@@ -3,6 +3,7 @@ import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
 import {api, type PlatformStatus} from "@/api/client";
 import {Button, Input, SettingSidebarButton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, Select, SelectTrigger, SelectValue, SelectContent, SelectItem} from "@/ui";
 import {useSearch, useNavigate} from "@tanstack/react-router";
+import {PlatformIcon} from "@/lib/platformIcons";
 
 type SectionId = "providers" | "channels";
 
@@ -313,7 +314,7 @@ export function Settings() {
 
 function ChannelsSection() {
 	const queryClient = useQueryClient();
-	const [editingPlatform, setEditingPlatform] = useState<"discord" | "slack" | "webhook" | null>(null);
+	const [editingPlatform, setEditingPlatform] = useState<"discord" | "slack" | "telegram" | "webhook" | null>(null);
 	const [platformInputs, setPlatformInputs] = useState<Record<string, string>>({});
 	const [addingBinding, setAddingBinding] = useState(false);
 	const [bindingForm, setBindingForm] = useState({
@@ -433,6 +434,11 @@ function ChannelsSection() {
 				slack_bot_token: platformInputs.slack_bot_token.trim(),
 				slack_app_token: platformInputs.slack_app_token.trim(),
 			};
+		} else if (editingPlatform === "telegram") {
+			if (!platformInputs.telegram_token?.trim()) return;
+			request.platform_credentials = {
+				telegram_token: platformInputs.telegram_token.trim(),
+			};
 		}
 
 		createPlatformMutation.mutate(request);
@@ -503,6 +509,7 @@ function ChannelsSection() {
 					{/* Platform Status Cards */}
 					<div className="mb-6 flex flex-col gap-3">
 						<PlatformCard
+							platform="discord"
 							name="Discord"
 							description="Discord bot integration"
 							status={messagingStatus?.discord}
@@ -513,6 +520,7 @@ function ChannelsSection() {
 							}}
 						/>
 						<PlatformCard
+							platform="slack"
 							name="Slack"
 							description="Slack bot integration"
 							status={messagingStatus?.slack}
@@ -523,6 +531,18 @@ function ChannelsSection() {
 							}}
 						/>
 						<PlatformCard
+							platform="telegram"
+							name="Telegram"
+							description="Telegram bot integration"
+							status={messagingStatus?.telegram}
+							onSetup={() => {
+								setEditingPlatform("telegram");
+								setPlatformInputs({});
+								setMessage(null);
+							}}
+						/>
+						<PlatformCard
+							platform="webhook"
 							name="Webhook"
 							description="HTTP webhook receiver"
 							status={messagingStatus?.webhook}
@@ -531,6 +551,50 @@ function ChannelsSection() {
 								setPlatformInputs({});
 								setMessage(null);
 							}}
+						/>
+						
+						{/* Coming Soon Platforms */}
+						<PlatformCard
+							platform="email"
+							name="Email"
+							description="IMAP polling for inbound, SMTP for outbound"
+							disabled
+						/>
+						<PlatformCard
+							platform="whatsapp"
+							name="WhatsApp"
+							description="Meta Cloud API integration"
+							disabled
+						/>
+						<PlatformCard
+							platform="matrix"
+							name="Matrix"
+							description="Decentralized chat protocol"
+							disabled
+						/>
+						<PlatformCard
+							platform="imessage"
+							name="iMessage"
+							description="macOS-only AppleScript bridge"
+							disabled
+						/>
+						<PlatformCard
+							platform="irc"
+							name="IRC"
+							description="TLS socket connection"
+							disabled
+						/>
+						<PlatformCard
+							platform="lark"
+							name="Lark"
+							description="Feishu/Lark webhook integration"
+							disabled
+						/>
+						<PlatformCard
+							platform="dingtalk"
+							name="DingTalk"
+							description="Chinese enterprise webhook integration"
+							disabled
 						/>
 					</div>
 
@@ -564,8 +628,9 @@ function ChannelsSection() {
 								{bindingsData.bindings.map((binding, idx) => (
 									<div
 										key={idx}
-										className="flex items-center justify-between border-b border-app-line/50 px-4 py-3 last:border-b-0"
+										className="flex items-center gap-3 border-b border-app-line/50 px-4 py-3 last:border-b-0"
 									>
+										<PlatformIcon platform={binding.channel} size="1x" className="text-ink-faint" />
 										<div className="flex-1">
 											<div className="flex items-center gap-2">
 												<span className="text-sm font-medium text-ink">
@@ -635,11 +700,13 @@ function ChannelsSection() {
 						<DialogTitle>
 							{editingPlatform === "discord" && "Configure Discord"}
 							{editingPlatform === "slack" && "Configure Slack"}
+							{editingPlatform === "telegram" && "Configure Telegram"}
 							{editingPlatform === "webhook" && "Configure Webhook"}
 						</DialogTitle>
 						<DialogDescription>
 							{editingPlatform === "discord" && "Enter your Discord bot token to enable Discord integration."}
 							{editingPlatform === "slack" && "Enter your Slack bot and app tokens to enable Slack integration."}
+							{editingPlatform === "telegram" && "Enter your Telegram bot token to enable Telegram integration."}
 							{editingPlatform === "webhook" && "Configure webhook receiver settings."}
 						</DialogDescription>
 					</DialogHeader>
@@ -698,6 +765,27 @@ function ChannelsSection() {
 						</div>
 					)}
 
+					{editingPlatform === "telegram" && (
+						<div className="flex flex-col gap-3">
+							<div>
+								<label className="mb-1.5 block text-sm font-medium text-ink">Bot Token</label>
+								<Input
+									type="password"
+									value={platformInputs.telegram_token ?? ""}
+									onChange={(e) => setPlatformInputs({...platformInputs, telegram_token: e.target.value})}
+									placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+									autoFocus
+									onKeyDown={(e) => {
+										if (e.key === "Enter") handleSavePlatform();
+									}}
+								/>
+								<p className="mt-1 text-tiny text-ink-faint">
+									Get this from @BotFather on Telegram
+								</p>
+							</div>
+						</div>
+					)}
+
 					{editingPlatform === "webhook" && (
 						<div className="flex flex-col gap-3">
 							<p className="text-sm text-ink-dull">
@@ -729,6 +817,7 @@ function ChannelsSection() {
 								disabled={
 									editingPlatform === "discord" ? !platformInputs.discord_token?.trim() :
 									editingPlatform === "slack" ? (!platformInputs.slack_bot_token?.trim() || !platformInputs.slack_app_token?.trim()) :
+									editingPlatform === "telegram" ? !platformInputs.telegram_token?.trim() :
 									false
 								}
 								loading={createPlatformMutation.isPending}
@@ -908,23 +997,26 @@ function ChannelsSection() {
 }
 
 interface PlatformCardProps {
+	platform: string;
 	name: string;
 	description: string;
 	status?: PlatformStatus;
-	onSetup: () => void;
+	disabled?: boolean;
+	onSetup?: () => void;
 }
 
-function PlatformCard({ name, description, status, onSetup }: PlatformCardProps) {
+function PlatformCard({ platform, name, description, status, disabled = false, onSetup }: PlatformCardProps) {
 	const configured = status?.configured ?? false;
 	const enabled = status?.enabled ?? false;
 
 	return (
-		<div className="rounded-lg border border-app-line bg-app-box p-4">
-			<div className="flex items-center justify-between">
+		<div className={`rounded-lg border border-app-line bg-app-box p-4 ${disabled ? "opacity-40" : ""}`}>
+			<div className="flex items-center gap-3">
+				<PlatformIcon platform={platform} size="lg" className={disabled ? "text-ink-faint/50" : "text-ink-faint"} />
 				<div className="flex-1">
 					<div className="flex items-center gap-2">
 						<span className="text-sm font-medium text-ink">{name}</span>
-						{configured && (
+						{!disabled && configured && (
 							<span className={`text-tiny ${enabled ? "text-green-400" : "text-ink-faint"}`}>
 								{enabled ? "● Active" : "○ Disabled"}
 							</span>
@@ -933,9 +1025,15 @@ function PlatformCard({ name, description, status, onSetup }: PlatformCardProps)
 					<p className="mt-0.5 text-sm text-ink-dull">{description}</p>
 				</div>
 				<div className="flex gap-2">
-					<Button onClick={onSetup} variant="outline" size="sm">
-						{configured ? "Configure" : "Setup"}
-					</Button>
+					{disabled ? (
+						<Button variant="outline" size="sm" disabled>
+							Coming Soon
+						</Button>
+					) : onSetup && (
+						<Button onClick={onSetup} variant="outline" size="sm">
+							{configured ? "Configure" : "Setup"}
+						</Button>
+					)}
 				</div>
 			</div>
 		</div>

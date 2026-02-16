@@ -678,6 +678,7 @@ export interface PlatformStatus {
 export interface MessagingStatusResponse {
 	discord: PlatformStatus;
 	slack: PlatformStatus;
+	telegram: PlatformStatus;
 	webhook: PlatformStatus;
 }
 

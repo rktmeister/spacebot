@@ -202,6 +202,11 @@ const agentCronRoute = createRoute({
 const agentConfigRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: "/agents/$agentId/config",
+	validateSearch: (search: Record<string, unknown>): {tab?: string} => {
+		return {
+			tab: typeof search.tab === "string" ? search.tab : undefined,
+		};
+	},
 	component: function AgentConfigPage() {
 		const {agentId} = agentConfigRoute.useParams();
 		return (

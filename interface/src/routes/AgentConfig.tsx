@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AgentConfigResponse, type AgentConfigUpdateRequest } from "@/api/client";
 import { Button, SettingSidebarButton, Input, TextArea, Toggle, NumberStepper } from "@/ui";
 import { motion, AnimatePresence } from "framer-motion";
+import { useSearch, useNavigate } from "@tanstack/react-router";
 
 
 type SectionId = "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser";
@@ -43,10 +44,27 @@ const getIdentityField = (data: { soul: string | null; identity: string | null; 
 
 export function AgentConfig({ agentId }: AgentConfigProps) {
 	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+	const search = useSearch({from: "/agents/$agentId/config"}) as {tab?: string};
 	const [activeSection, setActiveSection] = useState<SectionId>("soul");
 	const [dirty, setDirty] = useState(false);
 	const [saving, setSaving] = useState(false);
-	const saveHandlerRef = useState<{ save?: () => void; revert?: () => void }>(() => ({}))[0];
+	const saveHandlerRef = useRef<{ save?: () => void; revert?: () => void }>({});
+
+	// Sync activeSection with URL search param
+	useEffect(() => {
+		if (search.tab) {
+			const validSections: SectionId[] = ["soul", "identity", "user", "routing", "tuning", "compaction", "cortex", "coalesce", "memory", "browser"];
+			if (validSections.includes(search.tab as SectionId)) {
+				setActiveSection(search.tab as SectionId);
+			}
+		}
+	}, [search.tab]);
+
+	const handleSectionChange = (section: SectionId) => {
+		setActiveSection(section);
+		navigate({to: "/agents/$agentId/config", params: {agentId}, search: {tab: section}});
+	};
 
 	const identityQuery = useQuery({
 		queryKey: ["agent-identity", agentId],
@@ -86,6 +104,14 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 		onError: () => setSaving(false),
 	});
 
+	const handleSave = useCallback(() => {
+		saveHandlerRef.current.save?.();
+	}, []);
+
+	const handleRevert = useCallback(() => {
+		saveHandlerRef.current.revert?.();
+	}, []);
+
 	const isLoading = identityQuery.isLoading || configQuery.isLoading;
 	const isError = identityQuery.isError || configQuery.isError;
 
@@ -111,14 +137,6 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 	const active = SECTIONS.find((s) => s.id === activeSection)!;
 	const isIdentitySection = active.group === "identity";
 
-	const handleSave = useCallback(() => {
-		saveHandlerRef.save?.();
-	}, [saveHandlerRef]);
-
-	const handleRevert = useCallback(() => {
-		saveHandlerRef.revert?.();
-	}, [saveHandlerRef]);
-
 	return (
 		<div className="flex h-full relative">
 			{/* Sidebar */}
@@ -134,7 +152,7 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 						return (
 							<SettingSidebarButton
 								key={section.id}
-								onClick={() => setActiveSection(section.id)}
+								onClick={() => handleSectionChange(section.id)}
 								active={isActive}
 							>
 								<span className="flex-1">{section.label}</span>
@@ -156,7 +174,7 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 						return (
 							<SettingSidebarButton
 								key={section.id}
-								onClick={() => setActiveSection(section.id)}
+								onClick={() => handleSectionChange(section.id)}
 								active={isActive}
 							>
 								<span className="flex-1">{section.label}</span>
@@ -238,7 +256,7 @@ interface IdentityEditorProps {
 	description: string;
 	content: string | null;
 	onDirtyChange: (dirty: boolean) => void;
-	saveHandlerRef: { save?: () => void; revert?: () => void };
+	saveHandlerRef: React.MutableRefObject<{ save?: () => void; revert?: () => void }>;
 	onSave: (value: string) => void;
 }
 
@@ -283,13 +301,13 @@ function IdentityEditor({ label, description, content, onDirtyChange, saveHandle
 
 	// Register save/revert handlers
 	useEffect(() => {
-		saveHandlerRef.save = handleSave;
-		saveHandlerRef.revert = handleRevert;
+		saveHandlerRef.current.save = handleSave;
+		saveHandlerRef.current.revert = handleRevert;
 		return () => {
-			saveHandlerRef.save = undefined;
-			saveHandlerRef.revert = undefined;
+			saveHandlerRef.current.save = undefined;
+			saveHandlerRef.current.revert = undefined;
 		};
-	}, [saveHandlerRef, handleSave, handleRevert]);
+	}, [handleSave, handleRevert]);
 
 	return (
 		<>
@@ -327,7 +345,7 @@ interface ConfigSectionEditorProps {
 	detail: string;
 	config: AgentConfigResponse;
 	onDirtyChange: (dirty: boolean) => void;
-	saveHandlerRef: { save?: () => void; revert?: () => void };
+	saveHandlerRef: React.MutableRefObject<{ save?: () => void; revert?: () => void }>;
 	onSave: (update: Partial<AgentConfigUpdateRequest>) => void;
 }
 
@@ -428,13 +446,13 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 
 	// Register save/revert handlers
 	useEffect(() => {
-		saveHandlerRef.save = handleSave;
-		saveHandlerRef.revert = handleRevert;
+		saveHandlerRef.current.save = handleSave;
+		saveHandlerRef.current.revert = handleRevert;
 		return () => {
-			saveHandlerRef.save = undefined;
-			saveHandlerRef.revert = undefined;
+			saveHandlerRef.current.save = undefined;
+			saveHandlerRef.current.revert = undefined;
 		};
-	}, [saveHandlerRef, handleSave, handleRevert]);
+	}, [handleSave, handleRevert]);
 
 	const renderFields = () => {
 		switch (sectionId) {

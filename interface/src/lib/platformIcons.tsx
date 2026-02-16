@@ -1,0 +1,29 @@
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faDiscord, faSlack, faTelegram, faWhatsapp } from "@fortawesome/free-brands-svg-icons";
+import { faLink, faEnvelope, faComments, faComment } from "@fortawesome/free-solid-svg-icons";
+
+interface PlatformIconProps {
+	platform: string;
+	className?: string;
+	size?: "sm" | "lg" | "1x" | "2x";
+}
+
+export function PlatformIcon({ platform, className = "text-ink-faint", size = "1x" }: PlatformIconProps) {
+	const iconMap: Record<string, any> = {
+		discord: faDiscord,
+		slack: faSlack,
+		telegram: faTelegram,
+		webhook: faLink,
+		email: faEnvelope,
+		whatsapp: faWhatsapp,
+		matrix: faComments,
+		imessage: faComment,
+		irc: faComments,
+		lark: faComment,
+		dingtalk: faComment,
+	};
+
+	const icon = iconMap[platform.toLowerCase()] || faLink;
+
+	return <FontAwesomeIcon icon={icon} size={size} className={className} />;
+}

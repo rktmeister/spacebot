@@ -10,6 +10,10 @@
 	},
 	"dependencies": {
 		"@fontsource/ibm-plex-sans": "^5.1.0",
+		"@fortawesome/fontawesome-svg-core": "^7.2.0",
+		"@fortawesome/free-brands-svg-icons": "^7.2.0",
+		"@fortawesome/free-solid-svg-icons": "^7.2.0",
+		"@fortawesome/react-fontawesome": "^3.0.0",
 		"@hookform/resolvers": "^5.2.2",
 		"@hugeicons/core-free-icons": "^3.1.1",
 		"@hugeicons/react": "^1.1.5",
