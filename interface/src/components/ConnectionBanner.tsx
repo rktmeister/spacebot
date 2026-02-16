@@ -7,7 +7,10 @@ const stateConfig: Record<Exclude<ConnectionState, "connected">, { label: string
 	disconnected: { label: "Disconnected from server.", variant: "error" },
 };
 
-export function ConnectionBanner({ state }: { state: ConnectionState }) {
+export function ConnectionBanner({ state, hasData }: { state: ConnectionState; hasData: boolean }) {
+	// Don't show "Connecting..." if we already have data loaded
+	if (state === "connecting" && hasData) return null;
+	
 	if (state === "connected") return null;
 
 	const { label, variant } = stateConfig[state];

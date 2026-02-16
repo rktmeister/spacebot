@@ -8,6 +8,7 @@ interface LiveContextValue {
 	liveStates: Record<string, ChannelLiveState>;
 	channels: ChannelInfo[];
 	connectionState: ConnectionState;
+	hasData: boolean;
 	loadOlderMessages: (channelId: string) => void;
 }
 
@@ -15,6 +16,7 @@ const LiveContext = createContext<LiveContextValue>({
 	liveStates: {},
 	channels: [],
 	connectionState: "connecting",
+	hasData: false,
 	loadOlderMessages: () => {},
 });
 
@@ -46,8 +48,11 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 		onReconnect,
 	});
 
+	// Consider app "ready" once we have any data loaded
+	const hasData = channels.length > 0 || channelsData !== undefined;
+
 	return (
-		<LiveContext.Provider value={{ liveStates, channels, connectionState, loadOlderMessages }}>
+		<LiveContext.Provider value={{ liveStates, channels, connectionState, hasData, loadOlderMessages }}>
 			{children}
 		</LiveContext.Provider>
 	);

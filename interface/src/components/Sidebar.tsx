@@ -81,22 +81,14 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 			{/* Collapsed: icon-only nav */}
 			{collapsed ? (
 				<div className="flex flex-col items-center gap-1 pt-2">
-					<Link
-						to="/"
-						className={`flex h-8 w-8 items-center justify-center rounded-md ${
-							isOverview ? "bg-sidebar-selected text-sidebar-ink" : "text-sidebar-inkDull hover:bg-sidebar-selected/50"
-						}`}
+				<Link
+					to="/"
+					className={`flex h-8 w-8 items-center justify-center rounded-md ${
+						isOverview ? "bg-sidebar-selected text-sidebar-ink" : "text-sidebar-inkDull hover:bg-sidebar-selected/50"
+					}`}
 					title="Dashboard"
 				>
 					<HugeiconsIcon icon={DashboardSquare01Icon} className="h-4 w-4" />
-				</Link>
-				<Link
-					to="/logs"
-					className="flex h-8 w-8 items-center justify-center rounded-md text-sidebar-inkDull hover:bg-sidebar-selected/50 [&.active]:bg-sidebar-selected [&.active]:text-sidebar-ink"
-					activeProps={{ className: "active" }}
-					title="Logs"
-				>
-					<HugeiconsIcon icon={LeftToRightListBulletIcon} className="h-4 w-4" />
 				</Link>
 				<Link
 					to="/settings"
@@ -139,13 +131,6 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 						>
 							Dashboard
 						</Link>
-					<Link
-						to="/logs"
-						className="mx-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-sidebar-inkDull hover:bg-sidebar-selected/50 [&.active]:bg-sidebar-selected [&.active]:text-sidebar-ink"
-						activeProps={{ className: "active" }}
-					>
-						Logs
-					</Link>
 					<Link
 						to="/settings"
 						className={`mx-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${

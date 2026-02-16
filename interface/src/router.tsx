@@ -23,7 +23,7 @@ import {useLiveContext} from "@/hooks/useLiveContext";
 import {AgentTabs} from "@/components/AgentTabs";
 
 function RootLayout() {
-	const {liveStates, connectionState} = useLiveContext();
+	const {liveStates, connectionState, hasData} = useLiveContext();
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
 
 	return (
@@ -34,7 +34,7 @@ function RootLayout() {
 				onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
 			/>
 			<div className="flex flex-1 flex-col overflow-hidden">
-				<ConnectionBanner state={connectionState} />
+				<ConnectionBanner state={connectionState} hasData={hasData} />
 				<UpdateBanner />
 				<SetupBanner />
 				<div className="flex-1 overflow-hidden">
