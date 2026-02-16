@@ -1,7 +1,8 @@
-import {useState} from "react";
+import {useState, useEffect} from "react";
 import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
 import {api, type PlatformStatus} from "@/api/client";
 import {Button, Input, SettingSidebarButton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, Select, SelectTrigger, SelectValue, SelectContent, SelectItem} from "@/ui";
+import {useSearch, useNavigate} from "@tanstack/react-router";
 
 type SectionId = "providers" | "channels";
 
@@ -58,7 +59,21 @@ const PROVIDERS = [
 
 export function Settings() {
 	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+	const search = useSearch({from: "/settings"}) as {tab?: string};
 	const [activeSection, setActiveSection] = useState<SectionId>("providers");
+
+	// Sync activeSection with URL search param
+	useEffect(() => {
+		if (search.tab && (search.tab === "providers" || search.tab === "channels")) {
+			setActiveSection(search.tab as SectionId);
+		}
+	}, [search.tab]);
+
+	const handleSectionChange = (section: SectionId) => {
+		setActiveSection(section);
+		navigate({to: "/settings", search: {tab: section}});
+	};
 	const [editingProvider, setEditingProvider] = useState<string | null>(null);
 	const [keyInput, setKeyInput] = useState("");
 	const [message, setMessage] = useState<{
@@ -140,7 +155,7 @@ export function Settings() {
 					{SECTIONS.map((section) => (
 						<SettingSidebarButton
 							key={section.id}
-							onClick={() => setActiveSection(section.id)}
+							onClick={() => handleSectionChange(section.id)}
 							active={activeSection === section.id}
 						>
 							<span className="flex-1">{section.label}</span>

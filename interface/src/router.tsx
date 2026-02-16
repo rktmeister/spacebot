@@ -72,6 +72,11 @@ const indexRoute = createRoute({
 const settingsRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: "/settings",
+	validateSearch: (search: Record<string, unknown>): {tab?: string} => {
+		return {
+			tab: typeof search.tab === "string" ? search.tab : undefined,
+		};
+	},
 	component: function SettingsPage() {
 		return <Settings />;
 	},

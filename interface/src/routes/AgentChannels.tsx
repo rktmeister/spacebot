@@ -78,7 +78,7 @@ export function AgentChannels({ agentId, liveStates }: AgentChannelsProps) {
 								Configure messaging platforms and bindings in Settings to connect this agent to Discord, Slack, or Telegram
 							</p>
 							<Button 
-								onClick={() => navigate({ to: "/settings" })} 
+								onClick={() => navigate({ to: "/settings", search: { tab: "channels" } })} 
 								variant="secondary" 
 								size="sm"
 							>
