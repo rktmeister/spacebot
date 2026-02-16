@@ -178,6 +178,8 @@ impl Worker {
             self.browser_config.clone(),
             self.screenshot_dir.clone(),
             self.brave_search_key.clone(),
+            self.deps.runtime_config.workspace_dir.clone(),
+            self.deps.runtime_config.instance_dir.clone(),
         );
 
         let routing = self.deps.runtime_config.routing.load();

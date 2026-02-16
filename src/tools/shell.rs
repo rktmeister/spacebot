@@ -4,23 +4,116 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
 
-/// Tool for executing shell commands.
-#[derive(Debug, Clone)]
-pub struct ShellTool;
+/// Sensitive filenames that should not be accessible via shell commands.
+pub const SENSITIVE_FILES: &[&str] = &[
+    "config.toml",
+    "config.redb",
+    "settings.redb",
+    ".env",
+    "spacebot.db",
+];
 
-impl ShellTool {
-    /// Create a new shell tool.
-    pub fn new() -> Self {
-        Self
-    }
+/// Environment variable names that contain secrets.
+pub const SECRET_ENV_VARS: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "DISCORD_BOT_TOKEN",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+    "BRAVE_SEARCH_API_KEY",
+];
+
+/// Tool for executing shell commands, with path restrictions to prevent
+/// access to instance-level configuration and secrets.
+#[derive(Debug, Clone)]
+pub struct ShellTool {
+    instance_dir: PathBuf,
+    workspace: PathBuf,
 }
 
-impl Default for ShellTool {
-    fn default() -> Self {
-        Self::new()
+impl ShellTool {
+    /// Create a new shell tool with the given instance directory for path blocking.
+    pub fn new(instance_dir: PathBuf, workspace: PathBuf) -> Self {
+        Self { instance_dir, workspace }
+    }
+
+    /// Check if a command references sensitive instance paths or secret env vars.
+    fn check_command(&self, command: &str) -> Result<(), ShellError> {
+        let instance_str = self.instance_dir.to_string_lossy();
+
+        // Block commands that reference the instance dir with sensitive files
+        for file in SENSITIVE_FILES {
+            if command.contains(&format!("{}/{file}", instance_str)) {
+                return Err(ShellError {
+                    message: format!("Cannot access {file} — instance configuration is protected."),
+                    exit_code: -1,
+                });
+            }
+        }
+
+        // Block direct references to the instance dir's config files via common patterns
+        // (e.g. "cat /data/config.toml" on Docker, "cat ~/.spacebot/config.toml" locally)
+        for file in SENSITIVE_FILES {
+            // Check for the filename appearing right after common read/write commands
+            // targeting paths that resolve into the instance dir
+            if command.contains(file) {
+                // Allow references to files named config.toml in the workspace (e.g. a project's config)
+                let workspace_str = self.workspace.to_string_lossy();
+                let mentions_workspace = command.contains(workspace_str.as_ref());
+                let mentions_instance = command.contains(instance_str.as_ref());
+
+                // If the command explicitly references the instance dir, block it
+                if mentions_instance && !mentions_workspace {
+                    return Err(ShellError {
+                        message: format!("Cannot access {file} — instance configuration is protected."),
+                        exit_code: -1,
+                    });
+                }
+            }
+        }
+
+        // Block access to secret environment variables
+        for var in SECRET_ENV_VARS {
+            if command.contains(&format!("${var}"))
+                || command.contains(&format!("${{{var}}}"))
+                || command.contains(&format!("printenv {var}"))
+            {
+                return Err(ShellError {
+                    message: "Cannot access secret environment variables.".to_string(),
+                    exit_code: -1,
+                });
+            }
+        }
+
+        // Block broad env dumps that would expose secrets
+        if command.contains("printenv") && !SECRET_ENV_VARS.iter().any(|v| command.contains(v)) {
+            // "printenv" with no args dumps everything — block it
+            let trimmed = command.trim();
+            if trimmed == "printenv" || trimmed.ends_with("| printenv") || trimmed.contains("printenv |") || trimmed.contains("printenv >") {
+                return Err(ShellError {
+                    message: "Cannot dump all environment variables — they may contain secrets.".to_string(),
+                    exit_code: -1,
+                });
+            }
+        }
+        if command.contains("env") {
+            let trimmed = command.trim();
+            // Block bare "env" command that dumps all vars
+            if trimmed == "env" || trimmed.starts_with("env |") || trimmed.starts_with("env >") {
+                return Err(ShellError {
+                    message: "Cannot dump all environment variables — they may contain secrets.".to_string(),
+                    exit_code: -1,
+                });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -99,14 +192,19 @@ impl Tool for ShellTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        // Reject commands that target protected workspace paths
+        // Check for commands targeting sensitive paths or env vars
+        self.check_command(&args.command)?;
+
+        // Validate working_dir stays within workspace if specified
         if let Some(ref dir) = args.working_dir {
             let path = std::path::Path::new(dir);
-            if is_protected_working_dir(path) {
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            let workspace_canonical = self.workspace.canonicalize().unwrap_or_else(|_| self.workspace.clone());
+            if !canonical.starts_with(&workspace_canonical) {
                 return Err(ShellError {
                     message: format!(
-                        "Cannot use protected directory as working_dir: {dir}. \
-                         Agent data, archives, and ingestion directories are managed by the system."
+                        "working_dir must be within the workspace ({}).",
+                        self.workspace.display()
                     ),
                     exit_code: -1,
                 });
@@ -123,8 +221,11 @@ impl Tool for ShellTool {
             c
         };
 
+        // Default to workspace as working directory
         if let Some(dir) = args.working_dir {
             cmd.current_dir(dir);
+        } else {
+            cmd.current_dir(&self.workspace);
         }
 
         cmd.stdout(Stdio::piped())
@@ -190,22 +291,38 @@ fn format_shell_output(exit_code: i32, stdout: &str, stderr: &str) -> String {
     output
 }
 
-/// Legacy shell function for backward compatibility.
+/// System-internal shell execution that bypasses path restrictions.
+/// Used by the system itself, not LLM-facing.
 pub async fn shell(command: &str, working_dir: Option<&std::path::Path>) -> crate::error::Result<ShellResult> {
-    let tool = ShellTool::new();
-    let args = ShellArgs {
-        command: command.to_string(),
-        working_dir: working_dir.map(|p| p.to_string_lossy().to_string()),
-        timeout_seconds: 60,
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(command);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(command);
+        c
     };
 
-    let output = tool.call(args).await.map_err(|e| crate::error::AgentError::Other(e.into()))?;
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
+
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let output = tokio::time::timeout(
+        tokio::time::Duration::from_secs(60),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| crate::error::AgentError::Other(anyhow::anyhow!("Command timed out").into()))?
+    .map_err(|e| crate::error::AgentError::Other(anyhow::anyhow!("Failed to execute command: {e}").into()))?;
 
     Ok(ShellResult {
-        success: output.success,
-        exit_code: output.exit_code,
-        stdout: output.stdout,
-        stderr: output.stderr,
+        success: output.status.success(),
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
     })
 }
 
@@ -225,11 +342,4 @@ impl ShellResult {
     }
 }
 
-/// Check if a directory path is in a protected workspace location.
-fn is_protected_working_dir(path: &std::path::Path) -> bool {
-    let path_str = path.to_string_lossy();
-    path_str.contains("/data/lancedb")
-        || path_str.contains("/archives/")
-        || path_str.contains("/ingest/")
-        || path_str.ends_with("/data")
-}
+

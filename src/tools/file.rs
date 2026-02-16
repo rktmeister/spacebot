@@ -4,23 +4,78 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Tool for file operations.
+/// Tool for file operations, restricted to the agent's workspace directory.
 #[derive(Debug, Clone)]
-pub struct FileTool;
+pub struct FileTool {
+    workspace: PathBuf,
+}
 
 impl FileTool {
-    /// Create a new file tool.
-    pub fn new() -> Self {
-        Self
+    /// Create a new file tool restricted to the given workspace directory.
+    pub fn new(workspace: PathBuf) -> Self {
+        Self { workspace }
+    }
+
+    /// Resolve and validate a path, ensuring it stays within the workspace boundary.
+    ///
+    /// Relative paths are resolved against the workspace root. Absolute paths are
+    /// accepted only if they fall within the workspace. Symlink traversal and `..`
+    /// components are handled via canonicalization.
+    fn resolve_path(&self, raw: &str) -> Result<PathBuf, FileError> {
+        let path = Path::new(raw);
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.workspace.join(path)
+        };
+
+        // For writes, the target may not exist yet. Canonicalize the deepest
+        // existing ancestor and append the remaining components.
+        let canonical = best_effort_canonicalize(&resolved);
+
+        let workspace_canonical = self.workspace.canonicalize().unwrap_or_else(|_| self.workspace.clone());
+
+        if !canonical.starts_with(&workspace_canonical) {
+            return Err(FileError(format!(
+                "Path is outside the workspace boundary. File operations are restricted to {}.",
+                self.workspace.display()
+            )));
+        }
+
+        Ok(canonical)
     }
 }
 
-impl Default for FileTool {
-    fn default() -> Self {
-        Self::new()
+/// Canonicalize as much of the path as possible. For paths where the final
+/// components don't exist yet (e.g. writing a new file), canonicalize the
+/// deepest existing ancestor and append the rest.
+fn best_effort_canonicalize(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
     }
+
+    // Walk up until we find something that exists
+    let mut existing = path.to_path_buf();
+    let mut suffix = Vec::new();
+    while !existing.exists() {
+        if let Some(file_name) = existing.file_name() {
+            suffix.push(file_name.to_os_string());
+        } else {
+            break;
+        }
+        if !existing.pop() {
+            break;
+        }
+    }
+
+    let base = existing.canonicalize().unwrap_or(existing);
+    let mut result = base;
+    for component in suffix.into_iter().rev() {
+        result.push(component);
+    }
+    result
 }
 
 /// Error type for file tool.
@@ -113,25 +168,17 @@ impl Tool for FileTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = Path::new(&args.path);
-
-        // Check protected paths
-        if is_protected_path(path) {
-            return Err(FileError(format!(
-                "Cannot access protected path: {}. Use memory_save tool for identity/memory data.",
-                args.path
-            )));
-        }
+        let path = self.resolve_path(&args.path)?;
 
         match args.operation.as_str() {
-            "read" => do_file_read(path).await,
+            "read" => do_file_read(&path).await,
             "write" => {
                 let content = args.content.ok_or_else(|| {
                     FileError("Content is required for write operation".to_string())
                 })?;
-                do_file_write(path, content, args.create_dirs).await
+                do_file_write(&path, content, args.create_dirs).await
             }
-            "list" => do_file_list(path).await,
+            "list" => do_file_list(&path).await,
             _ => Err(FileError(format!("Unknown operation: {}", args.operation))),
         }
     }
@@ -250,27 +297,7 @@ async fn do_file_list(path: &Path) -> Result<FileOutput, FileError> {
     })
 }
 
-/// Check if a path is in a protected workspace location.
-///
-/// Workers should not write to identity files, agent databases, compaction
-/// archives, or the ingestion directory. These are managed by other parts
-/// of the system (identity loader, memory store, compactor, ingestion pipeline).
-fn is_protected_path(path: &Path) -> bool {
-    let path_str = path.to_string_lossy();
 
-    // Identity and prompt files
-    path_str.ends_with("SOUL.md")
-        || path_str.ends_with("IDENTITY.md")
-        || path_str.ends_with("USER.md")
-        || path_str.contains("/prompts/")
-        // Agent data directories (databases, embeddings, config)
-        || path_str.contains("/data/spacebot.db")
-        || path_str.contains("/data/lancedb/")
-        || path_str.contains("/data/config.redb")
-        // Compaction archives and ingestion pipeline
-        || path_str.contains("/archives/")
-        || path_str.contains("/ingest/")
-}
 
 /// File entry metadata (legacy).
 #[derive(Debug, Clone)]
@@ -288,59 +315,33 @@ pub enum FileType {
     Other,
 }
 
-/// Legacy convenience functions for backward compatibility.
+/// System-internal file operations that bypass workspace containment.
+/// These are used by the system itself (not LLM-facing) and operate on
+/// arbitrary paths.
 
 pub async fn file_read(path: impl AsRef<Path>) -> crate::error::Result<String> {
-    let tool = FileTool::new();
-    let args = FileArgs {
-        operation: "read".to_string(),
-        path: path.as_ref().to_string_lossy().to_string(),
-        content: None,
-        create_dirs: false,
-    };
-
-    let output = tool
-        .call(args)
+    do_file_read(path.as_ref())
         .await
-        .map_err(|e| crate::error::AgentError::Other(e.into()))?;
-
-    output
-        .content
-        .ok_or_else(|| crate::error::AgentError::Other(anyhow::anyhow!("No content in file read result").into()))
-        .map_err(|e| e.into())
+        .map(|output| output.content.unwrap_or_default())
+        .map_err(|e| crate::error::AgentError::Other(e.into()).into())
 }
 
 pub async fn file_write(
     path: impl AsRef<Path>,
     content: impl AsRef<[u8]>,
 ) -> crate::error::Result<()> {
-    let tool = FileTool::new();
-    let args = FileArgs {
-        operation: "write".to_string(),
-        path: path.as_ref().to_string_lossy().to_string(),
-        content: Some(String::from_utf8_lossy(content.as_ref()).to_string()),
-        create_dirs: true,
-    };
-
-    tool
-        .call(args)
-        .await
-        .map_err(|e| crate::error::AgentError::Other(e.into()))?;
-
-    Ok(())
+    do_file_write(
+        path.as_ref(),
+        String::from_utf8_lossy(content.as_ref()).to_string(),
+        true,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| crate::error::AgentError::Other(e.into()).into())
 }
 
 pub async fn file_list(path: impl AsRef<Path>) -> crate::error::Result<Vec<FileEntry>> {
-    let tool = FileTool::new();
-    let args = FileArgs {
-        operation: "list".to_string(),
-        path: path.as_ref().to_string_lossy().to_string(),
-        content: None,
-        create_dirs: false,
-    };
-
-    let output = tool
-        .call(args)
+    let output = do_file_list(path.as_ref())
         .await
         .map_err(|e| crate::error::AgentError::Other(e.into()))?;
 

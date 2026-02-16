@@ -1052,6 +1052,8 @@ async fn initialize_agents(
                 browser_config,
                 agent.config.screenshot_dir(),
                 brave_search_key,
+                agent.deps.runtime_config.workspace_dir.clone(),
+                agent.deps.runtime_config.instance_dir.clone(),
             );
             let store = spacebot::agent::cortex_chat::CortexChatStore::new(agent.db.sqlite.clone());
             let session = spacebot::agent::cortex_chat::CortexChatSession::new(

@@ -4,23 +4,42 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
 
-/// Tool for executing subprocesses.
+/// Tool for executing subprocesses, with path restrictions to prevent
+/// access to instance-level configuration and secrets.
 #[derive(Debug, Clone)]
-pub struct ExecTool;
-
-impl ExecTool {
-    /// Create a new exec tool.
-    pub fn new() -> Self {
-        Self
-    }
+pub struct ExecTool {
+    instance_dir: PathBuf,
+    workspace: PathBuf,
 }
 
-impl Default for ExecTool {
-    fn default() -> Self {
-        Self::new()
+impl ExecTool {
+    /// Create a new exec tool with the given instance directory for path blocking.
+    pub fn new(instance_dir: PathBuf, workspace: PathBuf) -> Self {
+        Self { instance_dir, workspace }
+    }
+
+    /// Check if program arguments reference sensitive instance paths.
+    fn check_args(&self, program: &str, args: &[String]) -> Result<(), ExecError> {
+        let instance_str = self.instance_dir.to_string_lossy();
+        let all_args = std::iter::once(program.to_string())
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        for file in super::shell::SENSITIVE_FILES {
+            if all_args.contains(&format!("{}/{file}", instance_str)) {
+                return Err(ExecError {
+                    message: format!("Cannot access {file} — instance configuration is protected."),
+                    exit_code: -1,
+                });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -140,11 +159,45 @@ impl Tool for ExecTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // Check for references to sensitive instance paths
+        self.check_args(&args.program, &args.args)?;
+
+        // Validate working_dir stays within workspace if specified
+        if let Some(ref dir) = args.working_dir {
+            let path = std::path::Path::new(dir);
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            let workspace_canonical = self.workspace.canonicalize().unwrap_or_else(|_| self.workspace.clone());
+            if !canonical.starts_with(&workspace_canonical) {
+                return Err(ExecError {
+                    message: format!(
+                        "working_dir must be within the workspace ({}).",
+                        self.workspace.display()
+                    ),
+                    exit_code: -1,
+                });
+            }
+        }
+
+        // Block passing secret env var values directly
+        for env_var in &args.env {
+            for secret in super::shell::SECRET_ENV_VARS {
+                if env_var.key == *secret {
+                    return Err(ExecError {
+                        message: "Cannot set secret environment variables.".to_string(),
+                        exit_code: -1,
+                    });
+                }
+            }
+        }
+
         let mut cmd = Command::new(&args.program);
         cmd.args(&args.args);
 
+        // Default to workspace as working directory
         if let Some(dir) = args.working_dir {
             cmd.current_dir(dir);
+        } else {
+            cmd.current_dir(&self.workspace);
         }
 
         for env_var in args.env {
@@ -213,44 +266,42 @@ fn format_exec_output(exit_code: i32, stdout: &str, stderr: &str) -> String {
     output
 }
 
-/// Legacy function for backward compatibility.
+/// System-internal exec that bypasses path restrictions.
+/// Used by the system itself, not LLM-facing.
 pub async fn exec(
     program: &str,
     args: &[&str],
     working_dir: Option<&std::path::Path>,
     env: Option<&[(&str, &str)]>,
 ) -> crate::error::Result<ExecResult> {
-    let tool = ExecTool::new();
+    let mut cmd = Command::new(program);
+    cmd.args(args);
 
-    let env_vars: Vec<EnvVar> = env
-        .map(|e| {
-            e.iter()
-                .map(|(k, v)| EnvVar {
-                    key: k.to_string(),
-                    value: v.to_string(),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
 
-    let exec_args = ExecArgs {
-        program: program.to_string(),
-        args: args.iter().map(|&s| s.to_string()).collect(),
-        working_dir: working_dir.map(|p| p.to_string_lossy().to_string()),
-        env: env_vars,
-        timeout_seconds: 60,
-    };
+    if let Some(env_vars) = env {
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
+    }
 
-    let output = tool
-        .call(exec_args)
-        .await
-        .map_err(|e| crate::error::AgentError::Other(e.into()))?;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let output = tokio::time::timeout(
+        tokio::time::Duration::from_secs(60),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| crate::error::AgentError::Other(anyhow::anyhow!("Execution timed out").into()))?
+    .map_err(|e| crate::error::AgentError::Other(anyhow::anyhow!("Failed to execute: {e}").into()))?;
 
     Ok(ExecResult {
-        success: output.success,
-        exit_code: output.exit_code,
-        stdout: output.stdout,
-        stderr: output.stderr,
+        success: output.status.success(),
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
     })
 }
 

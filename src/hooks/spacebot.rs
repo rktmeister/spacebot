@@ -50,10 +50,28 @@ impl SpacebotHook {
 
         static LEAK_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
             vec![
-                Regex::new(r"sk-[a-zA-Z0-9]{48}").expect("hardcoded regex"),
+                // OpenAI keys
+                Regex::new(r"sk-[a-zA-Z0-9]{20,}").expect("hardcoded regex"),
+                // Anthropic keys
+                Regex::new(r"sk-ant-[a-zA-Z0-9_-]{20,}").expect("hardcoded regex"),
+                // OpenRouter keys
+                Regex::new(r"sk-or-[a-zA-Z0-9_-]{20,}").expect("hardcoded regex"),
+                // PEM private keys
                 Regex::new(r"-----BEGIN.*PRIVATE KEY-----").expect("hardcoded regex"),
+                // GitHub personal access tokens
                 Regex::new(r"ghp_[a-zA-Z0-9]{36}").expect("hardcoded regex"),
+                // Google API keys
                 Regex::new(r"AIza[0-9A-Za-z_-]{35}").expect("hardcoded regex"),
+                // Discord bot tokens (base64 user ID . timestamp . HMAC)
+                Regex::new(r"[MN][A-Za-z0-9]{23,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}").expect("hardcoded regex"),
+                // Slack bot tokens
+                Regex::new(r"xoxb-[0-9]{10,}-[0-9A-Za-z-]+").expect("hardcoded regex"),
+                // Slack app tokens
+                Regex::new(r"xapp-[0-9]-[A-Z0-9]+-[0-9]+-[a-f0-9]+").expect("hardcoded regex"),
+                // Telegram bot tokens
+                Regex::new(r"\d{8,}:[A-Za-z0-9_-]{35}").expect("hardcoded regex"),
+                // Brave Search API keys
+                Regex::new(r"BSA[a-zA-Z0-9]{20,}").expect("hardcoded regex"),
             ]
         });
 
@@ -108,8 +126,21 @@ where
         tool_name: &str,
         _tool_call_id: Option<String>,
         _internal_call_id: &str,
-        _args: &str,
+        args: &str,
     ) -> ToolCallHookAction {
+        // Scan tool arguments for secrets before execution
+        if let Some(leak) = self.scan_for_leaks(args) {
+            tracing::error!(
+                process_id = %self.process_id,
+                tool_name = %tool_name,
+                leak_prefix = %&leak[..leak.len().min(8)],
+                "secret leak detected in tool arguments, blocking call"
+            );
+            return ToolCallHookAction::Skip {
+                reason: "Tool call blocked: arguments contained a secret.".into(),
+            };
+        }
+
         // Send event without blocking
         let event = ProcessEvent::ToolStarted {
             agent_id: self.agent_id.clone(),
