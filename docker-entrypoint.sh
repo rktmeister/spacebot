@@ -8,7 +8,7 @@ mkdir -p "$SPACEBOT_DIR"
 if [ ! -f "$SPACEBOT_DIR/config.toml" ]; then
     cat > "$SPACEBOT_DIR/config.toml" <<EOF
 [api]
-bind = "0.0.0.0"
+bind = "::"
 
 [llm]
 anthropic_key = "env:ANTHROPIC_API_KEY"

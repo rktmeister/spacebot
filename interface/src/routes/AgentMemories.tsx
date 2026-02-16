@@ -10,8 +10,14 @@ import {
 	type MemoryType,
 } from "@/api/client";
 import { CortexChatPanel } from "@/components/CortexChatPanel";
-import { Dropdown } from "@/components/Dropdown";
 import { MemoryGraph } from "@/components/MemoryGraph";
+import {
+	Button,
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/ui";
 import { formatTimeAgo } from "@/lib/format";
 
 type ViewMode = "list" | "graph";
@@ -158,86 +164,94 @@ export function AgentMemories({ agentId }: AgentMemoriesProps) {
 				</div>
 
 				{/* Sort dropdown */}
-				<Dropdown value={sort} onChange={setSort} options={SORT_OPTIONS} />
-
-				{/* View mode toggle */}
-				<div className="flex rounded-md border border-app-line bg-app-darkBox">
-					<button
-						onClick={() => setViewMode("list")}
-						className={`rounded-l-md px-2 py-1.5 transition-colors ${
-							viewMode === "list"
-								? "bg-accent/15 text-accent"
-								: "text-ink-faint hover:text-ink-dull"
-						}`}
-						title="List view"
-					>
-						<svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-							<line x1="2" y1="4" x2="14" y2="4" />
-							<line x1="2" y1="8" x2="14" y2="8" />
-							<line x1="2" y1="12" x2="14" y2="12" />
+				<DropdownMenu>
+					<DropdownMenuTrigger className="flex items-center gap-1.5 rounded-md border border-app-line bg-app-darkBox px-2.5 py-1.5 text-sm text-ink-dull transition-colors hover:border-app-line/80 hover:text-ink">
+						{SORT_OPTIONS.find((o) => o.value === sort)?.label ?? sort}
+						<svg className="h-3 w-3 text-ink-faint" viewBox="0 0 12 12" fill="currentColor">
+							<path d="M3 4.5l3 3 3-3" />
 						</svg>
-					</button>
-					<button
-						onClick={() => setViewMode("graph")}
-						className={`rounded-r-md px-2 py-1.5 transition-colors ${
-							viewMode === "graph"
-								? "bg-accent/15 text-accent"
-								: "text-ink-faint hover:text-ink-dull"
-						}`}
-						title="Graph view"
-					>
-						<svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-							<circle cx="4" cy="4" r="2" />
-							<circle cx="12" cy="4" r="2" />
-							<circle cx="8" cy="12" r="2" />
-							<line x1="5.5" y1="5.2" x2="7" y2="10.5" />
-							<line x1="10.5" y1="5.2" x2="9" y2="10.5" />
-							<line x1="6" y1="4" x2="10" y2="4" />
-						</svg>
-					</button>
-				</div>
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end">
+						{SORT_OPTIONS.map((option) => (
+							<DropdownMenuItem
+								key={option.value}
+								onClick={() => setSort(option.value)}
+								className={option.value === sort ? "bg-accent/10 text-ink" : ""}
+							>
+								{option.label}
+							</DropdownMenuItem>
+						))}
+					</DropdownMenuContent>
+				</DropdownMenu>
 
-				{/* Cortex chat toggle */}
-				<button
-					onClick={() => setChatOpen(!chatOpen)}
-					className={`rounded p-1.5 transition-colors ${
-						chatOpen
-							? "bg-violet-500/20 text-violet-400"
-							: "text-ink-faint hover:bg-app-darkBox hover:text-ink-dull"
-					}`}
-					title="Toggle cortex chat"
+			{/* View mode toggle */}
+			<div className="flex rounded-md border border-app-line bg-app-darkBox">
+				<Button
+					onClick={() => setViewMode("list")}
+					variant={viewMode === "list" ? "secondary" : "ghost"}
+					size="icon"
+					className={`rounded-l-md rounded-r-none ${viewMode === "list" ? "bg-accent/15 text-accent" : ""}`}
+					title="List view"
 				>
-					<svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-						<circle cx="8" cy="8" r="3" />
-						<path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" />
+					<svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+						<line x1="2" y1="4" x2="14" y2="4" />
+						<line x1="2" y1="8" x2="14" y2="8" />
+						<line x1="2" y1="12" x2="14" y2="12" />
 					</svg>
-				</button>
+				</Button>
+				<Button
+					onClick={() => setViewMode("graph")}
+					variant={viewMode === "graph" ? "secondary" : "ghost"}
+					size="icon"
+					className={`rounded-l-none rounded-r-md ${viewMode === "graph" ? "bg-accent/15 text-accent" : ""}`}
+					title="Graph view"
+				>
+					<svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+						<circle cx="4" cy="4" r="2" />
+						<circle cx="12" cy="4" r="2" />
+						<circle cx="8" cy="12" r="2" />
+						<line x1="5.5" y1="5.2" x2="7" y2="10.5" />
+						<line x1="10.5" y1="5.2" x2="9" y2="10.5" />
+						<line x1="6" y1="4" x2="10" y2="4" />
+					</svg>
+				</Button>
+			</div>
+
+			{/* Cortex chat toggle */}
+			<Button
+				onClick={() => setChatOpen(!chatOpen)}
+				variant={chatOpen ? "secondary" : "ghost"}
+				size="icon"
+				className={chatOpen ? "bg-violet-500/20 text-violet-400" : ""}
+				title="Toggle cortex chat"
+			>
+				<svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+					<circle cx="8" cy="8" r="3" />
+					<path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" />
+				</svg>
+			</Button>
 			</div>
 
 			{/* Type filter pills */}
 			<div className="flex items-center gap-1.5 border-b border-app-line/50 px-6 py-2">
-				<button
+				<Button
 					onClick={() => setTypeFilter(null)}
-					className={`rounded-md px-2 py-1 text-tiny font-medium transition-colors ${
-						typeFilter === null
-							? "bg-accent/15 text-accent"
-							: "text-ink-faint hover:text-ink-dull"
-					}`}
+					variant={typeFilter === null ? "secondary" : "ghost"}
+					size="sm"
+					className={`h-6 px-2 text-tiny ${typeFilter === null ? "bg-accent/15 text-accent" : ""}`}
 				>
 					All
-				</button>
+				</Button>
 				{MEMORY_TYPES.map((type_) => (
-					<button
+					<Button
 						key={type_}
 						onClick={() => setTypeFilter(typeFilter === type_ ? null : type_)}
-						className={`rounded-md px-2 py-1 text-tiny font-medium transition-colors ${
-							typeFilter === type_
-								? TYPE_COLORS[type_]
-								: "text-ink-faint hover:text-ink-dull"
-						}`}
+						variant={typeFilter === type_ ? "secondary" : "ghost"}
+						size="sm"
+						className={`h-6 px-2 text-tiny ${typeFilter === type_ ? TYPE_COLORS[type_] : ""}`}
 					>
 						{type_}
-					</button>
+					</Button>
 				))}
 				{memories.length > 0 && (
 					<span className="ml-auto text-tiny text-ink-faint">
@@ -297,10 +311,11 @@ export function AgentMemories({ agentId }: AgentMemoriesProps) {
 											className="absolute left-0 top-0 w-full"
 											style={{ transform: `translateY(${virtualRow.start}px)` }}
 										>
-											<button
-												onClick={() => setExpandedId(isExpanded ? null : memory.id)}
-												className="grid w-full grid-cols-[80px_1fr_100px_120px_100px] items-center gap-3 px-6 py-3 text-left transition-colors hover:bg-app-darkBox/30"
-											>
+										<Button
+											onClick={() => setExpandedId(isExpanded ? null : memory.id)}
+											variant="ghost"
+											className="grid h-auto w-full grid-cols-[80px_1fr_100px_120px_100px] items-center gap-3 rounded-none px-6 py-3 text-left hover:bg-app-darkBox/30"
+										>
 												<TypeBadge type={memory.memory_type} />
 												<div className="min-w-0">
 													<p className="truncate text-sm text-ink-dull">
@@ -319,7 +334,7 @@ export function AgentMemories({ agentId }: AgentMemoriesProps) {
 												<span className="text-tiny text-ink-faint">
 													{formatTimeAgo(memory.created_at)}
 												</span>
-											</button>
+											</Button>
 
 											{/* Expanded detail */}
 											<AnimatePresence>

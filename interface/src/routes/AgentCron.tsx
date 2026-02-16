@@ -3,7 +3,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type CronJobWithStats, type CreateCronRequest } from "@/api/client";
 import { formatDuration, formatTimeAgo } from "@/lib/format";
 import { AnimatePresence, motion } from "framer-motion";
-import { Modal } from "@/ui/Modal";
+import {
+	Button,
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+} from "@/ui";
 
 // -- Helpers --
 
@@ -171,12 +177,9 @@ export function AgentCron({ agentId }: AgentCronProps) {
 
 				<div className="flex-1" />
 
-				<button
-					onClick={openCreate}
-					className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/80"
-				>
-					+ New Job
-				</button>
+			<Button onClick={openCreate} size="sm">
+				+ New Job
+			</Button>
 			</div>
 
 			{/* Content */}
@@ -200,12 +203,9 @@ export function AgentCron({ agentId }: AgentCronProps) {
 						<p className="mb-6 max-w-sm text-sm text-ink-dull">
 							Schedule automated tasks that run on a timer and deliver results to any messaging channel.
 						</p>
-						<button
-							onClick={openCreate}
-							className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/80"
-						>
+						<Button onClick={openCreate}>
 							Create your first cron job
-						</button>
+						</Button>
 					</div>
 				)}
 
@@ -233,138 +233,148 @@ export function AgentCron({ agentId }: AgentCronProps) {
 			</div>
 
 			{/* Create / Edit Modal */}
-			<Modal isOpen={isModalOpen} onClose={closeModal} title={editingJob ? "Edit Cron Job" : "Create Cron Job"}>
-				<div className="flex flex-col gap-4">
-					<Field label="Job ID">
-						<input
-							value={formData.id}
-							onChange={(e) => setFormData((d) => ({ ...d, id: e.target.value }))}
-							placeholder="e.g. check-email"
-							disabled={!!editingJob}
-							className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none disabled:opacity-50"
-						/>
-					</Field>
+			<Dialog open={isModalOpen} onOpenChange={(open) => !open && closeModal()}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>{editingJob ? "Edit Cron Job" : "Create Cron Job"}</DialogTitle>
+					</DialogHeader>
+					<div className="flex flex-col gap-4">
+						<Field label="Job ID">
+							<input
+								value={formData.id}
+								onChange={(e) => setFormData((d) => ({ ...d, id: e.target.value }))}
+								placeholder="e.g. check-email"
+								disabled={!!editingJob}
+								className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none disabled:opacity-50"
+							/>
+						</Field>
 
-					<Field label="Prompt">
-						<textarea
-							value={formData.prompt}
-							onChange={(e) => setFormData((d) => ({ ...d, prompt: e.target.value }))}
-							placeholder="What should the agent do on each run?"
-							rows={3}
-							className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-						/>
-					</Field>
+						<Field label="Prompt">
+							<textarea
+								value={formData.prompt}
+								onChange={(e) => setFormData((d) => ({ ...d, prompt: e.target.value }))}
+								placeholder="What should the agent do on each run?"
+								rows={3}
+								className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+							/>
+						</Field>
 
-					<div className="grid grid-cols-2 gap-4">
-						<Field label="Interval">
-							<div className="flex gap-2">
+						<div className="grid grid-cols-2 gap-4">
+							<Field label="Interval">
+								<div className="flex gap-2">
+									<input
+										type="number"
+										min={1}
+										value={formData.interval_value}
+										onChange={(e) =>
+											setFormData((d) => ({ ...d, interval_value: parseInt(e.target.value, 10) || 1 }))
+										}
+										className="w-20 rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
+									/>
+									<select
+										value={formData.interval_unit}
+										onChange={(e) =>
+											setFormData((d) => ({ ...d, interval_unit: e.target.value as "minutes" | "hours" | "days" }))
+										}
+										className="flex-1 rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink"
+									>
+										<option value="minutes">minutes</option>
+										<option value="hours">hours</option>
+										<option value="days">days</option>
+									</select>
+								</div>
+							</Field>
+
+							<Field label="Delivery Target">
+								<input
+									value={formData.delivery_target}
+									onChange={(e) => setFormData((d) => ({ ...d, delivery_target: e.target.value }))}
+									placeholder="discord:channel_id"
+									className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+								/>
+							</Field>
+						</div>
+
+						<div className="grid grid-cols-2 gap-4">
+							<Field label="Active Start Hour (optional)">
 								<input
 									type="number"
-									min={1}
-									value={formData.interval_value}
-									onChange={(e) =>
-										setFormData((d) => ({ ...d, interval_value: parseInt(e.target.value, 10) || 1 }))
-									}
-									className="w-20 rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
+									min={0}
+									max={23}
+									value={formData.active_start_hour}
+									onChange={(e) => setFormData((d) => ({ ...d, active_start_hour: e.target.value }))}
+									placeholder="e.g. 9"
+									className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
 								/>
-								<select
-									value={formData.interval_unit}
-									onChange={(e) =>
-										setFormData((d) => ({ ...d, interval_unit: e.target.value as "minutes" | "hours" | "days" }))
-									}
-									className="flex-1 rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink"
-								>
-									<option value="minutes">minutes</option>
-									<option value="hours">hours</option>
-									<option value="days">days</option>
-								</select>
-							</div>
-						</Field>
+							</Field>
+							<Field label="Active End Hour (optional)">
+								<input
+									type="number"
+									min={0}
+									max={23}
+									value={formData.active_end_hour}
+									onChange={(e) => setFormData((d) => ({ ...d, active_end_hour: e.target.value }))}
+									placeholder="e.g. 17"
+									className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+								/>
+							</Field>
+						</div>
 
-						<Field label="Delivery Target">
+						<label className="flex items-center gap-2 text-sm text-ink-dull">
 							<input
-								value={formData.delivery_target}
-								onChange={(e) => setFormData((d) => ({ ...d, delivery_target: e.target.value }))}
-								placeholder="discord:channel_id"
-								className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+								type="checkbox"
+								checked={formData.enabled}
+								onChange={(e) => setFormData((d) => ({ ...d, enabled: e.target.checked }))}
+								className="rounded border-app-line"
 							/>
-						</Field>
-					</div>
-
-					<div className="grid grid-cols-2 gap-4">
-						<Field label="Active Start Hour (optional)">
-							<input
-								type="number"
-								min={0}
-								max={23}
-								value={formData.active_start_hour}
-								onChange={(e) => setFormData((d) => ({ ...d, active_start_hour: e.target.value }))}
-								placeholder="e.g. 9"
-								className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-							/>
-						</Field>
-						<Field label="Active End Hour (optional)">
-							<input
-								type="number"
-								min={0}
-								max={23}
-								value={formData.active_end_hour}
-								onChange={(e) => setFormData((d) => ({ ...d, active_end_hour: e.target.value }))}
-								placeholder="e.g. 17"
-								className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-							/>
-						</Field>
-					</div>
-
-					<label className="flex items-center gap-2 text-sm text-ink-dull">
-						<input
-							type="checkbox"
-							checked={formData.enabled}
-							onChange={(e) => setFormData((d) => ({ ...d, enabled: e.target.checked }))}
-							className="rounded border-app-line"
-						/>
-						Enabled
-					</label>
+							Enabled
+						</label>
 
 					<div className="mt-2 flex justify-end gap-2">
-						<button
-							onClick={closeModal}
-							className="rounded-lg px-3 py-1.5 text-sm text-ink-dull transition-colors hover:text-ink"
-						>
+						<Button variant="ghost" size="sm" onClick={closeModal}>
 							Cancel
-						</button>
-						<button
+						</Button>
+						<Button
+							size="sm"
 							onClick={handleSave}
-							disabled={!formData.id.trim() || !formData.prompt.trim() || !formData.delivery_target.trim() || saveMutation.isPending}
-							className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/80 disabled:opacity-50"
+							disabled={!formData.id.trim() || !formData.prompt.trim() || !formData.delivery_target.trim()}
+							loading={saveMutation.isPending}
 						>
-							{saveMutation.isPending ? "Saving..." : editingJob ? "Save Changes" : "Create Job"}
-						</button>
+							{editingJob ? "Save Changes" : "Create Job"}
+						</Button>
 					</div>
-				</div>
-			</Modal>
+					</div>
+				</DialogContent>
+			</Dialog>
 
 			{/* Delete Confirmation */}
-			<Modal isOpen={!!deleteConfirmId} onClose={() => setDeleteConfirmId(null)} title="Delete Cron Job?">
-				<p className="mb-4 text-sm text-ink-dull">
-					This will permanently delete <code className="rounded bg-app-darkBox px-1.5 py-0.5 text-ink">{deleteConfirmId}</code> and its execution history.
-				</p>
-				<div className="flex justify-end gap-2">
-					<button
-						onClick={() => setDeleteConfirmId(null)}
-						className="rounded-lg px-3 py-1.5 text-sm text-ink-dull transition-colors hover:text-ink"
-					>
-						Cancel
-					</button>
-					<button
-						onClick={() => deleteConfirmId && deleteMutation.mutate(deleteConfirmId)}
-						disabled={deleteMutation.isPending}
-						className="rounded-lg bg-red-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50"
-					>
-						{deleteMutation.isPending ? "Deleting..." : "Delete"}
-					</button>
-				</div>
-			</Modal>
+			<Dialog open={!!deleteConfirmId} onOpenChange={(open) => !open && setDeleteConfirmId(null)}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Delete Cron Job?</DialogTitle>
+					</DialogHeader>
+					<p className="mb-4 text-sm text-ink-dull">
+						This will permanently delete <code className="rounded bg-app-darkBox px-1.5 py-0.5 text-ink">{deleteConfirmId}</code> and its execution history.
+					</p>
+					<div className="flex justify-end gap-2">
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={() => setDeleteConfirmId(null)}
+						>
+							Cancel
+						</Button>
+						<Button
+							variant="destructive"
+							size="sm"
+							onClick={() => deleteConfirmId && deleteMutation.mutate(deleteConfirmId)}
+							loading={deleteMutation.isPending}
+						>
+							Delete
+						</Button>
+					</div>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }
@@ -498,12 +508,14 @@ function CronJobCard({
 			)}
 
 			{/* Expand toggle */}
-			<button
+			<Button
+				variant="ghost"
+				size="sm"
 				onClick={onToggleExpand}
-				className="flex w-full items-center justify-center gap-1 border-t border-app-line/50 py-1.5 text-tiny text-ink-faint transition-colors hover:bg-app-lightBox/30 hover:text-ink-dull"
+				className="w-full rounded-none border-t border-app-line/50"
 			>
 				{isExpanded ? "▾ Hide history" : "▸ Show history"}
-			</button>
+			</Button>
 		</div>
 	);
 }
@@ -522,14 +534,16 @@ function ActionButton({
 	children: React.ReactNode;
 }) {
 	return (
-		<button
+		<Button
 			title={title}
 			onClick={onClick}
 			disabled={disabled}
-			className={`rounded-md px-2 py-1.5 text-sm text-ink-faint transition-colors hover:bg-app-lightBox hover:text-ink disabled:opacity-30 ${className ?? ""}`}
+			variant="ghost"
+			size="sm"
+			className={className}
 		>
 			{children}
-		</button>
+		</Button>
 	);
 }
 

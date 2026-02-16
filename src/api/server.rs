@@ -2591,7 +2591,9 @@ async fn create_binding(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let mut restart_required = false;
+    // Track adapters that need to be started at runtime
+    let mut new_discord_token: Option<String> = None;
+    let mut new_slack_tokens: Option<(String, String)> = None;
 
     // Write platform credentials if provided
     if let Some(credentials) = &request.platform_credentials {
@@ -2607,7 +2609,7 @@ async fn create_binding(
                 let discord = messaging["discord"].as_table_mut().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
                 discord["enabled"] = toml_edit::value(true);
                 discord["token"] = toml_edit::value(token.as_str());
-                restart_required = true;
+                new_discord_token = Some(token.clone());
             }
         }
         if let Some(bot_token) = &credentials.slack_bot_token {
@@ -2624,7 +2626,7 @@ async fn create_binding(
                 slack["enabled"] = toml_edit::value(true);
                 slack["bot_token"] = toml_edit::value(bot_token.as_str());
                 slack["app_token"] = toml_edit::value(app_token);
-                restart_required = true;
+                new_slack_tokens = Some((bot_token.clone(), app_token.to_string()));
             }
         }
     }
@@ -2706,18 +2708,63 @@ async fn create_binding(
                 arc_swap.store(std::sync::Arc::new(new_perms));
             }
         }
-    }
 
-    let message = if restart_required {
-        "Binding created. Platform credentials were updated — restart required for the adapter to connect.".to_string()
-    } else {
-        "Binding created and active.".to_string()
-    };
+        // Hot-start new adapters if platform credentials were provided
+        let manager_guard = state.messaging_manager.read().await;
+        if let Some(manager) = manager_guard.as_ref() {
+            if let Some(token) = new_discord_token {
+                // Ensure Discord permissions exist for the new adapter
+                let discord_perms = {
+                    let perms_guard = state.discord_permissions.read().await;
+                    match perms_guard.as_ref() {
+                        Some(existing) => existing.clone(),
+                        None => {
+                            drop(perms_guard);
+                            let perms = crate::config::DiscordPermissions::from_config(
+                                new_config.messaging.discord.as_ref().expect("discord config exists when token is provided"),
+                                &new_config.bindings,
+                            );
+                            let arc_swap = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
+                            state.set_discord_permissions(arc_swap.clone()).await;
+                            arc_swap
+                        }
+                    }
+                };
+                let adapter = crate::messaging::discord::DiscordAdapter::new(&token, discord_perms);
+                if let Err(error) = manager.register_and_start(adapter).await {
+                    tracing::error!(%error, "failed to hot-start discord adapter");
+                }
+            }
+
+            if let Some((bot_token, app_token)) = new_slack_tokens {
+                let slack_perms = {
+                    let perms_guard = state.slack_permissions.read().await;
+                    match perms_guard.as_ref() {
+                        Some(existing) => existing.clone(),
+                        None => {
+                            drop(perms_guard);
+                            let perms = crate::config::SlackPermissions::from_config(
+                                new_config.messaging.slack.as_ref().expect("slack config exists when tokens are provided"),
+                                &new_config.bindings,
+                            );
+                            let arc_swap = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
+                            state.set_slack_permissions(arc_swap.clone()).await;
+                            arc_swap
+                        }
+                    }
+                };
+                let adapter = crate::messaging::slack::SlackAdapter::new(&bot_token, &app_token, slack_perms);
+                if let Err(error) = manager.register_and_start(adapter).await {
+                    tracing::error!(%error, "failed to hot-start slack adapter");
+                }
+            }
+        }
+    }
 
     Ok(Json(CreateBindingResponse {
         success: true,
-        restart_required,
-        message,
+        restart_required: false,
+        message: "Binding created and active.".to_string(),
     }))
 }
 

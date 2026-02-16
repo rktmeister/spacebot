@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AgentConfigResponse, type AgentConfigUpdateRequest } from "@/api/client";
+import { Button } from "@/ui";
 
 type SectionId = "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "discord";
 
@@ -107,24 +108,23 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 					<span className="text-tiny font-medium uppercase tracking-wider text-ink-faint">Identity</span>
 				</div>
 				<div className="flex flex-col gap-0.5 px-2">
-					{SECTIONS.filter((s) => s.group === "identity").map((section) => {
-						const isActive = activeSection === section.id;
-						const hasContent = !!getIdentityField(identityQuery.data ?? { soul: null, identity: null, user: null }, section.id)?.trim();
-						return (
-							<button
-								key={section.id}
-								onClick={() => setActiveSection(section.id)}
-								className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors ${
-									isActive ? "bg-app-darkBox text-ink" : "text-ink-dull hover:bg-app-darkBox/50 hover:text-ink"
-								}`}
-							>
-								<span className="flex-1">{section.label}</span>
-								{!hasContent && (
-									<span className="rounded bg-amber-500/10 px-1 py-0.5 text-tiny text-amber-400/70">empty</span>
-								)}
-							</button>
-						);
-					})}
+				{SECTIONS.filter((s) => s.group === "identity").map((section) => {
+					const isActive = activeSection === section.id;
+					const hasContent = !!getIdentityField(identityQuery.data ?? { soul: null, identity: null, user: null }, section.id)?.trim();
+					return (
+						<Button
+							key={section.id}
+							onClick={() => setActiveSection(section.id)}
+							variant={isActive ? "secondary" : "ghost"}
+							className={`justify-start ${isActive ? "bg-app-darkBox text-ink" : "text-ink-dull hover:text-ink"}`}
+						>
+							<span className="flex-1">{section.label}</span>
+							{!hasContent && (
+								<span className="rounded bg-amber-500/10 px-1 py-0.5 text-tiny text-amber-400/70">empty</span>
+							)}
+						</Button>
+					);
+				})}
 				</div>
 
 				{/* Config Group */}
@@ -132,20 +132,19 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 					<span className="text-tiny font-medium uppercase tracking-wider text-ink-faint">Configuration</span>
 				</div>
 				<div className="flex flex-col gap-0.5 px-2">
-					{SECTIONS.filter((s) => s.group === "config").map((section) => {
-						const isActive = activeSection === section.id;
-						return (
-							<button
-								key={section.id}
-								onClick={() => setActiveSection(section.id)}
-								className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors ${
-									isActive ? "bg-app-darkBox text-ink" : "text-ink-dull hover:bg-app-darkBox/50 hover:text-ink"
-								}`}
-							>
-								<span className="flex-1">{section.label}</span>
-							</button>
-						);
-					})}
+				{SECTIONS.filter((s) => s.group === "config").map((section) => {
+					const isActive = activeSection === section.id;
+					return (
+						<Button
+							key={section.id}
+							onClick={() => setActiveSection(section.id)}
+							variant={isActive ? "secondary" : "ghost"}
+							className={`justify-start ${isActive ? "bg-app-darkBox text-ink" : "text-ink-dull hover:text-ink"}`}
+						>
+							<span className="flex-1">{section.label}</span>
+						</Button>
+					);
+				})}
 				</div>
 			</div>
 
@@ -233,26 +232,29 @@ function IdentityEditor({ label, description, content, saving, onSave }: Identit
 					<h3 className="text-sm font-medium text-ink">{label}</h3>
 					<span className="rounded bg-app-darkBox px-1.5 py-0.5 font-mono text-tiny text-ink-faint">{description}</span>
 				</div>
-				<div className="flex items-center gap-2">
-					{dirty && (
-						<>
-							<button
-								onClick={handleRevert}
-								className="rounded-md px-2.5 py-1 text-tiny font-medium text-ink-faint transition-colors hover:bg-app-darkBox hover:text-ink-dull"
-							>
-								Revert
-							</button>
-							<button
-								onClick={handleSave}
-								disabled={saving}
-								className="rounded-md bg-accent/15 px-2.5 py-1 text-tiny font-medium text-accent transition-colors hover:bg-accent/25 disabled:opacity-50"
-							>
-								{saving ? "Saving..." : "Save"}
-							</button>
-						</>
-					)}
-					{!dirty && <span className="text-tiny text-ink-faint/50">Cmd+S to save</span>}
-				</div>
+			<div className="flex items-center gap-2">
+				{dirty && (
+					<>
+						<Button
+							onClick={handleRevert}
+							variant="ghost"
+							size="sm"
+							className="h-6 px-2 text-tiny"
+						>
+							Revert
+						</Button>
+						<Button
+							onClick={handleSave}
+							size="sm"
+							loading={saving}
+							className="h-6 bg-accent/15 px-2 text-tiny text-accent hover:bg-accent/25"
+						>
+							Save
+						</Button>
+					</>
+				)}
+				{!dirty && <span className="text-tiny text-ink-faint/50">Cmd+S to save</span>}
+			</div>
 			</div>
 			<div className="flex-1 overflow-y-auto p-4">
 				<textarea
@@ -682,26 +684,29 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 					<h3 className="text-sm font-medium text-ink">{label}</h3>
 					<span className="text-tiny text-ink-faint">{description}</span>
 				</div>
-				<div className="flex items-center gap-2">
-					{dirty && (
-						<>
-							<button
-								onClick={handleRevert}
-								className="rounded-md px-2.5 py-1 text-tiny font-medium text-ink-faint transition-colors hover:bg-app-darkBox hover:text-ink-dull"
-							>
-								Revert
-							</button>
-							<button
-								onClick={handleSave}
-								disabled={saving}
-								className="rounded-md bg-accent/15 px-2.5 py-1 text-tiny font-medium text-accent transition-colors hover:bg-accent/25 disabled:opacity-50"
-							>
-								{saving ? "Saving..." : "Save"}
-							</button>
-						</>
-					)}
-					{!dirty && <span className="text-tiny text-ink-faint/50">Changes auto-saved to config.toml</span>}
-				</div>
+			<div className="flex items-center gap-2">
+				{dirty && (
+					<>
+						<Button
+							onClick={handleRevert}
+							variant="ghost"
+							size="sm"
+							className="h-6 px-2 text-tiny"
+						>
+							Revert
+						</Button>
+						<Button
+							onClick={handleSave}
+							size="sm"
+							loading={saving}
+							className="h-6 bg-accent/15 px-2 text-tiny text-accent hover:bg-accent/25"
+						>
+							Save
+						</Button>
+					</>
+				)}
+				{!dirty && <span className="text-tiny text-ink-faint/50">Changes auto-saved to config.toml</span>}
+			</div>
 			</div>
 			<div className="flex-1 overflow-y-auto px-8 py-8">
 				<div className="mb-6 rounded-lg border border-app-line/30 bg-app-darkBox/20 px-5 py-4">
@@ -772,33 +777,37 @@ function ConfigNumberField({ label, description, value, onChange, min, max, step
 			<label className="text-sm font-medium text-ink">{label}</label>
 			<p className="text-tiny text-ink-faint">{description}</p>
 			<div className="flex items-center gap-2.5 mt-1">
-				<div className="flex items-stretch rounded-md border border-app-line/50 bg-app-darkBox/30 overflow-hidden">
-					<button
-						type="button"
-						onClick={decrement}
-						className="flex w-8 items-center justify-center text-ink-faint transition-colors hover:bg-app-hover hover:text-ink-dull active:bg-app-active"
-					>
-						<svg className="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-							<path d="M2.5 6h7" />
-						</svg>
-					</button>
-					<input
-						type="text"
-						inputMode="numeric"
-						value={safeValue}
-						onChange={handleInput}
-						className="w-20 border-x border-app-line/50 bg-transparent px-2 py-1.5 text-center font-mono text-sm text-ink-dull focus:outline-none"
-					/>
-					<button
-						type="button"
-						onClick={increment}
-						className="flex w-8 items-center justify-center text-ink-faint transition-colors hover:bg-app-hover hover:text-ink-dull active:bg-app-active"
-					>
-						<svg className="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-							<path d="M6 2.5v7M2.5 6h7" />
-						</svg>
-					</button>
-				</div>
+			<div className="flex items-stretch rounded-md border border-app-line/50 bg-app-darkBox/30 overflow-hidden">
+				<Button
+					type="button"
+					onClick={decrement}
+					variant="ghost"
+					size="icon"
+					className="h-8 w-8 rounded-none"
+				>
+					<svg className="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+						<path d="M2.5 6h7" />
+					</svg>
+				</Button>
+				<input
+					type="text"
+					inputMode="numeric"
+					value={safeValue}
+					onChange={handleInput}
+					className="w-20 border-x border-app-line/50 bg-transparent px-2 py-1.5 text-center font-mono text-sm text-ink-dull focus:outline-none"
+				/>
+				<Button
+					type="button"
+					onClick={increment}
+					variant="ghost"
+					size="icon"
+					className="h-8 w-8 rounded-none"
+				>
+					<svg className="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+						<path d="M6 2.5v7M2.5 6h7" />
+					</svg>
+				</Button>
+			</div>
 				{suffix && <span className="text-tiny text-ink-faint">{suffix}</span>}
 			</div>
 		</div>
@@ -841,33 +850,37 @@ function ConfigFloatField({ label, description, value, onChange, min = 0, max = 
 			<label className="text-sm font-medium text-ink">{label}</label>
 			<p className="text-tiny text-ink-faint">{description}</p>
 			<div className="flex items-center gap-3 mt-1">
-				<div className="flex items-stretch rounded-md border border-app-line/50 bg-app-darkBox/30 overflow-hidden">
-					<button
-						type="button"
-						onClick={decrement}
-						className="flex w-8 items-center justify-center text-ink-faint transition-colors hover:bg-app-hover hover:text-ink-dull active:bg-app-active"
-					>
-						<svg className="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-							<path d="M2.5 6h7" />
-						</svg>
-					</button>
-					<input
-						type="text"
-						inputMode="decimal"
-						value={safeValue.toFixed(2)}
-						onChange={handleInput}
-						className="w-16 border-x border-app-line/50 bg-transparent px-1.5 py-1.5 text-center font-mono text-sm text-ink-dull focus:outline-none"
-					/>
-					<button
-						type="button"
-						onClick={increment}
-						className="flex w-8 items-center justify-center text-ink-faint transition-colors hover:bg-app-hover hover:text-ink-dull active:bg-app-active"
-					>
-						<svg className="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-							<path d="M6 2.5v7M2.5 6h7" />
-						</svg>
-					</button>
-				</div>
+			<div className="flex items-stretch rounded-md border border-app-line/50 bg-app-darkBox/30 overflow-hidden">
+				<Button
+					type="button"
+					onClick={decrement}
+					variant="ghost"
+					size="icon"
+					className="h-8 w-8 rounded-none"
+				>
+					<svg className="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+						<path d="M2.5 6h7" />
+					</svg>
+				</Button>
+				<input
+					type="text"
+					inputMode="decimal"
+					value={safeValue.toFixed(2)}
+					onChange={handleInput}
+					className="w-16 border-x border-app-line/50 bg-transparent px-1.5 py-1.5 text-center font-mono text-sm text-ink-dull focus:outline-none"
+				/>
+				<Button
+					type="button"
+					onClick={increment}
+					variant="ghost"
+					size="icon"
+					className="h-8 w-8 rounded-none"
+				>
+					<svg className="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+						<path d="M6 2.5v7M2.5 6h7" />
+					</svg>
+				</Button>
+			</div>
 				{/* Progress bar */}
 				<div className="h-1.5 w-32 overflow-hidden rounded-full bg-app-darkBox">
 					<div
@@ -894,9 +907,11 @@ function ConfigToggleField({ label, description, value, onChange }: ConfigToggle
 				<label className="text-sm font-medium text-ink">{label}</label>
 				<p className="text-tiny text-ink-faint">{description}</p>
 			</div>
-			<button
+			<Button
 				onClick={() => onChange(!value)}
-				className={`relative h-6 w-11 rounded-full transition-colors ${
+				variant="ghost"
+				size="icon"
+				className={`relative h-6 w-11 rounded-full p-0 ${
 					value ? "bg-accent/60" : "bg-app-darkBox"
 				}`}
 			>
@@ -905,7 +920,7 @@ function ConfigToggleField({ label, description, value, onChange }: ConfigToggle
 						value ? "translate-x-5" : "translate-x-0"
 					}`}
 				/>
-			</button>
+			</Button>
 		</div>
 	);
 }

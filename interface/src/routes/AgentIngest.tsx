@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type IngestFileInfo } from "@/api/client";
 import { formatTimeAgo } from "@/lib/format";
+import { Button } from "@/ui";
 
 function formatFileSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
@@ -138,15 +139,17 @@ export function AgentIngest({ agentId }: AgentIngestProps) {
 
 			<div className="flex-1 overflow-auto p-6">
 				{/* Drop zone */}
-				<button
-					type="button"
-					onClick={() => fileInputRef.current?.click()}
-					className={`mb-6 flex w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 transition-colors ${
-						isDragging
-							? "border-accent bg-accent/10"
-							: "border-app-line bg-app-darkBox/30 hover:border-ink-faint hover:bg-app-darkBox/50"
-					}`}
-				>
+			<Button
+				type="button"
+				onClick={() => fileInputRef.current?.click()}
+				variant="outline"
+				size="lg"
+				className={`mb-6 h-auto w-full flex-col border-2 border-dashed py-10 ${
+					isDragging
+						? "border-accent bg-accent/10"
+						: "border-app-line bg-app-darkBox/30 hover:border-ink-faint hover:bg-app-darkBox/50"
+				}`}
+			>
 					<div className={`mb-3 text-3xl ${isDragging ? "text-accent" : "text-ink-faint"}`}>
 						{uploadMutation.isPending ? (
 							<span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
@@ -164,12 +167,12 @@ export function AgentIngest({ agentId }: AgentIngestProps) {
 					<p className="text-xs text-ink-faint">
 						Text files will be chunked and processed into structured memories
 					</p>
-					{uploadMutation.isError && (
-						<p className="mt-2 text-xs text-red-400">
-							Upload failed. Please try again.
-						</p>
-					)}
-				</button>
+				{uploadMutation.isError && (
+					<p className="mt-2 text-xs text-red-400">
+						Upload failed. Please try again.
+					</p>
+				)}
+			</Button>
 
 				<input
 					ref={fileInputRef}
@@ -276,13 +279,15 @@ function FileRow({
 
 			{/* Delete button (only for completed/failed) */}
 			{file.status !== "processing" && (
-				<button
+				<Button
 					onClick={onDelete}
-					disabled={isDeleting}
-					className="flex-shrink-0 rounded-md px-2 py-1 text-xs text-ink-faint opacity-0 transition-all hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100 disabled:opacity-50"
+					variant="ghost"
+					size="sm"
+					loading={isDeleting}
+					className="flex-shrink-0 opacity-0 text-xs text-ink-faint hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100"
 				>
 					Remove
-				</button>
+				</Button>
 			)}
 		</div>
 	);

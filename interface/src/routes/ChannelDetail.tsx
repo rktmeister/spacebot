@@ -7,6 +7,7 @@ import { CortexChatPanel } from "@/components/CortexChatPanel";
 import { LiveDuration } from "@/components/LiveDuration";
 import { Markdown } from "@/components/Markdown";
 import { formatTimestamp, platformIcon, platformColor } from "@/lib/format";
+import { Button } from "@/ui";
 
 interface ChannelDetailProps {
 	agentId: string;
@@ -19,21 +20,23 @@ interface ChannelDetailProps {
 function CancelButton({ onClick }: { onClick: () => void }) {
 	const [cancelling, setCancelling] = useState(false);
 	return (
-		<button
+		<Button
 			type="button"
+			variant="ghost"
+			size="icon"
 			disabled={cancelling}
 			onClick={(e) => {
 				e.stopPropagation();
 				setCancelling(true);
 				onClick();
 			}}
-			className="ml-auto flex-shrink-0 rounded p-1 text-ink-faint/50 transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-40"
+			className="ml-auto h-7 w-7 flex-shrink-0 text-ink-faint/50 hover:bg-red-500/15 hover:text-red-400"
 			title="Cancel"
 		>
 			<svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
 				<path d="M4 4l8 8M12 4l-8 8" />
 			</svg>
-		</button>
+		</Button>
 	);
 }
 
@@ -105,10 +108,11 @@ function BranchRunItem({ item }: { item: TimelineBranchRun }) {
 				{formatTimestamp(new Date(item.started_at).getTime())}
 			</span>
 			<div className="min-w-0 flex-1">
-				<button
+				<Button
 					type="button"
 					onClick={() => setExpanded(!expanded)}
-					className="w-full rounded-md bg-violet-500/10 px-3 py-2 text-left transition-colors hover:bg-violet-500/15"
+					variant="ghost"
+					className="h-auto w-full justify-start rounded-md bg-violet-500/10 px-3 py-2 text-left hover:bg-violet-500/15"
 				>
 					<div className="flex items-center gap-2">
 						<div className="h-2 w-2 rounded-full bg-violet-400/50" />
@@ -120,7 +124,7 @@ function BranchRunItem({ item }: { item: TimelineBranchRun }) {
 							</span>
 						)}
 					</div>
-				</button>
+				</Button>
 				{expanded && item.conclusion && (
 					<div className="mt-1 rounded-md border border-violet-500/10 bg-violet-500/5 px-3 py-2">
 						<div className="text-sm text-ink-dull">
@@ -142,10 +146,11 @@ function WorkerRunItem({ item }: { item: TimelineWorkerRun }) {
 				{formatTimestamp(new Date(item.started_at).getTime())}
 			</span>
 			<div className="min-w-0 flex-1">
-				<button
+				<Button
 					type="button"
 					onClick={() => setExpanded(!expanded)}
-					className="w-full rounded-md bg-amber-500/10 px-3 py-2 text-left transition-colors hover:bg-amber-500/15"
+					variant="ghost"
+					className="h-auto w-full justify-start rounded-md bg-amber-500/10 px-3 py-2 text-left hover:bg-amber-500/15"
 				>
 					<div className="flex items-center gap-2">
 						<div className="h-2 w-2 rounded-full bg-amber-400/50" />
@@ -157,7 +162,7 @@ function WorkerRunItem({ item }: { item: TimelineWorkerRun }) {
 							</span>
 						)}
 					</div>
-				</button>
+				</Button>
 				{expanded && item.result && (
 					<div className="mt-1 rounded-md border border-amber-500/10 bg-amber-500/5 px-3 py-2">
 						<div className="text-sm text-ink-dull">
@@ -298,20 +303,18 @@ export function ChannelDetail({ agentId, channelId, channel, liveState, onLoadMo
 								<span className="ml-1 text-tiny text-ink-faint">typing</span>
 							</div>
 						)}
-						<button
+						<Button
 							onClick={() => setCortexOpen(!cortexOpen)}
-							className={`rounded p-1.5 transition-colors ${
-								cortexOpen
-									? "bg-violet-500/20 text-violet-400"
-									: "text-ink-faint hover:bg-app-darkBox hover:text-ink-dull"
-							}`}
+							variant={cortexOpen ? "secondary" : "ghost"}
+							size="icon"
+							className={`h-8 w-8 ${cortexOpen ? "bg-violet-500/20 text-violet-400" : ""}`}
 							title="Toggle cortex chat"
 						>
 							<svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
 								<circle cx="8" cy="8" r="3" />
 								<path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" />
 							</svg>
-						</button>
+				</Button>
 					</div>
 				</div>
 

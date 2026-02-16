@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { api, type ChannelInfo } from "@/api/client";
 import type { ChannelLiveState } from "@/hooks/useChannelLiveState";
+import { Button } from "@/ui";
 
 interface SidebarProps {
 	liveStates: Record<string, ChannelLiveState>;
@@ -51,28 +52,30 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 		>
 			{/* Logo + collapse toggle */}
 			<div className="flex h-12 items-center border-b border-sidebar-line px-3">
-				{collapsed ? (
-					<button onClick={onToggle} className="flex h-full w-full items-center justify-center">
-						<img src="/ball.png" alt="" className="h-6 w-6" draggable={false} />
-					</button>
-				) : (
-					<div className="flex flex-1 items-center justify-between">
-						<Link to="/" className="flex items-center gap-2">
-							<img src="/ball.png" alt="" className="h-6 w-6 flex-shrink-0" draggable={false} />
-							<span className="whitespace-nowrap font-plex text-sm font-semibold text-sidebar-ink">
-								Spacebot
-							</span>
-						</Link>
-						<button
-							onClick={onToggle}
-							className="flex h-6 w-6 items-center justify-center rounded text-sidebar-inkFaint hover:bg-sidebar-selected/50 hover:text-sidebar-inkDull"
-						>
-							<svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-								<path d="M10 3L5 8l5 5" />
-							</svg>
-						</button>
-					</div>
-				)}
+			{collapsed ? (
+				<Button onClick={onToggle} variant="ghost" size="icon" className="h-full w-full">
+					<img src="/ball.png" alt="" className="h-6 w-6" draggable={false} />
+				</Button>
+			) : (
+				<div className="flex flex-1 items-center justify-between">
+					<Link to="/" className="flex items-center gap-2">
+						<img src="/ball.png" alt="" className="h-6 w-6 flex-shrink-0" draggable={false} />
+						<span className="whitespace-nowrap font-plex text-sm font-semibold text-sidebar-ink">
+							Spacebot
+						</span>
+					</Link>
+					<Button
+						onClick={onToggle}
+						variant="ghost"
+						size="icon"
+						className="h-6 w-6 text-sidebar-inkFaint hover:bg-sidebar-selected/50 hover:text-sidebar-inkDull"
+					>
+						<svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+							<path d="M10 3L5 8l5 5" />
+						</svg>
+					</Button>
+				</div>
+			)}
 			</div>
 
 			{/* Collapsed: icon-only nav */}
@@ -207,9 +210,13 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 								})}
 							</div>
 						)}
-						<button className="mx-2 mt-1 flex items-center justify-center rounded-md border border-dashed border-sidebar-line px-2 py-1.5 text-sm text-sidebar-inkFaint hover:border-sidebar-inkFaint hover:text-sidebar-inkDull">
+						<Button
+							variant="outline"
+							size="sm"
+							className="mx-2 mt-1 w-auto justify-center border-dashed border-sidebar-line text-sidebar-inkFaint hover:border-sidebar-inkFaint hover:text-sidebar-inkDull"
+						>
 							+ New Agent
-						</button>
+						</Button>
 					</div>
 				</>
 			)}

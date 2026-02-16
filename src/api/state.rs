@@ -6,6 +6,7 @@ use crate::agent::status::StatusBlock;
 use crate::config::{Binding, DiscordPermissions, RuntimeConfig, SlackPermissions};
 use crate::cron::{CronStore, Scheduler};
 use crate::memory::MemorySearch;
+use crate::messaging::MessagingManager;
 use crate::update::SharedUpdateStatus;
 use crate::{ProcessEvent, ProcessId};
 
@@ -63,6 +64,8 @@ pub struct ApiState {
     pub slack_permissions: RwLock<Option<Arc<ArcSwap<SlackPermissions>>>>,
     /// Shared reference to the bindings ArcSwap (same instance used by the main loop and file watcher).
     pub bindings: RwLock<Option<Arc<ArcSwap<Vec<Binding>>>>>,
+    /// Shared messaging manager for runtime adapter addition.
+    pub messaging_manager: RwLock<Option<Arc<MessagingManager>>>,
     /// Sender to signal the main event loop that provider keys have been configured.
     pub provider_setup_tx: mpsc::Sender<crate::ProviderSetupEvent>,
     /// Shared update status, populated by the background update checker.
@@ -165,6 +168,7 @@ impl ApiState {
             discord_permissions: RwLock::new(None),
             slack_permissions: RwLock::new(None),
             bindings: RwLock::new(None),
+            messaging_manager: RwLock::new(None),
             provider_setup_tx,
             update_status: crate::update::new_shared_status(),
         }
@@ -345,6 +349,11 @@ impl ApiState {
     /// Share the bindings ArcSwap with the API so reads get hot-reloaded values.
     pub async fn set_bindings(&self, bindings: Arc<ArcSwap<Vec<Binding>>>) {
         *self.bindings.write().await = Some(bindings);
+    }
+
+    /// Share the messaging manager for runtime adapter addition from API handlers.
+    pub async fn set_messaging_manager(&self, manager: Arc<MessagingManager>) {
+        *self.messaging_manager.write().await = Some(manager);
     }
 }
 

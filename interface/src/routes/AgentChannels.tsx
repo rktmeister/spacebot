@@ -7,7 +7,13 @@ import {
 	type MessagingStatusResponse,
 } from "@/api/client";
 import { ChannelCard } from "@/components/ChannelCard";
-import { Modal } from "@/ui/Modal";
+import {
+	Button,
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+} from "@/ui";
 import { platformColor } from "@/lib/format";
 import type { ChannelLiveState } from "@/hooks/useChannelLiveState";
 
@@ -234,9 +240,11 @@ export function AgentChannels({ agentId, liveStates }: AgentChannelsProps) {
 						))}
 
 						{/* Connect Channel card */}
-						<button
+						<Button
 							onClick={openModal}
-							className="flex min-h-[100px] flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-app-line/60 bg-transparent transition-colors hover:border-accent/50 hover:bg-app-darkBox/30"
+							variant="outline"
+							size="lg"
+							className="flex min-h-[100px] flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-app-line/60 bg-transparent hover:border-accent/50 hover:bg-app-darkBox/30"
 						>
 							<div className="flex h-8 w-8 items-center justify-center rounded-full border border-app-line/80 text-ink-faint">
 								<svg
@@ -250,81 +258,85 @@ export function AgentChannels({ agentId, liveStates }: AgentChannelsProps) {
 								</svg>
 							</div>
 							<span className="text-sm text-ink-faint">Connect Channel</span>
-						</button>
+						</Button>
 					</div>
 				)}
 			</div>
 
 			{/* Connect Channel Modal */}
-			<Modal
-				isOpen={isModalOpen}
-				onClose={closeModal}
-				title={
-					modalStep === "select"
-						? "Connect Channel"
-						: `Connect ${formData.platform.charAt(0).toUpperCase() + formData.platform.slice(1)}`
-				}
-			>
-				{modalStep === "select" ? (
-					<PlatformSelect
-						messagingStatus={messagingStatus}
-						onSelect={selectPlatform}
-					/>
-				) : (
-					<PlatformForm
-						formData={formData}
-						setFormData={setFormData}
-						needsCredentials={needsCredentials(formData.platform)}
-						onBack={() => setModalStep("select")}
-						onSave={handleSave}
-						isPending={createMutation.isPending}
-						result={createMutation.data}
-						existingBindings={bindingsData?.bindings ?? []}
-						onDeleteBinding={setDeleteConfirm}
-					/>
-				)}
-			</Modal>
+			<Dialog open={isModalOpen} onOpenChange={(open) => !open && closeModal()}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>
+							{modalStep === "select"
+								? "Connect Channel"
+								: `Connect ${formData.platform.charAt(0).toUpperCase() + formData.platform.slice(1)}`}
+						</DialogTitle>
+					</DialogHeader>
+					{modalStep === "select" ? (
+						<PlatformSelect
+							messagingStatus={messagingStatus}
+							onSelect={selectPlatform}
+						/>
+					) : (
+						<PlatformForm
+							formData={formData}
+							setFormData={setFormData}
+							needsCredentials={needsCredentials(formData.platform)}
+							onBack={() => setModalStep("select")}
+							onSave={handleSave}
+							isPending={createMutation.isPending}
+							result={createMutation.data}
+							existingBindings={bindingsData?.bindings ?? []}
+							onDeleteBinding={setDeleteConfirm}
+						/>
+					)}
+				</DialogContent>
+			</Dialog>
 
 			{/* Delete Binding Confirmation */}
-			<Modal
-				isOpen={!!deleteConfirm}
-				onClose={() => setDeleteConfirm(null)}
-				title="Remove Binding?"
-			>
-				{deleteConfirm && (
-					<>
-						<p className="mb-4 text-sm text-ink-dull">
-							This will remove the{" "}
-							<span className={`inline-flex rounded-md px-1.5 py-0.5 text-tiny font-medium ${platformColor(deleteConfirm.channel)}`}>
-								{deleteConfirm.channel}
-							</span>{" "}
-							binding
-							{deleteConfirm.guild_id && (
-								<> for guild <code className="rounded bg-app-darkBox px-1 py-0.5 text-ink">{deleteConfirm.guild_id}</code></>
-							)}
-							{deleteConfirm.workspace_id && (
-								<> for workspace <code className="rounded bg-app-darkBox px-1 py-0.5 text-ink">{deleteConfirm.workspace_id}</code></>
-							)}
-							. Messages from this source will fall back to the default agent.
-						</p>
+			<Dialog open={!!deleteConfirm} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Remove Binding?</DialogTitle>
+					</DialogHeader>
+					{deleteConfirm && (
+						<>
+							<p className="mb-4 text-sm text-ink-dull">
+								This will remove the{" "}
+								<span className={`inline-flex rounded-md px-1.5 py-0.5 text-tiny font-medium ${platformColor(deleteConfirm.channel)}`}>
+									{deleteConfirm.channel}
+								</span>{" "}
+								binding
+								{deleteConfirm.guild_id && (
+									<> for guild <code className="rounded bg-app-darkBox px-1 py-0.5 text-ink">{deleteConfirm.guild_id}</code></>
+								)}
+								{deleteConfirm.workspace_id && (
+									<> for workspace <code className="rounded bg-app-darkBox px-1 py-0.5 text-ink">{deleteConfirm.workspace_id}</code></>
+								)}
+								. Messages from this source will fall back to the default agent.
+							</p>
 						<div className="flex justify-end gap-2">
-							<button
+							<Button
+								variant="ghost"
+								size="sm"
 								onClick={() => setDeleteConfirm(null)}
-								className="rounded-lg px-3 py-1.5 text-sm text-ink-dull transition-colors hover:text-ink"
 							>
 								Cancel
-							</button>
-							<button
+							</Button>
+							<Button
+								variant="destructive"
+								size="sm"
 								onClick={() => deleteMutation.mutate(deleteConfirm)}
-								disabled={deleteMutation.isPending}
-								className="rounded-lg bg-red-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+								loading={deleteMutation.isPending}
 							>
-								{deleteMutation.isPending ? "Removing..." : "Remove"}
-							</button>
+								Remove
+							</Button>
 						</div>
-					</>
-				)}
-			</Modal>
+						</>
+					)}
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }
@@ -361,10 +373,11 @@ function PlatformSelect({
 			{platforms.map((platform) => {
 				const status = messagingStatus?.[platform.id];
 				return (
-					<button
+					<Button
 						key={platform.id}
 						onClick={() => onSelect(platform.id)}
-						className="flex items-center gap-3 rounded-lg border border-app-line bg-app-darkBox p-4 text-left transition-colors hover:border-accent/50 hover:bg-app-darkBox/80"
+						variant="outline"
+						className="h-auto justify-start gap-3 rounded-lg border border-app-line bg-app-darkBox p-4 text-left hover:border-accent/50 hover:bg-app-darkBox/80"
 					>
 						<span
 							className={`inline-flex rounded-md px-2 py-1 text-xs font-medium ${platformColor(platform.id)}`}
@@ -393,7 +406,7 @@ function PlatformSelect({
 										: "Not configured"}
 							</span>
 						)}
-					</button>
+					</Button>
 				);
 			})}
 		</div>
@@ -637,13 +650,15 @@ function PlatformForm({
 										</span>
 									)}
 								</div>
-								<button
-									onClick={() => onDeleteBinding(binding)}
-									className="rounded-md px-2 py-1 text-tiny text-ink-faint transition-colors hover:bg-app-lightBox hover:text-red-400"
-									title="Remove binding"
-								>
-									Remove
-								</button>
+							<Button
+								onClick={() => onDeleteBinding(binding)}
+								variant="ghost"
+								size="sm"
+								className="text-tiny hover:text-red-400"
+								title="Remove binding"
+							>
+								Remove
+							</Button>
 							</div>
 						))}
 					</div>
@@ -652,21 +667,12 @@ function PlatformForm({
 
 			{/* Actions */}
 			<div className="mt-2 flex justify-between">
-				<button
-					onClick={onBack}
-					className="rounded-lg px-3 py-1.5 text-sm text-ink-dull transition-colors hover:text-ink"
-				>
+				<Button variant="ghost" size="sm" onClick={onBack}>
 					Back
-				</button>
-				<div className="flex gap-2">
-					<button
-						onClick={onSave}
-						disabled={isPending}
-						className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/80 disabled:opacity-50"
-					>
-						{isPending ? "Saving..." : "Add Binding"}
-					</button>
-				</div>
+				</Button>
+				<Button size="sm" onClick={onSave} loading={isPending}>
+					Add Binding
+				</Button>
 			</div>
 		</div>
 	);

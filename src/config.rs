@@ -1840,6 +1840,7 @@ pub fn spawn_file_watcher(
     slack_permissions: Option<Arc<arc_swap::ArcSwap<SlackPermissions>>>,
     telegram_permissions: Option<Arc<arc_swap::ArcSwap<TelegramPermissions>>>,
     bindings: Arc<arc_swap::ArcSwap<Vec<Binding>>>,
+    messaging_manager: Option<Arc<crate::messaging::MessagingManager>>,
 ) -> tokio::task::JoinHandle<()> {
     use notify::{Event, RecursiveMode, Watcher};
     use std::time::Duration;
@@ -1850,7 +1851,18 @@ pub fn spawn_file_watcher(
         let mut watcher = match notify::recommended_watcher(
             move |result: std::result::Result<Event, notify::Error>| {
                 if let Ok(event) = result {
-                    let _ = tx.send(event);
+                    // Only forward data modification events, not metadata/access changes
+                    use notify::EventKind;
+                    match &event.kind {
+                        EventKind::Create(_) | EventKind::Modify(notify::event::ModifyKind::Data(_)) | EventKind::Remove(_) => {
+                            let _ = tx.send(event);
+                        }
+                        // Also forward Any/Other modify events (some backends don't distinguish)
+                        EventKind::Modify(notify::event::ModifyKind::Any) => {
+                            let _ = tx.send(event);
+                        }
+                        _ => {}
+                    }
                 }
             },
         ) {
@@ -1892,6 +1904,16 @@ pub fn spawn_file_watcher(
 
         tracing::info!("file watcher started");
 
+        // Track config.toml content hash to skip no-op reloads
+        let mut last_config_hash: u64 = std::fs::read(&config_path)
+            .map(|bytes| {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                bytes.hash(&mut hasher);
+                hasher.finish()
+            })
+            .unwrap_or(0);
+
         // Debounce loop: collect events for 2 seconds, then reload
         let debounce = Duration::from_secs(2);
 
@@ -1909,7 +1931,7 @@ pub fn spawn_file_watcher(
             }
 
             // Categorize what changed
-            let config_changed = changed_paths.iter().any(|p| p.ends_with("config.toml"));
+            let mut config_changed = changed_paths.iter().any(|p| p.ends_with("config.toml"));
             let identity_changed = changed_paths.iter().any(|p| {
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 matches!(name, "SOUL.md" | "IDENTITY.md" | "USER.md")
@@ -1917,6 +1939,32 @@ pub fn spawn_file_watcher(
             let skills_changed = changed_paths
                 .iter()
                 .any(|p| p.to_string_lossy().contains("skills"));
+
+            // Skip entirely if nothing relevant changed
+            if !config_changed && !identity_changed && !skills_changed {
+                continue;
+            }
+
+            // Skip config reload if file content hasn't actually changed
+            if config_changed {
+                let current_hash: u64 = std::fs::read(&config_path)
+                    .map(|bytes| {
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        bytes.hash(&mut hasher);
+                        hasher.finish()
+                    })
+                    .unwrap_or(0);
+                if current_hash == last_config_hash {
+                    config_changed = false;
+                    // If config was the only thing that "changed", skip entirely
+                    if !identity_changed && !skills_changed {
+                        continue;
+                    }
+                } else {
+                    last_config_hash = current_hash;
+                }
+            }
 
             let changed_summary: Vec<&str> = [
                 config_changed.then_some("config"),
@@ -1975,6 +2023,79 @@ pub fn spawn_file_watcher(
                         perms.store(Arc::new(new_perms));
                         tracing::info!("telegram permissions reloaded");
                     }
+                }
+
+                // Hot-start adapters that are newly enabled in the config
+                if let Some(ref manager) = messaging_manager {
+                    let rt = tokio::runtime::Handle::current();
+                    let manager = manager.clone();
+                    let config = config.clone();
+                    let discord_permissions = discord_permissions.clone();
+                    let slack_permissions = slack_permissions.clone();
+                    let telegram_permissions = telegram_permissions.clone();
+
+                    rt.spawn(async move {
+                        // Discord: start if enabled and not already running
+                        if let Some(discord_config) = &config.messaging.discord {
+                            if discord_config.enabled && !manager.has_adapter("discord").await {
+                                let perms = match discord_permissions {
+                                    Some(ref existing) => existing.clone(),
+                                    None => {
+                                        let perms = DiscordPermissions::from_config(discord_config, &config.bindings);
+                                        Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                    }
+                                };
+                                let adapter = crate::messaging::discord::DiscordAdapter::new(
+                                    &discord_config.token,
+                                    perms,
+                                );
+                                if let Err(error) = manager.register_and_start(adapter).await {
+                                    tracing::error!(%error, "failed to hot-start discord adapter from config change");
+                                }
+                            }
+                        }
+
+                        // Slack: start if enabled and not already running
+                        if let Some(slack_config) = &config.messaging.slack {
+                            if slack_config.enabled && !manager.has_adapter("slack").await {
+                                let perms = match slack_permissions {
+                                    Some(ref existing) => existing.clone(),
+                                    None => {
+                                        let perms = SlackPermissions::from_config(slack_config, &config.bindings);
+                                        Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                    }
+                                };
+                                let adapter = crate::messaging::slack::SlackAdapter::new(
+                                    &slack_config.bot_token,
+                                    &slack_config.app_token,
+                                    perms,
+                                );
+                                if let Err(error) = manager.register_and_start(adapter).await {
+                                    tracing::error!(%error, "failed to hot-start slack adapter from config change");
+                                }
+                            }
+                        }
+
+                        // Telegram: start if enabled and not already running
+                        if let Some(telegram_config) = &config.messaging.telegram {
+                            if telegram_config.enabled && !manager.has_adapter("telegram").await {
+                                let perms = match telegram_permissions {
+                                    Some(ref existing) => existing.clone(),
+                                    None => {
+                                        let perms = TelegramPermissions::from_config(telegram_config, &config.bindings);
+                                        Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                    }
+                                };
+                                let adapter = crate::messaging::telegram::TelegramAdapter::new(
+                                    &telegram_config.token,
+                                    perms,
+                                );
+                                if let Err(error) = manager.register_and_start(adapter).await {
+                                    tracing::error!(%error, "failed to hot-start telegram adapter from config change");
+                                }
+                            }
+                        }
+                    });
                 }
             }
 

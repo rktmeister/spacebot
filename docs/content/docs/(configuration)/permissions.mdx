@@ -9,7 +9,7 @@ Per-agent permission system that controls what tools can do, enforces inter-agen
 
 ## Design Principles
 
-**The container is the OS-level sandbox.** On spacebot.sh, each user runs in an isolated Fly Machine. Self-hosters who need OS-level isolation can run Spacebot in Docker themselves. The permissions system does not attempt to replicate container-level security — it handles inter-agent boundaries and tool-level restrictions within a single Spacebot process.
+**The container is the OS-level sandbox.** On spacebot.sh, each user runs in an isolated container. Self-hosters who need OS-level isolation can run Spacebot in Docker themselves. The permissions system does not attempt to replicate container-level security — it handles inter-agent boundaries and tool-level restrictions within a single Spacebot process.
 
 **Deny is an error, not invisible.** When a tool call is denied, the tool still appears in the LLM's tool list, but returns a structured error explaining the restriction. The LLM can reason about the denial and adapt. This is better than hiding tools (which causes the LLM to attempt workarounds) and better than silent failures (which cause confusion).
 
@@ -32,12 +32,14 @@ file_write = "workspace"  # can only write within its own workspace + allowed pa
 ```
 
 Values:
+
 - `"deny"` — file read/write operations return permission denied
 - `"workspace"` — confined to the agent's workspace directory tree. All paths are resolved, canonicalized, and checked for symlink escapes before access.
 - `"allow"` — unrestricted filesystem access (subject to OS-level permissions)
 - Array of globs — explicit allowlist: `["/home/me/projects/**", "/tmp/**"]`
 
 Workspace confinement means the agent can access:
+
 ```
 ~/.spacebot/agents/{agent_id}/workspace/   # identity files, prompt overrides
 ~/.spacebot/agents/{agent_id}/data/        # databases (read-only for file tool, managed by Spacebot)
@@ -45,6 +47,7 @@ Workspace confinement means the agent can access:
 ```
 
 But NOT:
+
 ```
 ~/.spacebot/agents/{other_agent}/          # other agents' data
 ~/.spacebot/config.toml                    # instance config (contains API keys)
@@ -61,6 +64,7 @@ shell = "allow"           # unrestricted shell access
 ```
 
 Values:
+
 - `"deny"` — shell tool returns permission denied on every call
 - `"workspace"` — shell commands can only run within the agent's workspace. The `working_dir` is forced to the workspace root. Commands that reference absolute paths outside the workspace are blocked via path scanning.
 - `"allow"` — unrestricted shell execution
@@ -77,11 +81,13 @@ exec = "deny"             # no exec at all
 ```
 
 Values:
+
 - `"deny"` — exec tool returns permission denied
 - `"allowlist"` — only binaries in the allowlist can be executed (see below)
 - `"allow"` — unrestricted
 
 Allowlist configuration:
+
 ```toml
 [agents.research-bot.permissions]
 exec = "allowlist"
@@ -106,6 +112,7 @@ browser_js_eval = false   # browser allowed, but no arbitrary JS execution
 ```
 
 Fields:
+
 - `browser` — `true` or `false`. When false, all browser tool actions return permission denied.
 - `browser_js_eval` — `true` or `false`. Gates the `evaluate` action independently. Defaults to `false`.
 - `browser_url_allowlist` — optional array of URL patterns. When set, `navigate` only allows matching URLs. Patterns support `*` wildcards: `["https://*.github.com/*", "https://docs.rs/*"]`.
@@ -120,10 +127,12 @@ network_outbound = false  # no outbound HTTP
 ```
 
 When `false`:
+
 - Shell/exec commands that attempt network access still run (we can't intercept syscalls without a container), but this is defense-in-depth — the LLM is told not to make network requests, and the browser tool's navigate action is blocked.
 - The web_search tool (if it exists) returns permission denied.
 
 When `true`:
+
 - Private IP ranges are blocked by default (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x, metadata endpoints). This prevents SSRF against local services.
 - `network_allow_private` can override this: `network_allow_private = true` or `network_allow_private = ["192.168.1.100"]` for specific hosts.
 
@@ -184,6 +193,7 @@ Skip profiles, set each permission individually.
 When building a worker's `ToolServer`, check the agent's permissions. Denied tools are still registered (the LLM sees them), but their `call()` implementation checks permissions first and returns an error result if denied.
 
 Why register denied tools instead of hiding them:
+
 - The LLM knows the tool exists and understands why it can't use it
 - The error message can suggest alternatives ("file access is restricted to the workspace — use a relative path instead of an absolute one")
 - Prevents the LLM from inventing workarounds because it doesn't know the tool exists
@@ -213,11 +223,13 @@ This pipeline is shared by the file tool, shell tool (for `working_dir`), and ex
 The hook becomes a security boundary:
 
 **`on_tool_call()`** — before execution:
+
 - Check tool name against agent permissions
 - For file/shell/exec tools, scan args for paths and validate against permissions
 - Return `ToolCallHookAction::Skip` with an error message on denial
 
 **`on_tool_result()`** — after execution:
+
 - Leak detection with blocking: scan output for API key patterns
 - On detection: redact the secret from the result string, replace with `[REDACTED]`
 - Log the detection with `tracing::warn`
@@ -225,6 +237,7 @@ The hook becomes a security boundary:
 - Also scan for the instance's own API key values (loaded from config at startup) as literal string matches
 
 **`on_completion_response()`** — before response reaches the user:
+
 - Same leak detection as tool results
 - Redact any secrets that made it through
 
@@ -272,7 +285,7 @@ Default when no `[permissions]` block exists: all tools return permission denied
 
 ## What This Does NOT Do
 
-**OS-level sandboxing.** No Docker containers, no seccomp profiles, no capability dropping. The Fly Machine (spacebot.sh) or the user's own Docker setup handles this. Spacebot's permissions system is application-level.
+**OS-level sandboxing.** No Docker containers, no seccomp profiles, no capability dropping. Provisioned instances (spacebot.sh) or the user's own Docker setup handles this. Spacebot's permissions system is application-level.
 
 **Shell command parsing.** We don't parse shell pipelines or analyze command strings for dangerous patterns. For `shell = "workspace"`, the `working_dir` is confined but the command itself runs unrestricted within that directory. Full command analysis is fragile and has diminishing returns — if you need that level of restriction, use `shell = "deny"`.
 

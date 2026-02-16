@@ -366,6 +366,7 @@ async fn run(
             slack_permissions,
             telegram_permissions,
             bindings.clone(),
+            Some(messaging_manager.clone()),
         );
     } else {
         // Start file watcher in setup mode (no agents to watch yet)
@@ -377,6 +378,7 @@ async fn run(
             None,
             None,
             bindings.clone(),
+            None,
         );
     }
 
@@ -642,6 +644,7 @@ async fn run(
                                             new_slack_permissions,
                                             new_telegram_permissions,
                                             bindings.clone(),
+                                            Some(messaging_manager.clone()),
                                         );
                                         tracing::info!("agents initialized after provider setup");
                                     }
@@ -859,7 +862,7 @@ async fn initialize_agents(
     }
 
     // Initialize messaging adapters
-    let mut new_messaging_manager = spacebot::messaging::MessagingManager::new();
+    let new_messaging_manager = spacebot::messaging::MessagingManager::new();
 
     // Shared Discord permissions (hot-reloadable via file watcher)
     *discord_permissions = config.messaging.discord.as_ref().map(|discord_config| {
@@ -878,7 +881,7 @@ async fn initialize_agents(
                 &discord_config.token,
                 discord_permissions.clone().expect("discord permissions initialized when discord is enabled"),
             );
-            new_messaging_manager.register(adapter);
+            new_messaging_manager.register(adapter).await;
         }
     }
 
@@ -898,7 +901,7 @@ async fn initialize_agents(
                 &slack_config.app_token,
                 slack_permissions.clone().expect("slack permissions initialized when slack is enabled"),
             );
-            new_messaging_manager.register(adapter);
+            new_messaging_manager.register(adapter).await;
         }
     }
 
@@ -914,7 +917,7 @@ async fn initialize_agents(
                 &telegram_config.token,
                 telegram_permissions.clone().expect("telegram permissions initialized when telegram is enabled"),
             );
-            new_messaging_manager.register(adapter);
+            new_messaging_manager.register(adapter).await;
         }
     }
 
@@ -924,11 +927,12 @@ async fn initialize_agents(
                 webhook_config.port,
                 &webhook_config.bind,
             );
-            new_messaging_manager.register(adapter);
+            new_messaging_manager.register(adapter).await;
         }
     }
 
     *messaging_manager = Arc::new(new_messaging_manager);
+    api_state.set_messaging_manager(messaging_manager.clone()).await;
 
     // Start all messaging adapters and get the merged inbound stream
     let new_inbound = messaging_manager

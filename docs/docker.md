@@ -1,8 +1,3 @@
----
-title: Docker
-description: Run Spacebot in a container with slim or full image variants.
----
-
 # Docker
 
 Run Spacebot in a container. Two image variants: `slim` (no browser) and `full` (includes Chromium for browser workers).
@@ -106,7 +101,7 @@ Config values can reference environment variables with `env:VAR_NAME`:
 anthropic_key = "env:ANTHROPIC_API_KEY"
 ```
 
-See [Configuration](/docs/config) for the full config reference.
+See [config.md](config.md) for the full config reference.
 
 ## Docker Compose
 
@@ -202,55 +197,6 @@ healthcheck:
 - Graceful shutdown on `SIGTERM` (what `docker stop` sends). Drains active channels, closes database connections.
 - The PID file and Unix socket (used in daemon mode) are not created.
 
-## Updates
-
-Spacebot checks for new releases on startup and every hour. When a new version is available, a banner appears in the web UI.
-
-### Manual Update
-
-```bash
-docker pull ghcr.io/spacedriveapp/spacebot:slim
-docker compose up -d
-```
-
-### One-Click Update
-
-Mount the Docker socket to enable updating directly from the web UI:
-
-```yaml
-services:
-  spacebot:
-    image: ghcr.io/spacedriveapp/spacebot:slim
-    container_name: spacebot
-    restart: unless-stopped
-    ports:
-      - "19898:19898"
-    volumes:
-      - spacebot-data:/data
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-```
-
-When the socket is mounted, the update banner shows an **Update now** button that pulls the new image and recreates the container automatically. Your `/data` volume is preserved across updates.
-
-Without the socket mount, the banner still notifies you of new versions but you'll need to update manually.
-
-### Update API
-
-You can also check for and trigger updates programmatically:
-
-```bash
-# Check for updates
-curl http://localhost:19898/api/update/check
-
-# Force a fresh check
-curl -X POST http://localhost:19898/api/update/check
-
-# Apply update (requires Docker socket)
-curl -X POST http://localhost:19898/api/update/apply
-```
-
 ## CI / Releases
 
 Images are built and pushed to `ghcr.io/spacedriveapp/spacebot` via GitHub Actions (`.github/workflows/release.yml`).
@@ -262,13 +208,16 @@ Images are built and pushed to `ghcr.io/spacedriveapp/spacebot` via GitHub Actio
 
 **Tags pushed per release:**
 
-| Tag           | Description              |
-| ------------- | ------------------------ |
-| `v0.1.0-slim` | Versioned slim           |
-| `v0.1.0-full` | Versioned full           |
-| `slim`        | Rolling slim             |
-| `full`        | Rolling full             |
-| `latest`      | Rolling (points to full) |
+| Tag           | Description                |
+| ------------- | -------------------------- |
+| `v0.1.0-slim` | Versioned slim             |
+| `v0.1.0-full` | Versioned full             |
+| `v0.1.0`      | Versioned (points to full) |
+| `slim`        | Rolling slim               |
+| `full`        | Rolling full               |
+| `latest`      | Rolling (points to full)   |
+
+The `latest` tag always points to the `full` variant.
 
 ```bash
 # Manual single-instance deploy

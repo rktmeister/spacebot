@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useCortexChat, type ToolActivity } from "@/hooks/useCortexChat";
 import { Markdown } from "@/components/Markdown";
+import { Button } from "@/ui";
 
 interface CortexChatPanelProps {
 	agentId: string;
@@ -72,26 +73,30 @@ export function CortexChatPanel({ agentId, channelId, onClose }: CortexChatPanel
 					)}
 				</div>
 				<div className="flex items-center gap-1">
-					<button
+					<Button
 						onClick={newThread}
+						variant="ghost"
+						size="icon"
 						disabled={isStreaming}
-						className="rounded p-1 text-tiny text-ink-faint transition-colors hover:bg-app-darkBox hover:text-ink-dull disabled:opacity-30"
+						className="h-7 w-7"
 						title="New chat"
 					>
 						<svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
 							<path d="M8 3v10M3 8h10" />
 						</svg>
-					</button>
+					</Button>
 					{onClose && (
-						<button
+						<Button
 							onClick={onClose}
-							className="rounded p-1 text-ink-faint transition-colors hover:bg-app-darkBox hover:text-ink-dull"
+							variant="ghost"
+							size="icon"
+							className="h-7 w-7"
 							title="Close"
 						>
 							<svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
 								<path d="M4 4l8 8M12 4l-8 8" />
 							</svg>
-						</button>
+						</Button>
 					)}
 				</div>
 			</div>
@@ -162,13 +167,14 @@ export function CortexChatPanel({ agentId, channelId, onClose }: CortexChatPanel
 						disabled={isStreaming}
 						className="flex-1 rounded-md border border-app-line bg-app-darkBox px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint focus:border-violet-500/50 focus:outline-none disabled:opacity-50"
 					/>
-					<button
-						type="submit"
-						disabled={isStreaming || !input.trim()}
-						className="rounded-md bg-violet-500/20 px-3 py-1.5 text-sm font-medium text-violet-400 transition-colors hover:bg-violet-500/30 disabled:opacity-30"
-					>
-						Send
-					</button>
+				<Button
+					type="submit"
+					disabled={isStreaming || !input.trim()}
+					size="sm"
+					className="bg-violet-500/20 text-violet-400 hover:bg-violet-500/30"
+				>
+					Send
+				</Button>
 				</div>
 			</form>
 		</div>

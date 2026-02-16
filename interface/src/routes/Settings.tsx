@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
+import { Button } from "@/ui";
 
 const PROVIDERS = [
 	{
@@ -157,55 +158,60 @@ export function Settings() {
 											</div>
 											{!isEditing && (
 												<div className="flex gap-2">
-													<button
-														onClick={() => {
-															setEditingProvider(provider.id);
-															setKeyInput("");
-															setMessage(null);
-														}}
-														className="rounded-md bg-app-box px-3 py-1.5 text-sm text-ink-dull hover:bg-app-selected hover:text-ink"
-													>
-														{configured ? "Update" : "Add key"}
-													</button>
-													{configured && (
-														<button
-															onClick={() => removeMutation.mutate(provider.id)}
-															disabled={removeMutation.isPending}
-															className="rounded-md px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/10"
+														<Button
+															onClick={() => {
+																setEditingProvider(provider.id);
+																setKeyInput("");
+																setMessage(null);
+															}}
+															variant="secondary"
+															size="sm"
 														>
-															Remove
-														</button>
-													)}
-												</div>
-											)}
+															{configured ? "Update" : "Add key"}
+														</Button>
+														{configured && (
+															<Button
+																onClick={() => removeMutation.mutate(provider.id)}
+																variant="ghost"
+																size="sm"
+																loading={removeMutation.isPending}
+																className="text-red-400 hover:bg-red-500/10"
+															>
+																Remove
+															</Button>
+														)}
+													</div>
+												)}
 										</div>
 										{isEditing && (
 											<div className="mt-3 flex gap-2">
-												<input
-													type="password"
-													value={keyInput}
-													onChange={(e) => setKeyInput(e.target.value)}
-													placeholder={provider.placeholder}
-													autoFocus
-													onKeyDown={(e) => {
-														if (e.key === "Enter") handleSave(provider.id);
-														if (e.key === "Escape") handleCancel();
-													}}
-													className="flex-1 rounded-md border border-app-line bg-app-box px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-												/>
-												<button
-													onClick={() => handleSave(provider.id)}
-													disabled={!keyInput.trim() || updateMutation.isPending}
-													className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-deep disabled:opacity-50"
-												>
-													{updateMutation.isPending ? "Saving..." : "Save"}
-												</button>
-												<button
-													onClick={handleCancel}
-													className="rounded-md px-3 py-1.5 text-sm text-ink-dull hover:text-ink"
-												>
-													Cancel
-												</button>
+													<input
+														type="password"
+														value={keyInput}
+														onChange={(e) => setKeyInput(e.target.value)}
+														placeholder={provider.placeholder}
+														autoFocus
+														onKeyDown={(e) => {
+															if (e.key === "Enter") handleSave(provider.id);
+															if (e.key === "Escape") handleCancel();
+														}}
+														className="flex-1 rounded-md border border-app-line bg-app-box px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+													/>
+													<Button
+															onClick={() => handleSave(provider.id)}
+															disabled={!keyInput.trim()}
+															loading={updateMutation.isPending}
+															size="sm"
+														>
+															Save
+														</Button>
+													<Button
+															onClick={handleCancel}
+															variant="ghost"
+															size="sm"
+														>
+															Cancel
+														</Button>
 											</div>
 										)}
 									</div>
