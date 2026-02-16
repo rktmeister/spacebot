@@ -218,11 +218,3 @@ Images are built and pushed to `ghcr.io/spacedriveapp/spacebot` via GitHub Actio
 | `latest`      | Rolling (points to full)   |
 
 The `latest` tag always points to the `full` variant.
-
-```bash
-# Manual single-instance deploy
-fly launch --image ghcr.io/spacedriveapp/spacebot:slim
-fly volumes create spacebot_data --size 5
-fly secrets set ANTHROPIC_API_KEY="sk-ant-..."
-fly deploy
-```

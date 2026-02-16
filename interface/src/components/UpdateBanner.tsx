@@ -25,7 +25,7 @@ export function UpdateBanner() {
 	const [applyError, setApplyError] = useState<string | null>(null);
 
 	// Platform-managed instances get updates via rollout, not self-service
-	if (!data || !data.update_available || dismissed || data.deployment === "fly") return null;
+	if (!data || !data.update_available || dismissed || data.deployment === "hosted") return null;
 
 	const isApplying = applyMutation.isPending;
 
