@@ -55,12 +55,13 @@ pub struct LlmConfig {
     pub anthropic_key: Option<String>,
     pub openai_key: Option<String>,
     pub openrouter_key: Option<String>,
+    pub zhipu_key: Option<String>,
 }
 
 impl LlmConfig {
     /// Check if any provider key is configured.
     pub fn has_any_key(&self) -> bool {
-        self.anthropic_key.is_some() || self.openai_key.is_some() || self.openrouter_key.is_some()
+        self.anthropic_key.is_some() || self.openai_key.is_some() || self.openrouter_key.is_some() || self.zhipu_key.is_some()
     }
 }
 
@@ -851,6 +852,7 @@ struct TomlLlmConfig {
     anthropic_key: Option<String>,
     openai_key: Option<String>,
     openrouter_key: Option<String>,
+    zhipu_key: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -882,8 +884,7 @@ struct TomlRoutingConfig {
     rate_limit_cooldown_secs: Option<u64>,
     #[serde(default)]
     task_overrides: HashMap<String, String>,
-    #[serde(default)]
-    fallbacks: HashMap<String, Vec<String>>,
+    fallbacks: Option<HashMap<String, Vec<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -1079,8 +1080,10 @@ fn resolve_routing(toml: Option<TomlRoutingConfig>, base: &RoutingConfig) -> Rou
     let mut task_overrides = base.task_overrides.clone();
     task_overrides.extend(t.task_overrides);
 
-    let mut fallbacks = base.fallbacks.clone();
-    fallbacks.extend(t.fallbacks);
+    let fallbacks = match t.fallbacks {
+        Some(f) => f,
+        None => base.fallbacks.clone(),
+    };
 
     RoutingConfig {
         channel: t.channel.unwrap_or_else(|| base.channel.clone()),
@@ -1155,6 +1158,7 @@ impl Config {
             anthropic_key: std::env::var("ANTHROPIC_API_KEY").ok(),
             openai_key: std::env::var("OPENAI_API_KEY").ok(),
             openrouter_key: std::env::var("OPENROUTER_API_KEY").ok(),
+            zhipu_key: std::env::var("ZHIPU_API_KEY").ok(),
         };
 
         // Note: We allow boot without provider keys now. System starts in setup mode.
@@ -1220,6 +1224,12 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("OPENROUTER_API_KEY").ok()),
+            zhipu_key: toml
+                .llm
+                .zhipu_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("ZHIPU_API_KEY").ok()),
         };
 
         // Note: We allow boot without provider keys now. System starts in setup mode.
@@ -2010,7 +2020,7 @@ pub fn run_onboarding() -> anyhow::Result<PathBuf> {
     println!();
 
     // 1. Pick a provider
-    let providers = &["Anthropic", "OpenRouter", "OpenAI"];
+    let providers = &["Anthropic", "OpenRouter", "OpenAI", "Z.ai (GLM)"];
     let provider_idx = Select::new()
         .with_prompt("Which LLM provider do you want to use?")
         .items(providers)
@@ -2021,6 +2031,7 @@ pub fn run_onboarding() -> anyhow::Result<PathBuf> {
         0 => ("Anthropic API key", "anthropic_key"),
         1 => ("OpenRouter API key", "openrouter_key"),
         2 => ("OpenAI API key", "openai_key"),
+        3 => ("Z.ai (GLM) API key", "zhipu_key"),
         _ => unreachable!(),
     };
 

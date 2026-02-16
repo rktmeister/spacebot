@@ -44,6 +44,8 @@ impl LlmManager {
                 .ok_or_else(|| LlmError::MissingProviderKey("openai".into()).into()),
             "openrouter" => self.config.openrouter_key.clone()
                 .ok_or_else(|| LlmError::MissingProviderKey("openrouter".into()).into()),
+            "zhipu" => self.config.zhipu_key.clone()
+                .ok_or_else(|| LlmError::MissingProviderKey("zhipu".into()).into()),
             _ => Err(LlmError::UnknownProvider(provider.into()).into()),
         }
     }

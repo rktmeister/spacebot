@@ -69,6 +69,7 @@ impl SpacebotModel {
             "anthropic" => self.call_anthropic(request).await,
             "openai" => self.call_openai(request).await,
             "openrouter" => self.call_openrouter(request).await,
+            "zhipu" => self.call_zhipu(request).await,
             other => Err(CompletionError::ProviderError(format!(
                 "unknown provider: {other}"
             ))),
@@ -509,6 +510,91 @@ impl SpacebotModel {
 
         // OpenRouter returns OpenAI-format responses
         parse_openai_response(response_body, "OpenRouter")
+    }
+
+    async fn call_zhipu(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        let api_key = self
+            .llm_manager
+            .get_api_key("zhipu")
+            .map_err(|e| CompletionError::ProviderError(e.to_string()))?;
+
+        let mut messages = Vec::new();
+
+        if let Some(preamble) = &request.preamble {
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": preamble,
+            }));
+        }
+
+        messages.extend(convert_messages_to_openai(&request.chat_history));
+
+        let mut body = serde_json::json!({
+            "model": self.model_name,
+            "messages": messages,
+        });
+
+        if let Some(max_tokens) = request.max_tokens {
+            body["max_tokens"] = serde_json::json!(max_tokens);
+        }
+
+        if let Some(temperature) = request.temperature {
+            body["temperature"] = serde_json::json!(temperature);
+        }
+
+        if !request.tools.is_empty() {
+            let tools: Vec<serde_json::Value> = request
+                .tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.parameters,
+                        }
+                    })
+                })
+                .collect();
+            body["tools"] = serde_json::json!(tools);
+        }
+
+        let response = self
+            .llm_manager
+            .http_client()
+            .post("https://api.z.ai/api/paas/v4/chat/completions")
+            .header("authorization", format!("Bearer {api_key}"))
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| CompletionError::ProviderError(e.to_string()))?;
+
+        let status = response.status();
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| CompletionError::ProviderError(format!("failed to read response body: {e}")))?;
+
+        let response_body: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| CompletionError::ProviderError(format!(
+                "Z.ai response ({status}) is not valid JSON: {e}\nBody: {}", truncate_body(&response_text)
+            )))?;
+
+        if !status.is_success() {
+            let message = response_body["error"]["message"]
+                .as_str()
+                .unwrap_or("unknown error");
+            return Err(CompletionError::ProviderError(format!(
+                "Z.ai API error ({status}): {message}"
+            )));
+        }
+
+        parse_openai_response(response_body, "Z.ai")
     }
 }
 
