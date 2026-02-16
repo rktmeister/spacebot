@@ -243,7 +243,7 @@ export interface InstanceOverviewResponse {
 	agents: AgentSummary[];
 }
 
-export type Deployment = "docker" | "native";
+export type Deployment = "docker" | "fly" | "native";
 
 export interface UpdateStatus {
 	current_version: string;

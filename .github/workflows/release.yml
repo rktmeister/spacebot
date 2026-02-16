@@ -85,6 +85,14 @@ jobs:
             --tag registry.fly.io/spacebot-image:latest \
             ${{ env.IMAGE }}:latest
 
+      - name: Roll out to hosted instances
+        if: success()
+        run: |
+          curl -sf -X POST https://api.spacebot.sh/api/admin/rollout \
+            -H "Content-Type: application/json" \
+            -H "X-Internal-Key: ${{ secrets.PLATFORM_INTERNAL_KEY }}" \
+            -d '{"image_tag": "${{ steps.version.outputs.version }}"}'
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

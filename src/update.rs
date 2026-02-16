@@ -23,6 +23,9 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(3600);
 #[serde(rename_all = "snake_case")]
 pub enum Deployment {
     Docker,
+    /// Hosted on the Spacebot platform (Fly.io). Updates are managed by the
+    /// platform via image rollouts — the instance itself cannot self-update.
+    Fly,
     Native,
 }
 
@@ -30,6 +33,7 @@ impl Deployment {
     pub fn detect() -> Self {
         match std::env::var("SPACEBOT_DEPLOYMENT").as_deref() {
             Ok("docker") => Deployment::Docker,
+            Ok("fly") => Deployment::Fly,
             _ => Deployment::Native,
         }
     }
