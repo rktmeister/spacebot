@@ -9,6 +9,11 @@ import {
 	DialogContent,
 	DialogHeader,
 	DialogTitle,
+	Badge,
+	Input,
+	TextArea,
+	Toggle,
+	Label,
 } from "@/ui";
 
 // -- Helpers --
@@ -169,11 +174,11 @@ export function AgentCron({ agentId }: AgentCronProps) {
 	return (
 		<div className="flex h-full flex-col">
 			{/* Stats bar */}
-			<div className="flex items-center gap-6 border-b border-app-line px-6 py-3">
-				<Stat label="total" value={totalJobs} color="text-accent" />
-				<Stat label="enabled" value={enabledJobs} color="text-green-500" />
-				<Stat label="runs" value={totalRuns} color="text-ink-dull" />
-				{failedRuns > 0 && <Stat label="failed" value={failedRuns} color="text-red-500" />}
+			<div className="flex items-center gap-2 border-b border-app-line px-6 py-3">
+				<Badge variant="accent" size="md">{totalJobs} total</Badge>
+				<Badge variant="green" size="md">{enabledJobs} enabled</Badge>
+				<Badge variant="outline" size="md">{totalRuns} runs</Badge>
+				{failedRuns > 0 && <Badge variant="red" size="md">{failedRuns} failed</Badge>}
 
 				<div className="flex-1" />
 
@@ -380,15 +385,6 @@ export function AgentCron({ agentId }: AgentCronProps) {
 }
 
 // -- Sub-components --
-
-function Stat({ label, value, color }: { label: string; value: number; color: string }) {
-	return (
-		<div className="flex items-center gap-1.5">
-			<span className={`font-plex text-lg font-semibold tabular-nums ${color}`}>{value}</span>
-			<span className="text-xs text-ink-faint">{label}</span>
-		</div>
-	);
-}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
 	return (

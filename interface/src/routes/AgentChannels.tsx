@@ -13,6 +13,7 @@ import {
 	DialogContent,
 	DialogHeader,
 	DialogTitle,
+	SearchInput,
 } from "@/ui";
 import { platformColor } from "@/lib/format";
 import type { ChannelLiveState } from "@/hooks/useChannelLiveState";
@@ -205,16 +206,12 @@ export function AgentChannels({ agentId, liveStates }: AgentChannelsProps) {
 	return (
 		<div className="flex h-full flex-col">
 			<div className="flex items-center gap-3 border-b border-app-line/50 bg-app-darkBox/20 px-6 py-3">
-				<div className="relative flex-1">
-				<input
-					type="text"
+				<SearchInput
 					placeholder="Search channels..."
 					value={searchQuery}
 					onChange={(event) => setSearchQuery(event.target.value)}
-					className="w-full rounded-md border border-app-line bg-app-darkBox px-3 py-1.5 pl-8 text-sm text-ink placeholder:text-ink-faint focus:border-accent/50 focus:outline-none"
+					className="flex-1"
 				/>
-				<HugeiconsIcon icon={Search01Icon} className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint" />
-				</div>
 			</div>
 			<div className="flex-1 overflow-y-auto p-6">
 				{isLoading ? (

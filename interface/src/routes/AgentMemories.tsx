@@ -18,6 +18,8 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 	ToggleGroup,
+	SearchInput,
+	FilterButton,
 } from "@/ui";
 import { formatTimeAgo } from "@/lib/format";
 import { Search01Icon, ArrowDown01Icon, LeftToRightListBulletIcon, WorkflowSquare01Icon, IdeaIcon } from "@hugeicons/core-free-icons";
@@ -146,16 +148,12 @@ export function AgentMemories({ agentId }: AgentMemoriesProps) {
 			{/* Toolbar */}
 			<div className="flex items-center gap-3 border-b border-app-line/50 bg-app-darkBox/20 px-6 py-3">
 				{/* Search */}
-				<div className="relative flex-1">
-				<input
-					type="text"
+				<SearchInput
 					placeholder="Search memories..."
 					value={searchQuery}
 					onChange={(event) => setSearchQuery(event.target.value)}
-					className="w-full rounded-md border border-app-line bg-app-darkBox px-3 py-1.5 pl-8 text-sm text-ink placeholder:text-ink-faint focus:border-accent/50 focus:outline-none"
+					className="flex-1"
 				/>
-				<HugeiconsIcon icon={Search01Icon} className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint" />
-				</div>
 
 				{/* Sort dropdown */}
 				<DropdownMenu>
@@ -202,24 +200,21 @@ export function AgentMemories({ agentId }: AgentMemoriesProps) {
 
 			{/* Type filter pills */}
 			<div className="flex items-center gap-1.5 border-b border-app-line/50 px-6 py-2">
-				<Button
+				<FilterButton
 					onClick={() => setTypeFilter(null)}
-					variant={typeFilter === null ? "secondary" : "ghost"}
-					size="sm"
-					className="h-6 px-2 text-tiny"
+					active={typeFilter === null}
 				>
 					All
-				</Button>
+				</FilterButton>
 				{MEMORY_TYPES.map((type_) => (
-					<Button
+					<FilterButton
 						key={type_}
 						onClick={() => setTypeFilter(typeFilter === type_ ? null : type_)}
-						variant={typeFilter === type_ ? "secondary" : "ghost"}
-						size="sm"
-						className={`h-6 px-2 text-tiny ${typeFilter === type_ ? TYPE_COLORS[type_] : ""}`}
+						active={typeFilter === type_}
+						colorClass={TYPE_COLORS[type_]}
 					>
 						{type_}
-					</Button>
+					</FilterButton>
 				))}
 				{memories.length > 0 && (
 					<span className="ml-auto text-tiny text-ink-faint">

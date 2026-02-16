@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AgentConfigResponse, type AgentConfigUpdateRequest } from "@/api/client";
-import { Button, SettingSidebarButton } from "@/ui";
-import { PlusSignIcon, MinusSignIcon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
+import { Button, SettingSidebarButton, Input, TextArea, Toggle, NumberStepper } from "@/ui";
+
 
 type SectionId = "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "discord";
 
@@ -257,14 +256,14 @@ function IdentityEditor({ label, description, content, saving, onSave }: Identit
 			</div>
 			</div>
 			<div className="flex-1 overflow-y-auto p-4">
-				<textarea
-					value={value}
-					onChange={handleChange}
-					onKeyDown={handleKeyDown}
-					placeholder={`Write ${label.toLowerCase()} content here...`}
-					className="h-full w-full resize-none rounded-md border border-transparent bg-app-darkBox/30 px-4 py-3 font-mono text-sm leading-relaxed text-ink-dull placeholder:text-ink-faint/40 focus:border-accent/30 focus:outline-none"
-					spellCheck={false}
-				/>
+			<TextArea
+				value={value}
+				onChange={handleChange}
+				onKeyDown={handleKeyDown}
+				placeholder={`Write ${label.toLowerCase()} content here...`}
+				className="h-full w-full resize-none border-transparent bg-app-darkBox/30 px-4 py-3 font-mono leading-relaxed placeholder:text-ink-faint/40"
+				spellCheck={false}
+			/>
 			</div>
 		</>
 	);
@@ -416,7 +415,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							value={localValues.cortex as string}
 							onChange={(v) => handleChange("cortex", v)}
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Rate Limit Cooldown"
 							description="Seconds to deprioritize rate-limited models"
 							value={localValues.rate_limit_cooldown_secs as number}
@@ -429,7 +428,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 			case "tuning":
 				return (
 					<div className="grid gap-4">
-						<ConfigNumberField
+						<NumberStepper
 							label="Max Concurrent Branches"
 							description="Maximum branches per channel"
 							value={localValues.max_concurrent_branches as number}
@@ -437,7 +436,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={1}
 							max={20}
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Max Concurrent Workers"
 							description="Maximum workers per channel"
 							value={localValues.max_concurrent_workers as number}
@@ -445,7 +444,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={1}
 							max={20}
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Max Turns"
 							description="Max LLM turns per channel message"
 							value={localValues.max_turns as number}
@@ -453,7 +452,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={1}
 							max={50}
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Branch Max Turns"
 							description="Max turns for thinking branches"
 							value={localValues.branch_max_turns as number}
@@ -461,7 +460,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={1}
 							max={100}
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Context Window"
 							description="Context window size in tokens"
 							value={localValues.context_window as number}
@@ -470,7 +469,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							step={1000}
 							suffix=" tokens"
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="History Backfill"
 							description="Messages to fetch on new channel"
 							value={localValues.history_backfill_count as number}
@@ -484,7 +483,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 			case "compaction":
 				return (
 					<div className="grid gap-4">
-						<ConfigFloatField
+						<NumberStepper
 							label="Background Threshold"
 							description="Start background summarization (fraction of context window)"
 							value={localValues.background_threshold as number}
@@ -492,8 +491,10 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={0}
 							max={1}
 							step={0.01}
+							type="float"
+							showProgress
 						/>
-						<ConfigFloatField
+						<NumberStepper
 							label="Aggressive Threshold"
 							description="Start aggressive summarization"
 							value={localValues.aggressive_threshold as number}
@@ -501,8 +502,10 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={0}
 							max={1}
 							step={0.01}
+							type="float"
+							showProgress
 						/>
-						<ConfigFloatField
+						<NumberStepper
 							label="Emergency Threshold"
 							description="Emergency truncation (no LLM, drop oldest 50%)"
 							value={localValues.emergency_threshold as number}
@@ -510,13 +513,15 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={0}
 							max={1}
 							step={0.01}
+							type="float"
+							showProgress
 						/>
 					</div>
 				);
 			case "cortex":
 				return (
 					<div className="grid gap-4">
-						<ConfigNumberField
+						<NumberStepper
 							label="Tick Interval"
 							description="How often the cortex checks system state"
 							value={localValues.tick_interval_secs as number}
@@ -524,7 +529,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={1}
 							suffix="s"
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Worker Timeout"
 							description="Worker timeout before cancellation"
 							value={localValues.worker_timeout_secs as number}
@@ -532,7 +537,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={10}
 							suffix="s"
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Branch Timeout"
 							description="Branch timeout before cancellation"
 							value={localValues.branch_timeout_secs as number}
@@ -540,7 +545,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={5}
 							suffix="s"
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Circuit Breaker"
 							description="Consecutive failures before auto-disable"
 							value={localValues.circuit_breaker_threshold as number}
@@ -548,7 +553,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={1}
 							max={10}
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Bulletin Interval"
 							description="Seconds between memory bulletin refreshes"
 							value={localValues.bulletin_interval_secs as number}
@@ -556,7 +561,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							min={60}
 							suffix="s"
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Bulletin Max Words"
 							description="Target word count for memory bulletin"
 							value={localValues.bulletin_max_words as number}
@@ -565,7 +570,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							max={5000}
 							suffix=" words"
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Bulletin Max Turns"
 							description="Max LLM turns for bulletin generation"
 							value={localValues.bulletin_max_turns as number}
@@ -584,7 +589,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							value={localValues.enabled as boolean}
 							onChange={(v) => handleChange("enabled", v)}
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Debounce"
 							description="Initial debounce window after first message"
 							value={localValues.debounce_ms as number}
@@ -593,7 +598,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							max={10000}
 							suffix="ms"
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Max Wait"
 							description="Maximum time to wait before flushing"
 							value={localValues.max_wait_ms as number}
@@ -602,7 +607,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							max={30000}
 							suffix="ms"
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Min Messages"
 							description="Min messages to trigger coalesce mode"
 							value={localValues.min_messages as number}
@@ -627,7 +632,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 							value={localValues.enabled as boolean}
 							onChange={(v) => handleChange("enabled", v)}
 						/>
-						<ConfigNumberField
+						<NumberStepper
 							label="Message Interval"
 							description="Number of user messages between automatic saves"
 							value={localValues.message_interval as number}
@@ -732,155 +737,12 @@ function ConfigField({ label, description, value, onChange }: ConfigFieldProps) 
 		<div className="flex flex-col gap-1.5">
 			<label className="text-sm font-medium text-ink">{label}</label>
 			<p className="text-tiny text-ink-faint">{description}</p>
-			<input
+			<Input
 				type="text"
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
-				className="mt-1 rounded-md border border-app-line/50 bg-app-darkBox/30 px-3 py-2 text-sm text-ink-dull focus:border-accent/30 focus:outline-none"
+				className="mt-1 border-app-line/50 bg-app-darkBox/30"
 			/>
-		</div>
-	);
-}
-
-interface ConfigNumberFieldProps {
-	label: string;
-	description: string;
-	value: number;
-	onChange: (value: number) => void;
-	min?: number;
-	max?: number;
-	step?: number;
-	suffix?: string;
-}
-
-function ConfigNumberField({ label, description, value, onChange, min, max, step = 1, suffix }: ConfigNumberFieldProps) {
-	const safeValue = value ?? 0;
-
-	const clamp = (v: number) => {
-		if (min !== undefined && v < min) return min;
-		if (max !== undefined && v > max) return max;
-		return v;
-	};
-
-	const increment = () => onChange(clamp(safeValue + step));
-	const decrement = () => onChange(clamp(safeValue - step));
-
-	const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-		const raw = e.target.value;
-		if (raw === "" || raw === "-") return;
-		const parsed = Number(raw);
-		if (!Number.isNaN(parsed)) onChange(clamp(parsed));
-	};
-
-	return (
-		<div className="flex flex-col gap-1.5">
-			<label className="text-sm font-medium text-ink">{label}</label>
-			<p className="text-tiny text-ink-faint">{description}</p>
-			<div className="flex items-center gap-2.5 mt-1">
-			<div className="flex items-stretch rounded-md border border-app-line/50 bg-app-darkBox/30 overflow-hidden">
-				<Button
-					type="button"
-					onClick={decrement}
-					variant="ghost"
-					size="icon"
-					className="h-8 w-8 rounded-none"
-				>
-					<HugeiconsIcon icon={MinusSignIcon} className="h-3 w-3" />
-				</Button>
-				<input
-					type="text"
-					inputMode="numeric"
-					value={safeValue}
-					onChange={handleInput}
-					className="w-20 border-x border-app-line/50 bg-transparent px-2 py-1.5 text-center font-mono text-sm text-ink-dull focus:outline-none"
-				/>
-				<Button
-					type="button"
-					onClick={increment}
-					variant="ghost"
-					size="icon"
-					className="h-8 w-8 rounded-none"
-				>
-					<HugeiconsIcon icon={PlusSignIcon} className="h-3 w-3" />
-				</Button>
-			</div>
-				{suffix && <span className="text-tiny text-ink-faint">{suffix}</span>}
-			</div>
-		</div>
-	);
-}
-
-interface ConfigFloatFieldProps {
-	label: string;
-	description: string;
-	value: number;
-	onChange: (value: number) => void;
-	min?: number;
-	max?: number;
-	step?: number;
-}
-
-function ConfigFloatField({ label, description, value, onChange, min = 0, max = 1, step = 0.01 }: ConfigFloatFieldProps) {
-	const safeValue = value ?? 0;
-
-	const clamp = (v: number) => {
-		if (v < min) return min;
-		if (v > max) return max;
-		return Math.round(v / step) * step;
-	};
-
-	const increment = () => onChange(clamp(safeValue + step));
-	const decrement = () => onChange(clamp(safeValue - step));
-
-	const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-		const raw = e.target.value;
-		if (raw === "" || raw === "0." || raw === ".") return;
-		const parsed = Number(raw);
-		if (!Number.isNaN(parsed)) onChange(clamp(parsed));
-	};
-
-	const pct = ((safeValue - min) / (max - min)) * 100;
-
-	return (
-		<div className="flex flex-col gap-1.5">
-			<label className="text-sm font-medium text-ink">{label}</label>
-			<p className="text-tiny text-ink-faint">{description}</p>
-			<div className="flex items-center gap-3 mt-1">
-			<div className="flex items-stretch rounded-md border border-app-line/50 bg-app-darkBox/30 overflow-hidden">
-				<Button
-					type="button"
-					onClick={decrement}
-					variant="ghost"
-					size="icon"
-					className="h-8 w-8 rounded-none"
-				>
-					<HugeiconsIcon icon={MinusSignIcon} className="h-3 w-3" />
-				</Button>
-				<input
-					type="text"
-					inputMode="decimal"
-					value={safeValue.toFixed(2)}
-					onChange={handleInput}
-					className="w-16 border-x border-app-line/50 bg-transparent px-1.5 py-1.5 text-center font-mono text-sm text-ink-dull focus:outline-none"
-				/>
-				<Button
-					type="button"
-					onClick={increment}
-					variant="ghost"
-					size="icon"
-					className="h-8 w-8 rounded-none"
-				>
-					<HugeiconsIcon icon={PlusSignIcon} className="h-3 w-3" />
-				</Button>
-			</div>
-				{/* Progress bar */}
-				<div className="h-1.5 w-32 overflow-hidden rounded-full bg-app-darkBox">
-					<div
-						className="h-full rounded-full bg-accent/50 transition-all"
-						style={{ width: `${pct}%` }}
-					/>
-				</div>
-			</div>
 		</div>
 	);
 }
@@ -899,20 +761,7 @@ function ConfigToggleField({ label, description, value, onChange }: ConfigToggle
 				<label className="text-sm font-medium text-ink">{label}</label>
 				<p className="text-tiny text-ink-faint">{description}</p>
 			</div>
-			<Button
-				onClick={() => onChange(!value)}
-				variant="ghost"
-				size="icon"
-				className={`relative h-6 w-11 rounded-full p-0 ${
-					value ? "bg-accent/60" : "bg-app-darkBox"
-				}`}
-			>
-				<span
-					className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-						value ? "translate-x-5" : "translate-x-0"
-					}`}
-				/>
-			</Button>
+			<Toggle checked={value} onCheckedChange={onChange} size="lg" />
 		</div>
 	);
 }

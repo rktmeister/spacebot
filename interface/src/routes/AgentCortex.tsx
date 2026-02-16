@@ -11,6 +11,7 @@ import { CortexChatPanel } from "@/components/CortexChatPanel";
 import { formatTimeAgo } from "@/lib/format";
 import { IdeaIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { FilterButton, Button } from "@/ui";
 
 const PAGE_SIZE = 50;
 
@@ -128,24 +129,21 @@ export function AgentCortex({ agentId }: AgentCortexProps) {
 					>
 						All
 					</button>
-					{FILTER_GROUPS.map((group) => (
-						<button
-							key={group.label}
-							onClick={() =>
-								handleFilterChange(
-									groupFilter === group.label ? null : group.label,
-									null,
-								)
-							}
-							className={`rounded-md px-2 py-1 text-tiny font-medium transition-colors ${
-								groupFilter === group.label
-									? EVENT_CATEGORY_COLORS[group.types[0]] ?? "bg-accent/15 text-accent"
-									: "text-ink-faint hover:text-ink-dull"
-							}`}
-						>
-							{group.label}
-						</button>
-					))}
+				{FILTER_GROUPS.map((group) => (
+					<FilterButton
+						key={group.label}
+						onClick={() =>
+							handleFilterChange(
+								groupFilter === group.label ? null : group.label,
+								null,
+							)
+						}
+						active={groupFilter === group.label}
+						colorClass={EVENT_CATEGORY_COLORS[group.types[0]]}
+					>
+						{group.label}
+					</FilterButton>
+				))}
 
 					{/* Count + pagination + chat toggle */}
 					<div className="ml-auto flex items-center gap-3">
@@ -172,17 +170,17 @@ export function AgentCortex({ agentId }: AgentCortexProps) {
 								</button>
 							</div>
 						)}
-						<button
+					<div className="flex overflow-hidden rounded-md border border-app-line bg-app-darkBox">
+						<Button
 							onClick={() => setChatOpen(!chatOpen)}
-							className={`rounded p-1.5 transition-colors ${
-								chatOpen
-									? "bg-violet-500/20 text-violet-400"
-									: "text-ink-faint hover:bg-app-darkBox hover:text-ink-dull"
-							}`}
+							variant={chatOpen ? "secondary" : "ghost"}
+							size="icon"
+							className={chatOpen ? "bg-app-selected text-ink" : ""}
 							title="Toggle cortex chat"
 						>
 							<HugeiconsIcon icon={IdeaIcon} className="h-4 w-4" />
-						</button>
+						</Button>
+					</div>
 					</div>
 				</div>
 

@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type IngestFileInfo } from "@/api/client";
 import { formatTimeAgo } from "@/lib/format";
-import { Button } from "@/ui";
+import { Button, Badge } from "@/ui";
 
 function formatFileSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
@@ -27,14 +27,7 @@ function StatusBadge({ status }: { status: IngestFileInfo["status"] }) {
 	);
 }
 
-function Stat({ label, value, color }: { label: string; value: number | string; color: string }) {
-	return (
-		<div className="flex items-baseline gap-1.5">
-			<span className={`font-plex text-lg font-semibold tabular-nums ${color}`}>{value}</span>
-			<span className="text-xs text-ink-faint">{label}</span>
-		</div>
-	);
-}
+
 
 interface AgentIngestProps {
 	agentId: string;
@@ -125,12 +118,12 @@ export function AgentIngest({ agentId }: AgentIngestProps) {
 			onDrop={handleDrop}
 		>
 			{/* Stats bar */}
-			<div className="flex items-center gap-6 border-b border-app-line px-6 py-3">
-				<Stat label="total" value={files.length} color="text-accent" />
-				{queued > 0 && <Stat label="queued" value={queued} color="text-amber-400" />}
-				{processing > 0 && <Stat label="processing" value={processing} color="text-blue-400" />}
-				<Stat label="completed" value={completed} color="text-green-500" />
-				{failed > 0 && <Stat label="failed" value={failed} color="text-red-500" />}
+			<div className="flex items-center gap-2 border-b border-app-line px-6 py-3">
+				<Badge variant="accent" size="md">{files.length} total</Badge>
+				{queued > 0 && <Badge variant="amber" size="md">{queued} queued</Badge>}
+				{processing > 0 && <Badge variant="accent" size="md">{processing} processing</Badge>}
+				<Badge variant="green" size="md">{completed} completed</Badge>
+				{failed > 0 && <Badge variant="red" size="md">{failed} failed</Badge>}
 				<div className="flex-1" />
 				<span className="text-xs text-ink-faint">
 					.txt .md .json .csv .yaml .toml .html .log +more
