@@ -5,7 +5,7 @@ import { Button, SettingSidebarButton, Input, TextArea, Toggle, NumberStepper } 
 import { motion, AnimatePresence } from "framer-motion";
 
 
-type SectionId = "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "discord";
+type SectionId = "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser";
 
 const SECTIONS: {
 	id: SectionId;
@@ -24,7 +24,6 @@ const SECTIONS: {
 	{ id: "coalesce", label: "Coalesce", group: "config", description: "Message batching", detail: "When multiple messages arrive in quick succession, coalescing batches them into a single LLM turn. This prevents the agent from responding to each message individually in fast-moving conversations." },
 	{ id: "memory", label: "Memory Persistence", group: "config", description: "Auto-save interval", detail: "Spawns a silent background branch at regular intervals to recall existing memories and save new ones from the recent conversation. Runs without blocking the channel." },
 	{ id: "browser", label: "Browser", group: "config", description: "Chrome automation", detail: "Controls browser automation tools available to workers. When enabled, workers can navigate web pages, take screenshots, and interact with sites. JavaScript evaluation is a separate permission." },
-	{ id: "discord", label: "Discord", group: "config", description: "Discord adapter settings", detail: "Instance-level Discord adapter configuration. Controls how the bot interacts with messages from other bots on Discord. Self-messages are always ignored regardless of settings." },
 ];
 
 interface AgentConfigProps {
@@ -350,8 +349,6 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 				return { ...config.memory_persistence };
 			case "browser":
 				return { ...config.browser };
-			case "discord":
-				return { ...config.discord };
 			default:
 				return {};
 		}
@@ -387,9 +384,6 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 					break;
 				case "browser":
 					setLocalValues({ ...config.browser });
-					break;
-				case "discord":
-					setLocalValues({ ...config.discord });
 					break;
 			}
 		}
@@ -427,9 +421,6 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 				break;
 			case "browser":
 				setLocalValues({ ...config.browser });
-				break;
-			case "discord":
-				setLocalValues({ ...config.discord });
 				break;
 		}
 		setLocalDirty(false);
@@ -728,17 +719,6 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 							description="Allow JavaScript evaluation via browser tool"
 							value={localValues.evaluate_enabled as boolean}
 							onChange={(v) => handleChange("evaluate_enabled", v)}
-						/>
-					</div>
-				);
-			case "discord":
-				return (
-					<div className="grid gap-4">
-						<ConfigToggleField
-							label="Allow Bot Messages"
-							description="Process messages from other Discord bots (self-messages are always ignored)"
-							value={localValues.allow_bot_messages as boolean}
-							onChange={(v) => handleChange("allow_bot_messages", v)}
 						/>
 					</div>
 				);

@@ -182,18 +182,20 @@ export function AgentCron({ agentId }: AgentCronProps) {
 	return (
 		<div className="flex h-full flex-col">
 			{/* Stats bar */}
-			<div className="flex items-center gap-2 border-b border-app-line px-6 py-3">
-				<Badge variant="accent" size="md">{totalJobs} total</Badge>
-				<Badge variant="green" size="md">{enabledJobs} enabled</Badge>
-				<Badge variant="outline" size="md">{totalRuns} runs</Badge>
-				{failedRuns > 0 && <Badge variant="red" size="md">{failedRuns} failed</Badge>}
+			{totalJobs > 0 && (
+				<div className="flex items-center gap-2 border-b border-app-line px-6 py-3">
+					<Badge variant="accent" size="md">{totalJobs} total</Badge>
+					<Badge variant="green" size="md">{enabledJobs} enabled</Badge>
+					<Badge variant="outline" size="md">{totalRuns} runs</Badge>
+					{failedRuns > 0 && <Badge variant="red" size="md">{failedRuns} failed</Badge>}
 
-				<div className="flex-1" />
+					<div className="flex-1" />
 
-			<Button onClick={openCreate} size="sm">
-				+ New Job
-			</Button>
-			</div>
+					<Button onClick={openCreate} size="sm">
+						+ New Job
+					</Button>
+				</div>
+			)}
 
 			{/* Content */}
 			<div className="flex-1 overflow-auto p-6">
@@ -210,9 +212,9 @@ export function AgentCron({ agentId }: AgentCronProps) {
 				)}
 
 				{!isLoading && !error && totalJobs === 0 && (
-					<div className="flex items-center justify-center py-12">
-						<div className="flex flex-col items-center rounded-lg border-2 border-dashed border-app-line px-12 py-16 text-center">
-							<div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-app-darkBox">
+					<div className="flex h-full items-start justify-center pt-[15vh]">
+						<div className="flex max-w-sm flex-col items-center rounded-xl border border-dashed border-app-line/50 bg-app-darkBox/20 p-8 text-center">
+							<div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-app-line bg-app-darkBox">
 								<HugeiconsIcon icon={Clock05Icon} className="h-6 w-6 text-ink-faint" />
 							</div>
 							<h3 className="mb-1 font-plex text-sm font-medium text-ink">No cron jobs yet</h3>

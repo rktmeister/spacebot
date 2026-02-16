@@ -1,116 +1,26 @@
 import { useMemo, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-	api,
-	type BindingInfo,
-	type CreateBindingRequest,
-	type MessagingStatusResponse,
-} from "@/api/client";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/api/client";
 import { ChannelCard } from "@/components/ChannelCard";
-import {
-	Button,
-	Dialog,
-	DialogContent,
-	DialogHeader,
-	DialogTitle,
-	SearchInput,
-} from "@/ui";
-import { platformColor } from "@/lib/format";
+import { Button, SearchInput } from "@/ui";
 import type { ChannelLiveState } from "@/hooks/useChannelLiveState";
-import { Search01Icon, PlusSignIcon } from "@hugeicons/core-free-icons";
+import { Settings02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { useNavigate } from "@tanstack/react-router";
 
 interface AgentChannelsProps {
 	agentId: string;
 	liveStates: Record<string, ChannelLiveState>;
 }
 
-type Platform = "discord" | "slack" | "webhook";
-type ModalStep = "select" | "configure";
-
-interface BindingFormData {
-	platform: Platform;
-	// Discord
-	guild_id: string;
-	channel_ids: string;
-	dm_allowed_users: string;
-	// Slack
-	workspace_id: string;
-	slack_channel_ids: string;
-	slack_dm_allowed_users: string;
-	// Credentials (only when platform not yet configured)
-	discord_token: string;
-	slack_bot_token: string;
-	slack_app_token: string;
-}
-
-function defaultFormData(): BindingFormData {
-	return {
-		platform: "discord",
-		guild_id: "",
-		channel_ids: "",
-		dm_allowed_users: "",
-		workspace_id: "",
-		slack_channel_ids: "",
-		slack_dm_allowed_users: "",
-		discord_token: "",
-		slack_bot_token: "",
-		slack_app_token: "",
-	};
-}
-
 export function AgentChannels({ agentId, liveStates }: AgentChannelsProps) {
-	const queryClient = useQueryClient();
+	const navigate = useNavigate();
 	const [searchQuery, setSearchQuery] = useState("");
-	const [isModalOpen, setIsModalOpen] = useState(false);
-	const [modalStep, setModalStep] = useState<ModalStep>("select");
-	const [formData, setFormData] = useState<BindingFormData>(defaultFormData());
-	const [deleteConfirm, setDeleteConfirm] = useState<BindingInfo | null>(null);
 
 	const { data: channelsData, isLoading } = useQuery({
 		queryKey: ["channels"],
 		queryFn: api.channels,
 		refetchInterval: 10_000,
-	});
-
-	const { data: messagingStatus } = useQuery({
-		queryKey: ["messaging-status"],
-		queryFn: api.messagingStatus,
-		staleTime: 30_000,
-	});
-
-	const { data: bindingsData } = useQuery({
-		queryKey: ["bindings", agentId],
-		queryFn: () => api.bindings(agentId),
-		enabled: isModalOpen,
-	});
-
-	const createMutation = useMutation({
-		mutationFn: (request: CreateBindingRequest) => api.createBinding(request),
-		onSuccess: (result) => {
-			queryClient.invalidateQueries({ queryKey: ["bindings", agentId] });
-			queryClient.invalidateQueries({ queryKey: ["messaging-status"] });
-			if (result.restart_required) {
-				// Stay on modal to show the restart message
-			} else {
-				closeModal();
-			}
-		},
-	});
-
-	const deleteMutation = useMutation({
-		mutationFn: (binding: BindingInfo) =>
-			api.deleteBinding({
-				agent_id: binding.agent_id,
-				channel: binding.channel,
-				guild_id: binding.guild_id ?? undefined,
-				workspace_id: binding.workspace_id ?? undefined,
-				chat_id: binding.chat_id ?? undefined,
-			}),
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["bindings", agentId] });
-			setDeleteConfirm(null);
-		},
 	});
 
 	const channels = useMemo(() => {
@@ -127,99 +37,27 @@ export function AgentChannels({ agentId, liveStates }: AgentChannelsProps) {
 		);
 	}, [channelsData, agentId, searchQuery]);
 
-	const openModal = () => {
-		setFormData(defaultFormData());
-		setModalStep("select");
-		createMutation.reset();
-		setIsModalOpen(true);
-	};
-
-	const closeModal = () => {
-		setIsModalOpen(false);
-		setFormData(defaultFormData());
-		setModalStep("select");
-		createMutation.reset();
-	};
-
-	const selectPlatform = (platform: Platform) => {
-		setFormData((d) => ({ ...d, platform }));
-		setModalStep("configure");
-	};
-
-	const handleSave = () => {
-		const request: CreateBindingRequest = {
-			agent_id: agentId,
-			channel: formData.platform,
-		};
-
-		if (formData.platform === "discord") {
-			if (formData.guild_id.trim()) request.guild_id = formData.guild_id.trim();
-			if (formData.channel_ids.trim()) {
-				request.channel_ids = formData.channel_ids
-					.split(",")
-					.map((s) => s.trim())
-					.filter(Boolean);
-			}
-			if (formData.dm_allowed_users.trim()) {
-				request.dm_allowed_users = formData.dm_allowed_users
-					.split(",")
-					.map((s) => s.trim())
-					.filter(Boolean);
-			}
-			if (formData.discord_token.trim()) {
-				request.platform_credentials = {
-					discord_token: formData.discord_token.trim(),
-				};
-			}
-		} else if (formData.platform === "slack") {
-			if (formData.workspace_id.trim())
-				request.workspace_id = formData.workspace_id.trim();
-			if (formData.slack_channel_ids.trim()) {
-				request.channel_ids = formData.slack_channel_ids
-					.split(",")
-					.map((s) => s.trim())
-					.filter(Boolean);
-			}
-			if (formData.slack_dm_allowed_users.trim()) {
-				request.dm_allowed_users = formData.slack_dm_allowed_users
-					.split(",")
-					.map((s) => s.trim())
-					.filter(Boolean);
-			}
-			if (formData.slack_bot_token.trim() && formData.slack_app_token.trim()) {
-				request.platform_credentials = {
-					slack_bot_token: formData.slack_bot_token.trim(),
-					slack_app_token: formData.slack_app_token.trim(),
-				};
-			}
-		}
-
-		createMutation.mutate(request);
-	};
-
-	const needsCredentials = (platform: Platform): boolean => {
-		if (!messagingStatus) return false;
-		const status = messagingStatus[platform];
-		return !status.configured;
-	};
+	const hasChannels = channels.length > 0;
 
 	return (
 		<div className="flex h-full flex-col">
-			<div className="flex items-center gap-3 border-b border-app-line/50 bg-app-darkBox/20 px-6 py-3">
-				<SearchInput
-					placeholder="Search channels..."
-					value={searchQuery}
-					onChange={(event) => setSearchQuery(event.target.value)}
-					className="flex-1"
-				/>
-			</div>
+			{hasChannels && (
+				<div className="flex items-center gap-3 border-b border-app-line/50 bg-app-darkBox/20 px-6 py-3">
+					<SearchInput
+						placeholder="Search channels..."
+						value={searchQuery}
+						onChange={(event) => setSearchQuery(event.target.value)}
+						className="flex-1"
+					/>
+				</div>
+			)}
 			<div className="flex-1 overflow-y-auto p-6">
 				{isLoading ? (
 					<div className="flex items-center gap-2 text-ink-dull">
 						<div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
 						Loading channels...
 					</div>
-				) : (
+				) : hasChannels ? (
 					<div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
 						{channels.map((channel) => (
 							<ChannelCard
@@ -228,449 +66,28 @@ export function AgentChannels({ agentId, liveStates }: AgentChannelsProps) {
 								liveState={liveStates[channel.id]}
 							/>
 						))}
-
-						{/* Connect Channel card */}
-						<Button
-							onClick={openModal}
-							variant="outline"
-							size="lg"
-							className="flex min-h-[100px] flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-app-line/60 bg-transparent hover:border-accent/50 hover:bg-app-darkBox/30"
-						>
-						<div className="flex h-8 w-8 items-center justify-center rounded-full border border-app-line/80 text-ink-faint">
-							<HugeiconsIcon icon={PlusSignIcon} className="h-4 w-4" />
+					</div>
+				) : (
+					<div className="flex h-full items-start justify-center pt-[15vh]">
+						<div className="flex max-w-sm flex-col items-center rounded-xl border border-dashed border-app-line/50 bg-app-darkBox/20 p-8 text-center">
+							<div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-app-line bg-app-darkBox">
+								<HugeiconsIcon icon={Settings02Icon} className="h-6 w-6 text-ink-faint" />
+							</div>
+							<h3 className="mb-1 font-plex text-sm font-medium text-ink">No channels connected</h3>
+							<p className="mb-5 max-w-md text-sm text-ink-faint">
+								Configure messaging platforms and bindings in Settings to connect this agent to Discord, Slack, or Telegram
+							</p>
+							<Button 
+								onClick={() => navigate({ to: "/settings" })} 
+								variant="secondary" 
+								size="sm"
+							>
+								Go to Settings
+							</Button>
 						</div>
-							<span className="text-sm text-ink-faint">Connect Channel</span>
-						</Button>
 					</div>
 				)}
 			</div>
-
-			{/* Connect Channel Modal */}
-			<Dialog open={isModalOpen} onOpenChange={(open) => !open && closeModal()}>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>
-							{modalStep === "select"
-								? "Connect Channel"
-								: `Connect ${formData.platform.charAt(0).toUpperCase() + formData.platform.slice(1)}`}
-						</DialogTitle>
-					</DialogHeader>
-					{modalStep === "select" ? (
-						<PlatformSelect
-							messagingStatus={messagingStatus}
-							onSelect={selectPlatform}
-						/>
-					) : (
-						<PlatformForm
-							formData={formData}
-							setFormData={setFormData}
-							needsCredentials={needsCredentials(formData.platform)}
-							onBack={() => setModalStep("select")}
-							onSave={handleSave}
-							isPending={createMutation.isPending}
-							result={createMutation.data}
-							existingBindings={bindingsData?.bindings ?? []}
-							onDeleteBinding={setDeleteConfirm}
-						/>
-					)}
-				</DialogContent>
-			</Dialog>
-
-			{/* Delete Binding Confirmation */}
-			<Dialog open={!!deleteConfirm} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>Remove Binding?</DialogTitle>
-					</DialogHeader>
-					{deleteConfirm && (
-						<>
-							<p className="mb-4 text-sm text-ink-dull">
-								This will remove the{" "}
-								<span className={`inline-flex rounded-md px-1.5 py-0.5 text-tiny font-medium ${platformColor(deleteConfirm.channel)}`}>
-									{deleteConfirm.channel}
-								</span>{" "}
-								binding
-								{deleteConfirm.guild_id && (
-									<> for guild <code className="rounded bg-app-darkBox px-1 py-0.5 text-ink">{deleteConfirm.guild_id}</code></>
-								)}
-								{deleteConfirm.workspace_id && (
-									<> for workspace <code className="rounded bg-app-darkBox px-1 py-0.5 text-ink">{deleteConfirm.workspace_id}</code></>
-								)}
-								. Messages from this source will fall back to the default agent.
-							</p>
-						<div className="flex justify-end gap-2">
-							<Button
-								variant="ghost"
-								size="sm"
-								onClick={() => setDeleteConfirm(null)}
-							>
-								Cancel
-							</Button>
-							<Button
-								variant="destructive"
-								size="sm"
-								onClick={() => deleteMutation.mutate(deleteConfirm)}
-								loading={deleteMutation.isPending}
-							>
-								Remove
-							</Button>
-						</div>
-						</>
-					)}
-				</DialogContent>
-			</Dialog>
-		</div>
-	);
-}
-
-// -- Sub-components --
-
-function PlatformSelect({
-	messagingStatus,
-	onSelect,
-}: {
-	messagingStatus: MessagingStatusResponse | undefined;
-	onSelect: (platform: Platform) => void;
-}) {
-	const platforms: { id: Platform; label: string; description: string }[] = [
-		{
-			id: "discord",
-			label: "Discord",
-			description: "Route messages from a Discord server or DMs.",
-		},
-		{
-			id: "slack",
-			label: "Slack",
-			description: "Route messages from a Slack workspace.",
-		},
-		{
-			id: "webhook",
-			label: "Webhook",
-			description: "Route programmatic messages via HTTP.",
-		},
-	];
-
-	return (
-		<div className="flex flex-col gap-2">
-			{platforms.map((platform) => {
-				const status = messagingStatus?.[platform.id];
-				return (
-					<Button
-						key={platform.id}
-						onClick={() => onSelect(platform.id)}
-						variant="outline"
-						className="h-auto justify-start gap-3 rounded-lg border border-app-line bg-app-darkBox p-4 text-left hover:border-accent/50 hover:bg-app-darkBox/80"
-					>
-						<span
-							className={`inline-flex rounded-md px-2 py-1 text-xs font-medium ${platformColor(platform.id)}`}
-						>
-							{platform.label}
-						</span>
-						<div className="min-w-0 flex-1">
-							<p className="text-sm text-ink-dull">
-								{platform.description}
-							</p>
-						</div>
-						{status && (
-							<span
-								className={`text-tiny ${
-									status.enabled
-										? "text-green-400"
-										: status.configured
-											? "text-yellow-400"
-											: "text-ink-faint"
-								}`}
-							>
-								{status.enabled
-									? "Active"
-									: status.configured
-										? "Configured"
-										: "Not configured"}
-							</span>
-						)}
-					</Button>
-				);
-			})}
-		</div>
-	);
-}
-
-function PlatformForm({
-	formData,
-	setFormData,
-	needsCredentials,
-	onBack,
-	onSave,
-	isPending,
-	result,
-	existingBindings,
-	onDeleteBinding,
-}: {
-	formData: BindingFormData;
-	setFormData: React.Dispatch<React.SetStateAction<BindingFormData>>;
-	needsCredentials: boolean;
-	onBack: () => void;
-	onSave: () => void;
-	isPending: boolean;
-	result: { success: boolean; restart_required: boolean; message: string } | undefined;
-	existingBindings: BindingInfo[];
-	onDeleteBinding: (binding: BindingInfo) => void;
-}) {
-	const platformBindings = existingBindings.filter(
-		(b) => b.channel === formData.platform,
-	);
-
-	return (
-		<div className="flex flex-col gap-4">
-			{/* Success message */}
-			{result?.success && (
-				<div
-					className={`rounded-lg px-3 py-2 text-sm ${
-						result.restart_required
-							? "bg-yellow-500/10 text-yellow-400"
-							: "bg-green-500/10 text-green-400"
-					}`}
-				>
-					{result.message}
-				</div>
-			)}
-
-			{/* Credential setup when platform not configured */}
-			{needsCredentials && (
-				<div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-3">
-					<p className="mb-3 text-xs text-yellow-400">
-						{formData.platform === "discord"
-							? "Discord is not configured yet. Add your bot token to connect."
-							: "Slack is not configured yet. Add your bot and app tokens to connect."}
-						{" "}A restart will be required after saving.
-					</p>
-					{formData.platform === "discord" && (
-						<Field label="Bot Token">
-							<input
-								type="password"
-								value={formData.discord_token}
-								onChange={(e) =>
-									setFormData((d) => ({
-										...d,
-										discord_token: e.target.value,
-									}))
-								}
-								placeholder="Bot token from Discord Developer Portal"
-								className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-							/>
-						</Field>
-					)}
-					{formData.platform === "slack" && (
-						<div className="flex flex-col gap-3">
-							<Field label="Bot Token">
-								<input
-									type="password"
-									value={formData.slack_bot_token}
-									onChange={(e) =>
-										setFormData((d) => ({
-											...d,
-											slack_bot_token: e.target.value,
-										}))
-									}
-									placeholder="xoxb-..."
-									className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-								/>
-							</Field>
-							<Field label="App Token">
-								<input
-									type="password"
-									value={formData.slack_app_token}
-									onChange={(e) =>
-										setFormData((d) => ({
-											...d,
-											slack_app_token: e.target.value,
-										}))
-									}
-									placeholder="xapp-..."
-									className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-								/>
-							</Field>
-						</div>
-					)}
-				</div>
-			)}
-
-			{/* Binding fields */}
-			{formData.platform === "discord" && (
-				<>
-					<Field label="Guild ID (Server ID)">
-						<input
-							value={formData.guild_id}
-							onChange={(e) =>
-								setFormData((d) => ({ ...d, guild_id: e.target.value }))
-							}
-							placeholder="e.g. 123456789012345678"
-							className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-						/>
-					</Field>
-					<Field label="Channel IDs (optional, comma-separated)">
-						<input
-							value={formData.channel_ids}
-							onChange={(e) =>
-								setFormData((d) => ({
-									...d,
-									channel_ids: e.target.value,
-								}))
-							}
-							placeholder="Leave empty for all channels in guild"
-							className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-						/>
-					</Field>
-					<Field label="DM Allowed Users (optional, comma-separated)">
-						<input
-							value={formData.dm_allowed_users}
-							onChange={(e) =>
-								setFormData((d) => ({
-									...d,
-									dm_allowed_users: e.target.value,
-								}))
-							}
-							placeholder="User IDs that can DM the bot"
-							className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-						/>
-					</Field>
-				</>
-			)}
-
-			{formData.platform === "slack" && (
-				<>
-					<Field label="Workspace ID (Team ID)">
-						<input
-							value={formData.workspace_id}
-							onChange={(e) =>
-								setFormData((d) => ({
-									...d,
-									workspace_id: e.target.value,
-								}))
-							}
-							placeholder="e.g. T01234ABCDE"
-							className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-						/>
-					</Field>
-					<Field label="Channel IDs (optional, comma-separated)">
-						<input
-							value={formData.slack_channel_ids}
-							onChange={(e) =>
-								setFormData((d) => ({
-									...d,
-									slack_channel_ids: e.target.value,
-								}))
-							}
-							placeholder="Leave empty for all channels"
-							className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-						/>
-					</Field>
-					<Field label="DM Allowed Users (optional, comma-separated)">
-						<input
-							value={formData.slack_dm_allowed_users}
-							onChange={(e) =>
-								setFormData((d) => ({
-									...d,
-									slack_dm_allowed_users: e.target.value,
-								}))
-							}
-							placeholder="User IDs that can DM the bot"
-							className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-						/>
-					</Field>
-				</>
-			)}
-
-			{formData.platform === "webhook" && (
-				<p className="text-sm text-ink-dull">
-					No additional configuration needed. The webhook adapter accepts
-					messages on the configured HTTP port.
-				</p>
-			)}
-
-			{/* Existing bindings for this platform */}
-			{platformBindings.length > 0 && (
-				<div className="border-t border-app-line/50 pt-3">
-					<h3 className="mb-2 text-xs font-medium text-ink-dull">
-						Existing {formData.platform} bindings
-					</h3>
-					<div className="flex flex-col gap-1.5">
-						{platformBindings.map((binding, i) => (
-							<div
-								key={i}
-								className="flex items-center justify-between rounded-lg bg-app-darkBox px-3 py-2"
-							>
-								<div className="min-w-0 flex-1 text-sm text-ink-dull">
-									{binding.guild_id && (
-										<span>
-											Guild{" "}
-											<code className="text-ink">
-												{binding.guild_id}
-											</code>
-										</span>
-									)}
-									{binding.workspace_id && (
-										<span>
-											Workspace{" "}
-											<code className="text-ink">
-												{binding.workspace_id}
-											</code>
-										</span>
-									)}
-									{!binding.guild_id &&
-										!binding.workspace_id && (
-											<span>All messages</span>
-										)}
-									{binding.channel_ids.length > 0 && (
-										<span className="ml-2 text-tiny text-ink-faint">
-											({binding.channel_ids.length}{" "}
-											channel
-											{binding.channel_ids.length !== 1
-												? "s"
-												: ""}
-											)
-										</span>
-									)}
-								</div>
-							<Button
-								onClick={() => onDeleteBinding(binding)}
-								variant="ghost"
-								size="sm"
-								className="text-tiny hover:text-red-400"
-								title="Remove binding"
-							>
-								Remove
-							</Button>
-							</div>
-						))}
-					</div>
-				</div>
-			)}
-
-			{/* Actions */}
-			<div className="mt-2 flex justify-between">
-				<Button variant="ghost" size="sm" onClick={onBack}>
-					Back
-				</Button>
-				<Button size="sm" onClick={onSave} loading={isPending}>
-					Add Binding
-				</Button>
-			</div>
-		</div>
-	);
-}
-
-function Field({
-	label,
-	children,
-}: {
-	label: string;
-	children: React.ReactNode;
-}) {
-	return (
-		<div className="space-y-1.5">
-			<label className="text-xs font-medium text-ink-dull">{label}</label>
-			{children}
 		</div>
 	);
 }
