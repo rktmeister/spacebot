@@ -14,6 +14,7 @@ export interface NumberStepperProps {
 	suffix?: string;
 	type?: "integer" | "float";
 	showProgress?: boolean;
+	variant?: "default" | "compact";
 }
 
 export const NumberStepper = React.forwardRef<HTMLDivElement, NumberStepperProps>(
@@ -29,6 +30,7 @@ export const NumberStepper = React.forwardRef<HTMLDivElement, NumberStepperProps
 			suffix,
 			type = "integer",
 			showProgress = false,
+			variant = "default",
 		},
 		ref
 	) => {
@@ -57,7 +59,9 @@ export const NumberStepper = React.forwardRef<HTMLDivElement, NumberStepperProps
 
 		const displayValue =
 			type === "float" ? safeValue.toFixed(2) : safeValue.toString();
-		const inputWidth = type === "float" ? "w-16" : "w-20";
+		const inputWidth = variant === "compact" 
+			? (type === "float" ? "w-12" : "w-14")
+			: (type === "float" ? "w-16" : "w-20");
 
 		const progress =
 			showProgress && min !== undefined && max !== undefined
@@ -68,7 +72,7 @@ export const NumberStepper = React.forwardRef<HTMLDivElement, NumberStepperProps
 			<div ref={ref} className="flex flex-col gap-1.5">
 				{label && <label className="text-sm font-medium text-ink">{label}</label>}
 				{description && <p className="text-tiny text-ink-faint">{description}</p>}
-				<div className="flex items-center gap-2.5 mt-1">
+				<div className={`flex items-center gap-2.5 ${(label || description) ? 'mt-1' : ''}`}>
 					<div className="flex items-stretch rounded-md border border-app-line/50 bg-app-darkBox/30 overflow-hidden">
 						<Button
 							type="button"

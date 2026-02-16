@@ -139,8 +139,8 @@ export function AgentIngest({ agentId }: AgentIngestProps) {
 				size="lg"
 				className={`mb-6 h-auto w-full flex-col border-2 border-dashed py-10 ${
 					isDragging
-						? "border-accent bg-accent/10"
-						: "border-app-line bg-app-darkBox/30 hover:border-ink-faint hover:bg-app-darkBox/50"
+						? "border-accent/50 bg-accent/5"
+						: "border-app-line bg-transparent hover:border-app-line/80 hover:bg-app-darkBox/20"
 				}`}
 			>
 					<div className={`mb-3 text-3xl ${isDragging ? "text-accent" : "text-ink-faint"}`}>

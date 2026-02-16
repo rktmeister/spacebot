@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type CronJobWithStats, type CreateCronRequest } from "@/api/client";
 import { formatDuration, formatTimeAgo } from "@/lib/format";
 import { AnimatePresence, motion } from "framer-motion";
+import { Clock05Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
 	Button,
 	Dialog,
@@ -14,6 +16,12 @@ import {
 	TextArea,
 	Toggle,
 	Label,
+	NumberStepper,
+	Select,
+	SelectTrigger,
+	SelectValue,
+	SelectContent,
+	SelectItem,
 } from "@/ui";
 
 // -- Helpers --
@@ -202,15 +210,19 @@ export function AgentCron({ agentId }: AgentCronProps) {
 				)}
 
 				{!isLoading && !error && totalJobs === 0 && (
-					<div className="flex flex-col items-center justify-center py-16 text-center">
-						<div className="mb-4 text-3xl text-ink-faint">&#9200;</div>
-						<h3 className="mb-2 font-plex text-base font-medium text-ink">No cron jobs</h3>
-						<p className="mb-6 max-w-sm text-sm text-ink-dull">
-							Schedule automated tasks that run on a timer and deliver results to any messaging channel.
-						</p>
-						<Button onClick={openCreate}>
-							Create your first cron job
-						</Button>
+					<div className="flex items-center justify-center py-12">
+						<div className="flex flex-col items-center rounded-lg border-2 border-dashed border-app-line px-12 py-16 text-center">
+							<div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-app-darkBox">
+								<HugeiconsIcon icon={Clock05Icon} className="h-6 w-6 text-ink-faint" />
+							</div>
+							<h3 className="mb-1 font-plex text-sm font-medium text-ink">No cron jobs yet</h3>
+							<p className="mb-5 max-w-md text-sm text-ink-faint">
+								Schedule automated tasks that run on a timer and deliver results to messaging channels
+							</p>
+							<Button onClick={openCreate} variant="secondary" size="sm">
+								+ New Job
+							</Button>
+						</div>
 					</div>
 				)}
 
@@ -245,95 +257,92 @@ export function AgentCron({ agentId }: AgentCronProps) {
 					</DialogHeader>
 					<div className="flex flex-col gap-4">
 						<Field label="Job ID">
-							<input
+							<Input
 								value={formData.id}
 								onChange={(e) => setFormData((d) => ({ ...d, id: e.target.value }))}
 								placeholder="e.g. check-email"
 								disabled={!!editingJob}
-								className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none disabled:opacity-50"
+								autoComplete="off"
 							/>
 						</Field>
 
 						<Field label="Prompt">
-							<textarea
+							<TextArea
 								value={formData.prompt}
 								onChange={(e) => setFormData((d) => ({ ...d, prompt: e.target.value }))}
 								placeholder="What should the agent do on each run?"
 								rows={3}
-								className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
 							/>
 						</Field>
 
+						<Field label="Interval">
+							<div className="flex items-center gap-2">
+								<span className="text-sm text-ink-faint">Every</span>
+								<NumberStepper
+									value={formData.interval_value}
+									onChange={(v) => setFormData((d) => ({ ...d, interval_value: v }))}
+									min={1}
+									max={999}
+									variant="compact"
+									suffix={` ${formData.interval_unit}`}
+								/>
+								<Select
+									value={formData.interval_unit}
+									onValueChange={(value) =>
+										setFormData((d) => ({ ...d, interval_unit: value as "minutes" | "hours" | "days" }))
+									}
+								>
+									<SelectTrigger className="w-32">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="minutes">minutes</SelectItem>
+										<SelectItem value="hours">hours</SelectItem>
+										<SelectItem value="days">days</SelectItem>
+									</SelectContent>
+								</Select>
+							</div>
+							<p className="mt-1 text-tiny text-ink-faint">How often this job should run</p>
+						</Field>
+
 						<div className="grid grid-cols-2 gap-4">
-							<Field label="Interval">
-								<div className="flex gap-2">
-									<input
-										type="number"
-										min={1}
-										value={formData.interval_value}
-										onChange={(e) =>
-											setFormData((d) => ({ ...d, interval_value: parseInt(e.target.value, 10) || 1 }))
-										}
-										className="w-20 rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
-									/>
-									<select
-										value={formData.interval_unit}
-										onChange={(e) =>
-											setFormData((d) => ({ ...d, interval_unit: e.target.value as "minutes" | "hours" | "days" }))
-										}
-										className="flex-1 rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink"
-									>
-										<option value="minutes">minutes</option>
-										<option value="hours">hours</option>
-										<option value="days">days</option>
-									</select>
-								</div>
-							</Field>
 
 							<Field label="Delivery Target">
-								<input
+								<Input
 									value={formData.delivery_target}
 									onChange={(e) => setFormData((d) => ({ ...d, delivery_target: e.target.value }))}
 									placeholder="discord:channel_id"
-									className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
 								/>
 							</Field>
 						</div>
 
-						<div className="grid grid-cols-2 gap-4">
-							<Field label="Active Start Hour (optional)">
-								<input
-									type="number"
+						<Field label="Active Hours (optional)">
+							<div className="flex items-center gap-2">
+								<NumberStepper
+									value={parseInt(formData.active_start_hour) || 0}
+									onChange={(v) => setFormData((d) => ({ ...d, active_start_hour: v.toString() }))}
 									min={0}
 									max={23}
-									value={formData.active_start_hour}
-									onChange={(e) => setFormData((d) => ({ ...d, active_start_hour: e.target.value }))}
-									placeholder="e.g. 9"
-									className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+									suffix="h"
+									variant="compact"
 								/>
-							</Field>
-							<Field label="Active End Hour (optional)">
-								<input
-									type="number"
+								<span className="text-sm text-ink-faint">to</span>
+								<NumberStepper
+									value={parseInt(formData.active_end_hour) || 23}
+									onChange={(v) => setFormData((d) => ({ ...d, active_end_hour: v.toString() }))}
 									min={0}
 									max={23}
-									value={formData.active_end_hour}
-									onChange={(e) => setFormData((d) => ({ ...d, active_end_hour: e.target.value }))}
-									placeholder="e.g. 17"
-									className="w-full rounded-lg border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+									suffix="h"
+									variant="compact"
 								/>
-							</Field>
-						</div>
+							</div>
+							<p className="mt-1 text-tiny text-ink-faint">Job will only run during these hours (0-23, 24-hour format)</p>
+						</Field>
 
-						<label className="flex items-center gap-2 text-sm text-ink-dull">
-							<input
-								type="checkbox"
-								checked={formData.enabled}
-								onChange={(e) => setFormData((d) => ({ ...d, enabled: e.target.checked }))}
-								className="rounded border-app-line"
-							/>
-							Enabled
-						</label>
+						<div className="flex items-center justify-between">
+							<Label>Enabled</Label>
+							<Toggle checked={formData.enabled} onCheckedChange={(checked) => setFormData((d) => ({ ...d, enabled: checked }))} size="lg" />
+						</div>
 
 					<div className="mt-2 flex justify-end gap-2">
 						<Button variant="ghost" size="sm" onClick={closeModal}>

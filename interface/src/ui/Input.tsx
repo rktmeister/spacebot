@@ -83,7 +83,7 @@ export const TextArea = React.forwardRef<HTMLTextAreaElement, TextAreaProps>(
 				ref={ref}
 				className={cx(
 					inputStyles({variant, error}),
-					"w-full min-h-[80px] resize-y py-2 placeholder:text-ink-faint",
+					"w-full min-h-[80px] resize-y py-2 placeholder:text-ink-faint [&::-webkit-resizer]:bg-transparent",
 					className,
 				)}
 				{...props}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AgentConfigResponse, type AgentConfigUpdateRequest } from "@/api/client";
 import { Button, SettingSidebarButton, Input, TextArea, Toggle, NumberStepper } from "@/ui";
+import { motion, AnimatePresence } from "framer-motion";
 
 
 type SectionId = "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "discord";
@@ -44,6 +45,9 @@ const getIdentityField = (data: { soul: string | null; identity: string | null; 
 export function AgentConfig({ agentId }: AgentConfigProps) {
 	const queryClient = useQueryClient();
 	const [activeSection, setActiveSection] = useState<SectionId>("soul");
+	const [dirty, setDirty] = useState(false);
+	const [saving, setSaving] = useState(false);
+	const saveHandlerRef = useState<{ save?: () => void; revert?: () => void }>(() => ({}))[0];
 
 	const identityQuery = useQuery({
 		queryKey: ["agent-identity", agentId],
@@ -63,16 +67,24 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 				agent_id: agentId,
 				[update.field]: update.content,
 			}),
+		onMutate: () => setSaving(true),
 		onSuccess: (result) => {
 			queryClient.setQueryData(["agent-identity", agentId], result);
+			setDirty(false);
+			setSaving(false);
 		},
+		onError: () => setSaving(false),
 	});
 
 	const configMutation = useMutation({
 		mutationFn: (update: AgentConfigUpdateRequest) => api.updateAgentConfig(update),
+		onMutate: () => setSaving(true),
 		onSuccess: (result) => {
 			queryClient.setQueryData(["agent-config", agentId], result);
+			setDirty(false);
+			setSaving(false);
 		},
+		onError: () => setSaving(false),
 	});
 
 	const isLoading = identityQuery.isLoading || configQuery.isLoading;
@@ -100,8 +112,16 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 	const active = SECTIONS.find((s) => s.id === activeSection)!;
 	const isIdentitySection = active.group === "identity";
 
+	const handleSave = useCallback(() => {
+		saveHandlerRef.save?.();
+	}, [saveHandlerRef]);
+
+	const handleRevert = useCallback(() => {
+		saveHandlerRef.revert?.();
+	}, [saveHandlerRef]);
+
 	return (
-		<div className="flex h-full">
+		<div className="flex h-full relative">
 			{/* Sidebar */}
 			<div className="flex w-52 flex-shrink-0 flex-col border-r border-app-line/50 bg-app-darkBox/20 overflow-y-auto">
 				{/* Identity Group */}
@@ -155,7 +175,8 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 					label={active.label}
 					description={active.description}
 					content={getIdentityField(identityQuery.data ?? { soul: null, identity: null, user: null }, active.id)}
-					saving={identityMutation.isPending}
+					onDirtyChange={setDirty}
+					saveHandlerRef={saveHandlerRef}
 					onSave={(content) => {
 						// Only mutate for identity sections
 						if (isIdentityField(active.id)) {
@@ -170,11 +191,43 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 						description={active.description}
 						detail={active.detail}
 						config={configQuery.data!}
-						saving={configMutation.isPending}
+						onDirtyChange={setDirty}
+						saveHandlerRef={saveHandlerRef}
 						onSave={(update) => configMutation.mutate({ agent_id: agentId, ...update })}
 					/>
 				)}
 			</div>
+
+			{/* Fixed bottom save bar */}
+			<AnimatePresence>
+				{dirty && (
+					<motion.div
+						initial={{ y: 100 }}
+						animate={{ y: 0 }}
+						exit={{ y: 100 }}
+						transition={{ type: "spring", damping: 25, stiffness: 300 }}
+						className="absolute bottom-4 right-4 flex items-center gap-4 rounded-lg border border-app-line/50 bg-app-darkBox px-4 py-3 shadow-lg"
+					>
+						<span className="text-sm text-ink-dull">You have unsaved changes</span>
+						<div className="flex items-center gap-2">
+							<Button
+								onClick={handleRevert}
+								variant="ghost"
+								size="sm"
+							>
+								Revert
+							</Button>
+							<Button
+								onClick={handleSave}
+								size="sm"
+								loading={saving}
+							>
+								Save Changes
+							</Button>
+						</div>
+					</motion.div>
+				)}
+			</AnimatePresence>
 		</div>
 	);
 }
@@ -185,44 +238,59 @@ interface IdentityEditorProps {
 	label: string;
 	description: string;
 	content: string | null;
-	saving: boolean;
-	onSave: (content: string) => void;
+	onDirtyChange: (dirty: boolean) => void;
+	saveHandlerRef: { save?: () => void; revert?: () => void };
+	onSave: (value: string) => void;
 }
 
-function IdentityEditor({ label, description, content, saving, onSave }: IdentityEditorProps) {
+function IdentityEditor({ label, description, content, onDirtyChange, saveHandlerRef, onSave }: IdentityEditorProps) {
 	const [value, setValue] = useState(content ?? "");
-	const [dirty, setDirty] = useState(false);
+	const [localDirty, setLocalDirty] = useState(false);
 
 	useEffect(() => {
-		if (!dirty) {
+		if (!localDirty) {
 			setValue(content ?? "");
 		}
-	}, [content, dirty]);
+	}, [content, localDirty]);
+
+	useEffect(() => {
+		onDirtyChange(localDirty);
+	}, [localDirty, onDirtyChange]);
 
 	const handleChange = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
 		setValue(event.target.value);
-		setDirty(true);
+		setLocalDirty(true);
 	}, []);
 
 	const handleSave = useCallback(() => {
 		onSave(value);
-		setDirty(false);
+		setLocalDirty(false);
 	}, [onSave, value]);
+
+	const handleRevert = useCallback(() => {
+		setValue(content ?? "");
+		setLocalDirty(false);
+	}, [content]);
 
 	const handleKeyDown = useCallback(
 		(event: React.KeyboardEvent) => {
 			if ((event.metaKey || event.ctrlKey) && event.key === "s") {
 				event.preventDefault();
-				if (dirty) handleSave();
+				if (localDirty) handleSave();
 			}
 		},
-		[dirty, handleSave],
+		[localDirty, handleSave],
 	);
 
-	const handleRevert = useCallback(() => {
-		setValue(content ?? "");
-		setDirty(false);
-	}, [content]);
+	// Register save/revert handlers
+	useEffect(() => {
+		saveHandlerRef.save = handleSave;
+		saveHandlerRef.revert = handleRevert;
+		return () => {
+			saveHandlerRef.save = undefined;
+			saveHandlerRef.revert = undefined;
+		};
+	}, [saveHandlerRef, handleSave, handleRevert]);
 
 	return (
 		<>
@@ -231,39 +299,21 @@ function IdentityEditor({ label, description, content, saving, onSave }: Identit
 					<h3 className="text-sm font-medium text-ink">{label}</h3>
 					<span className="rounded bg-app-darkBox px-1.5 py-0.5 font-mono text-tiny text-ink-faint">{description}</span>
 				</div>
-			<div className="flex items-center gap-2">
-				{dirty && (
-					<>
-						<Button
-							onClick={handleRevert}
-							variant="ghost"
-							size="sm"
-							className="h-6 px-2 text-tiny"
-						>
-							Revert
-						</Button>
-						<Button
-							onClick={handleSave}
-							size="sm"
-							loading={saving}
-							className="h-6 bg-accent/15 px-2 text-tiny text-accent hover:bg-accent/25"
-						>
-							Save
-						</Button>
-					</>
+				{localDirty ? (
+					<span className="text-tiny text-amber-400">Unsaved changes</span>
+				) : (
+					<span className="text-tiny text-ink-faint/50">Cmd+S to save</span>
 				)}
-				{!dirty && <span className="text-tiny text-ink-faint/50">Cmd+S to save</span>}
-			</div>
 			</div>
 			<div className="flex-1 overflow-y-auto p-4">
-			<TextArea
-				value={value}
-				onChange={handleChange}
-				onKeyDown={handleKeyDown}
-				placeholder={`Write ${label.toLowerCase()} content here...`}
-				className="h-full w-full resize-none border-transparent bg-app-darkBox/30 px-4 py-3 font-mono leading-relaxed placeholder:text-ink-faint/40"
-				spellCheck={false}
-			/>
+				<TextArea
+					value={value}
+					onChange={handleChange}
+					onKeyDown={handleKeyDown}
+					placeholder={`Write ${label.toLowerCase()} content here...`}
+					className="h-full w-full resize-none border-transparent bg-app-darkBox/30 px-4 py-3 font-mono leading-relaxed placeholder:text-ink-faint/40"
+					spellCheck={false}
+				/>
 			</div>
 		</>
 	);
@@ -277,11 +327,12 @@ interface ConfigSectionEditorProps {
 	description: string;
 	detail: string;
 	config: AgentConfigResponse;
-	saving: boolean;
+	onDirtyChange: (dirty: boolean) => void;
+	saveHandlerRef: { save?: () => void; revert?: () => void };
 	onSave: (update: Partial<AgentConfigUpdateRequest>) => void;
 }
 
-function ConfigSectionEditor({ sectionId, label, description, detail, config, saving, onSave }: ConfigSectionEditorProps) {
+function ConfigSectionEditor({ sectionId, label, description, detail, config, onDirtyChange, saveHandlerRef, onSave }: ConfigSectionEditorProps) {
 	const [localValues, setLocalValues] = useState<Record<string, string | number | boolean>>(() => {
 		// Initialize from config based on section
 		switch (sectionId) {
@@ -306,11 +357,15 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 		}
 	});
 
-	const [dirty, setDirty] = useState(false);
+	const [localDirty, setLocalDirty] = useState(false);
+
+	useEffect(() => {
+		onDirtyChange(localDirty);
+	}, [localDirty, onDirtyChange]);
 
 	// Reset local values when config changes externally
 	useEffect(() => {
-		if (!dirty) {
+		if (!localDirty) {
 			switch (sectionId) {
 				case "routing":
 					setLocalValues({ ...config.routing });
@@ -338,16 +393,16 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 					break;
 			}
 		}
-	}, [config, sectionId, dirty]);
+	}, [config, sectionId, localDirty]);
 
 	const handleChange = useCallback((field: string, value: string | number | boolean) => {
 		setLocalValues((prev) => ({ ...prev, [field]: value }));
-		setDirty(true);
+		setLocalDirty(true);
 	}, []);
 
 	const handleSave = useCallback(() => {
 		onSave({ [sectionId]: localValues });
-		setDirty(false);
+		setLocalDirty(false);
 	}, [onSave, sectionId, localValues]);
 
 	const handleRevert = useCallback(() => {
@@ -377,8 +432,18 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 				setLocalValues({ ...config.discord });
 				break;
 		}
-		setDirty(false);
+		setLocalDirty(false);
 	}, [config, sectionId]);
+
+	// Register save/revert handlers
+	useEffect(() => {
+		saveHandlerRef.save = handleSave;
+		saveHandlerRef.revert = handleRevert;
+		return () => {
+			saveHandlerRef.save = undefined;
+			saveHandlerRef.revert = undefined;
+		};
+	}, [saveHandlerRef, handleSave, handleRevert]);
 
 	const renderFields = () => {
 		switch (sectionId) {
@@ -689,29 +754,11 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, sa
 					<h3 className="text-sm font-medium text-ink">{label}</h3>
 					<span className="text-tiny text-ink-faint">{description}</span>
 				</div>
-			<div className="flex items-center gap-2">
-				{dirty && (
-					<>
-						<Button
-							onClick={handleRevert}
-							variant="ghost"
-							size="sm"
-							className="h-6 px-2 text-tiny"
-						>
-							Revert
-						</Button>
-						<Button
-							onClick={handleSave}
-							size="sm"
-							loading={saving}
-							className="h-6 bg-accent/15 px-2 text-tiny text-accent hover:bg-accent/25"
-						>
-							Save
-						</Button>
-					</>
+				{localDirty ? (
+					<span className="text-tiny text-amber-400">Unsaved changes</span>
+				) : (
+					<span className="text-tiny text-ink-faint/50">Changes saved to config.toml</span>
 				)}
-				{!dirty && <span className="text-tiny text-ink-faint/50">Changes auto-saved to config.toml</span>}
-			</div>
 			</div>
 			<div className="flex-1 overflow-y-auto px-8 py-8">
 				<div className="mb-6 rounded-lg border border-app-line/30 bg-app-darkBox/20 px-5 py-4">
