@@ -47,31 +47,38 @@ impl ShellTool {
     fn check_command(&self, command: &str) -> Result<(), ShellError> {
         let instance_str = self.instance_dir.to_string_lossy();
 
-        // Block commands that reference the instance dir with sensitive files
-        for file in SENSITIVE_FILES {
-            if command.contains(&format!("{}/{file}", instance_str)) {
+        // Block any command that directly references the instance directory.
+        // This prevents listing, reading, traversing, or archiving the instance
+        // dir and its contents (config.toml, databases, agent data, etc).
+        // Commands that reference the workspace (which is inside the instance dir)
+        // are allowed through.
+        if command.contains(instance_str.as_ref()) {
+            let workspace_str = self.workspace.to_string_lossy();
+            if !command.contains(workspace_str.as_ref()) {
                 return Err(ShellError {
-                    message: format!("Cannot access {file} — instance configuration is protected."),
+                    message: "ACCESS DENIED: Cannot access the instance directory — it contains \
+                              protected configuration and data. Do not attempt to reproduce or \
+                              guess its contents. Inform the user that this path is restricted.".to_string(),
                     exit_code: -1,
                 });
             }
         }
 
-        // Block direct references to the instance dir's config files via common patterns
-        // (e.g. "cat /data/config.toml" on Docker, "cat ~/.spacebot/config.toml" locally)
+        // Block commands referencing sensitive files even without the full instance path
+        // (e.g. "cat config.toml" from a relative path, or via variable expansion)
         for file in SENSITIVE_FILES {
-            // Check for the filename appearing right after common read/write commands
-            // targeting paths that resolve into the instance dir
             if command.contains(file) {
-                // Allow references to files named config.toml in the workspace (e.g. a project's config)
                 let workspace_str = self.workspace.to_string_lossy();
                 let mentions_workspace = command.contains(workspace_str.as_ref());
                 let mentions_instance = command.contains(instance_str.as_ref());
 
-                // If the command explicitly references the instance dir, block it
-                if mentions_instance && !mentions_workspace {
+                // Block if referencing instance dir, or if not clearly targeting workspace
+                if mentions_instance || !mentions_workspace {
                     return Err(ShellError {
-                        message: format!("Cannot access {file} — instance configuration is protected."),
+                        message: format!(
+                            "ACCESS DENIED: Cannot access {file} — instance configuration is protected. \
+                             Do not attempt to reproduce or guess the file contents."
+                        ),
                         exit_code: -1,
                     });
                 }
@@ -92,8 +99,7 @@ impl ShellTool {
         }
 
         // Block broad env dumps that would expose secrets
-        if command.contains("printenv") && !SECRET_ENV_VARS.iter().any(|v| command.contains(v)) {
-            // "printenv" with no args dumps everything — block it
+        if command.contains("printenv") {
             let trimmed = command.trim();
             if trimmed == "printenv" || trimmed.ends_with("| printenv") || trimmed.contains("printenv |") || trimmed.contains("printenv >") {
                 return Err(ShellError {
@@ -104,13 +110,20 @@ impl ShellTool {
         }
         if command.contains("env") {
             let trimmed = command.trim();
-            // Block bare "env" command that dumps all vars
             if trimmed == "env" || trimmed.starts_with("env |") || trimmed.starts_with("env >") {
                 return Err(ShellError {
                     message: "Cannot dump all environment variables — they may contain secrets.".to_string(),
                     exit_code: -1,
                 });
             }
+        }
+
+        // Block /proc/self/environ which exposes all env vars on Linux
+        if command.contains("/proc/self/environ") || command.contains("/proc/*/environ") {
+            return Err(ShellError {
+                message: "Cannot access process environment — it may contain secrets.".to_string(),
+                exit_code: -1,
+            });
         }
 
         Ok(())

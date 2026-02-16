@@ -39,7 +39,11 @@ impl FileTool {
 
         if !canonical.starts_with(&workspace_canonical) {
             return Err(FileError(format!(
-                "Path is outside the workspace boundary. File operations are restricted to {}.",
+                "ACCESS DENIED: Path is outside the workspace boundary. \
+                 File operations are restricted to {}. \
+                 You do not have access to this file and must not attempt to reproduce, \
+                 guess, or fabricate its contents. Inform the user that the path is \
+                 outside your workspace.",
                 self.workspace.display()
             )));
         }

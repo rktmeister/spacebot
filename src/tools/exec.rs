@@ -25,17 +25,29 @@ impl ExecTool {
     /// Check if program arguments reference sensitive instance paths.
     fn check_args(&self, program: &str, args: &[String]) -> Result<(), ExecError> {
         let instance_str = self.instance_dir.to_string_lossy();
+        let workspace_str = self.workspace.to_string_lossy();
         let all_args = std::iter::once(program.to_string())
             .chain(args.iter().cloned())
             .collect::<Vec<_>>()
             .join(" ");
 
+        // Block references to instance dir (unless targeting workspace within it)
+        if all_args.contains(instance_str.as_ref()) && !all_args.contains(workspace_str.as_ref()) {
+            return Err(ExecError {
+                message: "Cannot access the instance directory — it contains protected configuration and data.".to_string(),
+                exit_code: -1,
+            });
+        }
+
+        // Block references to sensitive files by name
         for file in super::shell::SENSITIVE_FILES {
-            if all_args.contains(&format!("{}/{file}", instance_str)) {
-                return Err(ExecError {
-                    message: format!("Cannot access {file} — instance configuration is protected."),
-                    exit_code: -1,
-                });
+            if all_args.contains(file) {
+                if all_args.contains(instance_str.as_ref()) || !all_args.contains(workspace_str.as_ref()) {
+                    return Err(ExecError {
+                        message: format!("Cannot access {file} — instance configuration is protected."),
+                        exit_code: -1,
+                    });
+                }
             }
         }
 
