@@ -9,140 +9,89 @@ Tracking progress from first compile to public launch.
 
 ## Current State
 
-**Project compiles cleanly** (26 warnings, 0 errors). All core abstractions have real implementations backed by Rig framework integration, direct HTTP LLM calls, and database queries. The full message-in → LLM → response-out pipeline is wired end-to-end. The system starts messaging adapters, routes inbound messages to agent channels via binding resolution, runs real Rig agent loops for channels/branches/workers, and routes outbound responses back through the messaging layer.
+The full message-in → LLM → response-out pipeline is wired end-to-end across Discord, Telegram, Slack, and webhooks. The system starts messaging adapters, routes inbound messages to agent channels via binding resolution, runs real Rig agent loops for channels/branches/workers, and routes outbound responses back through the messaging layer. The hosted platform (spacebot.sh) is deployed with a control plane, dashboard, and marketing site. Config changes hot-reload without restarts.
 
 ## Completed
 
 - **Project structure** — all modules declared, module root pattern (`src/memory.rs` not `mod.rs`)
 - **Error hierarchy** — thiserror domain enums wrapped by top-level `Error` with `#[from]`
-- **Config** — hierarchical TOML with `Config`, `AgentConfig`, `ResolvedAgentConfig`, `Binding`, `MessagingConfig`
+- **Config** — hierarchical TOML with `Config`, `AgentConfig`, `ResolvedAgentConfig`, `Binding`, `MessagingConfig`. File watcher with event filtering and content hash debounce for hot-reload.
 - **Multi-agent** — per-agent database isolation, `Agent` struct bundles all dependencies
 - **Database connections** — SQLite + LanceDB + redb per-agent, migrations for all tables
-- **LLM** — `SpacebotModel` implements Rig's `CompletionModel`, routes through `LlmManager` via HTTP
+- **LLM** — `SpacebotModel` implements Rig's `CompletionModel`, routes through `LlmManager` via HTTP with retries and fallback chains across 4 providers (Anthropic, OpenAI, OpenRouter, Zhipu)
 - **Model routing** — `RoutingConfig` with process-type defaults, task overrides, fallback chains
-- **Memory** — full stack: types, SQLite store (CRUD + graph), LanceDB (embeddings + vector + FTS), fastembed, hybrid search (RRF fusion)
+- **Memory** — full stack: types, SQLite store (CRUD + graph), LanceDB (embeddings + vector + FTS), fastembed, hybrid search (RRF fusion). `memory_type` filter wired end-to-end through SearchConfig. `total_cmp` for safe sorting.
+- **Memory maintenance** — decay + prune implemented
 - **Identity** — `Identity` struct loads SOUL.md/IDENTITY.md/USER.md, `Prompts` with fallback chain
 - **Agent loops** — all three process types run real Rig loops:
   - **Channel** — per-turn tool registration, status injection, `max_turns(5)`
   - **Branch** — history fork, `max_turns(10)`, memory tools, result injection
-  - **Worker** — fresh history, per-worker ToolServer, `max_turns(50)`, interactive mode
+  - **Worker** — fresh history, per-worker ToolServer, `max_turns(50)`, interactive mode with `input_tx` stored in ChannelState
 - **Compactor** — tiered thresholds (80%/85%/95%), LLM summarization, pre-compaction archiving, emergency truncation
-- **Cortex** — signal buffering, bulletin generation on 60min interval (complete); consolidation stubbed
+- **Cortex** — signal buffering, bulletin generation on 60min interval, association loop
 - **StatusBlock** — event-driven updates, renders to context string
-- **Hooks** — `SpacebotHook` with tool call/result events, leak detection; `CortexHook` for observation
+- **Hooks** — `SpacebotHook` with tool call/result events, leak detection (11 patterns scanning both tool args and output); `CortexHook` for observation (trace-only)
 - **Messaging** — `Messaging` trait with RPITIT + companion, `MessagingManager` with fan-in/routing
-- **Discord adapter** — full serenity implementation (message handling, streaming via edit, typing indicators)
+- **Discord adapter** — full Serenity implementation (message handling, streaming via edit, typing indicators, guild/channel/DM filtering)
+- **Telegram adapter** — full teloxide implementation (long polling, typing indicators, attachment extraction, chat/DM filtering, 4096 char splitting)
+- **Slack adapter** — full slack-morphism implementation (Socket Mode, thread replies, file upload v2, reactions, streaming via edit, workspace/channel/DM filtering via hot-reloadable permissions)
+- **Webhook adapter** — Axum HTTP server (POST /send, GET /poll/{id}, GET /health)
 - **Tools** — 16 tools implement Rig's `Tool` trait with real logic (reply, branch, spawn_worker, route, cancel, skip, react, memory_save, memory_recall, set_status, shell, file, exec, browser, cron, web_search)
+- **Workspace containment** — file tool validates paths stay within workspace boundary, shell/exec tools block instance directory traversal, sensitive file access, and secret env var leakage
 - **Conversation persistence** — `ConversationLogger` with fire-and-forget SQLite writes, compaction archiving
-- **Cron** — scheduler with timers, active hours, circuit breaker (3 failures → disable), creates real channels
+- **Cron** — scheduler with timers, active hours, circuit breaker (3 failures → disable), creates real channels. CronTool wired into channel tool factory.
 - **Message routing** — full event loop with binding resolution, channel lifecycle, outbound routing
+- **Settings store** — redb key-value with WorkerLogMode
+- **OpenClaw skills** — skill format parsing, tool mapping, directory watcher with hot reload, instance + per-agent directories
+- **Embedded UI** — Vite + React + TypeScript SPA, embedded into binary via rust_embed, served as SPA fallback
+- **Bindings API** — hot-creates bindings and starts adapters at runtime without restart via ArcSwap
+- **Hosted platform** — control plane (spacebot-platform on Fly.io), dashboard (spacebot-dash), marketing site (spacebot-web). Instance provisioning, auth, reverse proxy to private Fly VMs.
 
 ## In Progress
 
-- **Cortex consolidation** — `run_consolidation()` just logs, not implemented
-- **Memory maintenance** — decay + prune implemented, merge stubbed (`merge_similar_memories()` is a no-op)
-- **RouteTool follow-ups** — validates worker exists and returns success, but never delivers the message — `input_tx` dropped immediately after worker spawn
-- **Streaming** — `SpacebotModel.stream()` returns error, not implemented
-- ~~**Telegram adapter**~~ — implemented via teloxide
-- ~~**Webhook adapter**~~ — implemented with axum HTTP server
-- **Secrets store** — empty struct, no redb integration
-- **Settings store** — empty struct, no redb integration
+- **Cortex consolidation** — `run_consolidation()` is a stub, no actual memory merging or graph optimization
+- **Memory merge** — `merge_similar_memories()` is a no-op placeholder
+- **Cortex observe()** — extracts some event types but hardcodes `memory_type` and `importance` values instead of pulling from actual event data
 - **CortexHook** — all hook methods are trace-only passthrough, no observation logic
-- **Cortex observe()** — only extracts 3 event types, hardcodes `memory_type: "unknown"` and `importance: 0.5`
+- **Secrets store** — empty struct, no redb/AES-256-GCM integration
 
-## Phase 8: Critical Bug Fixes
+## Upcoming
 
-Fix runtime panics and functional gaps before launch.
+### Streaming
 
-- [ ] Fix `search.rs:273` — replace `partial_cmp().unwrap()` with `unwrap_or(Ordering::Equal)` or `total_cmp()`
-- [ ] Fix `embedding.rs:57` — remove `Default` impl or make it fallible
-- [ ] Fix Arrow type mismatch — `lance.rs` casts `_distance`/`_score` as `Float64Type` but LanceDB returns `Float32`
-- [ ] Fix arrow version mismatch in `Cargo.toml` (align or drop `arrow` meta-crate)
-- [ ] Fix RouteTool — store worker `input_tx` in `ChannelState` so `route` actually delivers messages
-- [ ] Fix silent error swallows — add `tracing::warn` on association creation, access recording, and inbound message send failures
-- [ ] Wire `memory_type` filter through to `SearchConfig` in `memory_recall`
-- [ ] Wire `CronTool` into `add_channel_tools()` factory
-- [ ] Add workspace path guards to `file` and `shell` tools
-- [ ] Test: send a message via Discord, get a real LLM response back
-- [ ] Test: trigger a branch (message that requires memory recall), verify branch result incorporation
-- [ ] Test: trigger a worker (ask for a file operation), verify worker completion
+Implement `SpacebotModel.stream()` with SSE parsing. The messaging adapters already handle `StreamStart`/`StreamChunk`/`StreamEnd` response types — this is purely the LLM layer.
 
-## Phase 9: Cortex Consolidation
+### Cortex Consolidation
 
-- [ ] Implement `run_consolidation()` — memory merging, decay management, graph optimization
-- [ ] Cross-channel coherence — shared observations across an agent's conversations
-- [ ] Memory graph traversal during recall — walk typed edges (Updates, Contradicts, CausedBy)
+- Implement `run_consolidation()` — memory merging, decay management, graph optimization
+- Implement `merge_similar_memories()` in maintenance.rs
+- Cross-channel coherence — shared observations across an agent's conversations
+- Wire real values into `observe()` signal extraction
+- Implement CortexHook observation logic (anomaly detection, consolidation triggers)
 
-## Phase 10: Webhook Adapter
+### Secrets Store
 
-HTTP adapter for testing and programmatic access without Discord.
+AES-256-GCM encrypted credentials in redb with `DecryptedSecret` wrapper type.
 
-- [ ] Implement WebhookAdapter (axum) — POST endpoint for `InboundMessage`, response routing
-- [ ] Optional sync mode (`"wait": true` blocks until agent responds)
-- [ ] Test: `curl -X POST` a message, get a response back
+### Hardening
 
-## Phase 11: Hardening
+- Tool nudging — inject "use your tools" in `SpacebotHook.on_completion_response()` when LLM responds with text in early iterations
+- Outbound HTTP leak scanning — block exfiltration via tool output before it reaches external services
 
-- [ ] Tool nudging — inject "use your tools" in `SpacebotHook.on_completion_response()` when LLM responds with text in early iterations
-- [ ] Expand leak detection — add patterns for AWS keys, Slack tokens, bearer tokens, DB connection strings
-- [ ] Outbound HTTP leak scanning — block exfiltration via tool output before it reaches external services
-- [ ] CortexHook — implement real observation logic (anomaly detection, consolidation triggers)
-- [ ] Cortex observe() — extract signals from all ProcessEvent variants with real values
-- [ ] Memory maintenance — implement `merge_similar_memories()` in `maintenance.rs`
-- [ ] Secrets store — AES-256-GCM encrypted credentials in redb, `DecryptedSecret` wrapper type
-- [ ] Settings store — redb key-value with env > DB > default resolution
-
-## Phase 12: Ingestion Pipeline
+### Ingestion Pipeline
 
 Drop files in, agent picks them up.
 
-- [ ] File watcher on `agents/{id}/ingest/` directory
-- [ ] Chunking — split large files into context-window-safe segments
-- [ ] Per-chunk worker using INGESTION.md prompt — recall existing, extract memories, build associations
-- [ ] Cleanup — move processed files to `agents/{id}/ingest/done/`
-- [ ] OpenClaw migration path — drop MEMORY.md, daily files, and skill configs into ingest folder
-
-## Phase 13: OpenClaw Skill Compatibility
-
-- [x] Parse OpenClaw skill format (SKILL.md + tool definitions)
-- [x] Map skill tools to Spacebot worker tool dispatch
-- [x] Skill directory watcher with hot reload
-- [x] Instance-level and per-agent skill directories
-
-## Phase 14: Telegram Adapter
-
-- [x] Implement TelegramAdapter via teloxide — long polling mode
-- [x] Message handling, typing indicators, reply threading
-- [x] Bindings support for `chat_id` routing
-
-## Phase 15: Launch Prep
-
-Everything needed to ship the video and go public.
-
-- [ ] End-to-end testing — Discord conversation with branching, workers, memory recall, compaction
-- [ ] Record demo footage — multi-user Discord interaction showing non-blocking behavior
-- [ ] README rewrite — clear setup instructions, architecture overview, quick start for new users
-- [ ] GitHub repo public — clean commit history, license, contributing guide
-- [ ] Landing page — spacebot.sh with overview, setup instructions, link to hosted version
-- [ ] Launch video — 60-90s Twitter video (see docs/launch-script.md)
-
-## Phase 16: Hosted Version (spacebot.sh)
-
-One-click hosted Spacebot for people who don't want to self-host.
-
-- [ ] Containerization — Docker image with all dependencies (Rust binary + Chrome for browser tool)
-- [ ] Container orchestration — per-user isolated containers with persistent volumes for agent data
-- [ ] Onboarding flow — connect Discord/Telegram, set API keys (or use shared keys with usage billing), configure identity
-- [ ] Billing — subscription model, usage-based pricing for LLM calls if using shared keys
-- [ ] Dashboard — web UI for agent management, memory browsing, conversation history, cron config
-- [ ] Monitoring — container health, per-user resource usage, error alerting
+- File watcher on `agents/{id}/ingest/` directory
+- Chunking — split large files into context-window-safe segments
+- Per-chunk worker using INGESTION.md prompt — recall existing, extract memories, build associations
+- Cleanup — move processed files to `agents/{id}/ingest/done/`
 
 ## Post-Launch
 
-- **Streaming** — implement `SpacebotModel.stream()` with SSE parsing, wire through messaging adapters
 - **Agent CLI** — `spacebot agents list/create/delete`, identity template bootstrapping
 - **Cross-agent communication** — routing between agents, shared observations
 - **Hot reload agent topology** — adding/removing agents without restart
 - **Agent templates** — pre-built configurations for common use cases
-- **JsonSchema-derived tool definitions** — replace hand-written JSON schemas in all 16 tools with the `JsonSchema` derive that's already on every Args struct
+- **JsonSchema-derived tool definitions** — replace hand-written JSON schemas in all tools with the `JsonSchema` derive that's already on every Args struct
 - **Spacedrive integration** — connect agents to terabytes of indexed, content-addressed file data across devices

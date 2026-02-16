@@ -7,6 +7,18 @@ description: Step-by-step guide to connect Spacebot to Discord.
 
 How to connect Spacebot to Discord so it can receive messages and respond through the Discord adapter.
 
+## Quick Setup (Hosted)
+
+If you're running a hosted instance on spacebot.sh, the embedded UI handles most of this for you:
+
+1. Create a bot in the [Discord Developer Portal](#1-create-an-application) and copy the token
+2. Open the **Agent Channels** tab in your instance UI
+3. Click **Connect Channel** → select **Discord**
+4. Paste your bot token and guild ID
+5. Click **Add Binding** — the bot starts immediately, no restart needed
+
+The rest of this guide covers manual `config.toml` setup and the full details.
+
 ## Discord Developer Portal
 
 ### 1. Create an Application
@@ -34,8 +46,8 @@ Under "OAuth2" > "URL Generator":
   - Send Messages in Threads
   - Create Public Threads
   - Read Message History
-  - Embed Links (for future media support)
-  - Attach Files (for future media support)
+  - Embed Links
+  - Attach Files
 
 Copy the generated URL and open it in your browser to invite the bot to your server.
 
@@ -76,6 +88,34 @@ Set the environment variables:
 export DISCORD_BOT_TOKEN="your-bot-token-here"
 export OPENROUTER_API_KEY="your-openrouter-key-here"
 ```
+
+### Discord Config Options
+
+The full `[messaging.discord]` section:
+
+```toml
+[messaging.discord]
+enabled = true
+token = "env:DISCORD_BOT_TOKEN"
+allow_bot_messages = false       # process messages from other bots (default: false)
+dm_allowed_users = ["USER_ID"]   # user IDs allowed to DM the bot (instance-wide)
+```
+
+### Binding Options
+
+Each `[[bindings]]` entry supports:
+
+```toml
+[[bindings]]
+agent_id = "main"
+channel = "discord"
+guild_id = "123456789"
+channel_ids = ["111111", "222222"]     # restrict to specific channels (empty = all)
+dm_allowed_users = ["333333"]          # per-binding DM allowlist (merged with instance-wide)
+```
+
+- `channel_ids` — When set, the bot only responds in those channels (and threads parented to them). When empty, it responds in all channels.
+- `dm_allowed_users` — User IDs allowed to DM the bot, scoped to this binding. Merged with the instance-wide `dm_allowed_users` on `[messaging.discord]`.
 
 ### LLM Providers
 
@@ -148,12 +188,19 @@ User types in #general on Discord
 Serenity gateway receives Message event
     |
     v
-Handler.message() builds InboundMessage:
+Handler.message() applies permission filters:
+    - Ignore self (prevent loops)
+    - Ignore other bots (unless allow_bot_messages)
+    - DM: check dm_allowed_users
+    - Guild: check guild_id against bindings
+    - Channel: check channel_ids (if specified)
+    |
+    v
+Builds InboundMessage:
     - id: Discord message snowflake
     - source: "discord"
     - conversation_id: "discord:GUILD_ID:CHANNEL_ID"
     - sender_id: Discord user ID
-    - agent_id: None (set by router later)
     - metadata: { discord_channel_id, discord_guild_id, ... }
     |
     v
@@ -183,7 +230,7 @@ Each Discord channel/thread maps to one Spacebot conversation:
 |----------------|----------------|-------------------|
 | Server channel `#general` | `discord:GUILD:CHANNEL` | One conversation per channel |
 | Thread in `#general` | `discord:GUILD:THREAD` | One conversation per thread |
-| DM with bot | `discord:dm:USER` | One conversation per DM |
+| DM with bot | `discord:dm:USER` | One conversation per DM (requires `dm_allowed_users`) |
 
 Threads are the natural fit for isolated conversations. In a busy server channel, all messages in that channel share one conversation context. Threads give each interaction its own history.
 
@@ -201,20 +248,15 @@ Discord caps messages at 2000 characters. Long responses are automatically split
 
 When streaming is enabled, the adapter sends an initial placeholder message on `StreamStart`, then edits it in-place as `StreamChunk` text accumulates. On `StreamEnd`, the placeholder is cleaned up. If accumulated text exceeds 2000 chars during streaming, it truncates with "..." (a future improvement would split into a new message).
 
-## What's Not Built Yet
+## Hot Reload
 
-The Discord adapter itself is complete, but the orchestration layer that ties it to the agent system has gaps. These are tracked on the roadmap (Phases 4, 7, 8):
+Config changes take effect immediately — no restart required.
 
-**Binding resolution / Router** — When an `InboundMessage` arrives, something needs to match its `source` + `guild_id` against the configured `[[bindings]]` to determine which agent handles it. The `InboundMessage.agent_id` field exists for this (set to `None` by the adapter, intended to be filled by the router). The binding data is loaded from config. The matching logic doesn't exist yet.
+The Discord adapter watches `config.toml` for changes and hot-reloads permissions on every edit. This includes:
+- Binding changes (guild IDs, channel IDs)
+- DM allowlist changes
+- `allow_bot_messages` toggle
 
-**Channel lifecycle management** — When a message arrives for a conversation_id that hasn't been seen before, a new `Channel` needs to be created (with the agent's deps, prompts, and identity) and its `run()` loop spawned. Subsequent messages for the same conversation_id route to the existing channel. This resolve-or-create pattern isn't wired yet. The `Channel::new()` and `Channel::run()` methods exist but nothing calls them.
+Permissions are stored behind `ArcSwap`, so each incoming message loads a fresh snapshot. You can add a new binding, change channel filters, or update the DM allowlist and it takes effect on the next message.
 
-**Main event loop** — `main.rs` registers adapters but never calls `messaging_manager.start()`. There's no loop consuming the `InboundStream`. The program currently just waits for ctrl+c after init.
-
-**Reply path** — The `ReplyTool` sends `OutboundResponse` on an mpsc channel, but that channel isn't connected back to `MessagingManager.respond()`. The original `InboundMessage` (with its source + metadata) needs to be available so responses route back through the correct adapter to the correct Discord channel.
-
-**Agent LLM calls** — Channel/Branch/Worker `run()` methods use placeholder `sleep()` instead of real Rig agent calls. This is the Phase 4 work (model routing + wiring `agent.prompt().with_history()`).
-
-### In short
-
-The Discord adapter handles the I/O layer — receiving messages from Discord and sending responses back. The gap is the middle: routing messages to the right agent, managing channel lifecycles, and connecting the reply path. Once those pieces are built (Phases 4, 7, 8), running `spacebot` with a Discord token will give you a working bot.
+Adding a binding via the embedded UI also hot-starts the Discord adapter if it wasn't already running — no restart needed.
