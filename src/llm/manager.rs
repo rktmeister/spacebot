@@ -46,6 +46,18 @@ impl LlmManager {
                 .ok_or_else(|| LlmError::MissingProviderKey("openrouter".into()).into()),
             "zhipu" => self.config.zhipu_key.clone()
                 .ok_or_else(|| LlmError::MissingProviderKey("zhipu".into()).into()),
+            "groq" => self.config.groq_key.clone()
+                .ok_or_else(|| LlmError::MissingProviderKey("groq".into()).into()),
+            "together" => self.config.together_key.clone()
+                .ok_or_else(|| LlmError::MissingProviderKey("together".into()).into()),
+            "fireworks" => self.config.fireworks_key.clone()
+                .ok_or_else(|| LlmError::MissingProviderKey("fireworks".into()).into()),
+            "deepseek" => self.config.deepseek_key.clone()
+                .ok_or_else(|| LlmError::MissingProviderKey("deepseek".into()).into()),
+            "xai" => self.config.xai_key.clone()
+                .ok_or_else(|| LlmError::MissingProviderKey("xai".into()).into()),
+            "mistral" => self.config.mistral_key.clone()
+                .ok_or_else(|| LlmError::MissingProviderKey("mistral".into()).into()),
             _ => Err(LlmError::UnknownProvider(provider.into()).into()),
         }
     }

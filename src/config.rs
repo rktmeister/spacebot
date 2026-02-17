@@ -56,12 +56,27 @@ pub struct LlmConfig {
     pub openai_key: Option<String>,
     pub openrouter_key: Option<String>,
     pub zhipu_key: Option<String>,
+    pub groq_key: Option<String>,
+    pub together_key: Option<String>,
+    pub fireworks_key: Option<String>,
+    pub deepseek_key: Option<String>,
+    pub xai_key: Option<String>,
+    pub mistral_key: Option<String>,
 }
 
 impl LlmConfig {
     /// Check if any provider key is configured.
     pub fn has_any_key(&self) -> bool {
-        self.anthropic_key.is_some() || self.openai_key.is_some() || self.openrouter_key.is_some() || self.zhipu_key.is_some()
+        self.anthropic_key.is_some() 
+            || self.openai_key.is_some() 
+            || self.openrouter_key.is_some() 
+            || self.zhipu_key.is_some()
+            || self.groq_key.is_some()
+            || self.together_key.is_some()
+            || self.fireworks_key.is_some()
+            || self.deepseek_key.is_some()
+            || self.xai_key.is_some()
+            || self.mistral_key.is_some()
     }
 }
 
@@ -853,6 +868,12 @@ struct TomlLlmConfig {
     openai_key: Option<String>,
     openrouter_key: Option<String>,
     zhipu_key: Option<String>,
+    groq_key: Option<String>,
+    together_key: Option<String>,
+    fireworks_key: Option<String>,
+    deepseek_key: Option<String>,
+    xai_key: Option<String>,
+    mistral_key: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1159,6 +1180,12 @@ impl Config {
             openai_key: std::env::var("OPENAI_API_KEY").ok(),
             openrouter_key: std::env::var("OPENROUTER_API_KEY").ok(),
             zhipu_key: std::env::var("ZHIPU_API_KEY").ok(),
+            groq_key: std::env::var("GROQ_API_KEY").ok(),
+            together_key: std::env::var("TOGETHER_API_KEY").ok(),
+            fireworks_key: std::env::var("FIREWORKS_API_KEY").ok(),
+            deepseek_key: std::env::var("DEEPSEEK_API_KEY").ok(),
+            xai_key: std::env::var("XAI_API_KEY").ok(),
+            mistral_key: std::env::var("MISTRAL_API_KEY").ok(),
         };
 
         // Note: We allow boot without provider keys now. System starts in setup mode.
@@ -1230,6 +1257,42 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("ZHIPU_API_KEY").ok()),
+            groq_key: toml
+                .llm
+                .groq_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("GROQ_API_KEY").ok()),
+            together_key: toml
+                .llm
+                .together_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("TOGETHER_API_KEY").ok()),
+            fireworks_key: toml
+                .llm
+                .fireworks_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("FIREWORKS_API_KEY").ok()),
+            deepseek_key: toml
+                .llm
+                .deepseek_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("DEEPSEEK_API_KEY").ok()),
+            xai_key: toml
+                .llm
+                .xai_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("XAI_API_KEY").ok()),
+            mistral_key: toml
+                .llm
+                .mistral_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("MISTRAL_API_KEY").ok()),
         };
 
         // Note: We allow boot without provider keys now. System starts in setup mode.
@@ -2159,7 +2222,18 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
     println!();
 
     // 1. Pick a provider
-    let providers = &["Anthropic", "OpenRouter", "OpenAI", "Z.ai (GLM)"];
+    let providers = &[
+        "Anthropic",
+        "OpenRouter",
+        "OpenAI",
+        "Z.ai (GLM)",
+        "Groq",
+        "Together AI",
+        "Fireworks AI",
+        "DeepSeek",
+        "xAI (Grok)",
+        "Mistral AI",
+    ];
     let provider_idx = Select::new()
         .with_prompt("Which LLM provider do you want to use?")
         .items(providers)
@@ -2171,6 +2245,12 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         1 => ("OpenRouter API key", "openrouter_key", "openrouter"),
         2 => ("OpenAI API key", "openai_key", "openai"),
         3 => ("Z.ai (GLM) API key", "zhipu_key", "zhipu"),
+        4 => ("Groq API key", "groq_key", "groq"),
+        5 => ("Together AI API key", "together_key", "together"),
+        6 => ("Fireworks AI API key", "fireworks_key", "fireworks"),
+        7 => ("DeepSeek API key", "deepseek_key", "deepseek"),
+        8 => ("xAI API key", "xai_key", "xai"),
+        9 => ("Mistral AI API key", "mistral_key", "mistral"),
         _ => unreachable!(),
     };
 

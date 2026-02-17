@@ -4,6 +4,7 @@ import {api, type PlatformStatus} from "@/api/client";
 import {Button, Input, SettingSidebarButton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, Select, SelectTrigger, SelectValue, SelectContent, SelectItem} from "@/ui";
 import {useSearch, useNavigate} from "@tanstack/react-router";
 import {PlatformIcon} from "@/lib/platformIcons";
+import {ProviderIcon} from "@/lib/providerIcons";
 
 type SectionId = "providers" | "channels";
 
@@ -55,6 +56,48 @@ const PROVIDERS = [
 		description: "GLM models (GLM-4, GLM-4-Flash)",
 		placeholder: "...",
 		envVar: "ZHIPU_API_KEY",
+	},
+	{
+		id: "groq",
+		name: "Groq",
+		description: "Fast inference for Llama, Mixtral models",
+		placeholder: "gsk_...",
+		envVar: "GROQ_API_KEY",
+	},
+	{
+		id: "together",
+		name: "Together AI",
+		description: "Wide model selection with competitive pricing",
+		placeholder: "...",
+		envVar: "TOGETHER_API_KEY",
+	},
+	{
+		id: "fireworks",
+		name: "Fireworks AI",
+		description: "Fast inference for popular OSS models",
+		placeholder: "...",
+		envVar: "FIREWORKS_API_KEY",
+	},
+	{
+		id: "deepseek",
+		name: "DeepSeek",
+		description: "DeepSeek Chat and Reasoner models",
+		placeholder: "sk-...",
+		envVar: "DEEPSEEK_API_KEY",
+	},
+	{
+		id: "xai",
+		name: "xAI",
+		description: "Grok models",
+		placeholder: "xai-...",
+		envVar: "XAI_API_KEY",
+	},
+	{
+		id: "mistral",
+		name: "Mistral AI",
+		description: "Mistral Large, Small, Codestral models",
+		placeholder: "...",
+		envVar: "MISTRAL_API_KEY",
 	},
 ] as const;
 
@@ -193,52 +236,22 @@ export function Settings() {
 							</div>
 						) : (
 							<div className="flex flex-col gap-3">
-								{PROVIDERS.map((provider) => {
-									const configured = isConfigured(provider.id);
-
-									return (
-										<div
-											key={provider.id}
-											className="rounded-lg border border-app-line bg-app-box p-4"
-										>
-											<div className="flex items-center justify-between">
-												<div className="flex-1">
-													<span className="text-sm font-medium text-ink">
-														{provider.name}
-													</span>
-													<p className="mt-0.5 text-sm text-ink-dull">
-														{provider.description}
-													</p>
-												</div>
-												<div className="flex gap-2">
-													<Button
-														onClick={() => {
-															setEditingProvider(provider.id);
-															setKeyInput("");
-															setMessage(null);
-														}}
-														variant="outline"
-														size="sm"
-													>
-														{configured ? "Update" : "Add key"}
-													</Button>
-													{configured && (
-														<Button
-															onClick={() =>
-																removeMutation.mutate(provider.id)
-															}
-															variant="outline"
-															size="sm"
-															loading={removeMutation.isPending}
-														>
-															Remove
-														</Button>
-													)}
-												</div>
-											</div>
-										</div>
-									);
-								})}
+								{PROVIDERS.map((provider) => (
+									<ProviderCard
+										key={provider.id}
+										provider={provider.id}
+										name={provider.name}
+										description={provider.description}
+										configured={isConfigured(provider.id)}
+										onEdit={() => {
+											setEditingProvider(provider.id);
+											setKeyInput("");
+											setMessage(null);
+										}}
+										onRemove={() => removeMutation.mutate(provider.id)}
+										removing={removeMutation.isPending}
+									/>
+								))}
 							</div>
 						)}
 
@@ -1032,6 +1045,47 @@ function PlatformCard({ platform, name, description, status, disabled = false, o
 					) : onSetup && (
 						<Button onClick={onSetup} variant="outline" size="sm">
 							{configured ? "Configure" : "Setup"}
+						</Button>
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
+interface ProviderCardProps {
+	provider: string;
+	name: string;
+	description: string;
+	configured: boolean;
+	onEdit: () => void;
+	onRemove: () => void;
+	removing: boolean;
+}
+
+function ProviderCard({ provider, name, description, configured, onEdit, onRemove, removing }: ProviderCardProps) {
+	return (
+		<div className="rounded-lg border border-app-line bg-app-box p-4">
+			<div className="flex items-center gap-3">
+				<ProviderIcon provider={provider} size={32} />
+				<div className="flex-1">
+					<div className="flex items-center gap-2">
+						<span className="text-sm font-medium text-ink">{name}</span>
+						{configured && (
+							<span className="text-tiny text-green-400">
+								● Configured
+							</span>
+						)}
+					</div>
+					<p className="mt-0.5 text-sm text-ink-dull">{description}</p>
+				</div>
+				<div className="flex gap-2">
+					<Button onClick={onEdit} variant="outline" size="sm">
+						{configured ? "Update" : "Add key"}
+					</Button>
+					{configured && (
+						<Button onClick={onRemove} variant="outline" size="sm" loading={removing}>
+							Remove
 						</Button>
 					)}
 				</div>

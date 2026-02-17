@@ -1995,6 +1995,12 @@ struct ProviderStatus {
     openai: bool,
     openrouter: bool,
     zhipu: bool,
+    groq: bool,
+    together: bool,
+    fireworks: bool,
+    deepseek: bool,
+    xai: bool,
+    mistral: bool,
 }
 
 #[derive(Serialize)]
@@ -2021,7 +2027,7 @@ async fn get_providers(
     let config_path = state.config_path.read().await.clone();
 
     // Check which providers have keys by reading the config
-    let (anthropic, openai, openrouter, zhipu) = if config_path.exists() {
+    let (anthropic, openai, openrouter, zhipu, groq, together, fireworks, deepseek, xai, mistral) = if config_path.exists() {
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2051,6 +2057,12 @@ async fn get_providers(
             has_key("openai_key", "OPENAI_API_KEY"),
             has_key("openrouter_key", "OPENROUTER_API_KEY"),
             has_key("zhipu_key", "ZHIPU_API_KEY"),
+            has_key("groq_key", "GROQ_API_KEY"),
+            has_key("together_key", "TOGETHER_API_KEY"),
+            has_key("fireworks_key", "FIREWORKS_API_KEY"),
+            has_key("deepseek_key", "DEEPSEEK_API_KEY"),
+            has_key("xai_key", "XAI_API_KEY"),
+            has_key("mistral_key", "MISTRAL_API_KEY"),
         )
     } else {
         // No config file — check env vars only
@@ -2059,6 +2071,12 @@ async fn get_providers(
             std::env::var("OPENAI_API_KEY").is_ok(),
             std::env::var("OPENROUTER_API_KEY").is_ok(),
             std::env::var("ZHIPU_API_KEY").is_ok(),
+            std::env::var("GROQ_API_KEY").is_ok(),
+            std::env::var("TOGETHER_API_KEY").is_ok(),
+            std::env::var("FIREWORKS_API_KEY").is_ok(),
+            std::env::var("DEEPSEEK_API_KEY").is_ok(),
+            std::env::var("XAI_API_KEY").is_ok(),
+            std::env::var("MISTRAL_API_KEY").is_ok(),
         )
     };
 
@@ -2067,8 +2085,23 @@ async fn get_providers(
         openai,
         openrouter,
         zhipu,
+        groq,
+        together,
+        fireworks,
+        deepseek,
+        xai,
+        mistral,
     };
-    let has_any = providers.anthropic || providers.openai || providers.openrouter || providers.zhipu;
+    let has_any = providers.anthropic 
+        || providers.openai 
+        || providers.openrouter 
+        || providers.zhipu
+        || providers.groq
+        || providers.together
+        || providers.fireworks
+        || providers.deepseek
+        || providers.xai
+        || providers.mistral;
 
     Ok(Json(ProvidersResponse { providers, has_any }))
 }
@@ -2082,6 +2115,12 @@ async fn update_provider(
         "openai" => "openai_key",
         "openrouter" => "openrouter_key",
         "zhipu" => "zhipu_key",
+        "groq" => "groq_key",
+        "together" => "together_key",
+        "fireworks" => "fireworks_key",
+        "deepseek" => "deepseek_key",
+        "xai" => "xai_key",
+        "mistral" => "mistral_key",
         _ => {
             return Ok(Json(ProviderUpdateResponse {
                 success: false,
@@ -2224,6 +2263,12 @@ async fn delete_provider(
         "openai" => "openai_key",
         "openrouter" => "openrouter_key",
         "zhipu" => "zhipu_key",
+        "groq" => "groq_key",
+        "together" => "together_key",
+        "fireworks" => "fireworks_key",
+        "deepseek" => "deepseek_key",
+        "xai" => "xai_key",
+        "mistral" => "mistral_key",
         _ => {
             return Ok(Json(ProviderUpdateResponse {
                 success: false,
@@ -2468,6 +2513,187 @@ fn curated_models() -> Vec<ModelInfo> {
             context_window: Some(128_000),
             curated: true,
         },
+        // Groq
+        ModelInfo {
+            id: "groq/llama-3.3-70b-versatile".into(),
+            name: "Llama 3.3 70B Versatile".into(),
+            provider: "groq".into(),
+            context_window: Some(32_768),
+            curated: true,
+        },
+        ModelInfo {
+            id: "groq/llama-3.3-70b-specdec".into(),
+            name: "Llama 3.3 70B Speculative Decoding".into(),
+            provider: "groq".into(),
+            context_window: Some(8192),
+            curated: true,
+        },
+        ModelInfo {
+            id: "groq/llama-3.1-70b-versatile".into(),
+            name: "Llama 3.1 70B Versatile".into(),
+            provider: "groq".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "groq/mixtral-8x7b-32768".into(),
+            name: "Mixtral 8x7B".into(),
+            provider: "groq".into(),
+            context_window: Some(32_768),
+            curated: true,
+        },
+        ModelInfo {
+            id: "groq/gemma2-9b-it".into(),
+            name: "Gemma 2 9B".into(),
+            provider: "groq".into(),
+            context_window: Some(8192),
+            curated: true,
+        },
+        // Together AI
+        ModelInfo {
+            id: "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo".into(),
+            name: "Llama 3.1 405B Instruct Turbo".into(),
+            provider: "together".into(),
+            context_window: Some(130_815),
+            curated: true,
+        },
+        ModelInfo {
+            id: "together/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo".into(),
+            name: "Llama 3.1 70B Instruct Turbo".into(),
+            provider: "together".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "together/meta-llama/Meta-Llama-3.3-70B-Instruct-Turbo".into(),
+            name: "Llama 3.3 70B Instruct Turbo".into(),
+            provider: "together".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "together/Qwen/Qwen2.5-72B-Instruct-Turbo".into(),
+            name: "Qwen 2.5 72B Instruct Turbo".into(),
+            provider: "together".into(),
+            context_window: Some(32_768),
+            curated: true,
+        },
+        ModelInfo {
+            id: "together/deepseek-ai/DeepSeek-V3".into(),
+            name: "DeepSeek V3".into(),
+            provider: "together".into(),
+            context_window: Some(65_536),
+            curated: true,
+        },
+        // Fireworks AI
+        ModelInfo {
+            id: "fireworks/accounts/fireworks/models/llama-v3p3-70b-instruct".into(),
+            name: "Llama 3.3 70B Instruct".into(),
+            provider: "fireworks".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "fireworks/accounts/fireworks/models/llama-v3p1-405b-instruct".into(),
+            name: "Llama 3.1 405B Instruct".into(),
+            provider: "fireworks".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "fireworks/accounts/fireworks/models/llama-v3p1-70b-instruct".into(),
+            name: "Llama 3.1 70B Instruct".into(),
+            provider: "fireworks".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct".into(),
+            name: "Llama 3.1 8B Instruct".into(),
+            provider: "fireworks".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "fireworks/accounts/fireworks/models/qwen2p5-72b-instruct".into(),
+            name: "Qwen 2.5 72B Instruct".into(),
+            provider: "fireworks".into(),
+            context_window: Some(32_768),
+            curated: true,
+        },
+        // DeepSeek
+        ModelInfo {
+            id: "deepseek/deepseek-chat".into(),
+            name: "DeepSeek Chat".into(),
+            provider: "deepseek".into(),
+            context_window: Some(65_536),
+            curated: true,
+        },
+        ModelInfo {
+            id: "deepseek/deepseek-reasoner".into(),
+            name: "DeepSeek Reasoner".into(),
+            provider: "deepseek".into(),
+            context_window: Some(65_536),
+            curated: true,
+        },
+        // xAI
+        ModelInfo {
+            id: "xai/grok-2-latest".into(),
+            name: "Grok 2".into(),
+            provider: "xai".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "xai/grok-2-vision-latest".into(),
+            name: "Grok 2 Vision".into(),
+            provider: "xai".into(),
+            context_window: Some(32_768),
+            curated: true,
+        },
+        ModelInfo {
+            id: "xai/grok-beta".into(),
+            name: "Grok Beta".into(),
+            provider: "xai".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        // Mistral AI
+        ModelInfo {
+            id: "mistral/mistral-large-latest".into(),
+            name: "Mistral Large".into(),
+            provider: "mistral".into(),
+            context_window: Some(128_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "mistral/mistral-small-latest".into(),
+            name: "Mistral Small".into(),
+            provider: "mistral".into(),
+            context_window: Some(128_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "mistral/mistral-medium-latest".into(),
+            name: "Mistral Medium".into(),
+            provider: "mistral".into(),
+            context_window: Some(128_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "mistral/codestral-latest".into(),
+            name: "Codestral".into(),
+            provider: "mistral".into(),
+            context_window: Some(32_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "mistral/pixtral-large-latest".into(),
+            name: "Pixtral Large".into(),
+            provider: "mistral".into(),
+            context_window: Some(128_000),
+            curated: true,
+        },
     ]
 }
 
@@ -2573,6 +2799,24 @@ async fn configured_providers(config_path: &std::path::Path) -> Vec<&'static str
     }
     if has_key("zhipu_key", "ZHIPU_API_KEY") {
         providers.push("zhipu");
+    }
+    if has_key("groq_key", "GROQ_API_KEY") {
+        providers.push("groq");
+    }
+    if has_key("together_key", "TOGETHER_API_KEY") {
+        providers.push("together");
+    }
+    if has_key("fireworks_key", "FIREWORKS_API_KEY") {
+        providers.push("fireworks");
+    }
+    if has_key("deepseek_key", "DEEPSEEK_API_KEY") {
+        providers.push("deepseek");
+    }
+    if has_key("xai_key", "XAI_API_KEY") {
+        providers.push("xai");
+    }
+    if has_key("mistral_key", "MISTRAL_API_KEY") {
+        providers.push("mistral");
     }
 
     providers

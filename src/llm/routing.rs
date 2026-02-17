@@ -167,6 +167,92 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 rate_limit_cooldown_secs: 60,
             }
         }
+        "groq" => {
+            let channel: String = "groq/llama-3.3-70b-versatile".into();
+            let worker: String = "groq/llama-3.3-70b-specdec".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::from([(channel, vec![worker])]),
+                rate_limit_cooldown_secs: 60,
+            }
+        }
+        "together" => {
+            let channel: String = "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo".into();
+            let worker: String = "together/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::from([(channel, vec![worker])]),
+                rate_limit_cooldown_secs: 60,
+            }
+        }
+        "fireworks" => {
+            let channel: String =
+                "fireworks/accounts/fireworks/models/llama-v3p3-70b-instruct".into();
+            let worker: String =
+                "fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::from([(channel, vec![worker])]),
+                rate_limit_cooldown_secs: 60,
+            }
+        }
+        "deepseek" => {
+            let channel: String = "deepseek/deepseek-chat".into();
+            let worker: String = "deepseek/deepseek-chat".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::new(),
+                rate_limit_cooldown_secs: 60,
+            }
+        }
+        "xai" => {
+            let channel: String = "xai/grok-2-latest".into();
+            let worker: String = "xai/grok-2-latest".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::new(),
+                rate_limit_cooldown_secs: 60,
+            }
+        }
+        "mistral" => {
+            let channel: String = "mistral/mistral-large-latest".into();
+            let worker: String = "mistral/mistral-small-latest".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::from([(channel, vec![worker])]),
+                rate_limit_cooldown_secs: 60,
+            }
+        }
         // Anthropic or unknown — use the standard defaults
         _ => RoutingConfig::default(),
     }
@@ -179,15 +265,19 @@ pub fn provider_to_prefix(provider: &str) -> &str {
         "openai" => "openai/",
         "anthropic" => "anthropic/",
         "zhipu" => "zhipu/",
+        "groq" => "groq/",
+        "together" => "together/",
+        "fireworks" => "fireworks/",
+        "deepseek" => "deepseek/",
+        "xai" => "xai/",
+        "mistral" => "mistral/",
         _ => "",
     }
 }
 
 /// Extracts the provider from a model routing string.
 pub fn provider_from_model(model: &str) -> &str {
-    if model.starts_with("openrouter/") {
-        "openrouter"
-    } else if let Some((provider, _)) = model.split_once('/') {
+    if let Some((provider, _)) = model.split_once('/') {
         provider
     } else {
         "anthropic"

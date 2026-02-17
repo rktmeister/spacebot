@@ -631,6 +631,12 @@ export interface ProviderStatus {
 	openai: boolean;
 	openrouter: boolean;
 	zhipu: boolean;
+	groq: boolean;
+	together: boolean;
+	fireworks: boolean;
+	deepseek: boolean;
+	xai: boolean;
+	mistral: boolean;
 }
 
 export interface ProvidersResponse {

@@ -70,6 +70,12 @@ impl SpacebotModel {
             "openai" => self.call_openai(request).await,
             "openrouter" => self.call_openrouter(request).await,
             "zhipu" => self.call_zhipu(request).await,
+            "groq" => self.call_groq(request).await,
+            "together" => self.call_together(request).await,
+            "fireworks" => self.call_fireworks(request).await,
+            "deepseek" => self.call_deepseek(request).await,
+            "xai" => self.call_xai(request).await,
+            "mistral" => self.call_mistral(request).await,
             other => Err(CompletionError::ProviderError(format!(
                 "unknown provider: {other}"
             ))),
@@ -595,6 +601,168 @@ impl SpacebotModel {
         }
 
         parse_openai_response(response_body, "Z.ai")
+    }
+
+    /// Generic OpenAI-compatible API call.
+    /// Used by providers that implement the OpenAI chat completions format.
+    async fn call_openai_compatible(
+        &self,
+        request: CompletionRequest,
+        provider_id: &str,
+        provider_display_name: &str,
+        endpoint: &str,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        let api_key = self
+            .llm_manager
+            .get_api_key(provider_id)
+            .map_err(|e| CompletionError::ProviderError(e.to_string()))?;
+
+        let mut messages = Vec::new();
+
+        if let Some(preamble) = &request.preamble {
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": preamble,
+            }));
+        }
+
+        messages.extend(convert_messages_to_openai(&request.chat_history));
+
+        let mut body = serde_json::json!({
+            "model": self.model_name,
+            "messages": messages,
+        });
+
+        if let Some(max_tokens) = request.max_tokens {
+            body["max_tokens"] = serde_json::json!(max_tokens);
+        }
+
+        if let Some(temperature) = request.temperature {
+            body["temperature"] = serde_json::json!(temperature);
+        }
+
+        if !request.tools.is_empty() {
+            let tools: Vec<serde_json::Value> = request
+                .tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.parameters,
+                        }
+                    })
+                })
+                .collect();
+            body["tools"] = serde_json::json!(tools);
+        }
+
+        let response = self
+            .llm_manager
+            .http_client()
+            .post(endpoint)
+            .header("authorization", format!("Bearer {api_key}"))
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| CompletionError::ProviderError(e.to_string()))?;
+
+        let status = response.status();
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| CompletionError::ProviderError(format!("failed to read response body: {e}")))?;
+
+        let response_body: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| CompletionError::ProviderError(format!(
+                "{provider_display_name} response ({status}) is not valid JSON: {e}\nBody: {}", truncate_body(&response_text)
+            )))?;
+
+        if !status.is_success() {
+            let message = response_body["error"]["message"]
+                .as_str()
+                .unwrap_or("unknown error");
+            return Err(CompletionError::ProviderError(format!(
+                "{provider_display_name} API error ({status}): {message}"
+            )));
+        }
+
+        parse_openai_response(response_body, provider_display_name)
+    }
+
+    async fn call_groq(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        self.call_openai_compatible(
+            request,
+            "groq",
+            "Groq",
+            "https://api.groq.com/openai/v1/chat/completions",
+        ).await
+    }
+
+    async fn call_together(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        self.call_openai_compatible(
+            request,
+            "together",
+            "Together AI",
+            "https://api.together.xyz/v1/chat/completions",
+        ).await
+    }
+
+    async fn call_fireworks(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        self.call_openai_compatible(
+            request,
+            "fireworks",
+            "Fireworks AI",
+            "https://api.fireworks.ai/inference/v1/chat/completions",
+        ).await
+    }
+
+    async fn call_deepseek(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        self.call_openai_compatible(
+            request,
+            "deepseek",
+            "DeepSeek",
+            "https://api.deepseek.com/v1/chat/completions",
+        ).await
+    }
+
+    async fn call_xai(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        self.call_openai_compatible(
+            request,
+            "xai",
+            "xAI",
+            "https://api.x.ai/v1/chat/completions",
+        ).await
+    }
+
+    async fn call_mistral(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        self.call_openai_compatible(
+            request,
+            "mistral",
+            "Mistral AI",
+            "https://api.mistral.ai/v1/chat/completions",
+        ).await
     }
 }
 
