@@ -117,6 +117,13 @@ const PROVIDERS = [
 		placeholder: "...",
 		envVar: "MISTRAL_API_KEY",
 	},
+	{
+		id: "opencode-zen",
+		name: "OpenCode Zen",
+		description: "Multi-format gateway (Kimi, GLM, MiniMax, Qwen)",
+		placeholder: "...",
+		envVar: "OPENCODE_ZEN_API_KEY",
+	},
 ] as const;
 
 export function Settings() {

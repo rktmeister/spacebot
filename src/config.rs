@@ -62,6 +62,7 @@ pub struct LlmConfig {
     pub deepseek_key: Option<String>,
     pub xai_key: Option<String>,
     pub mistral_key: Option<String>,
+    pub opencode_zen_key: Option<String>,
 }
 
 impl LlmConfig {
@@ -77,6 +78,7 @@ impl LlmConfig {
             || self.deepseek_key.is_some()
             || self.xai_key.is_some()
             || self.mistral_key.is_some()
+            || self.opencode_zen_key.is_some()
     }
 }
 
@@ -874,6 +876,7 @@ struct TomlLlmConfig {
     deepseek_key: Option<String>,
     xai_key: Option<String>,
     mistral_key: Option<String>,
+    opencode_zen_key: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1143,6 +1146,7 @@ impl Config {
         std::env::var("ANTHROPIC_API_KEY").is_err()
             && std::env::var("OPENAI_API_KEY").is_err()
             && std::env::var("OPENROUTER_API_KEY").is_err()
+            && std::env::var("OPENCODE_ZEN_API_KEY").is_err()
     }
 
     /// Load configuration from the default config file, falling back to env vars.
@@ -1186,6 +1190,7 @@ impl Config {
             deepseek_key: std::env::var("DEEPSEEK_API_KEY").ok(),
             xai_key: std::env::var("XAI_API_KEY").ok(),
             mistral_key: std::env::var("MISTRAL_API_KEY").ok(),
+            opencode_zen_key: std::env::var("OPENCODE_ZEN_API_KEY").ok(),
         };
 
         // Note: We allow boot without provider keys now. System starts in setup mode.
@@ -1293,6 +1298,12 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("MISTRAL_API_KEY").ok()),
+            opencode_zen_key: toml
+                .llm
+                .opencode_zen_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("OPENCODE_ZEN_API_KEY").ok()),
         };
 
         // Note: We allow boot without provider keys now. System starts in setup mode.
@@ -2233,6 +2244,7 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         "DeepSeek",
         "xAI (Grok)",
         "Mistral AI",
+        "OpenCode Zen",
     ];
     let provider_idx = Select::new()
         .with_prompt("Which LLM provider do you want to use?")
@@ -2251,6 +2263,7 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         7 => ("DeepSeek API key", "deepseek_key", "deepseek"),
         8 => ("xAI API key", "xai_key", "xai"),
         9 => ("Mistral AI API key", "mistral_key", "mistral"),
+        10 => ("OpenCode Zen API key", "opencode_zen_key", "opencode-zen"),
         _ => unreachable!(),
     };
 

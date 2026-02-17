@@ -2007,6 +2007,7 @@ struct ProviderStatus {
     deepseek: bool,
     xai: bool,
     mistral: bool,
+    opencode_zen: bool,
 }
 
 #[derive(Serialize)]
@@ -2033,7 +2034,7 @@ async fn get_providers(
     let config_path = state.config_path.read().await.clone();
 
     // Check which providers have keys by reading the config
-    let (anthropic, openai, openrouter, zhipu, groq, together, fireworks, deepseek, xai, mistral) = if config_path.exists() {
+    let (anthropic, openai, openrouter, zhipu, groq, together, fireworks, deepseek, xai, mistral, opencode_zen) = if config_path.exists() {
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2069,6 +2070,7 @@ async fn get_providers(
             has_key("deepseek_key", "DEEPSEEK_API_KEY"),
             has_key("xai_key", "XAI_API_KEY"),
             has_key("mistral_key", "MISTRAL_API_KEY"),
+            has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
         )
     } else {
         // No config file — check env vars only
@@ -2083,6 +2085,7 @@ async fn get_providers(
             std::env::var("DEEPSEEK_API_KEY").is_ok(),
             std::env::var("XAI_API_KEY").is_ok(),
             std::env::var("MISTRAL_API_KEY").is_ok(),
+            std::env::var("OPENCODE_ZEN_API_KEY").is_ok(),
         )
     };
 
@@ -2097,6 +2100,7 @@ async fn get_providers(
         deepseek,
         xai,
         mistral,
+        opencode_zen,
     };
     let has_any = providers.anthropic 
         || providers.openai 
@@ -2107,7 +2111,8 @@ async fn get_providers(
         || providers.fireworks
         || providers.deepseek
         || providers.xai
-        || providers.mistral;
+        || providers.mistral
+        || providers.opencode_zen;
 
     Ok(Json(ProvidersResponse { providers, has_any }))
 }
@@ -2127,6 +2132,7 @@ async fn update_provider(
         "deepseek" => "deepseek_key",
         "xai" => "xai_key",
         "mistral" => "mistral_key",
+        "opencode-zen" => "opencode_zen_key",
         _ => {
             return Ok(Json(ProviderUpdateResponse {
                 success: false,
@@ -2199,6 +2205,11 @@ async fn update_provider(
             "zhipu" => doc
                 .get("llm")
                 .and_then(|l| l.get("zhipu_key"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty()),
+            "opencode-zen" => doc
+                .get("llm")
+                .and_then(|l| l.get("opencode_zen_key"))
                 .and_then(|v| v.as_str())
                 .is_some_and(|s| !s.is_empty()),
             _ => false,
@@ -2274,6 +2285,7 @@ async fn delete_provider(
         "deepseek" => "deepseek_key",
         "xai" => "xai_key",
         "mistral" => "mistral_key",
+        "opencode-zen" => "opencode_zen_key",
         _ => {
             return Ok(Json(ProviderUpdateResponse {
                 success: false,
@@ -2699,6 +2711,56 @@ fn curated_models() -> Vec<ModelInfo> {
             context_window: Some(128_000),
             curated: true,
         },
+        // OpenCode Zen (OpenAI-compatible)
+        ModelInfo {
+            id: "opencode-zen/kimi-k2.5".into(),
+            name: "Kimi K2.5".into(),
+            provider: "opencode-zen".into(),
+            context_window: None,
+            curated: true,
+        },
+        ModelInfo {
+            id: "opencode-zen/kimi-k2".into(),
+            name: "Kimi K2".into(),
+            provider: "opencode-zen".into(),
+            context_window: None,
+            curated: true,
+        },
+        ModelInfo {
+            id: "opencode-zen/kimi-k2-thinking".into(),
+            name: "Kimi K2 Thinking".into(),
+            provider: "opencode-zen".into(),
+            context_window: None,
+            curated: true,
+        },
+        ModelInfo {
+            id: "opencode-zen/glm-5".into(),
+            name: "GLM 5".into(),
+            provider: "opencode-zen".into(),
+            context_window: None,
+            curated: true,
+        },
+        ModelInfo {
+            id: "opencode-zen/minimax-m2.5".into(),
+            name: "MiniMax M2.5".into(),
+            provider: "opencode-zen".into(),
+            context_window: None,
+            curated: true,
+        },
+        ModelInfo {
+            id: "opencode-zen/qwen3-coder".into(),
+            name: "Qwen3 Coder 480B".into(),
+            provider: "opencode-zen".into(),
+            context_window: None,
+            curated: true,
+        },
+        ModelInfo {
+            id: "opencode-zen/big-pickle".into(),
+            name: "Big Pickle".into(),
+            provider: "opencode-zen".into(),
+            context_window: None,
+            curated: true,
+        },
     ]
 }
 
@@ -2822,6 +2884,9 @@ async fn configured_providers(config_path: &std::path::Path) -> Vec<&'static str
     }
     if has_key("mistral_key", "MISTRAL_API_KEY") {
         providers.push("mistral");
+    }
+    if has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY") {
+        providers.push("opencode-zen");
     }
 
     providers

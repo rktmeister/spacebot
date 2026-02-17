@@ -76,6 +76,7 @@ impl SpacebotModel {
             "deepseek" => self.call_deepseek(request).await,
             "xai" => self.call_xai(request).await,
             "mistral" => self.call_mistral(request).await,
+            "opencode-zen" => self.call_opencode_zen(request).await,
             other => Err(CompletionError::ProviderError(format!(
                 "unknown provider: {other}"
             ))),
@@ -762,6 +763,18 @@ impl SpacebotModel {
             "mistral",
             "Mistral AI",
             "https://api.mistral.ai/v1/chat/completions",
+        ).await
+    }
+
+    async fn call_opencode_zen(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        self.call_openai_compatible(
+            request,
+            "opencode-zen",
+            "OpenCode Zen",
+            "https://opencode.ai/zen/v1/chat/completions",
         ).await
     }
 }
