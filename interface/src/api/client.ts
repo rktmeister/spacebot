@@ -750,6 +750,30 @@ export interface DeleteBindingResponse {
 	message: string;
 }
 
+// -- Global Settings Types --
+
+export interface GlobalSettingsResponse {
+	brave_search_key: string | null;
+	api_enabled: boolean;
+	api_port: number;
+	api_bind: string;
+	worker_log_mode: string;
+}
+
+export interface GlobalSettingsUpdate {
+	brave_search_key?: string | null;
+	api_enabled?: boolean;
+	api_port?: number;
+	api_bind?: string;
+	worker_log_mode?: string;
+}
+
+export interface GlobalSettingsUpdateResponse {
+	success: boolean;
+	message: string;
+	requires_restart: boolean;
+}
+
 export const api = {
 	status: () => fetchJson<StatusResponse>("/status"),
 	overview: () => fetchJson<InstanceOverviewResponse>("/overview"),
@@ -1008,6 +1032,21 @@ export const api = {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<DeleteBindingResponse>;
+	},
+
+	// Global Settings API
+	globalSettings: () => fetchJson<GlobalSettingsResponse>("/settings"),
+	
+	updateGlobalSettings: async (settings: GlobalSettingsUpdate) => {
+		const response = await fetch(`${API_BASE}/settings`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(settings),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<GlobalSettingsUpdateResponse>;
 	},
 
 	// Update API

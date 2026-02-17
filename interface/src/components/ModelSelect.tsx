@@ -88,14 +88,16 @@ export function ModelSelect({ label, description, value, onChange }: ModelSelect
 
 	const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		const val = e.target.value;
-		onChange(val);
 		setFilter(val);
 		if (!open) setOpen(true);
+		// Allow free-form input for custom model IDs
+		onChange(val);
 	};
 
 	const handleFocus = () => {
 		setOpen(true);
-		setFilter("");
+		// Start filtering from current value
+		setFilter(value);
 	};
 
 	const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -119,7 +121,7 @@ export function ModelSelect({ label, description, value, onChange }: ModelSelect
 				<Input
 					ref={inputRef}
 					type="text"
-					value={value}
+					value={open ? filter : value}
 					onChange={handleInputChange}
 					onFocus={handleFocus}
 					onKeyDown={handleKeyDown}

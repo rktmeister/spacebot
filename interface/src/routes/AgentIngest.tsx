@@ -4,6 +4,8 @@ import {api, type IngestFileInfo} from "@/api/client";
 import {formatTimeAgo} from "@/lib/format";
 import {Button, Badge} from "@/ui";
 import {clsx} from "clsx";
+import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
+import {faTrash} from "@fortawesome/free-solid-svg-icons";
 
 function formatFileSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
@@ -263,12 +265,9 @@ function FileRow({
 
 			{/* Info */}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<div className="flex items-center gap-2">
-					<span className="truncate text-sm font-medium text-ink">
-						{file.filename}
-					</span>
-					<StatusBadge status={file.status} />
-				</div>
+				<span className="truncate text-sm font-medium text-ink">
+					{file.filename}
+				</span>
 				<div className="flex items-center gap-3 text-xs text-ink-faint">
 					<span>{formatFileSize(file.file_size)}</span>
 					{file.total_chunks > 0 && (
@@ -295,17 +294,25 @@ function FileRow({
 				)}
 			</div>
 
-			{/* Delete button (only for completed/failed) */}
+			{/* Status badge - centered on the right */}
+			<div className="flex-shrink-0">
+				<StatusBadge status={file.status} />
+			</div>
+
+			{/* Delete button (always visible) */}
 			{file.status !== "processing" && (
-				<Button
+				<button
 					onClick={onDelete}
-					variant="ghost"
-					size="sm"
-					loading={isDeleting}
-					className="flex-shrink-0 opacity-0 text-xs text-ink-faint hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100"
+					disabled={isDeleting}
+					className="flex-shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-ink-faint hover:bg-app-box transition-colors disabled:opacity-50"
+					title="Delete file"
 				>
-					Remove
-				</Button>
+					{isDeleting ? (
+						<span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-ink-faint border-t-transparent" />
+					) : (
+						<FontAwesomeIcon icon={faTrash} className="h-3.5 w-3.5" />
+					)}
+				</button>
 			)}
 		</div>
 	);

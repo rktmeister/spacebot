@@ -464,6 +464,7 @@ pub async fn start_http_server(
         .route("/models/refresh", post(refresh_models))
         .route("/messaging/status", get(messaging_status))
         .route("/bindings", get(list_bindings).post(create_binding).delete(delete_binding))
+        .route("/settings", get(get_global_settings).put(update_global_settings))
         .route("/update/check", get(update_check).post(update_check_now))
         .route("/update/apply", post(update_apply));
 
@@ -1485,7 +1486,12 @@ async fn update_agent_config(
 
 /// Find the index of an agent table in the [[agents]] array, or create a new one.
 fn find_or_create_agent_table(doc: &mut toml_edit::DocumentMut, agent_id: &str) -> Result<usize, StatusCode> {
-    // Get or create the agents array
+    // Create agents array if it doesn't exist
+    if doc.get("agents").is_none() {
+        doc["agents"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+    }
+
+    // Get the agents array
     let agents = doc.get_mut("agents")
         .and_then(|a| a.as_array_of_tables_mut())
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2208,21 +2214,20 @@ async fn update_provider(
         if doc.get("defaults").is_none() {
             doc["defaults"] = toml_edit::Item::Table(toml_edit::Table::new());
         }
-        if doc["defaults"].get("routing").is_none() {
-            doc["defaults"]["routing"] =
-                toml_edit::Item::Table(toml_edit::Table::new());
+        
+        if let Some(defaults) = doc.get_mut("defaults").and_then(|d| d.as_table_mut()) {
+            if defaults.get("routing").is_none() {
+                defaults["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
+            
+            if let Some(routing_table) = defaults.get_mut("routing").and_then(|r| r.as_table_mut()) {
+                routing_table["channel"] = toml_edit::value(&routing.channel);
+                routing_table["branch"] = toml_edit::value(&routing.branch);
+                routing_table["worker"] = toml_edit::value(&routing.worker);
+                routing_table["compactor"] = toml_edit::value(&routing.compactor);
+                routing_table["cortex"] = toml_edit::value(&routing.cortex);
+            }
         }
-
-        doc["defaults"]["routing"]["channel"] =
-            toml_edit::value(&routing.channel);
-        doc["defaults"]["routing"]["branch"] =
-            toml_edit::value(&routing.branch);
-        doc["defaults"]["routing"]["worker"] =
-            toml_edit::value(&routing.worker);
-        doc["defaults"]["routing"]["compactor"] =
-            toml_edit::value(&routing.compactor);
-        doc["defaults"]["routing"]["cortex"] =
-            toml_edit::value(&routing.cortex);
     }
 
     // Write back to disk
@@ -3603,6 +3608,187 @@ async fn delete_binding(
     Ok(Json(DeleteBindingResponse {
         success: true,
         message: "Binding deleted.".to_string(),
+    }))
+}
+
+// -- Global Settings handlers --
+
+#[derive(Serialize)]
+struct GlobalSettingsResponse {
+    brave_search_key: Option<String>,
+    api_enabled: bool,
+    api_port: u16,
+    api_bind: String,
+    worker_log_mode: String,
+}
+
+#[derive(Deserialize)]
+struct GlobalSettingsUpdate {
+    brave_search_key: Option<String>,
+    api_enabled: Option<bool>,
+    api_port: Option<u16>,
+    api_bind: Option<String>,
+    worker_log_mode: Option<String>,
+}
+
+#[derive(Serialize)]
+struct GlobalSettingsUpdateResponse {
+    success: bool,
+    message: String,
+    requires_restart: bool,
+}
+
+async fn get_global_settings(
+    State(state): State<Arc<ApiState>>,
+) -> Result<Json<GlobalSettingsResponse>, StatusCode> {
+    let config_path = state.config_path.read().await.clone();
+    
+    let (brave_search_key, api_enabled, api_port, api_bind, worker_log_mode) = if config_path.exists() {
+        let content = tokio::fs::read_to_string(&config_path)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let doc: toml_edit::DocumentMut = content
+            .parse()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        
+        let brave_search = doc
+            .get("defaults")
+            .and_then(|d| d.get("brave_search_key"))
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                if let Some(var) = s.strip_prefix("env:") {
+                    std::env::var(var).ok()
+                } else {
+                    Some(s.to_string())
+                }
+            })
+            .flatten();
+        
+        let api_enabled = doc
+            .get("api")
+            .and_then(|a| a.get("enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        
+        let api_port = doc
+            .get("api")
+            .and_then(|a| a.get("port"))
+            .and_then(|v| v.as_integer())
+            .and_then(|i| u16::try_from(i).ok())
+            .unwrap_or(19898);
+        
+        let api_bind = doc
+            .get("api")
+            .and_then(|a| a.get("bind"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("127.0.0.1")
+            .to_string();
+        
+        let worker_log_mode = doc
+            .get("defaults")
+            .and_then(|d| d.get("worker_log_mode"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("errors_only")
+            .to_string();
+        
+        (brave_search, api_enabled, api_port, api_bind, worker_log_mode)
+    } else {
+        (None, true, 19898, "127.0.0.1".to_string(), "errors_only".to_string())
+    };
+    
+    Ok(Json(GlobalSettingsResponse {
+        brave_search_key: brave_search_key,
+        api_enabled,
+        api_port,
+        api_bind,
+        worker_log_mode,
+    }))
+}
+
+async fn update_global_settings(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<GlobalSettingsUpdate>,
+) -> Result<Json<GlobalSettingsUpdateResponse>, StatusCode> {
+    let config_path = state.config_path.read().await.clone();
+    
+    let content = if config_path.exists() {
+        tokio::fs::read_to_string(&config_path)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    } else {
+        String::new()
+    };
+    
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let mut requires_restart = false;
+    
+    // Update brave_search_key
+    if let Some(key) = request.brave_search_key {
+        if doc.get("defaults").is_none() {
+            doc["defaults"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        if key.is_empty() {
+            if let Some(table) = doc["defaults"].as_table_mut() {
+                table.remove("brave_search_key");
+            }
+        } else {
+            doc["defaults"]["brave_search_key"] = toml_edit::value(key);
+        }
+    }
+    
+    // Update API settings (requires restart)
+    if request.api_enabled.is_some() || request.api_port.is_some() || request.api_bind.is_some() {
+        requires_restart = true;
+        
+        if doc.get("api").is_none() {
+            doc["api"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        
+        if let Some(enabled) = request.api_enabled {
+            doc["api"]["enabled"] = toml_edit::value(enabled);
+        }
+        if let Some(port) = request.api_port {
+            doc["api"]["port"] = toml_edit::value(i64::from(port));
+        }
+        if let Some(bind) = request.api_bind {
+            doc["api"]["bind"] = toml_edit::value(bind);
+        }
+    }
+    
+    // Update worker_log_mode
+    if let Some(mode) = request.worker_log_mode {
+        // Validate the mode
+        if !["errors_only", "all_separate", "all_combined"].contains(&mode.as_str()) {
+            return Ok(Json(GlobalSettingsUpdateResponse {
+                success: false,
+                message: format!("Invalid worker log mode: {}", mode),
+                requires_restart: false,
+            }));
+        }
+        
+        if doc.get("defaults").is_none() {
+            doc["defaults"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        doc["defaults"]["worker_log_mode"] = toml_edit::value(mode);
+    }
+    
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let message = if requires_restart {
+        "Settings updated. API server changes require a restart to take effect.".to_string()
+    } else {
+        "Settings updated successfully.".to_string()
+    };
+    
+    Ok(Json(GlobalSettingsUpdateResponse {
+        success: true,
+        message,
+        requires_restart,
     }))
 }
 

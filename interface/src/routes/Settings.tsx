@@ -1,12 +1,12 @@
 import {useState, useEffect} from "react";
 import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
-import {api, type PlatformStatus} from "@/api/client";
+import {api, type PlatformStatus, type GlobalSettingsResponse} from "@/api/client";
 import {Button, Input, SettingSidebarButton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, Select, SelectTrigger, SelectValue, SelectContent, SelectItem} from "@/ui";
 import {useSearch, useNavigate} from "@tanstack/react-router";
 import {PlatformIcon} from "@/lib/platformIcons";
 import {ProviderIcon} from "@/lib/providerIcons";
 
-type SectionId = "providers" | "channels";
+type SectionId = "providers" | "channels" | "api-keys" | "server" | "worker-logs";
 
 const SECTIONS = [
 	{
@@ -20,6 +20,24 @@ const SECTIONS = [
 		label: "Channels",
 		group: "messaging" as const,
 		description: "Messaging platforms and bindings",
+	},
+	{
+		id: "api-keys" as const,
+		label: "API Keys",
+		group: "general" as const,
+		description: "Third-party service keys",
+	},
+	{
+		id: "server" as const,
+		label: "Server",
+		group: "system" as const,
+		description: "API server configuration",
+	},
+	{
+		id: "worker-logs" as const,
+		label: "Worker Logs",
+		group: "system" as const,
+		description: "Worker execution logging",
 	},
 ] satisfies {
 	id: SectionId;
@@ -109,7 +127,7 @@ export function Settings() {
 
 	// Sync activeSection with URL search param
 	useEffect(() => {
-		if (search.tab && (search.tab === "providers" || search.tab === "channels")) {
+		if (search.tab && SECTIONS.some(s => s.id === search.tab)) {
 			setActiveSection(search.tab as SectionId);
 		}
 	}, [search.tab]);
@@ -125,10 +143,20 @@ export function Settings() {
 		type: "success" | "error";
 	} | null>(null);
 
+	// Fetch providers data (only when on providers tab)
 	const {data, isLoading} = useQuery({
 		queryKey: ["providers"],
 		queryFn: api.providers,
 		staleTime: 5_000,
+		enabled: activeSection === "providers",
+	});
+
+	// Fetch global settings (only when on api-keys, server, or worker-logs tabs)
+	const {data: globalSettings, isLoading: globalSettingsLoading} = useQuery({
+		queryKey: ["global-settings"],
+		queryFn: api.globalSettings,
+		staleTime: 5_000,
+		enabled: activeSection === "api-keys" || activeSection === "server" || activeSection === "worker-logs",
 	});
 
 	const updateMutation = useMutation({
@@ -273,6 +301,12 @@ export function Settings() {
 					</div>
 					) : activeSection === "channels" ? (
 						<ChannelsSection />
+					) : activeSection === "api-keys" ? (
+						<ApiKeysSection settings={globalSettings} isLoading={globalSettingsLoading} />
+					) : activeSection === "server" ? (
+						<ServerSection settings={globalSettings} isLoading={globalSettingsLoading} />
+					) : activeSection === "worker-logs" ? (
+						<WorkerLogsSection settings={globalSettings} isLoading={globalSettingsLoading} />
 					) : null}
 				</div>
 			</div>
@@ -1049,6 +1083,400 @@ function PlatformCard({ platform, name, description, status, disabled = false, o
 					)}
 				</div>
 			</div>
+		</div>
+	);
+}
+
+interface GlobalSettingsSectionProps {
+	settings: GlobalSettingsResponse | undefined;
+	isLoading: boolean;
+}
+
+function ApiKeysSection({settings, isLoading}: GlobalSettingsSectionProps) {
+	const queryClient = useQueryClient();
+	const [editingBraveKey, setEditingBraveKey] = useState(false);
+	const [braveKeyInput, setBraveKeyInput] = useState("");
+	const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
+	const updateMutation = useMutation({
+		mutationFn: api.updateGlobalSettings,
+		onSuccess: (result) => {
+			if (result.success) {
+				setEditingBraveKey(false);
+				setBraveKeyInput("");
+				setMessage({text: result.message, type: "success"});
+				queryClient.invalidateQueries({queryKey: ["global-settings"]});
+			} else {
+				setMessage({text: result.message, type: "error"});
+			}
+		},
+		onError: (error) => {
+			setMessage({text: `Failed: ${error.message}`, type: "error"});
+		},
+	});
+
+	const handleSaveBraveKey = () => {
+		updateMutation.mutate({brave_search_key: braveKeyInput.trim() || null});
+	};
+
+	const handleRemoveBraveKey = () => {
+		updateMutation.mutate({brave_search_key: null});
+	};
+
+	return (
+		<div className="mx-auto max-w-2xl px-6 py-6">
+			<div className="mb-6">
+				<h2 className="font-plex text-sm font-semibold text-ink">Third-Party API Keys</h2>
+				<p className="mt-1 text-sm text-ink-dull">
+					Configure API keys for third-party services used by workers.
+				</p>
+			</div>
+
+			{isLoading ? (
+				<div className="flex items-center gap-2 text-ink-dull">
+					<div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+					Loading settings...
+				</div>
+			) : (
+				<div className="flex flex-col gap-3">
+					<div className="rounded-lg border border-app-line bg-app-box p-4">
+						<div className="flex items-center gap-3">
+							<div className="flex h-8 w-8 items-center justify-center rounded-lg bg-app-darkBox text-ink-faint">
+								<span className="text-lg">🔍</span>
+							</div>
+							<div className="flex-1">
+								<div className="flex items-center gap-2">
+									<span className="text-sm font-medium text-ink">Brave Search</span>
+									{settings?.brave_search_key && (
+										<span className="text-tiny text-green-400">● Configured</span>
+									)}
+								</div>
+								<p className="mt-0.5 text-sm text-ink-dull">
+									Powers web search capabilities for workers
+								</p>
+							</div>
+							<div className="flex gap-2">
+								<Button
+									onClick={() => {
+										setEditingBraveKey(true);
+										setBraveKeyInput(settings?.brave_search_key || "");
+										setMessage(null);
+									}}
+									variant="outline"
+									size="sm"
+								>
+									{settings?.brave_search_key ? "Update" : "Add key"}
+								</Button>
+								{settings?.brave_search_key && (
+									<Button
+										onClick={handleRemoveBraveKey}
+										variant="outline"
+										size="sm"
+										loading={updateMutation.isPending}
+									>
+										Remove
+									</Button>
+								)}
+							</div>
+						</div>
+					</div>
+				</div>
+			)}
+
+			{message && (
+				<div
+					className={`mt-4 rounded-md border px-3 py-2 text-sm ${
+						message.type === "success"
+							? "border-green-500/20 bg-green-500/10 text-green-400"
+							: "border-red-500/20 bg-red-500/10 text-red-400"
+					}`}
+				>
+					{message.text}
+				</div>
+			)}
+
+			<Dialog open={editingBraveKey} onOpenChange={(open) => { if (!open) setEditingBraveKey(false); }}>
+				<DialogContent className="max-w-md">
+					<DialogHeader>
+						<DialogTitle>{settings?.brave_search_key ? "Update" : "Add"} Brave Search Key</DialogTitle>
+						<DialogDescription>
+							Enter your Brave Search API key. Get one at brave.com/search/api
+						</DialogDescription>
+					</DialogHeader>
+					<Input
+						type="password"
+						value={braveKeyInput}
+						onChange={(e) => setBraveKeyInput(e.target.value)}
+						placeholder="BSA..."
+						autoFocus
+						onKeyDown={(e) => {
+							if (e.key === "Enter") handleSaveBraveKey();
+						}}
+					/>
+					<DialogFooter>
+						<Button onClick={() => setEditingBraveKey(false)} variant="ghost" size="sm">
+							Cancel
+						</Button>
+						<Button
+							onClick={handleSaveBraveKey}
+							disabled={!braveKeyInput.trim()}
+							loading={updateMutation.isPending}
+							size="sm"
+						>
+							Save
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</div>
+	);
+}
+
+function ServerSection({settings, isLoading}: GlobalSettingsSectionProps) {
+	const queryClient = useQueryClient();
+	const [apiEnabled, setApiEnabled] = useState(settings?.api_enabled ?? true);
+	const [apiPort, setApiPort] = useState(settings?.api_port.toString() ?? "19898");
+	const [apiBind, setApiBind] = useState(settings?.api_bind ?? "127.0.0.1");
+	const [message, setMessage] = useState<{ text: string; type: "success" | "error"; requiresRestart?: boolean } | null>(null);
+
+	// Update form state when settings load
+	useEffect(() => {
+		if (settings) {
+			setApiEnabled(settings.api_enabled);
+			setApiPort(settings.api_port.toString());
+			setApiBind(settings.api_bind);
+		}
+	}, [settings]);
+
+	const updateMutation = useMutation({
+		mutationFn: api.updateGlobalSettings,
+		onSuccess: (result) => {
+			if (result.success) {
+				setMessage({text: result.message, type: "success", requiresRestart: result.requires_restart});
+				queryClient.invalidateQueries({queryKey: ["global-settings"]});
+			} else {
+				setMessage({text: result.message, type: "error"});
+			}
+		},
+		onError: (error) => {
+			setMessage({text: `Failed: ${error.message}`, type: "error"});
+		},
+	});
+
+	const handleSave = () => {
+		const port = parseInt(apiPort, 10);
+		if (isNaN(port) || port < 1024 || port > 65535) {
+			setMessage({text: "Port must be between 1024 and 65535", type: "error"});
+			return;
+		}
+
+		updateMutation.mutate({
+			api_enabled: apiEnabled,
+			api_port: port,
+			api_bind: apiBind.trim(),
+		});
+	};
+
+	return (
+		<div className="mx-auto max-w-2xl px-6 py-6">
+			<div className="mb-6">
+				<h2 className="font-plex text-sm font-semibold text-ink">API Server Configuration</h2>
+				<p className="mt-1 text-sm text-ink-dull">
+					Configure the HTTP API server. Changes require a restart to take effect.
+				</p>
+			</div>
+
+			{isLoading ? (
+				<div className="flex items-center gap-2 text-ink-dull">
+					<div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+					Loading settings...
+				</div>
+			) : (
+				<div className="flex flex-col gap-4">
+					<div className="rounded-lg border border-app-line bg-app-box p-4">
+						<label className="flex items-center gap-3">
+							<input
+								type="checkbox"
+								checked={apiEnabled}
+								onChange={(e) => setApiEnabled(e.target.checked)}
+								className="h-4 w-4"
+							/>
+							<div>
+								<span className="text-sm font-medium text-ink">Enable API Server</span>
+								<p className="mt-0.5 text-sm text-ink-dull">
+									Disable to prevent the HTTP API from starting
+								</p>
+							</div>
+						</label>
+					</div>
+
+					<div className="rounded-lg border border-app-line bg-app-box p-4">
+						<label className="block">
+							<span className="text-sm font-medium text-ink">Port</span>
+							<p className="mt-0.5 text-sm text-ink-dull">Port number for the API server</p>
+							<Input
+								type="number"
+								value={apiPort}
+								onChange={(e) => setApiPort(e.target.value)}
+								min="1024"
+								max="65535"
+								className="mt-2"
+							/>
+						</label>
+					</div>
+
+					<div className="rounded-lg border border-app-line bg-app-box p-4">
+						<label className="block">
+							<span className="text-sm font-medium text-ink">Bind Address</span>
+							<p className="mt-0.5 text-sm text-ink-dull">
+								IP address to bind to (127.0.0.1 for local, 0.0.0.0 for all interfaces)
+							</p>
+							<Input
+								type="text"
+								value={apiBind}
+								onChange={(e) => setApiBind(e.target.value)}
+								placeholder="127.0.0.1"
+								className="mt-2"
+							/>
+						</label>
+					</div>
+
+					<Button onClick={handleSave} loading={updateMutation.isPending}>
+						Save Changes
+					</Button>
+				</div>
+			)}
+
+			{message && (
+				<div
+					className={`mt-4 rounded-md border px-3 py-2 text-sm ${
+						message.type === "success"
+							? "border-green-500/20 bg-green-500/10 text-green-400"
+							: "border-red-500/20 bg-red-500/10 text-red-400"
+					}`}
+				>
+					{message.text}
+					{message.requiresRestart && (
+						<div className="mt-1 text-yellow-400">
+							⚠️ Restart required for changes to take effect
+						</div>
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function WorkerLogsSection({settings, isLoading}: GlobalSettingsSectionProps) {
+	const queryClient = useQueryClient();
+	const [logMode, setLogMode] = useState(settings?.worker_log_mode ?? "errors_only");
+	const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
+	// Update form state when settings load
+	useEffect(() => {
+		if (settings) {
+			setLogMode(settings.worker_log_mode);
+		}
+	}, [settings]);
+
+	const updateMutation = useMutation({
+		mutationFn: api.updateGlobalSettings,
+		onSuccess: (result) => {
+			if (result.success) {
+				setMessage({text: result.message, type: "success"});
+				queryClient.invalidateQueries({queryKey: ["global-settings"]});
+			} else {
+				setMessage({text: result.message, type: "error"});
+			}
+		},
+		onError: (error) => {
+			setMessage({text: `Failed: ${error.message}`, type: "error"});
+		},
+	});
+
+	const handleSave = () => {
+		updateMutation.mutate({worker_log_mode: logMode});
+	};
+
+	const modes = [
+		{
+			value: "errors_only",
+			label: "Errors Only",
+			description: "Only log failed worker runs (saves disk space)",
+		},
+		{
+			value: "all_separate",
+			label: "All (Separate)",
+			description: "Log all runs with separate directories for success/failure",
+		},
+		{
+			value: "all_combined",
+			label: "All (Combined)",
+			description: "Log all runs to the same directory",
+		},
+	];
+
+	return (
+		<div className="mx-auto max-w-2xl px-6 py-6">
+			<div className="mb-6">
+				<h2 className="font-plex text-sm font-semibold text-ink">Worker Execution Logs</h2>
+				<p className="mt-1 text-sm text-ink-dull">
+					Control how worker execution logs are stored in the logs directory.
+				</p>
+			</div>
+
+			{isLoading ? (
+				<div className="flex items-center gap-2 text-ink-dull">
+					<div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+					Loading settings...
+				</div>
+			) : (
+				<div className="flex flex-col gap-4">
+					<div className="flex flex-col gap-3">
+						{modes.map((mode) => (
+							<div
+								key={mode.value}
+								className={`rounded-lg border p-4 cursor-pointer transition-colors ${
+									logMode === mode.value
+										? "border-accent bg-accent/5"
+										: "border-app-line bg-app-box hover:border-app-line/80"
+								}`}
+								onClick={() => setLogMode(mode.value)}
+							>
+								<label className="flex items-start gap-3 cursor-pointer">
+									<input
+										type="radio"
+										value={mode.value}
+										checked={logMode === mode.value}
+										onChange={(e) => setLogMode(e.target.value)}
+										className="mt-0.5"
+									/>
+									<div className="flex-1">
+										<span className="text-sm font-medium text-ink">{mode.label}</span>
+										<p className="mt-0.5 text-sm text-ink-dull">{mode.description}</p>
+									</div>
+								</label>
+							</div>
+						))}
+					</div>
+
+					<Button onClick={handleSave} loading={updateMutation.isPending}>
+						Save Changes
+					</Button>
+				</div>
+			)}
+
+			{message && (
+				<div
+					className={`mt-4 rounded-md border px-3 py-2 text-sm ${
+						message.type === "success"
+							? "border-green-500/20 bg-green-500/10 text-green-400"
+							: "border-red-500/20 bg-red-500/10 text-red-400"
+					}`}
+				>
+					{message.text}
+				</div>
+			)}
 		</div>
 	);
 }
