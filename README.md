@@ -14,7 +14,7 @@
   <a href="https://fsl.software/">
     <img src="https://img.shields.io/static/v1?label=License&message=FSL-1.1-ALv2&color=000" />
   </a>
-  <a href="https://github.com/jamiepine/spacebot">
+  <a href="https://github.com/spacedriveapp/spacebot">
     <img src="https://img.shields.io/static/v1?label=Core&message=Rust&color=DEA584" />
   </a>
   <a href="https://discord.gg/gTaF2Z44f5">
@@ -316,7 +316,7 @@ Read the full vision in [docs/spacedrive.md](docs/spacedrive.md).
 ### Build and Run
 
 ```bash
-git clone https://github.com/jamiepine/spacebot
+git clone https://github.com/spacedriveapp/spacebot
 cd spacebot
 cargo build --release
 ```
