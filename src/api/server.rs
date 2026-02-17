@@ -3357,6 +3357,9 @@ struct PlatformCredentials {
     /// Slack app token.
     #[serde(default)]
     slack_app_token: Option<String>,
+    /// Telegram bot token.
+    #[serde(default)]
+    telegram_token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3394,6 +3397,7 @@ async fn create_binding(
     // Track adapters that need to be started at runtime
     let mut new_discord_token: Option<String> = None;
     let mut new_slack_tokens: Option<(String, String)> = None;
+    let mut new_telegram_token: Option<String> = None;
 
     // Write platform credentials if provided
     if let Some(credentials) = &request.platform_credentials {
@@ -3427,6 +3431,21 @@ async fn create_binding(
                 slack["bot_token"] = toml_edit::value(bot_token.as_str());
                 slack["app_token"] = toml_edit::value(app_token);
                 new_slack_tokens = Some((bot_token.clone(), app_token.to_string()));
+            }
+        }
+        if let Some(token) = &credentials.telegram_token {
+            if !token.is_empty() {
+                if doc.get("messaging").is_none() {
+                    doc["messaging"] = toml_edit::Item::Table(toml_edit::Table::new());
+                }
+                let messaging = doc["messaging"].as_table_mut().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+                if !messaging.contains_key("telegram") {
+                    messaging["telegram"] = toml_edit::Item::Table(toml_edit::Table::new());
+                }
+                let telegram = messaging["telegram"].as_table_mut().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+                telegram["enabled"] = toml_edit::value(true);
+                telegram["token"] = toml_edit::value(token.as_str());
+                new_telegram_token = Some(token.clone());
             }
         }
     }
@@ -3556,6 +3575,20 @@ async fn create_binding(
                 let adapter = crate::messaging::slack::SlackAdapter::new(&bot_token, &app_token, slack_perms);
                 if let Err(error) = manager.register_and_start(adapter).await {
                     tracing::error!(%error, "failed to hot-start slack adapter");
+                }
+            }
+
+            if let Some(token) = new_telegram_token {
+                let telegram_perms = {
+                    let perms = crate::config::TelegramPermissions::from_config(
+                        new_config.messaging.telegram.as_ref().expect("telegram config exists when token is provided"),
+                        &new_config.bindings,
+                    );
+                    std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                };
+                let adapter = crate::messaging::telegram::TelegramAdapter::new(&token, telegram_perms);
+                if let Err(error) = manager.register_and_start(adapter).await {
+                    tracing::error!(%error, "failed to hot-start telegram adapter");
                 }
             }
         }

@@ -53,6 +53,10 @@ struct ActiveChannel {
 }
 
 fn main() -> anyhow::Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
+
     let cli = Cli::parse();
     let command = cli.command.unwrap_or(Command::Start { foreground: false });
 
