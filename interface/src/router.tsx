@@ -275,7 +275,10 @@ const routeTree = rootRoute.addChildren([
 	channelRoute,
 ]);
 
-export const router = createRouter({routeTree});
+export const router = createRouter({
+	routeTree,
+	basepath: (window as any).__SPACEBOT_BASE_PATH || "/",
+});
 
 declare module "@tanstack/react-router" {
 	interface Register {

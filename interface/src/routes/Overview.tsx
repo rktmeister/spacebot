@@ -92,7 +92,7 @@ export function Overview({ liveStates }: OverviewProps) {
 						{/* Agent Cards */}
 						<section>
 							<h2 className="mb-4 font-plex text-sm font-medium text-ink-dull">Agents</h2>
-							<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+							<div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
 								{agents.map((agent) => (
 									<AgentCard
 										key={agent.id}
@@ -209,6 +209,54 @@ function HeroSection({
 	);
 }
 
+/** Deterministic gradient from a seed string. Produces two HSL colors. */
+function seedGradient(seed: string): [string, string] {
+	let hash = 0;
+	for (let i = 0; i < seed.length; i++) {
+		hash = seed.charCodeAt(i) + ((hash << 5) - hash);
+		hash |= 0;
+	}
+	const hue1 = ((hash >>> 0) % 360);
+	const hue2 = (hue1 + 40 + ((hash >>> 8) % 60)) % 360;
+	return [
+		`hsl(${hue1}, 70%, 55%)`,
+		`hsl(${hue2}, 60%, 45%)`,
+	];
+}
+
+function AgentAvatar({ seed, size = 64 }: { seed: string; size?: number }) {
+	const [c1, c2] = seedGradient(seed);
+	const gradientId = `avatar-${seed.replace(/[^a-z0-9]/gi, "")}`;
+	return (
+		<svg width={size} height={size} viewBox="0 0 64 64" className="flex-shrink-0 rounded-full">
+			<defs>
+				<linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+					<stop offset="0%" stopColor={c1} />
+					<stop offset="100%" stopColor={c2} />
+				</linearGradient>
+			</defs>
+			<circle cx="32" cy="32" r="32" fill={`url(#${gradientId})`} />
+		</svg>
+	);
+}
+
+/** Gradient banner SVG that fills the card top. Uses the same seed as the avatar. */
+function BannerGradient({ seed }: { seed: string }) {
+	const [c1, c2] = seedGradient(seed);
+	const bannerId = `banner-${seed.replace(/[^a-z0-9]/gi, "")}`;
+	return (
+		<svg className="absolute inset-0 h-full w-full rounded-t-xl" preserveAspectRatio="none" viewBox="0 0 400 100">
+			<defs>
+				<linearGradient id={bannerId} x1="0%" y1="0%" x2="100%" y2="100%">
+					<stop offset="0%" stopColor={c1} stopOpacity={0.25} />
+					<stop offset="100%" stopColor={c2} stopOpacity={0.15} />
+				</linearGradient>
+			</defs>
+			<rect width="400" height="100" fill={`url(#${bannerId})`} />
+		</svg>
+	);
+}
+
 function AgentCard({
 	agent,
 	liveActivity,
@@ -217,69 +265,108 @@ function AgentCard({
 	liveActivity: { workers: number; branches: number; hasActivity: boolean };
 }) {
 	const isActive = liveActivity.hasActivity || (agent.last_activity_at && new Date(agent.last_activity_at).getTime() > Date.now() - 5 * 60 * 1000);
+	const profile = agent.profile;
+	const displayName = profile?.display_name ?? agent.id;
+	const avatarSeed = profile?.avatar_seed ?? agent.id;
 
 	return (
 		<Link
 			to="/agents/$agentId"
 			params={{ agentId: agent.id }}
-			className="group flex flex-col rounded-xl border border-app-line bg-app-darkBox p-5 transition-all hover:border-app-line/80 hover:bg-app-darkBox/80"
+			className="group flex flex-col rounded-xl border border-app-line bg-app-darkBox overflow-hidden transition-all hover:border-app-line/80 hover:bg-app-darkBox/80"
 		>
-			<div className="flex items-start justify-between">
-				<div className="flex items-center gap-2">
-					<div className={`h-2.5 w-2.5 rounded-full ${isActive ? "bg-green-500" : "bg-gray-500"}`} />
-					<h3 className="font-plex text-lg font-medium text-ink">{agent.id}</h3>
+			{/* Banner + Avatar */}
+			<div className="relative h-20">
+				<BannerGradient seed={avatarSeed} />
+				{/* Live activity badges — top right */}
+				{(liveActivity.workers > 0 || liveActivity.branches > 0) && (
+					<div className="absolute top-2.5 right-3 flex items-center gap-1.5 z-10">
+						{liveActivity.workers > 0 && (
+							<span className="flex items-center gap-1 rounded-full bg-amber-500/20 backdrop-blur-sm px-2 py-0.5 text-tiny text-amber-400">
+								<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
+								{liveActivity.workers}w
+							</span>
+						)}
+						{liveActivity.branches > 0 && (
+							<span className="flex items-center gap-1 rounded-full bg-violet-500/20 backdrop-blur-sm px-2 py-0.5 text-tiny text-violet-400">
+								<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
+								{liveActivity.branches}b
+							</span>
+						)}
+					</div>
+				)}
+			</div>
+
+			{/* Avatar — overlapping the banner */}
+			<div className="relative px-5 -mt-8">
+				<div className="relative inline-block">
+					<div className="rounded-full border-[3px] border-app-darkBox">
+						<AgentAvatar seed={avatarSeed} size={64} />
+					</div>
+					<div
+						className={`absolute bottom-0.5 right-0.5 h-4 w-4 rounded-full border-[2.5px] border-app-darkBox ${
+							isActive ? "bg-green-500" : "bg-gray-500"
+						}`}
+					/>
 				</div>
 			</div>
 
+			{/* Name + status */}
+			<div className="px-5 mt-2">
+				<h3 className="font-plex text-xl font-semibold text-ink truncate">
+					{displayName}
+				</h3>
+				{profile?.status ? (
+					<p className="mt-1 text-sm text-ink-dull italic">
+						{profile.status}
+					</p>
+				) : agent.last_activity_at ? (
+					<p className="mt-1 text-tiny text-ink-faint">
+						Active {formatTimeAgo(agent.last_activity_at)}
+					</p>
+				) : null}
+			</div>
+
+			{/* Bio — full text, no truncation */}
+			{profile?.bio && (
+				<p className="px-5 mt-3 text-sm leading-relaxed text-ink-dull">
+					{profile.bio}
+				</p>
+			)}
+
+			{/* Spacer pushes footer down when bio is short */}
+			<div className="flex-1" />
+
 			{/* Sparkline */}
-			<div className="mt-3 h-10">
+			<div className="mx-5 mt-4 h-10">
 				<SparklineChart data={agent.activity_sparkline} />
 			</div>
 
-			{/* Stats row */}
-			<div className="mt-3 flex items-center gap-4 text-tiny">
-				<div className="flex items-center gap-1">
-					<span className="text-ink-faint">Channels</span>
-					<span className="font-medium text-ink-dull">{agent.channel_count}</span>
-				</div>
-				<div className="flex items-center gap-1">
-					<span className="text-ink-faint">Memories</span>
-					<span className="font-medium text-ink-dull">{agent.memory_total.toLocaleString()}</span>
-				</div>
-				<div className="flex items-center gap-1">
-					<span className="text-ink-faint">Cron</span>
-					<span className="font-medium text-ink-dull">{agent.cron_job_count}</span>
-				</div>
-			</div>
-
-			{/* Live activity badges */}
-			{(liveActivity.workers > 0 || liveActivity.branches > 0) && (
-				<div className="mt-3 flex flex-wrap gap-1.5">
-					{liveActivity.workers > 0 && (
-						<span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-tiny text-amber-400">
-							{liveActivity.workers}w
-						</span>
-					)}
-					{liveActivity.branches > 0 && (
-						<span className="rounded-full bg-violet-500/10 px-2 py-0.5 text-tiny text-violet-400">
-							{liveActivity.branches}b
-						</span>
-					)}
-				</div>
-			)}
-
-			{/* Footer */}
-			<div className="mt-3 flex items-center justify-between text-tiny">
-				{agent.last_activity_at ? (
-					<span className="text-ink-faint">Active {formatTimeAgo(agent.last_activity_at)}</span>
-				) : (
-					<span className="text-ink-faint">No activity</span>
+			{/* Stats footer */}
+			<div className="flex items-center gap-4 px-5 py-3.5 mt-3 border-t border-app-line/50 text-tiny">
+				<StatPill label="channels" value={agent.channel_count} />
+				<StatPill label="memories" value={agent.memory_total} />
+				{agent.cron_job_count > 0 && (
+					<StatPill label="cron" value={agent.cron_job_count} />
 				)}
 				{agent.last_bulletin_at && (
-					<span className="text-accent/70">Bulletin {formatTimeAgo(agent.last_bulletin_at)}</span>
+					<span className="ml-auto text-accent/60">
+						Bulletin {formatTimeAgo(agent.last_bulletin_at)}
+					</span>
 				)}
 			</div>
 		</Link>
+	);
+}
+
+function StatPill({ label, value }: { label: string; value: number }) {
+	return (
+		<span className="text-ink-faint">
+			<span className="font-medium tabular-nums text-ink-dull">
+				{value >= 1000 ? `${(value / 1000).toFixed(1)}k` : value}
+			</span>
+			{" "}{label}
+		</span>
 	);
 }
 

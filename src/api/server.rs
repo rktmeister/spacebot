@@ -152,6 +152,8 @@ struct AgentSummary {
     last_activity_at: Option<String>,
     /// Last bulletin generation time.
     last_bulletin_at: Option<String>,
+    /// Cortex-generated agent profile (display name, status, bio).
+    profile: Option<crate::agent::cortex::AgentProfile>,
 }
 
 #[derive(Serialize)]
@@ -449,6 +451,7 @@ pub async fn start_http_server(
         .route("/cortex/events", get(cortex_events))
         .route("/cortex-chat/messages", get(cortex_chat_messages))
         .route("/cortex-chat/send", post(cortex_chat_send))
+        .route("/agents/profile", get(get_agent_profile))
         .route("/agents/identity", get(get_identity).put(update_identity))
         .route("/agents/config", get(get_agent_config).put(update_agent_config))
         .route("/agents/cron", get(list_cron_jobs).post(create_or_update_cron).delete(delete_cron))
@@ -758,6 +761,9 @@ async fn instance_overview(State(state): State<Arc<ApiState>>) -> Result<Json<In
             .unwrap_or_default();
         let last_bulletin_at = bulletin_events.first().map(|e| e.created_at.clone());
 
+        // Agent profile
+        let profile = crate::agent::cortex::load_profile(pool, &agent_id).await;
+
         agents.push(AgentSummary {
             id: agent_id,
             channel_count,
@@ -766,6 +772,7 @@ async fn instance_overview(State(state): State<Arc<ApiState>>) -> Result<Json<In
             activity_sparkline,
             last_activity_at,
             last_bulletin_at,
+            profile,
         });
     }
 
@@ -1235,6 +1242,26 @@ async fn cortex_chat_send(
     };
 
     Ok(Sse::new(stream))
+}
+
+// -- Agent profile handler --
+
+/// Get the cortex-generated profile for an agent.
+async fn get_agent_profile(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<AgentOverviewQuery>,
+) -> Result<Json<AgentProfileResponse>, StatusCode> {
+    let pools = state.agent_pools.load();
+    let pool = pools.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let profile = crate::agent::cortex::load_profile(pool, &query.agent_id).await;
+
+    Ok(Json(AgentProfileResponse { profile }))
+}
+
+#[derive(Serialize)]
+struct AgentProfileResponse {
+    profile: Option<crate::agent::cortex::AgentProfile>,
 }
 
 // -- Identity file handlers --

@@ -1,4 +1,4 @@
-const API_BASE = "/api";
+const API_BASE = ((window as any).__SPACEBOT_BASE_PATH || "") + "/api";
 
 export interface StatusResponse {
 	status: string;
@@ -226,6 +226,20 @@ export interface AgentOverviewResponse {
 	latest_bulletin: string | null;
 }
 
+export interface AgentProfile {
+	agent_id: string;
+	display_name: string | null;
+	status: string | null;
+	bio: string | null;
+	avatar_seed: string | null;
+	generated_at: string;
+	updated_at: string;
+}
+
+export interface AgentProfileResponse {
+	profile: AgentProfile | null;
+}
+
 export interface AgentSummary {
 	id: string;
 	channel_count: number;
@@ -234,6 +248,7 @@ export interface AgentSummary {
 	activity_sparkline: number[];
 	last_activity_at: string | null;
 	last_bulletin_at: string | null;
+	profile: AgentProfile | null;
 }
 
 export interface InstanceOverviewResponse {
@@ -894,6 +909,8 @@ export const api = {
 				channel_id: channelId ?? null,
 			}),
 		}),
+	agentProfile: (agentId: string) =>
+		fetchJson<AgentProfileResponse>(`/agents/profile?agent_id=${encodeURIComponent(agentId)}`),
 	agentIdentity: (agentId: string) =>
 		fetchJson<IdentityFiles>(`/agents/identity?agent_id=${encodeURIComponent(agentId)}`),
 	updateIdentity: async (request: IdentityUpdateRequest) => {
