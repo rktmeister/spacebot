@@ -15,6 +15,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 	openrouter: "OpenRouter",
 	openai: "OpenAI",
 	zhipu: "Z.ai (GLM)",
+	"opencode-zen": "OpenCode Zen",
 };
 
 function formatContextWindow(tokens: number | null): string {
@@ -108,7 +109,7 @@ export function ModelSelect({ label, description, value, onChange }: ModelSelect
 		}
 	};
 
-	const providerOrder = ["openrouter", "anthropic", "openai", "zhipu"];
+	const providerOrder = ["openrouter", "anthropic", "openai", "opencode-zen", "zhipu"];
 	const sortedProviders = Object.keys(grouped).sort(
 		(a, b) => (providerOrder.indexOf(a) ?? 99) - (providerOrder.indexOf(b) ?? 99),
 	);

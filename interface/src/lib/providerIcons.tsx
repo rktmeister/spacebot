@@ -37,6 +37,7 @@ export function ProviderIcon({ provider, className = "text-ink-faint", size = 24
 		together: Together,
 		xai: XAI,
 		zhipu: Zhipu,
+		"opencode-zen": OpenAI,
 	};
 
 	const IconComponent = iconMap[provider.toLowerCase()];

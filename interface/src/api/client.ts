@@ -637,6 +637,7 @@ export interface ProviderStatus {
 	deepseek: boolean;
 	xai: boolean;
 	mistral: boolean;
+	opencode_zen: boolean;
 }
 
 export interface ProvidersResponse {
