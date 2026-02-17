@@ -1236,6 +1236,17 @@ impl Config {
         })
     }
 
+    /// Validate a raw TOML string as a valid Spacebot config.
+    /// Returns Ok(()) if the config is structurally valid, or an error describing what's wrong.
+    pub fn validate_toml(content: &str) -> Result<()> {
+        let toml_config: TomlConfig = toml::from_str(content)
+            .context("failed to parse config TOML")?;
+        // Run full conversion to catch semantic errors (env resolution, defaults, etc.)
+        let instance_dir = Self::default_instance_dir();
+        Self::from_toml(toml_config, instance_dir)?;
+        Ok(())
+    }
+
     fn from_toml(toml: TomlConfig, instance_dir: PathBuf) -> Result<Self> {
         let llm = LlmConfig {
             anthropic_key: toml

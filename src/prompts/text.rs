@@ -59,6 +59,7 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         ("en", "worker") => include_str!("../../prompts/en/worker.md.j2"),
         ("en", "cortex") => include_str!("../../prompts/en/cortex.md.j2"),
         ("en", "cortex_bulletin") => include_str!("../../prompts/en/cortex_bulletin.md.j2"),
+        ("en", "cortex_profile") => include_str!("../../prompts/en/cortex_profile.md.j2"),
         ("en", "compactor") => include_str!("../../prompts/en/compactor.md.j2"),
         ("en", "memory_persistence") => include_str!("../../prompts/en/memory_persistence.md.j2"),
         ("en", "ingestion") => include_str!("../../prompts/en/ingestion.md.j2"),
@@ -96,6 +97,9 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         }
         ("en", "fragments/system/cortex_synthesis") => {
             include_str!("../../prompts/en/fragments/system/cortex_synthesis.md.j2")
+        }
+        ("en", "fragments/system/profile_synthesis") => {
+            include_str!("../../prompts/en/fragments/system/profile_synthesis.md.j2")
         }
         ("en", "fragments/system/ingestion_chunk") => {
             include_str!("../../prompts/en/fragments/system/ingestion_chunk.md.j2")

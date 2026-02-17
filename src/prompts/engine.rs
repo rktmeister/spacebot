@@ -50,6 +50,10 @@ impl PromptEngine {
         )?;
         env.add_template("ingestion", crate::prompts::text::get("ingestion"))?;
         env.add_template("cortex_chat", crate::prompts::text::get("cortex_chat"))?;
+        env.add_template(
+            "cortex_profile",
+            crate::prompts::text::get("cortex_profile"),
+        )?;
 
         // Fragment templates
         env.add_template(
@@ -93,6 +97,10 @@ impl PromptEngine {
         env.add_template(
             "fragments/system/cortex_synthesis",
             crate::prompts::text::get("fragments/system/cortex_synthesis"),
+        )?;
+        env.add_template(
+            "fragments/system/profile_synthesis",
+            crate::prompts::text::get("fragments/system/profile_synthesis"),
         )?;
         env.add_template(
             "fragments/system/ingestion_chunk",
@@ -261,6 +269,21 @@ impl PromptEngine {
     /// Convenience method for rendering memory persistence prompt.
     pub fn render_system_memory_persistence(&self) -> Result<String> {
         self.render_static("fragments/system/memory_persistence")
+    }
+
+    /// Render the profile synthesis prompt with identity and bulletin context.
+    pub fn render_system_profile_synthesis(
+        &self,
+        identity_context: Option<&str>,
+        memory_bulletin: Option<&str>,
+    ) -> Result<String> {
+        self.render(
+            "fragments/system/profile_synthesis",
+            context! {
+                identity_context => identity_context,
+                memory_bulletin => memory_bulletin,
+            },
+        )
     }
 
     /// Convenience method for rendering cortex synthesis prompt.

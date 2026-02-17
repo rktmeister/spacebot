@@ -152,6 +152,8 @@ struct AgentSummary {
     last_activity_at: Option<String>,
     /// Last bulletin generation time.
     last_bulletin_at: Option<String>,
+    /// Cortex-generated agent profile (display name, status, bio).
+    profile: Option<crate::agent::cortex::AgentProfile>,
 }
 
 #[derive(Serialize)]
@@ -449,6 +451,7 @@ pub async fn start_http_server(
         .route("/cortex/events", get(cortex_events))
         .route("/cortex-chat/messages", get(cortex_chat_messages))
         .route("/cortex-chat/send", post(cortex_chat_send))
+        .route("/agents/profile", get(get_agent_profile))
         .route("/agents/identity", get(get_identity).put(update_identity))
         .route("/agents/config", get(get_agent_config).put(update_agent_config))
         .route("/agents/cron", get(list_cron_jobs).post(create_or_update_cron).delete(delete_cron))
@@ -463,8 +466,9 @@ pub async fn start_http_server(
         .route("/models", get(get_models))
         .route("/models/refresh", post(refresh_models))
         .route("/messaging/status", get(messaging_status))
-        .route("/bindings", get(list_bindings).post(create_binding).delete(delete_binding))
+        .route("/bindings", get(list_bindings).post(create_binding).put(update_binding).delete(delete_binding))
         .route("/settings", get(get_global_settings).put(update_global_settings))
+        .route("/config/raw", get(get_raw_config).put(update_raw_config))
         .route("/update/check", get(update_check).post(update_check_now))
         .route("/update/apply", post(update_apply));
 
@@ -757,6 +761,9 @@ async fn instance_overview(State(state): State<Arc<ApiState>>) -> Result<Json<In
             .unwrap_or_default();
         let last_bulletin_at = bulletin_events.first().map(|e| e.created_at.clone());
 
+        // Agent profile
+        let profile = crate::agent::cortex::load_profile(pool, &agent_id).await;
+
         agents.push(AgentSummary {
             id: agent_id,
             channel_count,
@@ -765,6 +772,7 @@ async fn instance_overview(State(state): State<Arc<ApiState>>) -> Result<Json<In
             activity_sparkline,
             last_activity_at,
             last_bulletin_at,
+            profile,
         });
     }
 
@@ -1234,6 +1242,26 @@ async fn cortex_chat_send(
     };
 
     Ok(Sse::new(stream))
+}
+
+// -- Agent profile handler --
+
+/// Get the cortex-generated profile for an agent.
+async fn get_agent_profile(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<AgentOverviewQuery>,
+) -> Result<Json<AgentProfileResponse>, StatusCode> {
+    let pools = state.agent_pools.load();
+    let pool = pools.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let profile = crate::agent::cortex::load_profile(pool, &query.agent_id).await;
+
+    Ok(Json(AgentProfileResponse { profile }))
+}
+
+#[derive(Serialize)]
+struct AgentProfileResponse {
+    profile: Option<crate::agent::cortex::AgentProfile>,
 }
 
 // -- Identity file handlers --
@@ -3558,6 +3586,203 @@ struct DeleteBindingResponse {
     message: String,
 }
 
+/// Update an existing binding.
+#[derive(Deserialize)]
+struct UpdateBindingRequest {
+    // Original identifier (to find the binding)
+    original_agent_id: String,
+    original_channel: String,
+    #[serde(default)]
+    original_guild_id: Option<String>,
+    #[serde(default)]
+    original_workspace_id: Option<String>,
+    #[serde(default)]
+    original_chat_id: Option<String>,
+    
+    // New values
+    agent_id: String,
+    channel: String,
+    #[serde(default)]
+    guild_id: Option<String>,
+    #[serde(default)]
+    workspace_id: Option<String>,
+    #[serde(default)]
+    chat_id: Option<String>,
+    #[serde(default)]
+    channel_ids: Vec<String>,
+    #[serde(default)]
+    dm_allowed_users: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct UpdateBindingResponse {
+    success: bool,
+    message: String,
+}
+
+async fn update_binding(
+    State(state): State<Arc<ApiState>>,
+    axum::Json(request): axum::Json<UpdateBindingRequest>,
+) -> Result<Json<UpdateBindingResponse>, StatusCode> {
+    let config_path = state.config_path.read().await.clone();
+    if !config_path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let content = tokio::fs::read_to_string(&config_path).await.map_err(|error| {
+        tracing::warn!(%error, "failed to read config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
+        tracing::warn!(%error, "failed to parse config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let bindings_array = doc
+        .get_mut("bindings")
+        .and_then(|b| b.as_array_of_tables_mut())
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Find the matching binding by original identifiers
+    let mut match_idx: Option<usize> = None;
+    for (i, table) in bindings_array.iter().enumerate() {
+        let matches_agent = table
+            .get("agent_id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v == request.original_agent_id);
+        let matches_channel = table
+            .get("channel")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v == request.original_channel);
+        let matches_guild = match &request.original_guild_id {
+            Some(gid) => table
+                .get("guild_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == gid),
+            None => table.get("guild_id").is_none(),
+        };
+        let matches_workspace = match &request.original_workspace_id {
+            Some(wid) => table
+                .get("workspace_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == wid),
+            None => table.get("workspace_id").is_none(),
+        };
+        let matches_chat = match &request.original_chat_id {
+            Some(cid) => table
+                .get("chat_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == cid),
+            None => table.get("chat_id").is_none(),
+        };
+        if matches_agent && matches_channel && matches_guild && matches_workspace && matches_chat {
+            match_idx = Some(i);
+            break;
+        }
+    }
+
+    let Some(idx) = match_idx else {
+        return Ok(Json(UpdateBindingResponse {
+            success: false,
+            message: "No matching binding found.".to_string(),
+        }));
+    };
+
+    // Update the binding in place
+    let binding = bindings_array.get_mut(idx).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    binding["agent_id"] = toml_edit::value(&request.agent_id);
+    binding["channel"] = toml_edit::value(&request.channel);
+    
+    // Clear and set optional fields
+    binding.remove("guild_id");
+    binding.remove("workspace_id");
+    binding.remove("chat_id");
+    
+    if let Some(ref guild_id) = request.guild_id {
+        if !guild_id.is_empty() {
+            binding["guild_id"] = toml_edit::value(guild_id);
+        }
+    }
+    if let Some(ref workspace_id) = request.workspace_id {
+        if !workspace_id.is_empty() {
+            binding["workspace_id"] = toml_edit::value(workspace_id);
+        }
+    }
+    if let Some(ref chat_id) = request.chat_id {
+        if !chat_id.is_empty() {
+            binding["chat_id"] = toml_edit::value(chat_id);
+        }
+    }
+    
+    // Update arrays
+    if !request.channel_ids.is_empty() {
+        let mut arr = toml_edit::Array::new();
+        for id in &request.channel_ids {
+            arr.push(id.as_str());
+        }
+        binding["channel_ids"] = toml_edit::value(arr);
+    } else {
+        binding.remove("channel_ids");
+    }
+    
+    if !request.dm_allowed_users.is_empty() {
+        let mut arr = toml_edit::Array::new();
+        for id in &request.dm_allowed_users {
+            arr.push(id.as_str());
+        }
+        binding["dm_allowed_users"] = toml_edit::value(arr);
+    } else {
+        binding.remove("dm_allowed_users");
+    }
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to write config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::info!(
+        agent_id = %request.agent_id,
+        channel = %request.channel,
+        "binding updated via API"
+    );
+
+    // Hot-reload bindings and permissions
+    if let Ok(new_config) = crate::config::Config::load_from_path(&config_path) {
+        let bindings_guard = state.bindings.read().await;
+        if let Some(bindings_swap) = bindings_guard.as_ref() {
+            bindings_swap.store(std::sync::Arc::new(new_config.bindings.clone()));
+        }
+        drop(bindings_guard);
+
+        if let Some(discord_config) = &new_config.messaging.discord {
+            let new_perms =
+                crate::config::DiscordPermissions::from_config(discord_config, &new_config.bindings);
+            let perms = state.discord_permissions.read().await;
+            if let Some(arc_swap) = perms.as_ref() {
+                arc_swap.store(std::sync::Arc::new(new_perms));
+            }
+        }
+
+        if let Some(slack_config) = &new_config.messaging.slack {
+            let new_perms =
+                crate::config::SlackPermissions::from_config(slack_config, &new_config.bindings);
+            let perms = state.slack_permissions.read().await;
+            if let Some(arc_swap) = perms.as_ref() {
+                arc_swap.store(std::sync::Arc::new(new_perms));
+            }
+        }
+    }
+
+    Ok(Json(UpdateBindingResponse {
+        success: true,
+        message: "Binding updated.".to_string(),
+    }))
+}
+
 /// Delete a binding by matching agent_id + channel + platform-specific identifiers.
 async fn delete_binding(
     State(state): State<Arc<ApiState>>,
@@ -3685,6 +3910,24 @@ struct GlobalSettingsResponse {
     api_port: u16,
     api_bind: String,
     worker_log_mode: String,
+    opencode: OpenCodeSettingsResponse,
+}
+
+#[derive(Serialize)]
+struct OpenCodeSettingsResponse {
+    enabled: bool,
+    path: String,
+    max_servers: usize,
+    server_startup_timeout_secs: u64,
+    max_restart_retries: u32,
+    permissions: OpenCodePermissionsResponse,
+}
+
+#[derive(Serialize)]
+struct OpenCodePermissionsResponse {
+    edit: String,
+    bash: String,
+    webfetch: String,
 }
 
 #[derive(Deserialize)]
@@ -3694,6 +3937,24 @@ struct GlobalSettingsUpdate {
     api_port: Option<u16>,
     api_bind: Option<String>,
     worker_log_mode: Option<String>,
+    opencode: Option<OpenCodeSettingsUpdate>,
+}
+
+#[derive(Deserialize)]
+struct OpenCodeSettingsUpdate {
+    enabled: Option<bool>,
+    path: Option<String>,
+    max_servers: Option<usize>,
+    server_startup_timeout_secs: Option<u64>,
+    max_restart_retries: Option<u32>,
+    permissions: Option<OpenCodePermissionsUpdate>,
+}
+
+#[derive(Deserialize)]
+struct OpenCodePermissionsUpdate {
+    edit: Option<String>,
+    bash: Option<String>,
+    webfetch: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3708,7 +3969,7 @@ async fn get_global_settings(
 ) -> Result<Json<GlobalSettingsResponse>, StatusCode> {
     let config_path = state.config_path.read().await.clone();
     
-    let (brave_search_key, api_enabled, api_port, api_bind, worker_log_mode) = if config_path.exists() {
+    let (brave_search_key, api_enabled, api_port, api_bind, worker_log_mode, opencode) = if config_path.exists() {
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -3756,9 +4017,66 @@ async fn get_global_settings(
             .unwrap_or("errors_only")
             .to_string();
         
-        (brave_search, api_enabled, api_port, api_bind, worker_log_mode)
+        let opencode_table = doc.get("defaults").and_then(|d| d.get("opencode"));
+        let opencode_perms = opencode_table.and_then(|o| o.get("permissions"));
+        let opencode = OpenCodeSettingsResponse {
+            enabled: opencode_table
+                .and_then(|o| o.get("enabled"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            path: opencode_table
+                .and_then(|o| o.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("opencode")
+                .to_string(),
+            max_servers: opencode_table
+                .and_then(|o| o.get("max_servers"))
+                .and_then(|v| v.as_integer())
+                .and_then(|i| usize::try_from(i).ok())
+                .unwrap_or(5),
+            server_startup_timeout_secs: opencode_table
+                .and_then(|o| o.get("server_startup_timeout_secs"))
+                .and_then(|v| v.as_integer())
+                .and_then(|i| u64::try_from(i).ok())
+                .unwrap_or(30),
+            max_restart_retries: opencode_table
+                .and_then(|o| o.get("max_restart_retries"))
+                .and_then(|v| v.as_integer())
+                .and_then(|i| u32::try_from(i).ok())
+                .unwrap_or(5),
+            permissions: OpenCodePermissionsResponse {
+                edit: opencode_perms
+                    .and_then(|p| p.get("edit"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("allow")
+                    .to_string(),
+                bash: opencode_perms
+                    .and_then(|p| p.get("bash"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("allow")
+                    .to_string(),
+                webfetch: opencode_perms
+                    .and_then(|p| p.get("webfetch"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("allow")
+                    .to_string(),
+            },
+        };
+
+        (brave_search, api_enabled, api_port, api_bind, worker_log_mode, opencode)
     } else {
-        (None, true, 19898, "127.0.0.1".to_string(), "errors_only".to_string())
+        (None, true, 19898, "127.0.0.1".to_string(), "errors_only".to_string(), OpenCodeSettingsResponse {
+            enabled: false,
+            path: "opencode".to_string(),
+            max_servers: 5,
+            server_startup_timeout_secs: 30,
+            max_restart_retries: 5,
+            permissions: OpenCodePermissionsResponse {
+                edit: "allow".to_string(),
+                bash: "allow".to_string(),
+                webfetch: "allow".to_string(),
+            },
+        })
     };
     
     Ok(Json(GlobalSettingsResponse {
@@ -3767,6 +4085,7 @@ async fn get_global_settings(
         api_port,
         api_bind,
         worker_log_mode,
+        opencode,
     }))
 }
 
@@ -3840,6 +4159,46 @@ async fn update_global_settings(
         doc["defaults"]["worker_log_mode"] = toml_edit::value(mode);
     }
     
+    // Update OpenCode settings
+    if let Some(opencode) = request.opencode {
+        if doc.get("defaults").is_none() {
+            doc["defaults"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        if doc["defaults"].get("opencode").is_none() {
+            doc["defaults"]["opencode"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        
+        if let Some(enabled) = opencode.enabled {
+            doc["defaults"]["opencode"]["enabled"] = toml_edit::value(enabled);
+        }
+        if let Some(path) = opencode.path {
+            doc["defaults"]["opencode"]["path"] = toml_edit::value(path);
+        }
+        if let Some(max_servers) = opencode.max_servers {
+            doc["defaults"]["opencode"]["max_servers"] = toml_edit::value(max_servers as i64);
+        }
+        if let Some(timeout) = opencode.server_startup_timeout_secs {
+            doc["defaults"]["opencode"]["server_startup_timeout_secs"] = toml_edit::value(timeout as i64);
+        }
+        if let Some(retries) = opencode.max_restart_retries {
+            doc["defaults"]["opencode"]["max_restart_retries"] = toml_edit::value(retries as i64);
+        }
+        if let Some(permissions) = opencode.permissions {
+            if doc["defaults"]["opencode"].get("permissions").is_none() {
+                doc["defaults"]["opencode"]["permissions"] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
+            if let Some(edit) = permissions.edit {
+                doc["defaults"]["opencode"]["permissions"]["edit"] = toml_edit::value(edit);
+            }
+            if let Some(bash) = permissions.bash {
+                doc["defaults"]["opencode"]["permissions"]["bash"] = toml_edit::value(bash);
+            }
+            if let Some(webfetch) = permissions.webfetch {
+                doc["defaults"]["opencode"]["permissions"]["webfetch"] = toml_edit::value(webfetch);
+            }
+        }
+    }
+
     tokio::fs::write(&config_path, doc.to_string())
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -3886,6 +4245,94 @@ async fn update_apply(
             })))
         }
     }
+}
+
+// -- Raw config endpoints --
+
+#[derive(Serialize)]
+struct RawConfigResponse {
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct RawConfigUpdateRequest {
+    content: String,
+}
+
+#[derive(Serialize)]
+struct RawConfigUpdateResponse {
+    success: bool,
+    message: String,
+}
+
+async fn get_raw_config(
+    State(state): State<Arc<ApiState>>,
+) -> Result<Json<RawConfigResponse>, StatusCode> {
+    let config_path = state.config_path.read().await.clone();
+    if config_path.as_os_str().is_empty() {
+        tracing::error!("config_path not set in ApiState");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let content = if config_path.exists() {
+        tokio::fs::read_to_string(&config_path)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to read config.toml");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+    } else {
+        String::new()
+    };
+
+    Ok(Json(RawConfigResponse { content }))
+}
+
+async fn update_raw_config(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<RawConfigUpdateRequest>,
+) -> Result<Json<RawConfigUpdateResponse>, StatusCode> {
+    let config_path = state.config_path.read().await.clone();
+    if config_path.as_os_str().is_empty() {
+        tracing::error!("config_path not set in ApiState");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // Validate TOML syntax and config structure
+    if let Err(error) = crate::config::Config::validate_toml(&request.content) {
+        return Ok(Json(RawConfigUpdateResponse {
+            success: false,
+            message: format!("Validation error: {error}"),
+        }));
+    }
+
+    // Write to disk
+    tokio::fs::write(&config_path, &request.content)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to write config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::info!("config.toml updated via raw editor");
+
+    // Reload RuntimeConfig for all agents
+    match crate::config::Config::load_from_path(&config_path) {
+        Ok(new_config) => {
+            let runtime_configs = state.runtime_configs.load();
+            for (agent_id, rc) in runtime_configs.iter() {
+                rc.reload_config(&new_config, agent_id);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "config.toml written but failed to reload immediately");
+        }
+    }
+
+    Ok(Json(RawConfigUpdateResponse {
+        success: true,
+        message: "Config saved and reloaded.".to_string(),
+    }))
 }
 
 // -- Static file serving --

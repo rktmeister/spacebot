@@ -1,4 +1,4 @@
-const API_BASE = "/api";
+const API_BASE = ((window as any).__SPACEBOT_BASE_PATH || "") + "/api";
 
 export interface StatusResponse {
 	status: string;
@@ -226,6 +226,20 @@ export interface AgentOverviewResponse {
 	latest_bulletin: string | null;
 }
 
+export interface AgentProfile {
+	agent_id: string;
+	display_name: string | null;
+	status: string | null;
+	bio: string | null;
+	avatar_seed: string | null;
+	generated_at: string;
+	updated_at: string;
+}
+
+export interface AgentProfileResponse {
+	profile: AgentProfile | null;
+}
+
 export interface AgentSummary {
 	id: string;
 	channel_count: number;
@@ -234,6 +248,7 @@ export interface AgentSummary {
 	activity_sparkline: number[];
 	last_activity_at: string | null;
 	last_bulletin_at: string | null;
+	profile: AgentProfile | null;
 }
 
 export interface InstanceOverviewResponse {
@@ -738,6 +753,26 @@ export interface CreateBindingResponse {
 	message: string;
 }
 
+export interface UpdateBindingRequest {
+	original_agent_id: string;
+	original_channel: string;
+	original_guild_id?: string;
+	original_workspace_id?: string;
+	original_chat_id?: string;
+	agent_id: string;
+	channel: string;
+	guild_id?: string;
+	workspace_id?: string;
+	chat_id?: string;
+	channel_ids?: string[];
+	dm_allowed_users?: string[];
+}
+
+export interface UpdateBindingResponse {
+	success: boolean;
+	message: string;
+}
+
 export interface DeleteBindingRequest {
 	agent_id: string;
 	channel: string;
@@ -753,12 +788,37 @@ export interface DeleteBindingResponse {
 
 // -- Global Settings Types --
 
+export interface OpenCodePermissions {
+	edit: string;
+	bash: string;
+	webfetch: string;
+}
+
+export interface OpenCodeSettings {
+	enabled: boolean;
+	path: string;
+	max_servers: number;
+	server_startup_timeout_secs: number;
+	max_restart_retries: number;
+	permissions: OpenCodePermissions;
+}
+
+export interface OpenCodeSettingsUpdate {
+	enabled?: boolean;
+	path?: string;
+	max_servers?: number;
+	server_startup_timeout_secs?: number;
+	max_restart_retries?: number;
+	permissions?: Partial<OpenCodePermissions>;
+}
+
 export interface GlobalSettingsResponse {
 	brave_search_key: string | null;
 	api_enabled: boolean;
 	api_port: number;
 	api_bind: string;
 	worker_log_mode: string;
+	opencode: OpenCodeSettings;
 }
 
 export interface GlobalSettingsUpdate {
@@ -767,12 +827,22 @@ export interface GlobalSettingsUpdate {
 	api_port?: number;
 	api_bind?: string;
 	worker_log_mode?: string;
+	opencode?: OpenCodeSettingsUpdate;
 }
 
 export interface GlobalSettingsUpdateResponse {
 	success: boolean;
 	message: string;
 	requires_restart: boolean;
+}
+
+export interface RawConfigResponse {
+	content: string;
+}
+
+export interface RawConfigUpdateResponse {
+	success: boolean;
+	message: string;
 }
 
 export const api = {
@@ -839,6 +909,8 @@ export const api = {
 				channel_id: channelId ?? null,
 			}),
 		}),
+	agentProfile: (agentId: string) =>
+		fetchJson<AgentProfileResponse>(`/agents/profile?agent_id=${encodeURIComponent(agentId)}`),
 	agentIdentity: (agentId: string) =>
 		fetchJson<IdentityFiles>(`/agents/identity?agent_id=${encodeURIComponent(agentId)}`),
 	updateIdentity: async (request: IdentityUpdateRequest) => {
@@ -1023,6 +1095,18 @@ export const api = {
 		return response.json() as Promise<CreateBindingResponse>;
 	},
 
+	updateBinding: async (request: UpdateBindingRequest) => {
+		const response = await fetch(`${API_BASE}/bindings`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(request),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<UpdateBindingResponse>;
+	},
+
 	deleteBinding: async (request: DeleteBindingRequest) => {
 		const response = await fetch(`${API_BASE}/bindings`, {
 			method: "DELETE",
@@ -1048,6 +1132,20 @@ export const api = {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<GlobalSettingsUpdateResponse>;
+	},
+
+	// Raw config API
+	rawConfig: () => fetchJson<RawConfigResponse>("/config/raw"),
+	updateRawConfig: async (content: string) => {
+		const response = await fetch(`${API_BASE}/config/raw`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<RawConfigUpdateResponse>;
 	},
 
 	// Update API
