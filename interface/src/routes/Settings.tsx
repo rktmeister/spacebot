@@ -1,12 +1,14 @@
-import {useState, useEffect} from "react";
+import {useState, useEffect, useRef} from "react";
 import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
-import {api, type PlatformStatus, type GlobalSettingsResponse} from "@/api/client";
+import {api, type PlatformStatus, type GlobalSettingsResponse, type BindingInfo} from "@/api/client";
 import {Button, Input, SettingSidebarButton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, Select, SelectTrigger, SelectValue, SelectContent, SelectItem} from "@/ui";
 import {useSearch, useNavigate} from "@tanstack/react-router";
 import {PlatformIcon} from "@/lib/platformIcons";
 import {ProviderIcon} from "@/lib/providerIcons";
+import {TagInput} from "@/components/TagInput";
+import {parse as parseToml} from "smol-toml";
 
-type SectionId = "providers" | "channels" | "api-keys" | "server" | "worker-logs";
+type SectionId = "providers" | "channels" | "api-keys" | "server" | "worker-logs" | "config-file";
 
 const SECTIONS = [
 	{
@@ -38,6 +40,12 @@ const SECTIONS = [
 		label: "Worker Logs",
 		group: "system" as const,
 		description: "Worker execution logging",
+	},
+	{
+		id: "config-file" as const,
+		label: "Config File",
+		group: "system" as const,
+		description: "Raw config.toml editor",
 	},
 ] satisfies {
 	id: SectionId;
@@ -314,6 +322,8 @@ export function Settings() {
 						<ServerSection settings={globalSettings} isLoading={globalSettingsLoading} />
 					) : activeSection === "worker-logs" ? (
 						<WorkerLogsSection settings={globalSettings} isLoading={globalSettingsLoading} />
+					) : activeSection === "config-file" ? (
+						<ConfigFileSection />
 					) : null}
 				</div>
 			</div>
@@ -371,14 +381,15 @@ function ChannelsSection() {
 	const [editingPlatform, setEditingPlatform] = useState<"discord" | "slack" | "telegram" | "webhook" | null>(null);
 	const [platformInputs, setPlatformInputs] = useState<Record<string, string>>({});
 	const [addingBinding, setAddingBinding] = useState(false);
+	const [editingBinding, setEditingBinding] = useState<BindingInfo | null>(null);
 	const [bindingForm, setBindingForm] = useState({
 		agent_id: "main",
 		channel: "discord" as "discord" | "slack" | "telegram" | "webhook",
 		guild_id: "",
 		workspace_id: "",
 		chat_id: "",
-		channel_ids: "",
-		dm_allowed_users: "",
+		channel_ids: [] as string[],
+		dm_allowed_users: [] as string[],
 	});
 	const [message, setMessage] = useState<{
 		text: string;
@@ -432,8 +443,33 @@ function ChannelsSection() {
 					guild_id: "",
 					workspace_id: "",
 					chat_id: "",
-					channel_ids: "",
-					dm_allowed_users: "",
+					channel_ids: [],
+					dm_allowed_users: [],
+				});
+				setMessage({text: result.message, type: "success"});
+				queryClient.invalidateQueries({queryKey: ["bindings"]});
+			} else {
+				setMessage({text: result.message, type: "error"});
+			}
+		},
+		onError: (error) => {
+			setMessage({text: `Failed: ${error.message}`, type: "error"});
+		},
+	});
+
+	const updateBindingMutation = useMutation({
+		mutationFn: api.updateBinding,
+		onSuccess: (result) => {
+			if (result.success) {
+				setEditingBinding(null);
+				setBindingForm({
+					agent_id: "main",
+					channel: "discord",
+					guild_id: "",
+					workspace_id: "",
+					chat_id: "",
+					channel_ids: [],
+					dm_allowed_users: [],
 				});
 				setMessage({text: result.message, type: "success"});
 				queryClient.invalidateQueries({queryKey: ["bindings"]});
@@ -515,17 +551,60 @@ function ChannelsSection() {
 			request.chat_id = bindingForm.chat_id.trim();
 		}
 
-		// Parse channel_ids (comma-separated)
-		if (bindingForm.channel_ids.trim()) {
-			request.channel_ids = bindingForm.channel_ids.split(",").map(id => id.trim()).filter(Boolean);
+		// Add arrays
+		if (bindingForm.channel_ids.length > 0) {
+			request.channel_ids = bindingForm.channel_ids;
 		}
 
-		// Parse dm_allowed_users (comma-separated)
-		if (bindingForm.dm_allowed_users.trim()) {
-			request.dm_allowed_users = bindingForm.dm_allowed_users.split(",").map(id => id.trim()).filter(Boolean);
+		if (bindingForm.dm_allowed_users.length > 0) {
+			request.dm_allowed_users = bindingForm.dm_allowed_users;
 		}
 
 		addBindingMutation.mutate(request);
+	};
+
+	const handleEditBinding = (binding: BindingInfo) => {
+		setEditingBinding(binding);
+		setBindingForm({
+			agent_id: binding.agent_id,
+			channel: binding.channel as any,
+			guild_id: binding.guild_id || "",
+			workspace_id: binding.workspace_id || "",
+			chat_id: binding.chat_id || "",
+			channel_ids: binding.channel_ids,
+			dm_allowed_users: binding.dm_allowed_users,
+		});
+	};
+
+	const handleUpdateBinding = () => {
+		if (!editingBinding) return;
+
+		const request: any = {
+			original_agent_id: editingBinding.agent_id,
+			original_channel: editingBinding.channel,
+			original_guild_id: editingBinding.guild_id || undefined,
+			original_workspace_id: editingBinding.workspace_id || undefined,
+			original_chat_id: editingBinding.chat_id || undefined,
+			agent_id: bindingForm.agent_id,
+			channel: bindingForm.channel,
+		};
+
+		// Add platform-specific filters
+		if (bindingForm.channel === "discord" && bindingForm.guild_id.trim()) {
+			request.guild_id = bindingForm.guild_id.trim();
+		}
+		if (bindingForm.channel === "slack" && bindingForm.workspace_id.trim()) {
+			request.workspace_id = bindingForm.workspace_id.trim();
+		}
+		if (bindingForm.channel === "telegram" && bindingForm.chat_id.trim()) {
+			request.chat_id = bindingForm.chat_id.trim();
+		}
+
+		// Add arrays (empty arrays are valid - they clear the field)
+		request.channel_ids = bindingForm.channel_ids;
+		request.dm_allowed_users = bindingForm.dm_allowed_users;
+
+		updateBindingMutation.mutate(request);
 	};
 
 	const handleDeleteBinding = (binding: any) => {
@@ -661,14 +740,15 @@ function ChannelsSection() {
 								variant="outline"
 								onClick={() => {
 									setAddingBinding(true);
+									setEditingBinding(null);
 									setBindingForm({
 										agent_id: agentsData?.agents?.[0]?.id ?? "main",
 										channel: "discord",
 										guild_id: "",
 										workspace_id: "",
 										chat_id: "",
-										channel_ids: "",
-										dm_allowed_users: "",
+										channel_ids: [],
+										dm_allowed_users: [],
 									});
 									setMessage(null);
 								}}
@@ -713,14 +793,23 @@ function ChannelsSection() {
 												)}
 											</div>
 										</div>
-										<Button 
-											size="sm" 
-											variant="ghost"
-											onClick={() => handleDeleteBinding(binding)}
-											loading={deleteBindingMutation.isPending}
-										>
-											Remove
-										</Button>
+										<div className="flex items-center gap-2">
+											<Button 
+												size="sm" 
+												variant="ghost"
+												onClick={() => handleEditBinding(binding)}
+											>
+												Edit
+											</Button>
+											<Button 
+												size="sm" 
+												variant="ghost"
+												onClick={() => handleDeleteBinding(binding)}
+												loading={deleteBindingMutation.isPending}
+											>
+												Remove
+											</Button>
+										</div>
 									</div>
 								))}
 							</div>
@@ -884,16 +973,17 @@ function ChannelsSection() {
 				</DialogContent>
 			</Dialog>
 
-			{/* Add Binding Modal */}
-			<Dialog open={addingBinding} onOpenChange={(open) => { 
+			{/* Add/Edit Binding Modal */}
+			<Dialog open={addingBinding || editingBinding !== null} onOpenChange={(open) => { 
 				if (!open) {
 					setAddingBinding(false);
+					setEditingBinding(null);
 					setMessage(null);
 				}
 			}}>
 				<DialogContent className="max-w-md">
 					<DialogHeader>
-						<DialogTitle>Add Binding</DialogTitle>
+						<DialogTitle>{editingBinding ? "Edit Binding" : "Add Binding"}</DialogTitle>
 						<DialogDescription>
 							Route messages from a specific platform location to an agent.
 						</DialogDescription>
@@ -988,10 +1078,10 @@ function ChannelsSection() {
 						{(bindingForm.channel === "discord" || bindingForm.channel === "slack") && (
 							<div>
 								<label className="mb-1.5 block text-sm font-medium text-ink">Channel IDs</label>
-								<Input
+								<TagInput
 									value={bindingForm.channel_ids}
-									onChange={(e) => setBindingForm({...bindingForm, channel_ids: e.target.value})}
-									placeholder="123,456,789 (optional, comma-separated)"
+									onChange={(ids) => setBindingForm({...bindingForm, channel_ids: ids})}
+									placeholder="Add channel ID..."
 								/>
 								<p className="mt-1 text-tiny text-ink-faint">
 									Leave empty to match all channels
@@ -1002,10 +1092,10 @@ function ChannelsSection() {
 						{/* DM Allowed Users */}
 						<div>
 							<label className="mb-1.5 block text-sm font-medium text-ink">DM Allowed Users</label>
-							<Input
+							<TagInput
 								value={bindingForm.dm_allowed_users}
-								onChange={(e) => setBindingForm({...bindingForm, dm_allowed_users: e.target.value})}
-								placeholder="user1,user2 (optional, comma-separated)"
+								onChange={(users) => setBindingForm({...bindingForm, dm_allowed_users: users})}
+								placeholder="Add user ID..."
 							/>
 							<p className="mt-1 text-tiny text-ink-faint">
 								User IDs allowed to send DMs
@@ -1029,6 +1119,7 @@ function ChannelsSection() {
 						<Button 
 							onClick={() => {
 								setAddingBinding(false);
+								setEditingBinding(null);
 								setMessage(null);
 							}} 
 							variant="ghost" 
@@ -1037,11 +1128,11 @@ function ChannelsSection() {
 							Cancel
 						</Button>
 						<Button
-							onClick={handleAddBinding}
-							loading={addBindingMutation.isPending}
+							onClick={editingBinding ? handleUpdateBinding : handleAddBinding}
+							loading={editingBinding ? updateBindingMutation.isPending : addBindingMutation.isPending}
 							size="sm"
 						>
-							Add Binding
+							{editingBinding ? "Update Binding" : "Add Binding"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -1484,6 +1575,215 @@ function WorkerLogsSection({settings, isLoading}: GlobalSettingsSectionProps) {
 					{message.text}
 				</div>
 			)}
+		</div>
+	);
+}
+
+function ConfigFileSection() {
+	const queryClient = useQueryClient();
+	const editorRef = useRef<HTMLDivElement>(null);
+	const viewRef = useRef<import("@codemirror/view").EditorView | null>(null);
+	const [originalContent, setOriginalContent] = useState("");
+	const [currentContent, setCurrentContent] = useState("");
+	const [validationError, setValidationError] = useState<string | null>(null);
+	const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+	const [editorLoaded, setEditorLoaded] = useState(false);
+
+	const {data, isLoading} = useQuery({
+		queryKey: ["raw-config"],
+		queryFn: api.rawConfig,
+		staleTime: 5_000,
+	});
+
+	const updateMutation = useMutation({
+		mutationFn: (content: string) => api.updateRawConfig(content),
+		onSuccess: (result) => {
+			if (result.success) {
+				setOriginalContent(currentContent);
+				setMessage({text: result.message, type: "success"});
+				setValidationError(null);
+				// Invalidate all config-related queries so other tabs pick up changes
+				queryClient.invalidateQueries({queryKey: ["providers"]});
+				queryClient.invalidateQueries({queryKey: ["global-settings"]});
+				queryClient.invalidateQueries({queryKey: ["agents"]});
+				queryClient.invalidateQueries({queryKey: ["overview"]});
+			} else {
+				setMessage({text: result.message, type: "error"});
+			}
+		},
+		onError: (error) => {
+			setMessage({text: `Failed: ${error.message}`, type: "error"});
+		},
+	});
+
+	const isDirty = currentContent !== originalContent;
+
+	// Initialize CodeMirror when data loads
+	useEffect(() => {
+		if (!data?.content || !editorRef.current || editorLoaded) return;
+
+		const content = data.content;
+		setOriginalContent(content);
+		setCurrentContent(content);
+
+		// Lazy-load CodeMirror to avoid SSR issues and keep initial bundle small
+		Promise.all([
+			import("@codemirror/view"),
+			import("@codemirror/state"),
+			import("codemirror"),
+			import("@codemirror/theme-one-dark"),
+			import("@codemirror/language"),
+			import("@codemirror/legacy-modes/mode/toml"),
+		]).then(([viewMod, stateMod, cm, themeMod, langMod, tomlMode]) => {
+			if (!editorRef.current) return;
+
+			const tomlLang = langMod.StreamLanguage.define(tomlMode.toml);
+
+			const updateListener = viewMod.EditorView.updateListener.of((update) => {
+				if (update.docChanged) {
+					const newContent = update.state.doc.toString();
+					setCurrentContent(newContent);
+					try {
+						parseToml(newContent);
+						setValidationError(null);
+					} catch (error: any) {
+						setValidationError(error.message || "Invalid TOML");
+					}
+				}
+			});
+
+			const theme = viewMod.EditorView.theme({
+				"&": {
+					height: "100%",
+					fontSize: "13px",
+				},
+				".cm-scroller": {
+					fontFamily: "'IBM Plex Mono', monospace",
+					overflow: "auto",
+				},
+				".cm-gutters": {
+					backgroundColor: "transparent",
+					borderRight: "1px solid hsl(var(--color-app-line) / 0.3)",
+				},
+				".cm-activeLineGutter": {
+					backgroundColor: "transparent",
+				},
+			});
+
+			const state = stateMod.EditorState.create({
+				doc: content,
+				extensions: [
+					cm.basicSetup,
+					tomlLang,
+					themeMod.oneDark,
+					theme,
+					updateListener,
+					viewMod.keymap.of([{
+						key: "Mod-s",
+						run: () => {
+							// Trigger save via DOM event since we can't access React state here
+							editorRef.current?.dispatchEvent(new CustomEvent("cm-save"));
+							return true;
+						},
+					}]),
+				],
+			});
+
+			const view = new viewMod.EditorView({
+				state,
+				parent: editorRef.current,
+			});
+
+			viewRef.current = view;
+			setEditorLoaded(true);
+		});
+
+		return () => {
+			viewRef.current?.destroy();
+			viewRef.current = null;
+		};
+	}, [data?.content]);
+
+	// Handle Cmd+S from CodeMirror
+	useEffect(() => {
+		const element = editorRef.current;
+		if (!element) return;
+
+		const handler = () => {
+			if (isDirty && !validationError) {
+				updateMutation.mutate(currentContent);
+			}
+		};
+
+		element.addEventListener("cm-save", handler);
+		return () => element.removeEventListener("cm-save", handler);
+	}, [isDirty, validationError, currentContent]);
+
+	const handleSave = () => {
+		if (!isDirty || validationError) return;
+		setMessage(null);
+		updateMutation.mutate(currentContent);
+	};
+
+	const handleRevert = () => {
+		if (!viewRef.current) return;
+		const view = viewRef.current;
+		view.dispatch({
+			changes: {from: 0, to: view.state.doc.length, insert: originalContent},
+		});
+		setCurrentContent(originalContent);
+		setValidationError(null);
+		setMessage(null);
+	};
+
+	return (
+		<div className="flex h-full flex-col">
+			{/* Description + actions */}
+			<div className="flex items-center justify-between px-6 py-4 border-b border-app-line/30">
+				<p className="text-sm text-ink-dull">
+					Edit the raw configuration file. Changes are validated as TOML before saving.
+				</p>
+				<div className="flex items-center gap-2 flex-shrink-0 ml-4">
+					{isDirty && (
+						<Button onClick={handleRevert} variant="ghost" size="sm">
+							Revert
+						</Button>
+					)}
+					<Button
+						onClick={handleSave}
+						disabled={!isDirty || !!validationError}
+						loading={updateMutation.isPending}
+						size="sm"
+					>
+						Save
+					</Button>
+				</div>
+			</div>
+
+			{/* Validation / status bar */}
+			{(validationError || message) && (
+				<div className={`border-b px-6 py-2 text-sm ${
+					validationError
+						? "border-red-500/20 bg-red-500/5 text-red-400"
+						: message?.type === "success"
+							? "border-green-500/20 bg-green-500/5 text-green-400"
+							: "border-red-500/20 bg-red-500/5 text-red-400"
+				}`}>
+					{validationError ? `Syntax error: ${validationError}` : message?.text}
+				</div>
+			)}
+
+			{/* Editor */}
+			<div className="flex-1 overflow-hidden">
+				{isLoading ? (
+					<div className="flex items-center gap-2 p-6 text-ink-dull">
+						<div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+						Loading config...
+					</div>
+				) : (
+					<div ref={editorRef} className="h-full" />
+				)}
+			</div>
 		</div>
 	);
 }

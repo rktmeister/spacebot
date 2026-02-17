@@ -463,8 +463,9 @@ pub async fn start_http_server(
         .route("/models", get(get_models))
         .route("/models/refresh", post(refresh_models))
         .route("/messaging/status", get(messaging_status))
-        .route("/bindings", get(list_bindings).post(create_binding).delete(delete_binding))
+        .route("/bindings", get(list_bindings).post(create_binding).put(update_binding).delete(delete_binding))
         .route("/settings", get(get_global_settings).put(update_global_settings))
+        .route("/config/raw", get(get_raw_config).put(update_raw_config))
         .route("/update/check", get(update_check).post(update_check_now))
         .route("/update/apply", post(update_apply));
 
@@ -3558,6 +3559,203 @@ struct DeleteBindingResponse {
     message: String,
 }
 
+/// Update an existing binding.
+#[derive(Deserialize)]
+struct UpdateBindingRequest {
+    // Original identifier (to find the binding)
+    original_agent_id: String,
+    original_channel: String,
+    #[serde(default)]
+    original_guild_id: Option<String>,
+    #[serde(default)]
+    original_workspace_id: Option<String>,
+    #[serde(default)]
+    original_chat_id: Option<String>,
+    
+    // New values
+    agent_id: String,
+    channel: String,
+    #[serde(default)]
+    guild_id: Option<String>,
+    #[serde(default)]
+    workspace_id: Option<String>,
+    #[serde(default)]
+    chat_id: Option<String>,
+    #[serde(default)]
+    channel_ids: Vec<String>,
+    #[serde(default)]
+    dm_allowed_users: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct UpdateBindingResponse {
+    success: bool,
+    message: String,
+}
+
+async fn update_binding(
+    State(state): State<Arc<ApiState>>,
+    axum::Json(request): axum::Json<UpdateBindingRequest>,
+) -> Result<Json<UpdateBindingResponse>, StatusCode> {
+    let config_path = state.config_path.read().await.clone();
+    if !config_path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let content = tokio::fs::read_to_string(&config_path).await.map_err(|error| {
+        tracing::warn!(%error, "failed to read config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
+        tracing::warn!(%error, "failed to parse config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let bindings_array = doc
+        .get_mut("bindings")
+        .and_then(|b| b.as_array_of_tables_mut())
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Find the matching binding by original identifiers
+    let mut match_idx: Option<usize> = None;
+    for (i, table) in bindings_array.iter().enumerate() {
+        let matches_agent = table
+            .get("agent_id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v == request.original_agent_id);
+        let matches_channel = table
+            .get("channel")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v == request.original_channel);
+        let matches_guild = match &request.original_guild_id {
+            Some(gid) => table
+                .get("guild_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == gid),
+            None => table.get("guild_id").is_none(),
+        };
+        let matches_workspace = match &request.original_workspace_id {
+            Some(wid) => table
+                .get("workspace_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == wid),
+            None => table.get("workspace_id").is_none(),
+        };
+        let matches_chat = match &request.original_chat_id {
+            Some(cid) => table
+                .get("chat_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == cid),
+            None => table.get("chat_id").is_none(),
+        };
+        if matches_agent && matches_channel && matches_guild && matches_workspace && matches_chat {
+            match_idx = Some(i);
+            break;
+        }
+    }
+
+    let Some(idx) = match_idx else {
+        return Ok(Json(UpdateBindingResponse {
+            success: false,
+            message: "No matching binding found.".to_string(),
+        }));
+    };
+
+    // Update the binding in place
+    let binding = bindings_array.get_mut(idx).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    binding["agent_id"] = toml_edit::value(&request.agent_id);
+    binding["channel"] = toml_edit::value(&request.channel);
+    
+    // Clear and set optional fields
+    binding.remove("guild_id");
+    binding.remove("workspace_id");
+    binding.remove("chat_id");
+    
+    if let Some(ref guild_id) = request.guild_id {
+        if !guild_id.is_empty() {
+            binding["guild_id"] = toml_edit::value(guild_id);
+        }
+    }
+    if let Some(ref workspace_id) = request.workspace_id {
+        if !workspace_id.is_empty() {
+            binding["workspace_id"] = toml_edit::value(workspace_id);
+        }
+    }
+    if let Some(ref chat_id) = request.chat_id {
+        if !chat_id.is_empty() {
+            binding["chat_id"] = toml_edit::value(chat_id);
+        }
+    }
+    
+    // Update arrays
+    if !request.channel_ids.is_empty() {
+        let mut arr = toml_edit::Array::new();
+        for id in &request.channel_ids {
+            arr.push(id.as_str());
+        }
+        binding["channel_ids"] = toml_edit::value(arr);
+    } else {
+        binding.remove("channel_ids");
+    }
+    
+    if !request.dm_allowed_users.is_empty() {
+        let mut arr = toml_edit::Array::new();
+        for id in &request.dm_allowed_users {
+            arr.push(id.as_str());
+        }
+        binding["dm_allowed_users"] = toml_edit::value(arr);
+    } else {
+        binding.remove("dm_allowed_users");
+    }
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to write config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::info!(
+        agent_id = %request.agent_id,
+        channel = %request.channel,
+        "binding updated via API"
+    );
+
+    // Hot-reload bindings and permissions
+    if let Ok(new_config) = crate::config::Config::load_from_path(&config_path) {
+        let bindings_guard = state.bindings.read().await;
+        if let Some(bindings_swap) = bindings_guard.as_ref() {
+            bindings_swap.store(std::sync::Arc::new(new_config.bindings.clone()));
+        }
+        drop(bindings_guard);
+
+        if let Some(discord_config) = &new_config.messaging.discord {
+            let new_perms =
+                crate::config::DiscordPermissions::from_config(discord_config, &new_config.bindings);
+            let perms = state.discord_permissions.read().await;
+            if let Some(arc_swap) = perms.as_ref() {
+                arc_swap.store(std::sync::Arc::new(new_perms));
+            }
+        }
+
+        if let Some(slack_config) = &new_config.messaging.slack {
+            let new_perms =
+                crate::config::SlackPermissions::from_config(slack_config, &new_config.bindings);
+            let perms = state.slack_permissions.read().await;
+            if let Some(arc_swap) = perms.as_ref() {
+                arc_swap.store(std::sync::Arc::new(new_perms));
+            }
+        }
+    }
+
+    Ok(Json(UpdateBindingResponse {
+        success: true,
+        message: "Binding updated.".to_string(),
+    }))
+}
+
 /// Delete a binding by matching agent_id + channel + platform-specific identifiers.
 async fn delete_binding(
     State(state): State<Arc<ApiState>>,
@@ -3886,6 +4084,94 @@ async fn update_apply(
             })))
         }
     }
+}
+
+// -- Raw config endpoints --
+
+#[derive(Serialize)]
+struct RawConfigResponse {
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct RawConfigUpdateRequest {
+    content: String,
+}
+
+#[derive(Serialize)]
+struct RawConfigUpdateResponse {
+    success: bool,
+    message: String,
+}
+
+async fn get_raw_config(
+    State(state): State<Arc<ApiState>>,
+) -> Result<Json<RawConfigResponse>, StatusCode> {
+    let config_path = state.config_path.read().await.clone();
+    if config_path.as_os_str().is_empty() {
+        tracing::error!("config_path not set in ApiState");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let content = if config_path.exists() {
+        tokio::fs::read_to_string(&config_path)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to read config.toml");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+    } else {
+        String::new()
+    };
+
+    Ok(Json(RawConfigResponse { content }))
+}
+
+async fn update_raw_config(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<RawConfigUpdateRequest>,
+) -> Result<Json<RawConfigUpdateResponse>, StatusCode> {
+    let config_path = state.config_path.read().await.clone();
+    if config_path.as_os_str().is_empty() {
+        tracing::error!("config_path not set in ApiState");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // Validate TOML syntax and config structure
+    if let Err(error) = crate::config::Config::validate_toml(&request.content) {
+        return Ok(Json(RawConfigUpdateResponse {
+            success: false,
+            message: format!("Validation error: {error}"),
+        }));
+    }
+
+    // Write to disk
+    tokio::fs::write(&config_path, &request.content)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to write config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::info!("config.toml updated via raw editor");
+
+    // Reload RuntimeConfig for all agents
+    match crate::config::Config::load_from_path(&config_path) {
+        Ok(new_config) => {
+            let runtime_configs = state.runtime_configs.load();
+            for (agent_id, rc) in runtime_configs.iter() {
+                rc.reload_config(&new_config, agent_id);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "config.toml written but failed to reload immediately");
+        }
+    }
+
+    Ok(Json(RawConfigUpdateResponse {
+        success: true,
+        message: "Config saved and reloaded.".to_string(),
+    }))
 }
 
 // -- Static file serving --

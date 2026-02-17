@@ -9,6 +9,11 @@
 		"preview": "vite preview"
 	},
 	"dependencies": {
+		"@codemirror/language": "^6.12.1",
+		"@codemirror/legacy-modes": "^6.5.2",
+		"@codemirror/state": "^6.5.4",
+		"@codemirror/theme-one-dark": "^6.1.3",
+		"@codemirror/view": "^6.39.14",
 		"@fontsource/ibm-plex-sans": "^5.1.0",
 		"@fortawesome/fontawesome-svg-core": "^7.2.0",
 		"@fortawesome/free-brands-svg-icons": "^7.2.0",
@@ -35,6 +40,7 @@
 		"@tanstack/router-devtools": "^1.159.5",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
+		"codemirror": "^6.0.2",
 		"framer-motion": "^12.34.0",
 		"graphology": "^0.26.0",
 		"graphology-layout-forceatlas2": "^0.10.1",
@@ -46,6 +52,7 @@
 		"recharts": "^3.7.0",
 		"remark-gfm": "^4.0.1",
 		"sigma": "^3.0.2",
+		"smol-toml": "^1.6.0",
 		"sonner": "^2.0.7",
 		"zod": "^4.3.6"
 	},

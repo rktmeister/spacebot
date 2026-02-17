@@ -738,6 +738,26 @@ export interface CreateBindingResponse {
 	message: string;
 }
 
+export interface UpdateBindingRequest {
+	original_agent_id: string;
+	original_channel: string;
+	original_guild_id?: string;
+	original_workspace_id?: string;
+	original_chat_id?: string;
+	agent_id: string;
+	channel: string;
+	guild_id?: string;
+	workspace_id?: string;
+	chat_id?: string;
+	channel_ids?: string[];
+	dm_allowed_users?: string[];
+}
+
+export interface UpdateBindingResponse {
+	success: boolean;
+	message: string;
+}
+
 export interface DeleteBindingRequest {
 	agent_id: string;
 	channel: string;
@@ -773,6 +793,15 @@ export interface GlobalSettingsUpdateResponse {
 	success: boolean;
 	message: string;
 	requires_restart: boolean;
+}
+
+export interface RawConfigResponse {
+	content: string;
+}
+
+export interface RawConfigUpdateResponse {
+	success: boolean;
+	message: string;
 }
 
 export const api = {
@@ -1023,6 +1052,18 @@ export const api = {
 		return response.json() as Promise<CreateBindingResponse>;
 	},
 
+	updateBinding: async (request: UpdateBindingRequest) => {
+		const response = await fetch(`${API_BASE}/bindings`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(request),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<UpdateBindingResponse>;
+	},
+
 	deleteBinding: async (request: DeleteBindingRequest) => {
 		const response = await fetch(`${API_BASE}/bindings`, {
 			method: "DELETE",
@@ -1048,6 +1089,20 @@ export const api = {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<GlobalSettingsUpdateResponse>;
+	},
+
+	// Raw config API
+	rawConfig: () => fetchJson<RawConfigResponse>("/config/raw"),
+	updateRawConfig: async (content: string) => {
+		const response = await fetch(`${API_BASE}/config/raw`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<RawConfigUpdateResponse>;
 	},
 
 	// Update API
