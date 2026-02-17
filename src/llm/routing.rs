@@ -253,6 +253,20 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 rate_limit_cooldown_secs: 60,
             }
         }
+        "ollama" => {
+            let channel: String = "ollama/gemma3".into();
+            let worker: String = "ollama/gemma3".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::new(),
+                rate_limit_cooldown_secs: 60,
+            }
+        }
         "opencode-zen" => {
             let channel: String = "opencode-zen/kimi-k2.5".into();
             let worker: String = "opencode-zen/kimi-k2.5".into();
@@ -285,6 +299,7 @@ pub fn provider_to_prefix(provider: &str) -> &str {
         "deepseek" => "deepseek/",
         "xai" => "xai/",
         "mistral" => "mistral/",
+        "ollama" => "ollama/",
         "opencode-zen" => "opencode-zen/",
         _ => "",
     }

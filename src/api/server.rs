@@ -2035,6 +2035,7 @@ struct ProviderStatus {
     deepseek: bool,
     xai: bool,
     mistral: bool,
+    ollama: bool,
     opencode_zen: bool,
 }
 
@@ -2061,8 +2062,21 @@ async fn get_providers(
 ) -> Result<Json<ProvidersResponse>, StatusCode> {
     let config_path = state.config_path.read().await.clone();
 
-    // Check which providers have keys by reading the config
-    let (anthropic, openai, openrouter, zhipu, groq, together, fireworks, deepseek, xai, mistral, opencode_zen) = if config_path.exists() {
+    // Check which providers have config by reading the config
+    let (
+        anthropic,
+        openai,
+        openrouter,
+        zhipu,
+        groq,
+        together,
+        fireworks,
+        deepseek,
+        xai,
+        mistral,
+        ollama,
+        opencode_zen,
+    ) = if config_path.exists() {
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2098,6 +2112,8 @@ async fn get_providers(
             has_key("deepseek_key", "DEEPSEEK_API_KEY"),
             has_key("xai_key", "XAI_API_KEY"),
             has_key("mistral_key", "MISTRAL_API_KEY"),
+            has_key("ollama_base_url", "OLLAMA_BASE_URL")
+                || has_key("ollama_key", "OLLAMA_API_KEY"),
             has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
         )
     } else {
@@ -2113,6 +2129,7 @@ async fn get_providers(
             std::env::var("DEEPSEEK_API_KEY").is_ok(),
             std::env::var("XAI_API_KEY").is_ok(),
             std::env::var("MISTRAL_API_KEY").is_ok(),
+            std::env::var("OLLAMA_BASE_URL").is_ok() || std::env::var("OLLAMA_API_KEY").is_ok(),
             std::env::var("OPENCODE_ZEN_API_KEY").is_ok(),
         )
     };
@@ -2128,6 +2145,7 @@ async fn get_providers(
         deepseek,
         xai,
         mistral,
+        ollama,
         opencode_zen,
     };
     let has_any = providers.anthropic 
@@ -2140,6 +2158,7 @@ async fn get_providers(
         || providers.deepseek
         || providers.xai
         || providers.mistral
+        || providers.ollama
         || providers.opencode_zen;
 
     Ok(Json(ProvidersResponse { providers, has_any }))
@@ -2149,6 +2168,8 @@ async fn update_provider(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<ProviderUpdateRequest>,
 ) -> Result<Json<ProviderUpdateResponse>, StatusCode> {
+    let provider_value = request.api_key.trim();
+
     let key_name = match request.provider.as_str() {
         "anthropic" => "anthropic_key",
         "openai" => "openai_key",
@@ -2160,6 +2181,7 @@ async fn update_provider(
         "deepseek" => "deepseek_key",
         "xai" => "xai_key",
         "mistral" => "mistral_key",
+        "ollama" => "ollama_base_url",
         "opencode-zen" => "opencode_zen_key",
         _ => {
             return Ok(Json(ProviderUpdateResponse {
@@ -2169,10 +2191,14 @@ async fn update_provider(
         }
     };
 
-    if request.api_key.trim().is_empty() {
+    if provider_value.is_empty() {
         return Ok(Json(ProviderUpdateResponse {
             success: false,
-            message: "API key cannot be empty".into(),
+            message: if request.provider == "ollama" {
+                "Ollama base URL cannot be empty".into()
+            } else {
+                "API key cannot be empty".into()
+            },
         }));
     }
 
@@ -2197,7 +2223,7 @@ async fn update_provider(
     }
 
     // Set the key
-    doc["llm"][key_name] = toml_edit::value(request.api_key);
+    doc["llm"][key_name] = toml_edit::value(provider_value);
 
     // Auto-set routing defaults if the current routing points to a provider
     // the user doesn't have a key for. This prevents the common case where
@@ -2240,6 +2266,17 @@ async fn update_provider(
                 .and_then(|l| l.get("opencode_zen_key"))
                 .and_then(|v| v.as_str())
                 .is_some_and(|s| !s.is_empty()),
+            "ollama" => {
+                doc.get("llm")
+                    .and_then(|l| l.get("ollama_base_url"))
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty())
+                    || doc
+                        .get("llm")
+                        .and_then(|l| l.get("ollama_key"))
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|s| !s.is_empty())
+            }
             _ => false,
         };
 
@@ -2302,18 +2339,19 @@ async fn delete_provider(
     State(state): State<Arc<ApiState>>,
     axum::extract::Path(provider): axum::extract::Path<String>,
 ) -> Result<Json<ProviderUpdateResponse>, StatusCode> {
-    let key_name = match provider.as_str() {
-        "anthropic" => "anthropic_key",
-        "openai" => "openai_key",
-        "openrouter" => "openrouter_key",
-        "zhipu" => "zhipu_key",
-        "groq" => "groq_key",
-        "together" => "together_key",
-        "fireworks" => "fireworks_key",
-        "deepseek" => "deepseek_key",
-        "xai" => "xai_key",
-        "mistral" => "mistral_key",
-        "opencode-zen" => "opencode_zen_key",
+    let (key_name, secondary_key_name) = match provider.as_str() {
+        "anthropic" => ("anthropic_key", None),
+        "openai" => ("openai_key", None),
+        "openrouter" => ("openrouter_key", None),
+        "zhipu" => ("zhipu_key", None),
+        "groq" => ("groq_key", None),
+        "together" => ("together_key", None),
+        "fireworks" => ("fireworks_key", None),
+        "deepseek" => ("deepseek_key", None),
+        "xai" => ("xai_key", None),
+        "mistral" => ("mistral_key", None),
+        "ollama" => ("ollama_base_url", Some("ollama_key")),
+        "opencode-zen" => ("opencode_zen_key", None),
         _ => {
             return Ok(Json(ProviderUpdateResponse {
                 success: false,
@@ -2342,6 +2380,9 @@ async fn delete_provider(
     if let Some(llm) = doc.get_mut("llm") {
         if let Some(table) = llm.as_table_mut() {
             table.remove(key_name);
+            if let Some(secondary_key_name) = secondary_key_name {
+                table.remove(secondary_key_name);
+            }
         }
     }
 
@@ -2363,7 +2404,7 @@ struct ModelInfo {
     id: String,
     /// Human-readable name
     name: String,
-    /// Provider ID ("anthropic", "openrouter", "openai", "zhipu")
+    /// Provider ID ("anthropic", "openrouter", "openai", "zhipu", "ollama", ...)
     provider: String,
     /// Context window size in tokens, if known
     context_window: Option<u64>,
@@ -2815,10 +2856,14 @@ async fn get_models(
         .filter(|m| configured.contains(&m.provider.as_str()))
         .collect();
 
-    // Add cached dynamic models if fresh
+    // Add cached dynamic models if fresh.
+    // Ollama is resolved live from its /api/tags endpoint.
     let cache = DYNAMIC_MODELS.read().await;
     if !cache.0.is_empty() && cache.1.elapsed() < MODEL_CACHE_TTL {
         for model in &cache.0 {
+            if model.provider == "ollama" {
+                continue;
+            }
             if configured.contains(&model.provider.as_str()) {
                 // Skip if already in curated list
                 if !models.iter().any(|m| m.id == model.id) {
@@ -2828,6 +2873,17 @@ async fn get_models(
         }
     }
     drop(cache);
+
+    // Only suggest currently installed Ollama models.
+    if configured.contains(&"ollama") {
+        if let Ok(ollama_models) = fetch_ollama_models(&config_path).await {
+            for model in ollama_models {
+                if !models.iter().any(|existing| existing.id == model.id) {
+                    models.push(model);
+                }
+            }
+        }
+    }
 
     Ok(Json(ModelsResponse { models }))
 }
@@ -2846,7 +2902,6 @@ async fn refresh_models(
             dynamic.extend(models);
         }
     }
-
     // Cache the results
     let mut cache = DYNAMIC_MODELS.write().await;
     *cache = (dynamic, std::time::Instant::now());
@@ -2860,23 +2915,21 @@ async fn refresh_models(
 async fn configured_providers(config_path: &std::path::Path) -> Vec<&'static str> {
     let mut providers = Vec::new();
 
-    let content = match tokio::fs::read_to_string(config_path).await {
-        Ok(c) => c,
-        Err(_) => return providers,
-    };
-    let doc: toml_edit::DocumentMut = match content.parse() {
-        Ok(d) => d,
-        Err(_) => return providers,
-    };
+    let config_doc = tokio::fs::read_to_string(config_path)
+        .await
+        .ok()
+        .and_then(|content| content.parse::<toml_edit::DocumentMut>().ok());
 
     let has_key = |key: &str, env_var: &str| -> bool {
-        if let Some(llm) = doc.get("llm") {
-            if let Some(val) = llm.get(key) {
-                if let Some(s) = val.as_str() {
-                    if let Some(var_name) = s.strip_prefix("env:") {
-                        return std::env::var(var_name).is_ok();
+        if let Some(doc) = &config_doc {
+            if let Some(llm) = doc.get("llm") {
+                if let Some(val) = llm.get(key) {
+                    if let Some(s) = val.as_str() {
+                        if let Some(var_name) = s.strip_prefix("env:") {
+                            return std::env::var(var_name).is_ok();
+                        }
+                        return !s.is_empty();
                     }
-                    return !s.is_empty();
                 }
             }
         }
@@ -2912,6 +2965,11 @@ async fn configured_providers(config_path: &std::path::Path) -> Vec<&'static str
     }
     if has_key("mistral_key", "MISTRAL_API_KEY") {
         providers.push("mistral");
+    }
+    if has_key("ollama_base_url", "OLLAMA_BASE_URL")
+        || has_key("ollama_key", "OLLAMA_API_KEY")
+    {
+        providers.push("ollama");
     }
     if has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY") {
         providers.push("opencode-zen");
@@ -2975,6 +3033,96 @@ async fn fetch_openrouter_models(
             provider: "openrouter".into(),
             context_window: m.context_length,
             curated: false,
+        })
+        .collect())
+}
+
+fn normalize_ollama_base_url(configured: Option<String>) -> String {
+    let mut base_url = configured
+        .unwrap_or_else(|| "http://localhost:11434".to_string())
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+
+    if base_url.ends_with("/api") {
+        base_url.truncate(base_url.len() - "/api".len());
+    } else if base_url.ends_with("/v1") {
+        base_url.truncate(base_url.len() - "/v1".len());
+    }
+
+    base_url
+}
+
+/// Fetch available models from Ollama's local API.
+async fn fetch_ollama_models(
+    config_path: &std::path::Path,
+) -> anyhow::Result<Vec<ModelInfo>> {
+    let (configured_base_url, configured_api_key) = match tokio::fs::read_to_string(config_path).await {
+        Ok(content) => match content.parse::<toml_edit::DocumentMut>() {
+            Ok(doc) => {
+                let resolve_value = |key: &str| -> Option<String> {
+                    doc.get("llm")
+                        .and_then(|table| table.get(key))
+                        .and_then(|value| value.as_str())
+                        .and_then(|raw| {
+                            if let Some(env_var) = raw.strip_prefix("env:") {
+                                std::env::var(env_var).ok()
+                            } else {
+                                Some(raw.to_string())
+                            }
+                        })
+                };
+                (resolve_value("ollama_base_url"), resolve_value("ollama_key"))
+            }
+            Err(_) => (None, None),
+        },
+        Err(_) => (None, None),
+    };
+
+    let base_url = normalize_ollama_base_url(
+        configured_base_url.or_else(|| std::env::var("OLLAMA_BASE_URL").ok()),
+    );
+    let endpoint = format!("{base_url}/api/tags");
+    let api_key = configured_api_key.or_else(|| std::env::var("OLLAMA_API_KEY").ok());
+
+    let client = reqwest::Client::new();
+    let request = client
+        .get(endpoint)
+        .timeout(std::time::Duration::from_secs(10));
+    let request = if let Some(api_key) = api_key {
+        request.header("Authorization", format!("Bearer {api_key}"))
+    } else {
+        request
+    };
+    let response = request.send().await?.error_for_status()?;
+
+    #[derive(Deserialize)]
+    struct OllamaTagsResponse {
+        models: Vec<OllamaModel>,
+    }
+
+    #[derive(Deserialize)]
+    struct OllamaModel {
+        name: String,
+        model: Option<String>,
+    }
+
+    let body: OllamaTagsResponse = response.json().await?;
+
+    Ok(body
+        .models
+        .into_iter()
+        .map(|model| {
+            let model_name = model.name;
+            ModelInfo {
+                id: format!("ollama/{model_name}"),
+                name: model
+                    .model
+                    .unwrap_or_else(|| model_name.trim_end_matches(":latest").to_string()),
+                provider: "ollama".into(),
+                context_window: None,
+                curated: false,
+            }
         })
         .collect())
 }
