@@ -7,7 +7,7 @@ import DeepSeek from "@lobehub/icons/es/DeepSeek";
 import Fireworks from "@lobehub/icons/es/Fireworks";
 import Together from "@lobehub/icons/es/Together";
 import XAI from "@lobehub/icons/es/XAI";
-import Zhipu from "@lobehub/icons/es/Zhipu";
+import ZAI from "@lobehub/icons/es/ZAI";
 
 interface IconProps {
 	size?: number;
@@ -36,7 +36,7 @@ export function ProviderIcon({ provider, className = "text-ink-faint", size = 24
 		fireworks: Fireworks,
 		together: Together,
 		xai: XAI,
-		zhipu: Zhipu,
+		zhipu: ZAI,
 		"opencode-zen": OpenAI,
 	};
 
