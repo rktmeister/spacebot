@@ -643,6 +643,20 @@ export interface ProviderActionResponse {
 	message: string;
 }
 
+// -- Model Types --
+
+export interface ModelInfo {
+	id: string;
+	name: string;
+	provider: string;
+	context_window: number | null;
+	curated: boolean;
+}
+
+export interface ModelsResponse {
+	models: ModelInfo[];
+}
+
 // -- Ingest Types --
 
 export interface IngestFileInfo {
@@ -912,6 +926,18 @@ export const api = {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<ProviderActionResponse>;
+	},
+
+	// Model listing
+	models: () => fetchJson<ModelsResponse>("/models"),
+	refreshModels: async () => {
+		const response = await fetch(`${API_BASE}/models/refresh`, {
+			method: "POST",
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<ModelsResponse>;
 	},
 
 	// Ingest API

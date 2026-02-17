@@ -460,6 +460,8 @@ pub async fn start_http_server(
         .route("/agents/ingest/upload", post(upload_ingest_file))
         .route("/providers", get(get_providers).put(update_provider))
         .route("/providers/{provider}", delete(delete_provider))
+        .route("/models", get(get_models))
+        .route("/models/refresh", post(refresh_models))
         .route("/messaging/status", get(messaging_status))
         .route("/bindings", get(list_bindings).post(create_binding).delete(delete_binding))
         .route("/update/check", get(update_check).post(update_check_now))
@@ -2118,6 +2120,72 @@ async fn update_provider(
     // Set the key
     doc["llm"][key_name] = toml_edit::value(request.api_key);
 
+    // Auto-set routing defaults if the current routing points to a provider
+    // the user doesn't have a key for. This prevents the common case where
+    // someone sets up OpenRouter but routing still defaults to anthropic/*.
+    let should_set_routing = {
+        let current_channel = doc
+            .get("defaults")
+            .and_then(|d| d.get("routing"))
+            .and_then(|r| r.get("channel"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("anthropic/claude-sonnet-4-20250514");
+
+        let current_provider =
+            crate::llm::routing::provider_from_model(current_channel);
+
+        // Check if the current routing provider has a key configured
+        let has_key_for_current = match current_provider {
+            "anthropic" => doc
+                .get("llm")
+                .and_then(|l| l.get("anthropic_key"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty()),
+            "openai" => doc
+                .get("llm")
+                .and_then(|l| l.get("openai_key"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty()),
+            "openrouter" => doc
+                .get("llm")
+                .and_then(|l| l.get("openrouter_key"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty()),
+            "zhipu" => doc
+                .get("llm")
+                .and_then(|l| l.get("zhipu_key"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty()),
+            _ => false,
+        };
+
+        !has_key_for_current
+    };
+
+    if should_set_routing {
+        let routing =
+            crate::llm::routing::defaults_for_provider(&request.provider);
+
+        if doc.get("defaults").is_none() {
+            doc["defaults"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        if doc["defaults"].get("routing").is_none() {
+            doc["defaults"]["routing"] =
+                toml_edit::Item::Table(toml_edit::Table::new());
+        }
+
+        doc["defaults"]["routing"]["channel"] =
+            toml_edit::value(&routing.channel);
+        doc["defaults"]["routing"]["branch"] =
+            toml_edit::value(&routing.branch);
+        doc["defaults"]["routing"]["worker"] =
+            toml_edit::value(&routing.worker);
+        doc["defaults"]["routing"]["compactor"] =
+            toml_edit::value(&routing.compactor);
+        doc["defaults"]["routing"]["cortex"] =
+            toml_edit::value(&routing.cortex);
+    }
+
     // Write back to disk
     tokio::fs::write(&config_path, doc.to_string())
         .await
@@ -2129,9 +2197,21 @@ async fn update_provider(
         .try_send(crate::ProviderSetupEvent::ProvidersConfigured)
         .ok();
 
+    let routing_note = if should_set_routing {
+        format!(
+            " Model routing updated to use {} defaults.",
+            request.provider
+        )
+    } else {
+        String::new()
+    };
+
     Ok(Json(ProviderUpdateResponse {
         success: true,
-        message: format!("Provider '{}' configured", request.provider),
+        message: format!(
+            "Provider '{}' configured.{}",
+            request.provider, routing_note
+        ),
     }))
 }
 
@@ -2183,6 +2263,378 @@ async fn delete_provider(
         success: true,
         message: format!("Provider '{}' removed", provider),
     }))
+}
+
+// -- Model listing --
+
+#[derive(Serialize, Clone)]
+struct ModelInfo {
+    /// Full routing string (e.g. "openrouter/anthropic/claude-sonnet-4-20250514")
+    id: String,
+    /// Human-readable name
+    name: String,
+    /// Provider ID ("anthropic", "openrouter", "openai", "zhipu")
+    provider: String,
+    /// Context window size in tokens, if known
+    context_window: Option<u64>,
+    /// Whether this is a curated/recommended model
+    curated: bool,
+}
+
+#[derive(Serialize)]
+struct ModelsResponse {
+    models: Vec<ModelInfo>,
+}
+
+/// Static curated model list — the "known good" models we recommend.
+fn curated_models() -> Vec<ModelInfo> {
+    vec![
+        // Anthropic (direct)
+        ModelInfo {
+            id: "anthropic/claude-sonnet-4-20250514".into(),
+            name: "Claude Sonnet 4".into(),
+            provider: "anthropic".into(),
+            context_window: Some(200_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "anthropic/claude-haiku-4.5-20250514".into(),
+            name: "Claude Haiku 4.5".into(),
+            provider: "anthropic".into(),
+            context_window: Some(200_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "anthropic/claude-opus-4-20250514".into(),
+            name: "Claude Opus 4".into(),
+            provider: "anthropic".into(),
+            context_window: Some(200_000),
+            curated: true,
+        },
+        // OpenRouter
+        ModelInfo {
+            id: "openrouter/anthropic/claude-sonnet-4-20250514".into(),
+            name: "Claude Sonnet 4".into(),
+            provider: "openrouter".into(),
+            context_window: Some(200_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/anthropic/claude-haiku-4.5-20250514".into(),
+            name: "Claude Haiku 4.5".into(),
+            provider: "openrouter".into(),
+            context_window: Some(200_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/anthropic/claude-opus-4-20250514".into(),
+            name: "Claude Opus 4".into(),
+            provider: "openrouter".into(),
+            context_window: Some(200_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/google/gemini-2.5-pro-preview".into(),
+            name: "Gemini 2.5 Pro".into(),
+            provider: "openrouter".into(),
+            context_window: Some(1_048_576),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/google/gemini-2.5-flash-preview".into(),
+            name: "Gemini 2.5 Flash".into(),
+            provider: "openrouter".into(),
+            context_window: Some(1_048_576),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/deepseek/deepseek-r1".into(),
+            name: "DeepSeek R1".into(),
+            provider: "openrouter".into(),
+            context_window: Some(163_840),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/deepseek/deepseek-chat-v3-0324".into(),
+            name: "DeepSeek V3".into(),
+            provider: "openrouter".into(),
+            context_window: Some(163_840),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/moonshotai/kimi-k2".into(),
+            name: "Kimi K2".into(),
+            provider: "openrouter".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/moonshotai/kimi-k2.5".into(),
+            name: "Kimi K2.5".into(),
+            provider: "openrouter".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/openai/gpt-4.1".into(),
+            name: "GPT-4.1".into(),
+            provider: "openrouter".into(),
+            context_window: Some(1_047_576),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/openai/gpt-4.1-mini".into(),
+            name: "GPT-4.1 Mini".into(),
+            provider: "openrouter".into(),
+            context_window: Some(1_047_576),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/x-ai/grok-3-mini".into(),
+            name: "Grok 3 Mini".into(),
+            provider: "openrouter".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openrouter/mistralai/mistral-medium-3".into(),
+            name: "Mistral Medium 3".into(),
+            provider: "openrouter".into(),
+            context_window: Some(131_072),
+            curated: true,
+        },
+        // OpenAI (direct)
+        ModelInfo {
+            id: "openai/gpt-4.1".into(),
+            name: "GPT-4.1".into(),
+            provider: "openai".into(),
+            context_window: Some(1_047_576),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openai/gpt-4.1-mini".into(),
+            name: "GPT-4.1 Mini".into(),
+            provider: "openai".into(),
+            context_window: Some(1_047_576),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openai/gpt-4.1-nano".into(),
+            name: "GPT-4.1 Nano".into(),
+            provider: "openai".into(),
+            context_window: Some(1_047_576),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openai/o3".into(),
+            name: "o3".into(),
+            provider: "openai".into(),
+            context_window: Some(200_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openai/o3-mini".into(),
+            name: "o3 Mini".into(),
+            provider: "openai".into(),
+            context_window: Some(200_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "openai/o4-mini".into(),
+            name: "o4 Mini".into(),
+            provider: "openai".into(),
+            context_window: Some(200_000),
+            curated: true,
+        },
+        // Z.ai (GLM)
+        ModelInfo {
+            id: "zhipu/glm-4-plus".into(),
+            name: "GLM-4 Plus".into(),
+            provider: "zhipu".into(),
+            context_window: Some(128_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "zhipu/glm-4-flash".into(),
+            name: "GLM-4 Flash".into(),
+            provider: "zhipu".into(),
+            context_window: Some(128_000),
+            curated: true,
+        },
+        ModelInfo {
+            id: "zhipu/glm-4-flashx".into(),
+            name: "GLM-4 FlashX".into(),
+            provider: "zhipu".into(),
+            context_window: Some(128_000),
+            curated: true,
+        },
+    ]
+}
+
+/// In-memory cache for dynamically fetched models.
+static DYNAMIC_MODELS: std::sync::LazyLock<
+    tokio::sync::RwLock<(Vec<ModelInfo>, std::time::Instant)>,
+> = std::sync::LazyLock::new(|| {
+    tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now()))
+});
+
+const MODEL_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+async fn get_models(
+    State(state): State<Arc<ApiState>>,
+) -> Result<Json<ModelsResponse>, StatusCode> {
+    let config_path = state.config_path.read().await.clone();
+
+    // Determine which providers are configured
+    let configured = configured_providers(&config_path).await;
+
+    // Start with curated models, filtered to configured providers
+    let mut models: Vec<ModelInfo> = curated_models()
+        .into_iter()
+        .filter(|m| configured.contains(&m.provider.as_str()))
+        .collect();
+
+    // Add cached dynamic models if fresh
+    let cache = DYNAMIC_MODELS.read().await;
+    if !cache.0.is_empty() && cache.1.elapsed() < MODEL_CACHE_TTL {
+        for model in &cache.0 {
+            if configured.contains(&model.provider.as_str()) {
+                // Skip if already in curated list
+                if !models.iter().any(|m| m.id == model.id) {
+                    models.push(model.clone());
+                }
+            }
+        }
+    }
+    drop(cache);
+
+    Ok(Json(ModelsResponse { models }))
+}
+
+async fn refresh_models(
+    State(state): State<Arc<ApiState>>,
+) -> Result<Json<ModelsResponse>, StatusCode> {
+    let config_path = state.config_path.read().await.clone();
+    let configured = configured_providers(&config_path).await;
+
+    let mut dynamic = Vec::new();
+
+    // Query OpenRouter if configured
+    if configured.contains(&"openrouter") {
+        if let Ok(models) = fetch_openrouter_models(&config_path).await {
+            dynamic.extend(models);
+        }
+    }
+
+    // Cache the results
+    let mut cache = DYNAMIC_MODELS.write().await;
+    *cache = (dynamic, std::time::Instant::now());
+    drop(cache);
+
+    // Return full list (curated + dynamic)
+    get_models(State(state)).await
+}
+
+/// Helper: which providers have keys configured
+async fn configured_providers(config_path: &std::path::Path) -> Vec<&'static str> {
+    let mut providers = Vec::new();
+
+    let content = match tokio::fs::read_to_string(config_path).await {
+        Ok(c) => c,
+        Err(_) => return providers,
+    };
+    let doc: toml_edit::DocumentMut = match content.parse() {
+        Ok(d) => d,
+        Err(_) => return providers,
+    };
+
+    let has_key = |key: &str, env_var: &str| -> bool {
+        if let Some(llm) = doc.get("llm") {
+            if let Some(val) = llm.get(key) {
+                if let Some(s) = val.as_str() {
+                    if let Some(var_name) = s.strip_prefix("env:") {
+                        return std::env::var(var_name).is_ok();
+                    }
+                    return !s.is_empty();
+                }
+            }
+        }
+        std::env::var(env_var).is_ok()
+    };
+
+    if has_key("anthropic_key", "ANTHROPIC_API_KEY") {
+        providers.push("anthropic");
+    }
+    if has_key("openai_key", "OPENAI_API_KEY") {
+        providers.push("openai");
+    }
+    if has_key("openrouter_key", "OPENROUTER_API_KEY") {
+        providers.push("openrouter");
+    }
+    if has_key("zhipu_key", "ZHIPU_API_KEY") {
+        providers.push("zhipu");
+    }
+
+    providers
+}
+
+/// Fetch available models from OpenRouter's API.
+async fn fetch_openrouter_models(
+    config_path: &std::path::Path,
+) -> anyhow::Result<Vec<ModelInfo>> {
+    let content = tokio::fs::read_to_string(config_path).await?;
+    let doc: toml_edit::DocumentMut = content.parse()?;
+
+    let api_key = doc
+        .get("llm")
+        .and_then(|l| l.get("openrouter_key"))
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            if let Some(var) = s.strip_prefix("env:") {
+                std::env::var(var).unwrap_or_default()
+            } else {
+                s.to_string()
+            }
+        })
+        .unwrap_or_default();
+
+    if api_key.is_empty() {
+        anyhow::bail!("no openrouter key");
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://openrouter.ai/api/v1/models")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    #[derive(Deserialize)]
+    struct OpenRouterModelsResponse {
+        data: Vec<OpenRouterModel>,
+    }
+    #[derive(Deserialize)]
+    struct OpenRouterModel {
+        id: String,
+        name: Option<String>,
+        context_length: Option<u64>,
+    }
+
+    let body: OpenRouterModelsResponse = response.json().await?;
+
+    Ok(body
+        .data
+        .into_iter()
+        .map(|m| ModelInfo {
+            id: format!("openrouter/{}", m.id),
+            name: m.name.unwrap_or_else(|| m.id.clone()),
+            provider: "openrouter".into(),
+            context_window: m.context_length,
+            curated: false,
+        })
+        .collect())
 }
 
 // -- Ingest handlers --

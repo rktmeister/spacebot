@@ -118,6 +118,82 @@ pub fn is_context_overflow_error(error_message: &str) -> bool {
         || (lower.contains("maximum") && lower.contains("tokens"))
 }
 
+/// Returns routing defaults appropriate for a given provider.
+///
+/// When a user sets up OpenRouter but routing still points to `anthropic/...`,
+/// every LLM call fails because there's no Anthropic key. This function gives
+/// each provider sane defaults so things work out of the box.
+pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
+    match provider {
+        "openrouter" => {
+            let channel: String = "openrouter/anthropic/claude-sonnet-4-20250514".into();
+            let worker: String = "openrouter/anthropic/claude-haiku-4.5-20250514".into();
+            RoutingConfig {
+                channel: "openrouter/anthropic/claude-sonnet-4-20250514".into(),
+                branch: "openrouter/anthropic/claude-sonnet-4-20250514".into(),
+                worker: "openrouter/anthropic/claude-haiku-4.5-20250514".into(),
+                compactor: "openrouter/anthropic/claude-haiku-4.5-20250514".into(),
+                cortex: "openrouter/anthropic/claude-haiku-4.5-20250514".into(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::from([(channel, vec![worker])]),
+                rate_limit_cooldown_secs: 60,
+            }
+        }
+        "openai" => {
+            let channel: String = "openai/gpt-4.1".into();
+            let worker: String = "openai/gpt-4.1-mini".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::from([(channel, vec![worker])]),
+                rate_limit_cooldown_secs: 60,
+            }
+        }
+        "zhipu" => {
+            let channel: String = "zhipu/glm-4-plus".into();
+            let worker: String = "zhipu/glm-4-flash".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::from([(channel, vec![worker])]),
+                rate_limit_cooldown_secs: 60,
+            }
+        }
+        // Anthropic or unknown — use the standard defaults
+        _ => RoutingConfig::default(),
+    }
+}
+
+/// Maps a provider ID to the prefix used in model routing strings.
+pub fn provider_to_prefix(provider: &str) -> &str {
+    match provider {
+        "openrouter" => "openrouter/",
+        "openai" => "openai/",
+        "anthropic" => "anthropic/",
+        "zhipu" => "zhipu/",
+        _ => "",
+    }
+}
+
+/// Extracts the provider from a model routing string.
+pub fn provider_from_model(model: &str) -> &str {
+    if model.starts_with("openrouter/") {
+        "openrouter"
+    } else if let Some((provider, _)) = model.split_once('/') {
+        provider
+    } else {
+        "anthropic"
+    }
+}
+
 /// Max number of fallback models to try before giving up.
 pub const MAX_FALLBACK_ATTEMPTS: usize = 3;
 

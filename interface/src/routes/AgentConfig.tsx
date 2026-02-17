@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AgentConfigResponse, type AgentConfigUpdateRequest } from "@/api/client";
 import { Button, SettingSidebarButton, Input, TextArea, Toggle, NumberStepper } from "@/ui";
+import { ModelSelect } from "@/components/ModelSelect";
 import { motion, AnimatePresence } from "framer-motion";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 
@@ -459,31 +460,31 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 			case "routing":
 				return (
 					<div className="grid gap-4">
-						<ConfigField
+						<ModelSelect
 							label="Channel Model"
 							description="Model for user-facing channels"
 							value={localValues.channel as string}
 							onChange={(v) => handleChange("channel", v)}
 						/>
-						<ConfigField
+						<ModelSelect
 							label="Branch Model"
 							description="Model for thinking branches"
 							value={localValues.branch as string}
 							onChange={(v) => handleChange("branch", v)}
 						/>
-						<ConfigField
+						<ModelSelect
 							label="Worker Model"
 							description="Model for task workers"
 							value={localValues.worker as string}
 							onChange={(v) => handleChange("worker", v)}
 						/>
-						<ConfigField
+						<ModelSelect
 							label="Compactor Model"
 							description="Model for summarization"
 							value={localValues.compactor as string}
 							onChange={(v) => handleChange("compactor", v)}
 						/>
-						<ConfigField
+						<ModelSelect
 							label="Cortex Model"
 							description="Model for system observation"
 							value={localValues.cortex as string}

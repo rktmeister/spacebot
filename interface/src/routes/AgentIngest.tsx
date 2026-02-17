@@ -1,8 +1,9 @@
-import { useState, useRef, useCallback } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type IngestFileInfo } from "@/api/client";
-import { formatTimeAgo } from "@/lib/format";
-import { Button, Badge } from "@/ui";
+import {useState, useRef, useCallback} from "react";
+import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
+import {api, type IngestFileInfo} from "@/api/client";
+import {formatTimeAgo} from "@/lib/format";
+import {Button, Badge} from "@/ui";
+import {clsx} from "clsx";
 
 function formatFileSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
@@ -10,7 +11,7 @@ function formatFileSize(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function StatusBadge({ status }: { status: IngestFileInfo["status"] }) {
+function StatusBadge({status}: {status: IngestFileInfo["status"]}) {
 	const styles: Record<string, string> = {
 		queued: "bg-amber-500/20 text-amber-400",
 		processing: "bg-blue-500/20 text-blue-400",
@@ -18,28 +19,30 @@ function StatusBadge({ status }: { status: IngestFileInfo["status"] }) {
 		failed: "bg-red-500/20 text-red-400",
 	};
 	return (
-		<span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${styles[status] ?? styles.queued}`}>
+		<span
+			className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${styles[status] ?? styles.queued}`}
+		>
 			{(status === "processing" || status === "queued") && (
-				<span className={`mr-1.5 h-1.5 w-1.5 animate-pulse rounded-full ${status === "queued" ? "bg-amber-400" : "bg-blue-400"}`} />
+				<span
+					className={`mr-1.5 h-1.5 w-1.5 animate-pulse rounded-full ${status === "queued" ? "bg-amber-400" : "bg-blue-400"}`}
+				/>
 			)}
 			{status}
 		</span>
 	);
 }
 
-
-
 interface AgentIngestProps {
 	agentId: string;
 }
 
-export function AgentIngest({ agentId }: AgentIngestProps) {
+export function AgentIngest({agentId}: AgentIngestProps) {
 	const queryClient = useQueryClient();
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragging, setIsDragging] = useState(false);
 	const dragCounter = useRef(0);
 
-	const { data, isLoading, error } = useQuery({
+	const {data, isLoading, error} = useQuery({
 		queryKey: ["ingest-files", agentId],
 		queryFn: () => api.ingestFiles(agentId),
 		refetchInterval: 5_000,
@@ -48,14 +51,15 @@ export function AgentIngest({ agentId }: AgentIngestProps) {
 	const uploadMutation = useMutation({
 		mutationFn: (files: File[]) => api.uploadIngestFiles(agentId, files),
 		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["ingest-files", agentId] });
+			queryClient.invalidateQueries({queryKey: ["ingest-files", agentId]});
 		},
 	});
 
 	const deleteMutation = useMutation({
-		mutationFn: (contentHash: string) => api.deleteIngestFile(agentId, contentHash),
+		mutationFn: (contentHash: string) =>
+			api.deleteIngestFile(agentId, contentHash),
 		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["ingest-files", agentId] });
+			queryClient.invalidateQueries({queryKey: ["ingest-files", agentId]});
 		},
 	});
 
@@ -119,11 +123,27 @@ export function AgentIngest({ agentId }: AgentIngestProps) {
 		>
 			{/* Stats bar */}
 			<div className="flex items-center gap-2 border-b border-app-line px-6 py-3">
-				<Badge variant="accent" size="md">{files.length} total</Badge>
-				{queued > 0 && <Badge variant="amber" size="md">{queued} queued</Badge>}
-				{processing > 0 && <Badge variant="accent" size="md">{processing} processing</Badge>}
-				<Badge variant="green" size="md">{completed} completed</Badge>
-				{failed > 0 && <Badge variant="red" size="md">{failed} failed</Badge>}
+				<Badge variant="accent" size="md">
+					{files.length} total
+				</Badge>
+				{queued > 0 && (
+					<Badge variant="amber" size="md">
+						{queued} queued
+					</Badge>
+				)}
+				{processing > 0 && (
+					<Badge variant="accent" size="md">
+						{processing} processing
+					</Badge>
+				)}
+				<Badge variant="green" size="md">
+					{completed} completed
+				</Badge>
+				{failed > 0 && (
+					<Badge variant="red" size="md">
+						{failed} failed
+					</Badge>
+				)}
 				<div className="flex-1" />
 				<span className="text-xs text-ink-faint">
 					.txt .md .json .csv .yaml .toml .html .log +more
@@ -132,18 +152,19 @@ export function AgentIngest({ agentId }: AgentIngestProps) {
 
 			<div className="flex-1 overflow-auto p-6">
 				{/* Drop zone */}
-			<Button
-				type="button"
-				onClick={() => fileInputRef.current?.click()}
-				variant="outline"
-				size="lg"
-				className={`mb-6 h-auto w-full flex-col border-2 border-dashed py-10 ${
-					isDragging
-						? "border-accent/50 bg-accent/5"
-						: "border-app-line bg-transparent hover:border-app-line/80 hover:bg-app-darkBox/20"
-				}`}
-			>
-					<div className={`mb-3 text-3xl ${isDragging ? "text-accent" : "text-ink-faint"}`}>
+				<button
+					type="button"
+					onClick={() => fileInputRef.current?.click()}
+					className={clsx(
+						"mb-6 flex h-auto w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed py-10 transition-colors hover:bg-app-box/20",
+						isDragging
+							? "border-accent/30 bg-accent/[0.02]"
+							: "border-app-line bg-transparent hover:border-app-line/80",
+					)}
+				>
+					<div
+						className={`mb-3 text-3xl ${isDragging ? "text-accent" : "text-ink-faint"}`}
+					>
 						{uploadMutation.isPending ? (
 							<span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
 						) : (
@@ -160,12 +181,12 @@ export function AgentIngest({ agentId }: AgentIngestProps) {
 					<p className="text-xs text-ink-faint">
 						Text files will be chunked and processed into structured memories
 					</p>
-				{uploadMutation.isError && (
-					<p className="mt-2 text-xs text-red-400">
-						Upload failed. Please try again.
-					</p>
-				)}
-			</Button>
+					{uploadMutation.isError && (
+						<p className="mt-2 text-xs text-red-400">
+							Upload failed. Please try again.
+						</p>
+					)}
+				</button>
 
 				<input
 					ref={fileInputRef}
@@ -243,13 +264,17 @@ function FileRow({
 			{/* Info */}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<div className="flex items-center gap-2">
-					<span className="truncate text-sm font-medium text-ink">{file.filename}</span>
+					<span className="truncate text-sm font-medium text-ink">
+						{file.filename}
+					</span>
 					<StatusBadge status={file.status} />
 				</div>
 				<div className="flex items-center gap-3 text-xs text-ink-faint">
 					<span>{formatFileSize(file.file_size)}</span>
 					{file.total_chunks > 0 && (
-						<span>{file.total_chunks} chunk{file.total_chunks !== 1 ? "s" : ""}</span>
+						<span>
+							{file.total_chunks} chunk{file.total_chunks !== 1 ? "s" : ""}
+						</span>
 					)}
 					<span>{formatTimeAgo(file.started_at)}</span>
 				</div>
@@ -260,7 +285,7 @@ function FileRow({
 						<div className="h-1 flex-1 overflow-hidden rounded-full bg-app-line">
 							<div
 								className="h-full rounded-full bg-blue-400 transition-all duration-500"
-								style={{ width: `${progress}%` }}
+								style={{width: `${progress}%`}}
 							/>
 						</div>
 						<span className="text-xs tabular-nums text-ink-faint">

@@ -2166,11 +2166,11 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         .default(0)
         .interact()?;
 
-    let (provider_key_name, toml_key) = match provider_idx {
-        0 => ("Anthropic API key", "anthropic_key"),
-        1 => ("OpenRouter API key", "openrouter_key"),
-        2 => ("OpenAI API key", "openai_key"),
-        3 => ("Z.ai (GLM) API key", "zhipu_key"),
+    let (provider_key_name, toml_key, provider_id) = match provider_idx {
+        0 => ("Anthropic API key", "anthropic_key", "anthropic"),
+        1 => ("OpenRouter API key", "openrouter_key", "openrouter"),
+        2 => ("OpenAI API key", "openai_key", "openai"),
+        3 => ("Z.ai (GLM) API key", "zhipu_key", "zhipu"),
         _ => unreachable!(),
     };
 
@@ -2277,6 +2277,17 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
     config_content.push_str("[llm]\n");
     config_content.push_str(&format!("{toml_key} = \"{api_key}\"\n"));
     config_content.push('\n');
+
+    // Write routing defaults for the chosen provider
+    let routing = crate::llm::routing::defaults_for_provider(provider_id);
+    config_content.push_str("[defaults.routing]\n");
+    config_content.push_str(&format!("channel = \"{}\"\n", routing.channel));
+    config_content.push_str(&format!("branch = \"{}\"\n", routing.branch));
+    config_content.push_str(&format!("worker = \"{}\"\n", routing.worker));
+    config_content.push_str(&format!("compactor = \"{}\"\n", routing.compactor));
+    config_content.push_str(&format!("cortex = \"{}\"\n", routing.cortex));
+    config_content.push('\n');
+
     config_content.push_str("[[agents]]\n");
     config_content.push_str(&format!("id = \"{agent_id}\"\n"));
     config_content.push_str("default = true\n");
