@@ -82,6 +82,8 @@ pub struct ApiState {
     pub prompt_engine: RwLock<Option<PromptEngine>>,
     /// Instance-level defaults for resolving new agent configs.
     pub defaults_config: RwLock<Option<DefaultsConfig>>,
+    /// Sender to register newly created agents with the main event loop.
+    pub agent_tx: mpsc::Sender<crate::Agent>,
 }
 
 /// Events sent to SSE clients. Wraps ProcessEvents with agent context.
@@ -163,7 +165,10 @@ pub enum ApiEvent {
 }
 
 impl ApiState {
-    pub fn new_with_provider_sender(provider_setup_tx: mpsc::Sender<crate::ProviderSetupEvent>) -> Self {
+    pub fn new_with_provider_sender(
+        provider_setup_tx: mpsc::Sender<crate::ProviderSetupEvent>,
+        agent_tx: mpsc::Sender<crate::Agent>,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel(512);
         Self {
             started_at: Instant::now(),
@@ -190,6 +195,7 @@ impl ApiState {
             embedding_model: RwLock::new(None),
             prompt_engine: RwLock::new(None),
             defaults_config: RwLock::new(None),
+            agent_tx,
         }
     }
 

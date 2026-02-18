@@ -899,11 +899,25 @@ async fn create_agent(
         );
     }
 
+    // Build the Agent and send to main loop so it can receive messages
+    let sqlite_pool = db.sqlite.clone();
+    let mut deps_with_cron = deps.clone();
+    deps_with_cron.cron_tool = Some(cron_tool);
+    let agent = crate::Agent {
+        id: arc_agent_id.clone(),
+        config: agent_config.clone(),
+        db,
+        deps: deps_with_cron,
+    };
+    if let Err(error) = state.agent_tx.send(agent).await {
+        tracing::error!(%error, "failed to send new agent to main loop");
+    }
+
     // Update all ArcSwap-based API state maps
     {
         // Agent pools
         let mut pools = (**state.agent_pools.load()).clone();
-        pools.insert(agent_id.clone(), db.sqlite.clone());
+        pools.insert(agent_id.clone(), sqlite_pool);
         state.agent_pools.store(std::sync::Arc::new(pools));
 
         // Memory searches
