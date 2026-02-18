@@ -2,7 +2,7 @@
 
 use crate::config::SlackPermissions;
 use crate::messaging::traits::{HistoryMessage, InboundStream, Messaging};
-use crate::{InboundMessage, MessageContent, OutboundResponse, StatusUpdate};
+use crate::{InboundMessage, MessageContent, OutboundResponse};
 
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
@@ -16,6 +16,7 @@ struct SlackAdapterState {
     inbound_tx: mpsc::Sender<InboundMessage>,
     permissions: Arc<ArcSwap<SlackPermissions>>,
     bot_token: String,
+    bot_user_id: String,
 }
 
 /// Slack adapter state.
@@ -65,8 +66,8 @@ async fn handle_push_event(
         _ => return Ok(()),
     };
 
-    // Skip bot messages and message edits/deletes
-    if msg_event.sender.user.is_none() || msg_event.subtype.is_some() {
+    // Skip message edits/deletes
+    if msg_event.subtype.is_some() {
         return Ok(());
     }
 
@@ -76,6 +77,16 @@ async fn handle_push_event(
         .expect("SlackAdapterState must be in user_state");
 
     let user_id = msg_event.sender.user.as_ref().map(|u| u.0.clone());
+
+    // Skip messages from the bot itself
+    if user_id.as_deref() == Some(&adapter_state.bot_user_id) {
+        return Ok(());
+    }
+
+    // Skip messages with no user (system messages)
+    if user_id.is_none() {
+        return Ok(());
+    }
     let team_id = event.team_id.0.clone();
     let channel_id = msg_event
         .origin
@@ -238,10 +249,21 @@ impl Messaging for SlackAdapter {
             SlackClientHyperConnector::new().context("failed to create slack connector")?,
         ));
 
+        // Fetch bot's own user ID so we can filter out self-messages
+        let bot_token = SlackApiToken::new(SlackApiTokenValue(self.bot_token.clone()));
+        let session = client.open_session(&bot_token);
+        let auth_response = session
+            .auth_test()
+            .await
+            .context("failed to call auth.test for bot user ID")?;
+        let bot_user_id = auth_response.user_id.0.clone();
+        tracing::info!(bot_user_id = %bot_user_id, "slack bot user ID resolved");
+
         let adapter_state = Arc::new(SlackAdapterState {
             inbound_tx,
             permissions: self.permissions.clone(),
             bot_token: self.bot_token.clone(),
+            bot_user_id,
         });
 
         let callbacks = SlackSocketModeListenerCallbacks::new()
@@ -423,52 +445,14 @@ impl Messaging for SlackAdapter {
             OutboundResponse::StreamEnd => {
                 self.active_messages.write().await.remove(&message.id);
             }
-            OutboundResponse::Status(status) => {
-                self.send_status(message, status).await?;
-            }
+            OutboundResponse::Status(_) => {}  // no-op, Slack has no native typing indicator
         }
 
         Ok(())
     }
 
-    async fn send_status(
-        &self,
-        message: &InboundMessage,
-        status: StatusUpdate,
-    ) -> crate::Result<()> {
-        let (client, token) = self.create_session()?;
-        let session = client.open_session(&token);
-        let channel_id = extract_channel_id(message)?;
-
-        match status {
-            StatusUpdate::Thinking => {
-                if let Some(ts) = extract_message_ts(message) {
-                    let req = SlackApiReactionsAddRequest::new(
-                        channel_id,
-                        SlackReactionName("thinking_face".into()),
-                        ts,
-                    );
-                    // Best-effort, don't fail the whole response
-                    if let Err(error) = session.reactions_add(&req).await {
-                        tracing::debug!(%error, "failed to add thinking reaction");
-                    }
-                }
-            }
-            _ => {
-                if let Some(ts) = extract_message_ts(message) {
-                    let req = SlackApiReactionsRemoveRequest::new(SlackReactionName(
-                        "thinking_face".into(),
-                    ))
-                    .with_channel(channel_id)
-                    .with_timestamp(ts);
-
-                    let _ = session.reactions_remove(&req).await;
-                }
-            }
-        }
-
-        Ok(())
-    }
+    // send_status: uses the default no-op from the Messaging trait.
+    // Slack has no native typing indicator API.
 
     async fn broadcast(
         &self,

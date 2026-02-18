@@ -177,11 +177,21 @@ coding = "ollama/qwen3"
 
 ### Skills
 
-Extensible skill system for domain-specific behavior:
+Extensible skill system integrated with [skills.sh](https://skills.sh):
 
-- **SKILL.md format** — markdown files with frontmatter, loaded from instance or agent workspace
+- **skills.sh registry** — install any skill from the public ecosystem with one command
+- **CLI management** — `spacebot skill add owner/repo` to install, list, remove, and inspect skills
 - **Worker injection** — skills are injected into worker system prompts for specialized tasks
-- **OpenClaw compatible** — drop in existing OpenClaw skills
+- **Bundled resources** — scripts, references, and assets packaged with skills
+- **OpenClaw compatible** — drop in existing OpenClaw skills, or any skill from skills.sh
+
+**Install skills from the registry:**
+
+```bash
+spacebot skill add vercel-labs/agent-skills
+spacebot skill add anthropics/skills/pdf
+spacebot skill list
+```
 
 ---
 

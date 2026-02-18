@@ -43,11 +43,66 @@ enum Command {
     },
     /// Show status of the running daemon
     Status,
+    /// Manage skills
+    #[command(subcommand)]
+    Skill(SkillCommand),
+}
+
+#[derive(Subcommand)]
+enum SkillCommand {
+    /// Install a skill from GitHub or skills.sh registry
+    Add {
+        /// Skill spec: owner/repo or owner/repo/skill-name
+        spec: String,
+        /// Agent ID to install for (defaults to first agent)
+        #[arg(short, long)]
+        agent: Option<String>,
+        /// Install to instance-level skills directory (shared across all agents)
+        #[arg(short, long)]
+        instance: bool,
+    },
+    /// Install a skill from a .skill file
+    Install {
+        /// Path to .skill file
+        path: std::path::PathBuf,
+        /// Agent ID to install for (defaults to first agent)
+        #[arg(short, long)]
+        agent: Option<String>,
+        /// Install to instance-level skills directory (shared across all agents)
+        #[arg(short, long)]
+        instance: bool,
+    },
+    /// List installed skills
+    List {
+        /// Agent ID (defaults to first agent)
+        #[arg(short, long)]
+        agent: Option<String>,
+    },
+    /// Remove an installed skill
+    Remove {
+        /// Skill name
+        name: String,
+        /// Agent ID (defaults to first agent)
+        #[arg(short, long)]
+        agent: Option<String>,
+    },
+    /// Show skill details
+    Info {
+        /// Skill name
+        name: String,
+        /// Agent ID (defaults to first agent)
+        #[arg(short, long)]
+        agent: Option<String>,
+    },
 }
 
 /// Tracks an active conversation channel and its message sender.
 struct ActiveChannel {
     message_tx: mpsc::Sender<spacebot::InboundMessage>,
+    /// Latest inbound message for this conversation, shared with the outbound
+    /// routing task so status updates (e.g. typing indicators) target the
+    /// most recent message rather than the first one the channel ever received.
+    latest_message: Arc<tokio::sync::RwLock<spacebot::InboundMessage>>,
     /// Retained so the outbound routing task stays alive.
     _outbound_handle: tokio::task::JoinHandle<()>,
 }
@@ -68,6 +123,7 @@ fn main() -> anyhow::Result<()> {
             cmd_start(cli.config, cli.debug, foreground)
         }
         Command::Status => cmd_status(),
+        Command::Skill(skill_cmd) => cmd_skill(cli.config, skill_cmd),
     }
 }
 
@@ -225,6 +281,177 @@ fn cmd_status() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn cmd_skill(
+    config_path: Option<std::path::PathBuf>,
+    skill_cmd: SkillCommand,
+) -> anyhow::Result<()> {
+    let config = load_config(&config_path)?;
+    
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build tokio runtime")?;
+    
+    runtime.block_on(async {
+        match skill_cmd {
+            SkillCommand::Add { spec, agent, instance } => {
+                let target_dir = resolve_skills_dir(&config, agent.as_deref(), instance)?;
+                
+                println!("Installing skill from: {spec}");
+                println!("Target directory: {}", target_dir.display());
+                
+                let installed = spacebot::skills::install_from_github(&spec, &target_dir)
+                    .await
+                    .context("failed to install skill")?;
+                
+                println!("\nSuccessfully installed {} skill(s):", installed.len());
+                for name in installed {
+                    println!("  - {name}");
+                }
+                
+                Ok(())
+            }
+            SkillCommand::Install { path, agent, instance } => {
+                let target_dir = resolve_skills_dir(&config, agent.as_deref(), instance)?;
+                
+                println!("Installing skill from: {}", path.display());
+                println!("Target directory: {}", target_dir.display());
+                
+                let installed = spacebot::skills::install_from_file(&path, &target_dir)
+                    .await
+                    .context("failed to install skill")?;
+                
+                println!("\nSuccessfully installed {} skill(s):", installed.len());
+                for name in installed {
+                    println!("  - {name}");
+                }
+                
+                Ok(())
+            }
+            SkillCommand::List { agent } => {
+                let (instance_dir, workspace_dir) = resolve_skill_dirs(&config, agent.as_deref())?;
+                
+                let skills = spacebot::skills::SkillSet::load(&instance_dir, &workspace_dir).await;
+                
+                if skills.is_empty() {
+                    println!("No skills installed");
+                    return Ok(());
+                }
+                
+                println!("Installed skills ({}):\n", skills.len());
+                
+                for info in skills.list() {
+                    let source_label = match info.source {
+                        spacebot::skills::SkillSource::Instance => "instance",
+                        spacebot::skills::SkillSource::Workspace => "workspace",
+                    };
+                    
+                    println!("  {} ({})", info.name, source_label);
+                    if !info.description.is_empty() {
+                        println!("    {}", info.description);
+                    }
+                    println!();
+                }
+                
+                Ok(())
+            }
+            SkillCommand::Remove { name, agent } => {
+                let (instance_dir, workspace_dir) = resolve_skill_dirs(&config, agent.as_deref())?;
+                
+                let mut skills = spacebot::skills::SkillSet::load(&instance_dir, &workspace_dir).await;
+                
+                match skills.remove(&name).await? {
+                    Some(path) => {
+                        println!("Removed skill: {name}");
+                        println!("Path: {}", path.display());
+                    }
+                    None => {
+                        eprintln!("Skill not found: {name}");
+                        std::process::exit(1);
+                    }
+                }
+                
+                Ok(())
+            }
+            SkillCommand::Info { name, agent } => {
+                let (instance_dir, workspace_dir) = resolve_skill_dirs(&config, agent.as_deref())?;
+                
+                let skills = spacebot::skills::SkillSet::load(&instance_dir, &workspace_dir).await;
+                
+                let Some(skill) = skills.get(&name) else {
+                    eprintln!("Skill not found: {name}");
+                    std::process::exit(1);
+                };
+                
+                let source_label = match skill.source {
+                    spacebot::skills::SkillSource::Instance => "instance",
+                    spacebot::skills::SkillSource::Workspace => "workspace",
+                };
+                
+                println!("Skill: {}", skill.name);
+                println!("Description: {}", skill.description);
+                println!("Source: {source_label}");
+                println!("Path: {}", skill.file_path.display());
+                println!("Base directory: {}", skill.base_dir.display());
+                
+                // Show a preview of the content
+                let preview_len = skill.content.chars().take(500).count();
+                if preview_len < skill.content.len() {
+                    println!("\nContent preview (first 500 chars):\n");
+                    println!("{}", &skill.content[..preview_len]);
+                    println!("\n... ({} more characters)", skill.content.len() - preview_len);
+                } else {
+                    println!("\nContent:\n");
+                    println!("{}", skill.content);
+                }
+                
+                Ok(())
+            }
+        }
+    })
+}
+
+fn resolve_skills_dir(
+    config: &spacebot::config::Config,
+    agent_id: Option<&str>,
+    instance: bool,
+) -> anyhow::Result<std::path::PathBuf> {
+    if instance {
+        Ok(config.skills_dir())
+    } else {
+        let agent_config = get_agent_config(config, agent_id)?;
+        let resolved = agent_config.resolve(&config.instance_dir, &config.defaults);
+        Ok(resolved.skills_dir())
+    }
+}
+
+fn resolve_skill_dirs(
+    config: &spacebot::config::Config,
+    agent_id: Option<&str>,
+) -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let agent_config = get_agent_config(config, agent_id)?;
+    let resolved = agent_config.resolve(&config.instance_dir, &config.defaults);
+    Ok((config.skills_dir(), resolved.skills_dir()))
+}
+
+fn get_agent_config<'a>(
+    config: &'a spacebot::config::Config,
+    agent_id: Option<&str>,
+) -> anyhow::Result<&'a spacebot::config::AgentConfig> {
+    let agent_id = agent_id.unwrap_or_else(|| {
+        if config.agents.is_empty() {
+            panic!("no agents configured");
+        }
+        &config.agents[0].id
+    });
+    
+    config
+        .agents
+        .iter()
+        .find(|a| a.id == agent_id)
+        .with_context(|| format!("agent not found: {agent_id}"))
+}
+
 fn load_config(config_path: &Option<std::path::PathBuf>) -> anyhow::Result<spacebot::config::Config> {
     if let Some(path) = config_path {
         spacebot::config::Config::load_from_path(path)
@@ -251,19 +478,22 @@ async fn run(
 
     // Create the provider setup channel so API handlers can signal the main loop
     let (provider_tx, mut provider_rx) = mpsc::channel::<spacebot::ProviderSetupEvent>(1);
+    // Channel for newly created agents to be registered in the main event loop
+    let (agent_tx, mut agent_rx) = mpsc::channel::<spacebot::Agent>(8);
 
     // Start HTTP API server if enabled
-    let api_state = Arc::new(spacebot::api::ApiState::new_with_provider_sender(provider_tx));
+    let api_state = Arc::new(spacebot::api::ApiState::new_with_provider_sender(provider_tx, agent_tx));
 
     // Start background update checker
     spacebot::update::spawn_update_checker(api_state.update_status.clone());
 
     let _http_handle = if config.api.enabled {
         // IPv6 addresses need brackets when combined with port: [::]:19898
-        let bind_str = if config.api.bind.contains(':') {
-            format!("[{}]:{}", config.api.bind, config.api.port)
+        let raw_bind = config.api.bind.trim_start_matches('[').trim_end_matches(']');
+        let bind_str = if raw_bind.contains(':') {
+            format!("[{}]:{}", raw_bind, config.api.port)
         } else {
-            format!("{}:{}", config.api.bind, config.api.port)
+            format!("{}:{}", raw_bind, config.api.port)
         };
         let bind: std::net::SocketAddr = bind_str
             .parse()
@@ -334,6 +564,10 @@ async fn run(
     // Set the config path on the API state for config.toml writes
     let config_path = config.instance_dir.join("config.toml");
     api_state.set_config_path(config_path.clone()).await;
+    api_state.set_llm_manager(llm_manager.clone()).await;
+    api_state.set_embedding_model(embedding_model.clone()).await;
+    api_state.set_prompt_engine(prompt_engine.clone()).await;
+    api_state.set_defaults_config(config.defaults.clone()).await;
 
     // Track whether agents have been initialized
     let mut agents_initialized = false;
@@ -506,7 +740,8 @@ async fn run(
                     // Spawn outbound response routing: reads from response_rx,
                     // sends to the messaging adapter and forwards to SSE
                     let messaging_for_outbound = messaging_manager.clone();
-                    let outbound_message = message.clone();
+                    let latest_message = Arc::new(tokio::sync::RwLock::new(message.clone()));
+                    let outbound_message = latest_message.clone();
                     let outbound_conversation_id = conversation_id.clone();
                     let api_event_tx = api_state.event_tx.clone();
                     let sse_agent_id = agent_id.to_string();
@@ -546,10 +781,11 @@ async fn run(
                                 _ => {}
                             }
 
+                            let current_message = outbound_message.read().await.clone();
                             match response {
                                 spacebot::OutboundResponse::Status(status) => {
                                     if let Err(error) = messaging_for_outbound
-                                        .send_status(&outbound_message, status)
+                                        .send_status(&current_message, status)
                                         .await
                                     {
                                         tracing::warn!(%error, "failed to send status update");
@@ -561,7 +797,7 @@ async fn run(
                                         "routing outbound response to messaging adapter"
                                     );
                                     if let Err(error) = messaging_for_outbound
-                                        .respond(&outbound_message, response)
+                                        .respond(&current_message, response)
                                         .await
                                     {
                                         tracing::error!(%error, "failed to send outbound response");
@@ -573,6 +809,7 @@ async fn run(
 
                     active_channels.insert(conversation_id.clone(), ActiveChannel {
                         message_tx: channel_tx,
+                        latest_message,
                         _outbound_handle: outbound_handle,
                     });
 
@@ -585,6 +822,10 @@ async fn run(
 
                 // Forward the message to the channel
                 if let Some(active) = active_channels.get(&conversation_id) {
+                    // Update the shared message reference so outbound routing
+                    // (typing indicators, reactions) targets this message
+                    *active.latest_message.write().await = message.clone();
+
                     // Emit inbound message to SSE clients
                     api_state.event_tx.send(spacebot::api::ApiEvent::InboundMessage {
                         agent_id: agent_id.to_string(),
@@ -602,6 +843,10 @@ async fn run(
                         active_channels.remove(&conversation_id);
                     }
                 }
+            }
+            Some(agent) = agent_rx.recv() => {
+                tracing::info!(agent_id = %agent.id, "registering new agent in main loop");
+                agents.insert(agent.id.clone(), agent);
             }
             Some(_event) = provider_rx.recv(), if !agents_initialized => {
                 tracing::info!("providers configured, initializing agents");
@@ -869,6 +1114,7 @@ async fn initialize_agents(
         api_state.set_memory_searches(memory_searches);
         api_state.set_runtime_configs(runtime_configs);
         api_state.set_agent_workspaces(agent_workspaces);
+        api_state.set_instance_dir(config.instance_dir.clone());
     }
 
     // Initialize messaging adapters

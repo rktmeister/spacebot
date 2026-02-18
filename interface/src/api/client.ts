@@ -706,6 +706,63 @@ export interface IngestDeleteResponse {
 	success: boolean;
 }
 
+// -- Skills Types --
+
+export interface SkillInfo {
+	name: string;
+	description: string;
+	file_path: string;
+	base_dir: string;
+	source: "instance" | "workspace";
+}
+
+export interface SkillsListResponse {
+	skills: SkillInfo[];
+}
+
+export interface InstallSkillRequest {
+	agent_id: string;
+	spec: string;
+	instance?: boolean;
+}
+
+export interface InstallSkillResponse {
+	installed: string[];
+}
+
+export interface RemoveSkillRequest {
+	agent_id: string;
+	name: string;
+}
+
+export interface RemoveSkillResponse {
+	success: boolean;
+	path: string | null;
+}
+
+// -- Skills Registry Types (skills.sh) --
+
+export type RegistryView = "all-time" | "trending" | "hot";
+
+export interface RegistrySkill {
+	source: string;
+	skillId: string;
+	name: string;
+	installs: number;
+	id?: string;
+}
+
+export interface RegistryBrowseResponse {
+	skills: RegistrySkill[];
+	has_more: boolean;
+}
+
+export interface RegistrySearchResponse {
+	skills: RegistrySkill[];
+	query: string;
+	count: number;
+}
+
 // -- Messaging / Bindings Types --
 
 export interface PlatformStatus {
@@ -926,6 +983,18 @@ export const api = {
 		}
 		return response.json() as Promise<IdentityFiles>;
 	},
+	createAgent: async (agentId: string) => {
+		const response = await fetch(`${API_BASE}/agents`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ agent_id: agentId }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ success: boolean; agent_id: string; message: string }>;
+	},
+
 	agentConfig: (agentId: string) =>
 		fetchJson<AgentConfigResponse>(`/agents/config?agent_id=${encodeURIComponent(agentId)}`),
 	updateAgentConfig: async (request: AgentConfigUpdateRequest) => {
@@ -1121,6 +1190,30 @@ export const api = {
 		return response.json() as Promise<DeleteBindingResponse>;
 	},
 
+	togglePlatform: async (platform: string, enabled: boolean) => {
+		const response = await fetch(`${API_BASE}/messaging/toggle`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ platform, enabled }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ success: boolean; message: string }>;
+	},
+
+	disconnectPlatform: async (platform: string) => {
+		const response = await fetch(`${API_BASE}/messaging/disconnect`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ platform }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ success: boolean; message: string }>;
+	},
+
 	// Global Settings API
 	globalSettings: () => fetchJson<GlobalSettingsResponse>("/settings"),
 	
@@ -1166,6 +1259,45 @@ export const api = {
 		}
 		return response.json() as Promise<UpdateApplyResponse>;
 	},
+
+	// Skills API
+	listSkills: (agentId: string) =>
+		fetchJson<SkillsListResponse>(`/agents/skills?agent_id=${encodeURIComponent(agentId)}`),
+	
+	installSkill: async (request: InstallSkillRequest) => {
+		const response = await fetch(`${API_BASE}/agents/skills/install`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(request),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<InstallSkillResponse>;
+	},
+	
+	removeSkill: async (request: RemoveSkillRequest) => {
+		const response = await fetch(`${API_BASE}/agents/skills/remove`, {
+			method: "DELETE",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(request),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<RemoveSkillResponse>;
+	},
+
+	// Skills Registry API (skills.sh proxy)
+	registryBrowse: (view: RegistryView = "all-time", page = 0) =>
+		fetchJson<RegistryBrowseResponse>(
+			`/skills/registry/browse?view=${encodeURIComponent(view)}&page=${page}`,
+		),
+
+	registrySearch: (query: string, limit = 50) =>
+		fetchJson<RegistrySearchResponse>(
+			`/skills/registry/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+		),
 
 	eventsUrl: `${API_BASE}/events`,
 };

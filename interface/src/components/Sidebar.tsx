@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useMatchRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -7,6 +7,7 @@ import type { ChannelLiveState } from "@/hooks/useChannelLiveState";
 import { Button } from "@/ui";
 import { ArrowLeft01Icon, DashboardSquare01Icon, LeftToRightListBulletIcon, Settings01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { CreateAgentDialog } from "@/components/CreateAgentDialog";
 
 interface SidebarProps {
 	liveStates: Record<string, ChannelLiveState>;
@@ -15,6 +16,8 @@ interface SidebarProps {
 }
 
 export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
+	const [createOpen, setCreateOpen] = useState(false);
+
 	const { data: agentsData } = useQuery({
 		queryKey: ["agents"],
 		queryFn: api.agents,
@@ -55,13 +58,13 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 			{/* Logo + collapse toggle */}
 			<div className="flex h-12 items-center border-b border-sidebar-line px-3">
 			{collapsed ? (
-				<Button onClick={onToggle} variant="ghost" size="icon" className="h-full w-full">
-					<img src={`${BASE_PATH}/ball.png`} alt="" className="h-6 w-6" draggable={false} />
-				</Button>
+				<button onClick={onToggle} className="flex h-full w-full items-center justify-center">
+					<img src={`${BASE_PATH}/ball.png`} alt="" className="h-6 w-6 transition-transform duration-150 ease-out hover:scale-110 active:scale-95" draggable={false} />
+				</button>
 			) : (
 				<div className="flex flex-1 items-center justify-between">
 					<Link to="/" className="flex items-center gap-2">
-						<img src={`${BASE_PATH}/ball.png`} alt="" className="h-6 w-6 flex-shrink-0" draggable={false} />
+						<img src={`${BASE_PATH}/ball.png`} alt="" className="h-6 w-6 flex-shrink-0 transition-transform duration-150 ease-out hover:scale-110 active:scale-95" draggable={false} />
 						<span className="whitespace-nowrap font-plex text-sm font-semibold text-sidebar-ink">
 							Spacebot
 						</span>
@@ -116,6 +119,13 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 							</Link>
 						);
 					})}
+				<button
+					onClick={() => setCreateOpen(true)}
+					className="flex h-8 w-8 items-center justify-center rounded-md text-sidebar-inkFaint hover:bg-sidebar-selected/50 hover:text-sidebar-inkDull"
+					title="New Agent"
+				>
+					+
+				</button>
 				</div>
 			) : (
 				<>
@@ -189,16 +199,18 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 								})}
 							</div>
 						)}
-						<Button
-							variant="outline"
-							size="sm"
-							className="mx-2 mt-1 w-auto justify-center border-dashed border-sidebar-line text-sidebar-inkFaint hover:border-sidebar-inkFaint hover:text-sidebar-inkDull"
-						>
-							+ New Agent
-						</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => setCreateOpen(true)}
+						className="mx-2 mt-1 w-auto justify-center border-dashed border-sidebar-line text-sidebar-inkFaint hover:border-sidebar-inkFaint hover:text-sidebar-inkDull"
+					>
+						+ New Agent
+					</Button>
 					</div>
 				</>
 			)}
+			<CreateAgentDialog open={createOpen} onOpenChange={setCreateOpen} />
 		</motion.nav>
 	);
 }

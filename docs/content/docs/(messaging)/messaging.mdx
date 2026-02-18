@@ -5,546 +5,138 @@ description: How Spacebot connects to Discord, Slack, Telegram, and webhooks.
 
 # Messaging
 
-How Spacebot connects to external chat platforms (Discord, Telegram, etc).
+Spacebot connects to chat platforms so your agent can talk to people where they already are. You can connect multiple platforms at once — messages from all of them flow into the same agent system.
 
-## Terminology
+## Supported Platforms
 
-"Channel" in Spacebot means the user-facing LLM process -- the thing with soul, personality, and conversation history. A "messaging adapter" is the I/O layer that connects a chat platform (Discord, Telegram, etc) to the Spacebot system. Adapters produce inbound messages and deliver outbound responses. Channels do the thinking.
+| Platform | Status | Setup Guide |
+|----------|--------|-------------|
+| [Discord](/docs/discord-setup) | Supported | Bot token + gateway connection |
+| [Slack](/docs/slack-setup) | Supported | Bot token + app token via Socket Mode |
+| [Telegram](/docs/telegram-setup) | Supported | Bot token via BotFather |
+| Webhook | Supported | HTTP endpoint for programmatic access |
+| Email | Coming soon | IMAP/SMTP |
+| WhatsApp | Coming soon | Meta Cloud API |
+| Matrix | Coming soon | Decentralized chat protocol |
+| iMessage | Coming soon | macOS only |
 
-```
-Discord message arrives
-    → Discord adapter produces InboundMessage
-    → Router maps conversation_id to a Channel
-    → Channel processes (branches, workers, etc)
-    → Channel produces OutboundResponse
-    → Router sends it back through the Discord adapter
-    → User sees the reply in Discord
-```
+## How It Works
 
-## Core Types
+1. You connect a platform by adding your tokens in the dashboard or config
+2. Spacebot opens a persistent connection to that platform
+3. When someone sends a message, Spacebot receives it, thinks, and replies
+4. Each conversation (channel, thread, DM) gets its own isolated history
 
-These live in `src/` (not in the messaging module) because they're the contract between messaging adapters and the rest of the system. Every adapter produces and consumes these types.
+You can connect multiple platforms at the same time. An agent on Discord and Slack simultaneously is just two bindings pointing at the same agent.
 
-### InboundMessage
+## Bindings
 
-```rust
-pub struct InboundMessage {
-    pub id: String,
-    pub source: String,             // "discord", "telegram", "webhook"
-    pub conversation_id: String,    // uniquely identifies a conversation (see Routing)
-    pub sender_id: String,
-    pub content: MessageContent,
-    pub timestamp: DateTime<Utc>,
-    pub metadata: HashMap<String, serde_json::Value>,
-}
+Bindings route messages from a platform to a specific agent. A binding says "messages from this place go to this agent."
 
-pub enum MessageContent {
-    Text(String),
-    Media {
-        text: Option<String>,
-        attachments: Vec<Attachment>,
-    },
-}
+<Tabs items={["Spacebot UI", "TOML Config"]}>
+<Tab value="Spacebot UI">
 
-pub struct Attachment {
-    pub filename: String,
-    pub mime_type: String,
-    pub url: String,
-    pub size_bytes: Option<u64>,
-}
-```
+Go to **Settings** → **Bindings** tab to create and manage bindings.
 
-The `metadata` field carries platform-specific data (Discord message flags, Telegram reply-to info, etc) without polluting the core type. Adapters write it, the router ignores it, and the Channel's `reply` tool can pass it back when responding so the adapter knows how to format the response (thread reply, inline reply, etc).
+Each binding specifies:
+- Which **agent** handles the messages
+- Which **platform** (Discord, Slack, Telegram)
+- Optionally which **server/workspace/chat** to scope it to
+- Optionally which **channels** within that server
 
-### OutboundResponse
+</Tab>
+<Tab value="TOML Config">
 
-```rust
-pub enum OutboundResponse {
-    Text(String),
-    StreamStart,
-    StreamChunk(String),
-    StreamEnd,
-}
-```
+```toml
+# Route a Discord server to the main agent
+[[bindings]]
+agent_id = "main"
+channel = "discord"
+guild_id = "123456789"
 
-Text for complete messages. The `Stream*` variants enable real-time streaming where the platform supports it. Each adapter decides how to render streaming. Adapters that don't support streaming buffer all chunks and send the final text as a single message on `StreamEnd`.
+# Route a Slack workspace to the main agent
+[[bindings]]
+agent_id = "main"
+channel = "slack"
+workspace_id = "T01234ABCDE"
 
-### StatusUpdate
-
-```rust
-pub enum StatusUpdate {
-    Thinking,
-    ToolStarted { tool_name: String },
-    ToolCompleted { tool_name: String },
-    BranchStarted,
-    WorkerStarted { task: String },
-    WorkerCompleted { task: String, result: String },
-}
+# Route a Telegram chat to a different agent
+[[bindings]]
+agent_id = "support-bot"
+channel = "telegram"
+chat_id = "-100123456789"
 ```
 
-Status updates flow from `SpacebotHook` through the adapter to the platform. Discord and Telegram show typing indicators. Webhook has no persistent connection so status is a no-op. Adapters that don't support status just ignore them (the trait method has a default no-op).
+</Tab>
+</Tabs>
 
-### InboundStream
+Without any filtering (no guild ID, workspace ID, or chat ID), a binding accepts messages from anywhere on that platform.
 
-```rust
-pub type InboundStream = Pin<Box<dyn Stream<Item = InboundMessage> + Send>>;
+If no binding matches an incoming message, it's routed to the default agent automatically. This means the bot responds everywhere out of the box — add bindings to restrict it to specific channels or servers.
+
+## Multiple Agents
+
+You can run multiple agents on the same Spacebot instance, each connected to different places. Each agent has its own memory, personality, and conversation history.
+
+<Tabs items={["Spacebot UI", "TOML Config"]}>
+<Tab value="Spacebot UI">
+
+Create multiple agents in **Settings** → **Agents**, then assign them to different bindings.
+
+</Tab>
+<Tab value="TOML Config">
+
+```toml
+[[agents]]
+id = "main"
+default = true
+
+[[agents]]
+id = "support-bot"
+
+# Main agent handles Discord
+[[bindings]]
+agent_id = "main"
+channel = "discord"
+guild_id = "123456789"
+
+# Support bot handles Slack
+[[bindings]]
+agent_id = "support-bot"
+channel = "slack"
+workspace_id = "T01234ABCDE"
 ```
 
-Each adapter produces one of these from `start()`. The `MessagingManager` merges them all via `select_all()`.
+</Tab>
+</Tabs>
 
-## The Messaging Trait
+## Conversations
 
-```rust
-pub trait Messaging: Send + Sync + 'static {
-    /// Unique name for this adapter ("discord", "telegram", "webhook")
-    fn name(&self) -> &str;
+Each chat context maps to its own Spacebot conversation with isolated history:
 
-    /// Connect to the platform and return a stream of inbound messages.
-    /// Called once at startup. The stream should run until shutdown.
-    fn start(&self) -> impl Future<Output = Result<InboundStream>> + Send;
+| Platform | What gets its own conversation |
+|----------|-------------------------------|
+| Discord | Each channel, each thread, each DM |
+| Slack | Each channel, each thread, each DM |
+| Telegram | Each chat (group, DM, or channel) |
+| Webhook | Each unique conversation ID in the request |
 
-    /// Send a response to a specific inbound message.
-    fn respond(
-        &self,
-        message: &InboundMessage,
-        response: OutboundResponse,
-    ) -> impl Future<Output = Result<()>> + Send;
-
-    /// Push a status update to the platform (typing indicator, tool activity).
-    /// Default: no-op. Override if the platform supports status.
-    fn send_status(
-        &self,
-        message: &InboundMessage,
-        status: StatusUpdate,
-    ) -> impl Future<Output = Result<()>> + Send {
-        async { Ok(()) }
-    }
-
-    /// Send a proactive message not tied to an inbound message.
-    /// Used for heartbeat results, worker completions with notify flag, etc.
-    fn broadcast(
-        &self,
-        target: &str,
-        response: OutboundResponse,
-    ) -> impl Future<Output = Result<()>> + Send {
-        async { Ok(()) }
-    }
-
-    /// Check if the platform connection is healthy.
-    fn health_check(&self) -> impl Future<Output = Result<()>> + Send;
-
-    /// Graceful shutdown. Close connections, flush pending messages.
-    fn shutdown(&self) -> impl Future<Output = Result<()>> + Send {
-        async { Ok(()) }
-    }
-}
-```
-
-Since adapters are registered at runtime based on config, the `MessagingManager` needs dynamic dispatch. This is a case for the companion `Dyn` trait pattern from the style guide -- implement the static trait for type safety, use the `Dyn` version for runtime polymorphism.
-
-## Module Layout
-
-```
-src/
-├── lib.rs                  — InboundMessage, OutboundResponse, StatusUpdate, InboundStream
-│
-├── messaging.rs            → messaging/
-│   ├── traits.rs           — Messaging trait + MessagingDyn companion
-│   ├── manager.rs          — MessagingManager: start all, fan-in, route outbound
-│   ├── discord.rs          — Discord adapter
-│   ├── telegram.rs         — Telegram adapter
-│   └── webhook.rs          — Webhook receiver (programmatic access)
-```
-
-The module root (`src/messaging.rs`) re-exports the trait and manager. Individual adapters are private -- the manager is the only public interface.
-
-## MessagingManager
-
-Fan-in all inbound streams. Route outbound by adapter name.
-
-```rust
-pub struct MessagingManager {
-    adapters: HashMap<String, Arc<dyn MessagingDyn>>,
-}
-
-impl MessagingManager {
-    /// Register an adapter. Called during startup based on config.
-    pub fn register(&mut self, adapter: impl Messaging) {
-        let name = adapter.name().to_string();
-        self.adapters.insert(name, Arc::new(adapter));
-    }
-
-    /// Start all registered adapters and merge their inbound streams.
-    pub async fn start(&self) -> Result<InboundStream> {
-        let streams = futures::future::try_join_all(
-            self.adapters.values().map(|a| a.start())
-        ).await?;
-        Ok(Box::pin(futures::stream::select_all(streams)))
-    }
-
-    /// Route a response back to the correct adapter.
-    pub async fn respond(
-        &self,
-        message: &InboundMessage,
-        response: OutboundResponse,
-    ) -> Result<()> {
-        let adapter = self.adapters.get(&message.source)
-            .with_context(|| format!("no messaging adapter named '{}'", message.source))?;
-        adapter.respond(message, response).await
-    }
-
-    /// Route a status update to the correct adapter.
-    pub async fn send_status(
-        &self,
-        message: &InboundMessage,
-        status: StatusUpdate,
-    ) -> Result<()> {
-        let adapter = self.adapters.get(&message.source)
-            .with_context(|| format!("no messaging adapter named '{}'", message.source))?;
-        adapter.send_status(message, status).await
-    }
-
-    /// Send a proactive message through a specific adapter.
-    pub async fn broadcast(
-        &self,
-        adapter_name: &str,
-        target: &str,
-        response: OutboundResponse,
-    ) -> Result<()> {
-        let adapter = self.adapters.get(adapter_name)
-            .with_context(|| format!("no messaging adapter named '{adapter_name}'"))?;
-        adapter.broadcast(target, response).await
-    }
-}
-```
-
-The main loop consumes the merged `InboundStream` and feeds messages into the router:
-
-```rust
-let mut inbound = messaging_manager.start().await?;
-
-while let Some(message) = inbound.next().await {
-    let channel = router.resolve_or_create(&message).await?;
-    channel.handle_message(message).await?;
-}
-```
-
-## Routing
-
-Each adapter produces a `conversation_id` that maps to a Spacebot Channel. The format is platform-specific:
-
-| Adapter | conversation_id format | Example |
-|---------|----------------------|---------|
-| Discord | `discord:<guild_id>:<channel_id>` | `discord:123:456` |
-| Discord DM | `discord:dm:<user_id>` | `discord:dm:789` |
-| Discord thread | `discord:<guild_id>:<thread_id>` | `discord:123:thread_456` |
-| Telegram | `telegram:<chat_id>` | `telegram:-100123` |
-| Webhook | `webhook:<caller_id>` | `webhook:github-ci` |
-
-The router maintains a map of `conversation_id → Channel`. First message for a conversation creates a new Channel. Subsequent messages route to the existing one.
-
-Cross-platform identity linking (same human on Discord and Telegram sharing a Channel) is a future concern. For now, each platform conversation gets its own Channel.
-
-## Configuration
-
-Messaging config lives in redb alongside the rest of the system config. Each adapter reads its own key namespace at startup.
-
-```
-messaging:discord:enabled       → bool
-messaging:discord:token         → encrypted (via DecryptedSecret)
-messaging:discord:guilds        → JSON array of guild IDs to monitor
-
-messaging:telegram:enabled      → bool
-messaging:telegram:token        → encrypted (via DecryptedSecret)
-
-messaging:webhook:enabled       → bool
-messaging:webhook:port          → u16
-messaging:webhook:bind          → String (default "127.0.0.1")
-messaging:webhook:secret        → encrypted (via DecryptedSecret, optional)
-```
-
-Tokens are stored encrypted using the existing secrets system (AES-256-GCM, redb). The `messaging:<name>:enabled` flag allows enabling/disabling adapters at runtime without removing credentials.
-
-At startup, the system reads all `messaging:*:enabled` keys, constructs the enabled adapters, and registers them with the `MessagingManager`.
+Threads are first-class on Discord and Slack — a thread gets its own conversation, separate from the parent channel.
 
 ## Streaming
 
-For platforms that support it, text deltas flow from the Channel to the user in real time.
+Responses stream in real-time on platforms that support it. You see the reply being typed out word by word, similar to how ChatGPT works. Discord, Slack, and Telegram all support this.
 
-The flow:
+## Webhook
 
-```
-Channel's SpacebotHook.on_text_delta()
-    → pushes StreamChunk to the messaging manager
-    → adapter receives OutboundResponse::StreamChunk
-    → platform-specific rendering
-```
+The webhook adapter is for programmatic access — CI hooks, scripts, monitoring alerts, anything that can make an HTTP request.
 
-Each adapter handles streaming differently:
-
-**Discord:** Send an initial message on `StreamStart`, edit it in-place on each `StreamChunk`. Rate-limit edits to avoid API throttling. Send final edit on `StreamEnd`.
-
-**Telegram:** Send an initial message on `StreamStart`, call `editMessageText` on each `StreamChunk`. Buffer chunks and edit at intervals -- Telegram's `editMessageText` has a ~1 second effective rate limit.
-
-**Webhook:** No streaming (request-response). The full response is returned when the agent finishes. If the caller wants real-time output, that's a web UI concern (separate from messaging).
-
-Adapters that don't support streaming buffer all chunks and send the final text as a single message on `StreamEnd`.
-
-### Block Streaming Coalescing
-
-Forwarding every LLM token delta as a separate message edit is wasteful and hits platform rate limits. Adapters should coalesce chunks before sending updates.
-
-The coalescer accumulates `StreamChunk` text and flushes based on configurable thresholds:
-
-```rust
-pub struct CoalesceConfig {
-    /// Minimum chars accumulated before flushing an edit.
-    pub min_chars: usize,
-    /// Maximum chars before forcing a flush regardless of idle time.
-    pub max_chars: usize,
-    /// Flush after this duration of no new chunks (LLM is "pausing").
-    pub idle_timeout: Duration,
-}
+```bash
+curl -X POST http://localhost:18789/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hello", "sender_id": "script", "conversation_id": "test"}'
 ```
 
-Reasonable defaults per platform:
+## Hot Reloading
 
-| Platform | min_chars | max_chars | idle_timeout |
-|----------|-----------|-----------|-------------|
-| Discord | 200 | 1500 | 500ms |
-| Telegram | 300 | 2000 | 1000ms |
-
-The coalescer runs per-message (one active response = one coalescer instance). On `StreamStart` it sends the initial message. As chunks arrive it accumulates text and flushes an edit when any threshold is hit. On `StreamEnd` it flushes whatever remains.
-
-This sits inside each adapter's `respond()` implementation, not in the manager or core. Different platforms have different rate limits and the coalescing strategy is a platform concern.
-
-## Webhook Adapter
-
-The webhook adapter is the simplest one. It exposes an HTTP endpoint where external systems can POST messages into Spacebot.
-
-```
-POST /webhook
-{
-    "message": "deploy to staging",
-    "sender_id": "github-ci",
-    "conversation_id": "github-ci"
-}
-
-→ 202 Accepted { "id": "msg-uuid" }
-```
-
-This is for programmatic access -- CI hooks, monitoring alerts, external scripts, `curl` from the terminal during development. The "platform" is anything that can make an HTTP request.
-
-Optionally supports sync mode: if the request includes `"wait": true`, the HTTP response blocks until the agent replies (with a timeout). Useful for scripts that need the result.
-
-```
-POST /webhook
-{
-    "message": "what's the status of the auth refactor?",
-    "sender_id": "james",
-    "conversation_id": "dev-queries",
-    "wait": true
-}
-
-→ 200 OK { "response": "The auth refactor worker completed 10 minutes ago..." }
-```
-
-The webhook adapter does NOT include:
-- SSE or WebSocket streaming
-- A chat UI
-- Session management
-- Any browser-facing features
-
-If Spacebot ever gets a web UI, that would be its own subsystem -- not part of the messaging layer.
-
-## Discord Adapter
-
-Uses **serenity** (`0.12.x`) — the standard Rust Discord library. Tokio-native, handles the gateway WebSocket, sharding, and caching. We use it for the gateway connection and HTTP API, not the command framework.
-
-### How It Maps to Spacebot
-
-Serenity provides an `EventHandler` trait. We implement `message()` to receive messages and map them to `InboundMessage`. The adapter holds an `mpsc::Sender` that feeds the `InboundStream` consumed by the `MessagingManager`.
-
-```rust
-struct Handler {
-    inbound_tx: mpsc::Sender<InboundMessage>,
-}
-
-#[async_trait]
-impl EventHandler for Handler {
-    async fn message(&self, ctx: SerenityContext, msg: SerenityMessage) {
-        // Ignore bot messages (including our own)
-        if msg.author.bot { return; }
-
-        let inbound = InboundMessage {
-            id: msg.id.to_string(),
-            source: "discord".into(),
-            conversation_id: build_conversation_id(&msg),
-            sender_id: msg.author.id.to_string(),
-            content: extract_content(&msg),
-            timestamp: *msg.timestamp,
-            metadata: build_metadata(&msg),
-        };
-
-        self.inbound_tx.send(inbound).await.ok();
-    }
-}
-```
-
-### Conversation ID Mapping
-
-Discord has guilds (servers), channels, threads, and DMs. Each maps to a Spacebot conversation:
-
-| Discord Context | conversation_id | Spacebot Channel |
-|----------------|----------------|-----------------|
-| Server channel | `discord:<guild_id>:<channel_id>` | One channel per Discord channel |
-| Thread | `discord:<guild_id>:<thread_id>` | One channel per thread |
-| DM | `discord:dm:<user_id>` | One channel per DM |
-
-Threads are the natural fit — one Discord thread = one Spacebot conversation with its own history. In server channels without threads, the bot treats the whole channel as one conversation (which might get noisy in active channels, but that's configurable).
-
-### Metadata
-
-Platform-specific data stored in `InboundMessage.metadata` for response routing:
-
-```rust
-fn build_metadata(msg: &SerenityMessage) -> HashMap<String, Value> {
-    let mut meta = HashMap::new();
-    meta.insert("discord_channel_id", msg.channel_id.into());
-    meta.insert("discord_message_id", msg.id.into());
-    meta.insert("discord_guild_id", msg.guild_id.map(|g| g.into()));
-    meta.insert("discord_author_name", msg.author.name.clone().into());
-    meta
-}
-```
-
-When responding, the adapter reads `discord_channel_id` from the original message's metadata to know where to send the reply.
-
-### Responding
-
-Responses route through serenity's HTTP client. The adapter holds an `Arc<Http>` (from serenity's context) for sending messages outside of event handlers.
-
-```rust
-async fn respond(&self, message: &InboundMessage, response: OutboundResponse) -> Result<()> {
-    let channel_id = ChannelId::from(message.metadata["discord_channel_id"]);
-
-    match response {
-        OutboundResponse::Text(text) => {
-            // Split into 2000-char chunks if needed
-            for chunk in split_message(&text, 2000) {
-                channel_id.say(&self.http, chunk).await?;
-            }
-        }
-        OutboundResponse::StreamStart => {
-            // Send placeholder message, store its ID for editing
-            let msg = channel_id.say(&self.http, "...").await?;
-            self.store_active_message(message, msg.id).await;
-        }
-        OutboundResponse::StreamChunk(text) => {
-            // Edit the active message with accumulated text
-            // (coalescer handles batching, this receives already-coalesced text)
-            if let Some(msg_id) = self.get_active_message(message).await {
-                channel_id.edit_message(&self.http, msg_id, |m| m.content(&text)).await?;
-            }
-        }
-        OutboundResponse::StreamEnd => {
-            self.clear_active_message(message).await;
-        }
-    }
-    Ok(())
-}
-```
-
-### Message Length Limits
-
-Discord caps messages at 2000 characters. The adapter splits long responses into multiple messages. For streaming, if the accumulated text exceeds 2000 chars, send a new message and continue editing that one.
-
-### Typing Indicators
-
-Discord's typing indicator lasts ~10 seconds. On `StatusUpdate::Thinking`, start a background task that calls `channel_id.broadcast_typing()` every 8 seconds. Cancel it when a response is sent or a non-Thinking status arrives.
-
-```rust
-async fn send_status(&self, message: &InboundMessage, status: StatusUpdate) -> Result<()> {
-    match status {
-        StatusUpdate::Thinking => {
-            let channel_id = ChannelId::from(message.metadata["discord_channel_id"]);
-            let http = self.http.clone();
-            self.start_typing_loop(channel_id, http).await;
-        }
-        _ => {
-            self.stop_typing_loop(message).await;
-        }
-    }
-    Ok(())
-}
-```
-
-### Bot Permissions and Intents
-
-Required Discord bot setup:
-- **Intents:** `GUILD_MESSAGES`, `DIRECT_MESSAGES`, `MESSAGE_CONTENT` (privileged — must be enabled in the Discord developer portal)
-- **Permissions:** Send Messages, Read Message History, Embed Links, Attach Files (for future media support)
-
-The adapter validates intents on startup and logs a warning if `MESSAGE_CONTENT` is missing (messages will arrive but with empty content).
-
-### Guild Filtering
-
-The adapter accepts an optional list of guild IDs. If configured, it ignores messages from guilds not in the list. If not configured, it responds to all guilds the bot is in.
-
-### DiscordAdapter Struct
-
-```rust
-pub struct DiscordAdapter {
-    token: DecryptedSecret,
-    guild_filter: Option<Vec<GuildId>>,
-    http: Arc<RwLock<Option<Arc<Http>>>>,
-    active_messages: Arc<RwLock<HashMap<String, MessageId>>>,
-    typing_tasks: Arc<RwLock<HashMap<String, JoinHandle<()>>>>,
-}
-```
-
-The `http` handle is `None` until `start()` is called. Serenity's `Client::start()` is blocking (takes over the runtime), so we spawn it in a background task and extract the HTTP client from the `ready()` event.
-
-### Initialization Flow
-
-```
-1. DiscordAdapter::new(token, guild_filter)
-2. adapter.start() called by MessagingManager
-3. Build serenity Client with our EventHandler
-4. Spawn client.start() in tokio task
-5. EventHandler.ready() fires → store Http handle
-6. EventHandler.message() fires → map to InboundMessage → send on mpsc channel
-7. Return the mpsc receiver as InboundStream
-```
-
-### Thread Auto-Creation
-
-An optional mode where the bot automatically creates a thread for each new conversation in a server channel. This gives every interaction its own isolated context. The bot replies in the thread, and the thread's ID becomes the `conversation_id`. This avoids the problem of one noisy server channel becoming one massive Spacebot conversation.
-
-This is configurable per-guild. Some channels might want threaded mode (support, general chat), others might want single-channel mode (a dedicated bot channel).
-
-## Telegram Adapter
-
-Uses **teloxide** for the Telegram Bot API. Long polling mode for receiving updates, Telegram Bot API for sending/editing messages. Key differences from Discord: `sendChatAction("typing")` for typing indicators (expires after ~5s, repeated every 4s), `editMessageText` for streaming (rate-limited to ~1s intervals to avoid API throttling). Supports text messages, file attachments (documents, photos, video, audio, voice), reactions (limited to Telegram's available emoji set per chat), and reply threading via `ReplyParameters`. History backfill is not available via the Bot API — the conversation DB handles reconnect recovery.
-
-## Webhook Adapter
-
-The simplest adapter. An HTTP server (axum or similar) bound to a configurable address/port.
-
-- `POST /webhook` — accepts JSON messages, produces `InboundMessage`
-- Optional shared secret auth via `X-Webhook-Secret` header
-- Optional sync mode (`"wait": true`) blocks until agent responds
-- Localhost-only by default
-- No streaming, no persistent connections, no UI
-
-This is for programmatic access — CI hooks, monitoring alerts, external scripts, `curl` during development.
-
-## Adding a New Adapter
-
-1. Create `src/messaging/<name>.rs`
-2. Implement the `Messaging` trait
-3. Add the module declaration to `src/messaging.rs`
-4. Add config keys (`messaging:<name>:*`) to redb
-5. Register the adapter in the startup code (conditional on `messaging:<name>:enabled`)
-
-The adapter only needs to produce `InboundMessage` and consume `OutboundResponse`. It doesn't know about Channels, branches, workers, memory, or any other internal system. The boundary is the shared types in `src/lib.rs`.
+Changes to bindings and permissions (channel filters, DM allowed users) take effect within a couple seconds — no restart needed. Token changes require a restart, or you can re-save from the dashboard which reconnects automatically.

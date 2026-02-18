@@ -563,8 +563,13 @@ impl Binding {
             let message_chat = message
                 .metadata
                 .get("telegram_chat_id")
-                .and_then(|v| v.as_str());
-            if message_chat != Some(chat_id) {
+                .and_then(|value| {
+                    value
+                        .as_str()
+                        .map(std::borrow::ToOwned::to_owned)
+                        .or_else(|| value.as_i64().map(|id| id.to_string()))
+                });
+            if message_chat.as_deref() != Some(chat_id.as_str()) {
                 return false;
             }
         }

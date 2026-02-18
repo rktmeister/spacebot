@@ -38,8 +38,8 @@ function OpenCodeZenIcon({ size = 24, className }: IconProps) {
 			focusable="false"
 		>
 			<g clipPath={`url(#${clipPathId})`}>
-				<path d="M24 32H8V16H24V32Z" fill="#4B4646" />
-				<path d="M24 8H8V32H24V8ZM32 40H0V0H32V40Z" fill="#F1ECEC" />
+				<path d="M24 32H8V16H24V32Z" fill="currentColor" opacity="0.4" />
+				<path d="M24 8H8V32H24V8ZM32 40H0V0H32V40Z" fill="currentColor" />
 			</g>
 			<defs>
 				<clipPath id={clipPathId}>

@@ -1,6 +1,6 @@
 [package]
 name = "spacebot"
-version = "0.1.4"
+version = "0.1.7"
 edition = "2024"
 
 [dependencies]
@@ -116,6 +116,10 @@ bollard = "0.18"
 # Semver parsing (for update version comparison)
 semver = "1"
 
+# Skill installation
+zip = "2"
+tempfile = "3"
+
 [lints.clippy]
 dbg_macro = "forbid"
 todo = "forbid"
@@ -123,4 +127,3 @@ unimplemented = "forbid"
 
 [dev-dependencies]
 tokio-test = "0.4"
-tempfile = "3"

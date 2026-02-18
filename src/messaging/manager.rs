@@ -45,9 +45,10 @@ impl MessagingManager {
     pub async fn start(&self) -> crate::Result<InboundStream> {
         let adapters = self.adapters.read().await;
         for (name, adapter) in adapters.iter() {
-            let stream = adapter.start().await
-                .with_context(|| format!("failed to start adapter '{name}'"))?;
-            Self::spawn_forwarder(name.clone(), stream, self.fan_in_tx.clone());
+            match adapter.start().await {
+                Ok(stream) => Self::spawn_forwarder(name.clone(), stream, self.fan_in_tx.clone()),
+                Err(error) => tracing::error!(adapter = %name, %error, "adapter failed to start, skipping"),
+            }
         }
         drop(adapters);
 
@@ -161,6 +162,16 @@ impl MessagingManager {
             .get(&message.source)
             .with_context(|| format!("no messaging adapter named '{}'", message.source))?;
         adapter.fetch_history(message, limit).await
+    }
+
+    /// Remove and shut down a single adapter by name.
+    pub async fn remove_adapter(&self, name: &str) -> crate::Result<()> {
+        let adapter = self.adapters.write().await.remove(name);
+        if let Some(adapter) = adapter {
+            adapter.shutdown().await?;
+            tracing::info!(adapter = %name, "adapter removed and shut down");
+        }
+        Ok(())
     }
 
     /// Shut down all adapters gracefully.

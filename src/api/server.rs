@@ -39,6 +39,13 @@ struct HealthResponse {
 }
 
 #[derive(Serialize)]
+struct IdleResponse {
+    idle: bool,
+    active_workers: usize,
+    active_branches: usize,
+}
+
+#[derive(Serialize)]
 struct StatusResponse {
     status: &'static str,
     version: &'static str,
@@ -249,6 +256,74 @@ struct IngestDeleteResponse {
     success: bool,
 }
 
+// -- Skill Types --
+
+#[derive(Serialize)]
+struct SkillInfo {
+    name: String,
+    description: String,
+    file_path: String,
+    base_dir: String,
+    source: String,
+}
+
+#[derive(Serialize)]
+struct SkillsListResponse {
+    skills: Vec<SkillInfo>,
+}
+
+#[derive(Deserialize)]
+struct InstallSkillRequest {
+    agent_id: String,
+    spec: String,
+    #[serde(default)]
+    instance: bool,
+}
+
+#[derive(Serialize)]
+struct InstallSkillResponse {
+    installed: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct RemoveSkillRequest {
+    agent_id: String,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct RemoveSkillResponse {
+    success: bool,
+    path: Option<String>,
+}
+
+// -- Skills Registry Types (skills.sh proxy) --
+
+#[derive(Serialize, Deserialize, Clone)]
+struct RegistrySkill {
+    source: String,
+    #[serde(rename = "skillId")]
+    skill_id: String,
+    name: String,
+    installs: u64,
+    /// Only present in search results
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RegistryBrowseResponse {
+    skills: Vec<RegistrySkill>,
+    has_more: bool,
+}
+
+#[derive(Serialize)]
+struct RegistrySearchResponse {
+    skills: Vec<RegistrySkill>,
+    query: String,
+    count: usize,
+}
+
 // -- Agent Config Types --
 
 #[derive(Serialize, Debug)]
@@ -436,10 +511,11 @@ pub async fn start_http_server(
 
     let api_routes = Router::new()
         .route("/health", get(health))
+        .route("/idle", get(idle))
         .route("/status", get(status))
         .route("/overview", get(instance_overview))
         .route("/events", get(events_sse))
-        .route("/agents", get(list_agents))
+        .route("/agents", get(list_agents).post(create_agent))
         .route("/agents/overview", get(agent_overview))
         .route("/channels", get(list_channels))
         .route("/channels/messages", get(channel_messages))
@@ -461,11 +537,18 @@ pub async fn start_http_server(
         .route("/channels/cancel", post(cancel_process))
         .route("/agents/ingest/files", get(list_ingest_files).delete(delete_ingest_file))
         .route("/agents/ingest/upload", post(upload_ingest_file))
+        .route("/agents/skills", get(list_skills))
+        .route("/agents/skills/install", post(install_skill))
+        .route("/agents/skills/remove", delete(remove_skill))
+        .route("/skills/registry/browse", get(registry_browse))
+        .route("/skills/registry/search", get(registry_search))
         .route("/providers", get(get_providers).put(update_provider))
         .route("/providers/{provider}", delete(delete_provider))
         .route("/models", get(get_models))
         .route("/models/refresh", post(refresh_models))
         .route("/messaging/status", get(messaging_status))
+        .route("/messaging/disconnect", post(disconnect_platform))
+        .route("/messaging/toggle", post(toggle_platform))
         .route("/bindings", get(list_bindings).post(create_binding).put(update_binding).delete(delete_binding))
         .route("/settings", get(get_global_settings).put(update_global_settings))
         .route("/config/raw", get(get_raw_config).put(update_raw_config))
@@ -502,6 +585,26 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
+/// Reports whether the instance is idle (no active workers or branches).
+/// Used by the platform to gate rolling updates.
+async fn idle(State(state): State<Arc<ApiState>>) -> Json<IdleResponse> {
+    let blocks = state.channel_status_blocks.read().await;
+    let mut total_workers = 0;
+    let mut total_branches = 0;
+
+    for status_block in blocks.values() {
+        let block = status_block.read().await;
+        total_workers += block.active_workers.len();
+        total_branches += block.active_branches.len();
+    }
+
+    Json(IdleResponse {
+        idle: total_workers == 0 && total_branches == 0,
+        active_workers: total_workers,
+        active_branches: total_branches,
+    })
+}
+
 async fn status(State(state): State<Arc<ApiState>>) -> Json<StatusResponse> {
     let uptime = state.started_at.elapsed();
     Json(StatusResponse {
@@ -516,6 +619,361 @@ async fn status(State(state): State<Arc<ApiState>>) -> Json<StatusResponse> {
 async fn list_agents(State(state): State<Arc<ApiState>>) -> Json<AgentsResponse> {
     let agents = state.agent_configs.load();
     Json(AgentsResponse { agents: agents.as_ref().clone() })
+}
+
+/// Create a new agent and initialize it live (directories, databases, memory, identity, cron, cortex).
+async fn create_agent(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<CreateAgentRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let agent_id = request.agent_id.trim().to_string();
+    if agent_id.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "success": false,
+            "message": "Agent ID cannot be empty"
+        })));
+    }
+
+    // Check if agent already exists
+    {
+        let existing = state.agent_configs.load();
+        if existing.iter().any(|a| a.id == agent_id) {
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": format!("Agent '{agent_id}' already exists")
+            })));
+        }
+    }
+
+    let config_path = state.config_path.read().await.clone();
+    let instance_dir = (**state.instance_dir.load()).clone();
+
+    // Write agent entry to config.toml
+    let content = if config_path.exists() {
+        tokio::fs::read_to_string(&config_path).await.map_err(|error| {
+            tracing::warn!(%error, "failed to read config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+    } else {
+        String::new()
+    };
+    let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
+        tracing::warn!(%error, "failed to parse config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    if doc.get("agents").is_none() {
+        doc["agents"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+    }
+    let agents_array = doc["agents"]
+        .as_array_of_tables_mut()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut new_table = toml_edit::Table::new();
+    new_table["id"] = toml_edit::value(&agent_id);
+    agents_array.push(new_table);
+
+    tokio::fs::write(&config_path, doc.to_string()).await.map_err(|error| {
+        tracing::warn!(%error, "failed to write config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Resolve the agent config using instance defaults
+    let defaults = state.defaults_config.read().await;
+    let defaults = defaults.as_ref().ok_or_else(|| {
+        tracing::error!("defaults config not available");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let raw_config = crate::config::AgentConfig {
+        id: agent_id.clone(),
+        default: false,
+        workspace: None,
+        routing: None,
+        max_concurrent_branches: None,
+        max_concurrent_workers: None,
+        max_turns: None,
+        branch_max_turns: None,
+        context_window: None,
+        compaction: None,
+        memory_persistence: None,
+        coalesce: None,
+        ingestion: None,
+        cortex: None,
+        browser: None,
+        brave_search_key: None,
+        cron: Vec::new(),
+    };
+    let agent_config = raw_config.resolve(&instance_dir, defaults);
+    drop(defaults);
+
+    // Create directories
+    for dir in [
+        &agent_config.workspace,
+        &agent_config.data_dir,
+        &agent_config.archives_dir,
+        &agent_config.ingest_dir(),
+        &agent_config.logs_dir(),
+    ] {
+        std::fs::create_dir_all(dir).map_err(|error| {
+            tracing::error!(%error, dir = %dir.display(), "failed to create agent directory");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    }
+
+    // Connect databases
+    let db = crate::db::Db::connect(&agent_config.data_dir).await.map_err(|error| {
+        tracing::error!(%error, agent_id = %agent_id, "failed to connect agent databases");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Settings store
+    let settings_path = agent_config.data_dir.join("settings.redb");
+    let settings_store = std::sync::Arc::new(
+        crate::settings::SettingsStore::new(&settings_path).map_err(|error| {
+            tracing::error!(%error, agent_id = %agent_id, "failed to init settings store");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+    );
+
+    // Memory system
+    let embedding_model = {
+        let guard = state.embedding_model.read().await;
+        guard.as_ref().ok_or_else(|| {
+            tracing::error!("embedding model not available");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?.clone()
+    };
+
+    let memory_store = crate::memory::MemoryStore::new(db.sqlite.clone());
+    let embedding_table = crate::memory::EmbeddingTable::open_or_create(&db.lance)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, agent_id = %agent_id, "failed to init embeddings");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if let Err(error) = embedding_table.ensure_fts_index().await {
+        tracing::warn!(%error, agent_id = %agent_id, "failed to create FTS index");
+    }
+
+    let memory_search = std::sync::Arc::new(crate::memory::MemorySearch::new(
+        memory_store,
+        embedding_table,
+        embedding_model,
+    ));
+
+    // Event bus
+    let (event_tx, _) = tokio::sync::broadcast::channel(256);
+    let arc_agent_id: crate::AgentId = std::sync::Arc::from(agent_id.as_str());
+
+    // Identity scaffolding
+    crate::identity::scaffold_identity_files(&agent_config.workspace)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, agent_id = %agent_id, "failed to scaffold identity files");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let identity = crate::identity::Identity::load(&agent_config.workspace).await;
+
+    // Skills
+    let skills = crate::skills::SkillSet::load(
+        &instance_dir.join("skills"),
+        &agent_config.skills_dir(),
+    ).await;
+
+    // Prompt engine
+    let prompt_engine = {
+        let guard = state.prompt_engine.read().await;
+        guard.as_ref().ok_or_else(|| {
+            tracing::error!("prompt engine not available");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?.clone()
+    };
+
+    // Defaults for RuntimeConfig
+    let defaults_for_runtime = {
+        let guard = state.defaults_config.read().await;
+        guard.as_ref().ok_or_else(|| {
+            tracing::error!("defaults config not available");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?.clone()
+    };
+
+    // RuntimeConfig
+    let runtime_config = std::sync::Arc::new(crate::config::RuntimeConfig::new(
+        &instance_dir,
+        &agent_config,
+        &defaults_for_runtime,
+        prompt_engine,
+        identity,
+        skills,
+    ));
+    runtime_config.set_settings(settings_store.clone());
+
+    // LLM manager
+    let llm_manager = {
+        let guard = state.llm_manager.read().await;
+        guard.as_ref().ok_or_else(|| {
+            tracing::error!("LLM manager not available");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?.clone()
+    };
+
+    // Build deps
+    let deps = crate::AgentDeps {
+        agent_id: arc_agent_id.clone(),
+        memory_search: memory_search.clone(),
+        llm_manager,
+        cron_tool: None,
+        runtime_config: runtime_config.clone(),
+        event_tx: event_tx.clone(),
+        sqlite_pool: db.sqlite.clone(),
+    };
+
+    // Register event stream with API
+    let event_rx = event_tx.subscribe();
+    state.register_agent_events(agent_id.clone(), event_rx);
+
+    // Cron setup
+    let cron_store = std::sync::Arc::new(crate::cron::CronStore::new(db.sqlite.clone()));
+    let cron_context = crate::cron::CronContext {
+        deps: deps.clone(),
+        screenshot_dir: agent_config.screenshot_dir(),
+        logs_dir: agent_config.logs_dir(),
+        messaging_manager: {
+            let guard = state.messaging_manager.read().await;
+            guard.as_ref().cloned().unwrap_or_else(|| std::sync::Arc::new(crate::messaging::MessagingManager::new()))
+        },
+        store: cron_store.clone(),
+    };
+    let scheduler = std::sync::Arc::new(crate::cron::Scheduler::new(cron_context));
+    runtime_config.set_cron(cron_store.clone(), scheduler.clone());
+
+    let cron_tool = crate::tools::CronTool::new(cron_store.clone(), scheduler.clone());
+
+    // Cortex chat session
+    let browser_config = (**runtime_config.browser_config.load()).clone();
+    let brave_search_key = (**runtime_config.brave_search_key.load()).clone();
+    let conversation_logger = crate::conversation::history::ConversationLogger::new(db.sqlite.clone());
+    let channel_store = crate::conversation::ChannelStore::new(db.sqlite.clone());
+    let cortex_tool_server = crate::tools::create_cortex_chat_tool_server(
+        memory_search.clone(),
+        conversation_logger,
+        channel_store,
+        browser_config,
+        agent_config.screenshot_dir(),
+        brave_search_key,
+        runtime_config.workspace_dir.clone(),
+        runtime_config.instance_dir.clone(),
+    );
+    let cortex_store = crate::agent::cortex_chat::CortexChatStore::new(db.sqlite.clone());
+    let cortex_session = crate::agent::cortex_chat::CortexChatSession::new(
+        deps.clone(),
+        cortex_tool_server,
+        cortex_store,
+    );
+
+    // Spawn cortex loops
+    let cortex_logger = crate::agent::cortex::CortexLogger::new(db.sqlite.clone());
+    tokio::spawn({
+        let deps = deps.clone();
+        let logger = cortex_logger.clone();
+        async move {
+            crate::agent::cortex::spawn_bulletin_loop(deps, logger).await;
+        }
+    });
+    tokio::spawn({
+        let deps = deps.clone();
+        async move {
+            crate::agent::cortex::spawn_association_loop(deps, cortex_logger).await;
+        }
+    });
+
+    // Spawn ingestion if enabled
+    let ingestion_config = **runtime_config.ingestion.load();
+    if ingestion_config.enabled {
+        crate::agent::ingestion::spawn_ingestion_loop(
+            agent_config.ingest_dir(),
+            deps.clone(),
+        );
+    }
+
+    // Build the Agent and send to main loop so it can receive messages
+    let sqlite_pool = db.sqlite.clone();
+    let mut deps_with_cron = deps.clone();
+    deps_with_cron.cron_tool = Some(cron_tool);
+    let agent = crate::Agent {
+        id: arc_agent_id.clone(),
+        config: agent_config.clone(),
+        db,
+        deps: deps_with_cron,
+    };
+    if let Err(error) = state.agent_tx.send(agent).await {
+        tracing::error!(%error, "failed to send new agent to main loop");
+    }
+
+    // Update all ArcSwap-based API state maps
+    {
+        // Agent pools
+        let mut pools = (**state.agent_pools.load()).clone();
+        pools.insert(agent_id.clone(), sqlite_pool);
+        state.agent_pools.store(std::sync::Arc::new(pools));
+
+        // Memory searches
+        let mut searches = (**state.memory_searches.load()).clone();
+        searches.insert(agent_id.clone(), memory_search);
+        state.memory_searches.store(std::sync::Arc::new(searches));
+
+        // Agent workspaces
+        let mut workspaces = (**state.agent_workspaces.load()).clone();
+        workspaces.insert(agent_id.clone(), agent_config.workspace.clone());
+        state.agent_workspaces.store(std::sync::Arc::new(workspaces));
+
+        // Runtime configs
+        let mut configs = (**state.runtime_configs.load()).clone();
+        configs.insert(agent_id.clone(), runtime_config);
+        state.runtime_configs.store(std::sync::Arc::new(configs));
+
+        // Agent config summaries
+        let mut agent_infos = (**state.agent_configs.load()).clone();
+        agent_infos.push(AgentInfo {
+            id: agent_config.id.clone(),
+            workspace: agent_config.workspace.clone(),
+            context_window: agent_config.context_window,
+            max_turns: agent_config.max_turns,
+            max_concurrent_branches: agent_config.max_concurrent_branches,
+            max_concurrent_workers: agent_config.max_concurrent_workers,
+        });
+        state.agent_configs.store(std::sync::Arc::new(agent_infos));
+
+        // Cron stores and schedulers
+        let mut cron_stores = (**state.cron_stores.load()).clone();
+        cron_stores.insert(agent_id.clone(), cron_store);
+        state.cron_stores.store(std::sync::Arc::new(cron_stores));
+
+        let mut cron_schedulers = (**state.cron_schedulers.load()).clone();
+        cron_schedulers.insert(agent_id.clone(), scheduler);
+        state.cron_schedulers.store(std::sync::Arc::new(cron_schedulers));
+
+        // Cortex chat sessions
+        let mut sessions = (**state.cortex_chat_sessions.load()).clone();
+        sessions.insert(agent_id.clone(), std::sync::Arc::new(cortex_session));
+        state.cortex_chat_sessions.store(std::sync::Arc::new(sessions));
+    }
+
+    tracing::info!(agent_id = %agent_id, "agent created and initialized via API");
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "agent_id": agent_id,
+        "message": format!("Agent '{agent_id}' created and running")
+    })))
+}
+
+#[derive(Deserialize)]
+struct CreateAgentRequest {
+    agent_id: String,
 }
 
 /// Get overview stats for an agent: memory breakdown, channels, cron, cortex.
@@ -806,6 +1264,7 @@ async fn events_sse(
                             ApiEvent::BranchCompleted { .. } => "branch_completed",
                             ApiEvent::ToolStarted { .. } => "tool_started",
                             ApiEvent::ToolCompleted { .. } => "tool_completed",
+                            ApiEvent::ConfigReloaded => "config_reloaded",
                         };
                         yield Ok(axum::response::sse::Event::default()
                             .event(event_type)
@@ -2035,7 +2494,6 @@ struct ProviderStatus {
     deepseek: bool,
     xai: bool,
     mistral: bool,
-    ollama: bool,
     opencode_zen: bool,
 }
 
@@ -2062,21 +2520,8 @@ async fn get_providers(
 ) -> Result<Json<ProvidersResponse>, StatusCode> {
     let config_path = state.config_path.read().await.clone();
 
-    // Check which providers have config by reading the config
-    let (
-        anthropic,
-        openai,
-        openrouter,
-        zhipu,
-        groq,
-        together,
-        fireworks,
-        deepseek,
-        xai,
-        mistral,
-        ollama,
-        opencode_zen,
-    ) = if config_path.exists() {
+    // Check which providers have keys by reading the config
+    let (anthropic, openai, openrouter, zhipu, groq, together, fireworks, deepseek, xai, mistral, opencode_zen) = if config_path.exists() {
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2112,8 +2557,6 @@ async fn get_providers(
             has_key("deepseek_key", "DEEPSEEK_API_KEY"),
             has_key("xai_key", "XAI_API_KEY"),
             has_key("mistral_key", "MISTRAL_API_KEY"),
-            has_key("ollama_base_url", "OLLAMA_BASE_URL")
-                || has_key("ollama_key", "OLLAMA_API_KEY"),
             has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
         )
     } else {
@@ -2129,7 +2572,6 @@ async fn get_providers(
             std::env::var("DEEPSEEK_API_KEY").is_ok(),
             std::env::var("XAI_API_KEY").is_ok(),
             std::env::var("MISTRAL_API_KEY").is_ok(),
-            std::env::var("OLLAMA_BASE_URL").is_ok() || std::env::var("OLLAMA_API_KEY").is_ok(),
             std::env::var("OPENCODE_ZEN_API_KEY").is_ok(),
         )
     };
@@ -2145,7 +2587,6 @@ async fn get_providers(
         deepseek,
         xai,
         mistral,
-        ollama,
         opencode_zen,
     };
     let has_any = providers.anthropic 
@@ -2158,7 +2599,6 @@ async fn get_providers(
         || providers.deepseek
         || providers.xai
         || providers.mistral
-        || providers.ollama
         || providers.opencode_zen;
 
     Ok(Json(ProvidersResponse { providers, has_any }))
@@ -2168,8 +2608,6 @@ async fn update_provider(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<ProviderUpdateRequest>,
 ) -> Result<Json<ProviderUpdateResponse>, StatusCode> {
-    let provider_value = request.api_key.trim();
-
     let key_name = match request.provider.as_str() {
         "anthropic" => "anthropic_key",
         "openai" => "openai_key",
@@ -2181,7 +2619,6 @@ async fn update_provider(
         "deepseek" => "deepseek_key",
         "xai" => "xai_key",
         "mistral" => "mistral_key",
-        "ollama" => "ollama_base_url",
         "opencode-zen" => "opencode_zen_key",
         _ => {
             return Ok(Json(ProviderUpdateResponse {
@@ -2191,14 +2628,10 @@ async fn update_provider(
         }
     };
 
-    if provider_value.is_empty() {
+    if request.api_key.trim().is_empty() {
         return Ok(Json(ProviderUpdateResponse {
             success: false,
-            message: if request.provider == "ollama" {
-                "Ollama base URL cannot be empty".into()
-            } else {
-                "API key cannot be empty".into()
-            },
+            message: "API key cannot be empty".into(),
         }));
     }
 
@@ -2223,7 +2656,7 @@ async fn update_provider(
     }
 
     // Set the key
-    doc["llm"][key_name] = toml_edit::value(provider_value);
+    doc["llm"][key_name] = toml_edit::value(request.api_key);
 
     // Auto-set routing defaults if the current routing points to a provider
     // the user doesn't have a key for. This prevents the common case where
@@ -2239,44 +2672,31 @@ async fn update_provider(
         let current_provider =
             crate::llm::routing::provider_from_model(current_channel);
 
-        // Check if the current routing provider has a key configured
-        let has_key_for_current = match current_provider {
-            "anthropic" => doc
-                .get("llm")
-                .and_then(|l| l.get("anthropic_key"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "openai" => doc
-                .get("llm")
-                .and_then(|l| l.get("openai_key"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "openrouter" => doc
-                .get("llm")
-                .and_then(|l| l.get("openrouter_key"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "zhipu" => doc
-                .get("llm")
-                .and_then(|l| l.get("zhipu_key"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "opencode-zen" => doc
-                .get("llm")
-                .and_then(|l| l.get("opencode_zen_key"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "ollama" => {
-                doc.get("llm")
-                    .and_then(|l| l.get("ollama_base_url"))
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|s| !s.is_empty())
-                    || doc
-                        .get("llm")
-                        .and_then(|l| l.get("ollama_key"))
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|s| !s.is_empty())
+        // Check if the current routing provider has a usable key.
+        // Resolves "env:VAR_NAME" references — the boot script writes these
+        // for common providers even when the env var isn't actually set.
+        let has_provider_key = |toml_key: &str, env_var: &str| -> bool {
+            if let Some(s) = doc.get("llm").and_then(|l| l.get(toml_key)).and_then(|v| v.as_str()) {
+                if let Some(var_name) = s.strip_prefix("env:") {
+                    return std::env::var(var_name).is_ok();
+                }
+                return !s.is_empty();
             }
+            std::env::var(env_var).is_ok()
+        };
+
+        let has_key_for_current = match current_provider {
+            "anthropic" => has_provider_key("anthropic_key", "ANTHROPIC_API_KEY"),
+            "openai" => has_provider_key("openai_key", "OPENAI_API_KEY"),
+            "openrouter" => has_provider_key("openrouter_key", "OPENROUTER_API_KEY"),
+            "zhipu" => has_provider_key("zhipu_key", "ZHIPU_API_KEY"),
+            "groq" => has_provider_key("groq_key", "GROQ_API_KEY"),
+            "together" => has_provider_key("together_key", "TOGETHER_API_KEY"),
+            "fireworks" => has_provider_key("fireworks_key", "FIREWORKS_API_KEY"),
+            "deepseek" => has_provider_key("deepseek_key", "DEEPSEEK_API_KEY"),
+            "xai" => has_provider_key("xai_key", "XAI_API_KEY"),
+            "mistral" => has_provider_key("mistral_key", "MISTRAL_API_KEY"),
+            "opencode-zen" => has_provider_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
             _ => false,
         };
 
@@ -2339,19 +2759,18 @@ async fn delete_provider(
     State(state): State<Arc<ApiState>>,
     axum::extract::Path(provider): axum::extract::Path<String>,
 ) -> Result<Json<ProviderUpdateResponse>, StatusCode> {
-    let (key_name, secondary_key_name) = match provider.as_str() {
-        "anthropic" => ("anthropic_key", None),
-        "openai" => ("openai_key", None),
-        "openrouter" => ("openrouter_key", None),
-        "zhipu" => ("zhipu_key", None),
-        "groq" => ("groq_key", None),
-        "together" => ("together_key", None),
-        "fireworks" => ("fireworks_key", None),
-        "deepseek" => ("deepseek_key", None),
-        "xai" => ("xai_key", None),
-        "mistral" => ("mistral_key", None),
-        "ollama" => ("ollama_base_url", Some("ollama_key")),
-        "opencode-zen" => ("opencode_zen_key", None),
+    let key_name = match provider.as_str() {
+        "anthropic" => "anthropic_key",
+        "openai" => "openai_key",
+        "openrouter" => "openrouter_key",
+        "zhipu" => "zhipu_key",
+        "groq" => "groq_key",
+        "together" => "together_key",
+        "fireworks" => "fireworks_key",
+        "deepseek" => "deepseek_key",
+        "xai" => "xai_key",
+        "mistral" => "mistral_key",
+        "opencode-zen" => "opencode_zen_key",
         _ => {
             return Ok(Json(ProviderUpdateResponse {
                 success: false,
@@ -2380,9 +2799,6 @@ async fn delete_provider(
     if let Some(llm) = doc.get_mut("llm") {
         if let Some(table) = llm.as_table_mut() {
             table.remove(key_name);
-            if let Some(secondary_key_name) = secondary_key_name {
-                table.remove(secondary_key_name);
-            }
         }
     }
 
@@ -2404,7 +2820,7 @@ struct ModelInfo {
     id: String,
     /// Human-readable name
     name: String,
-    /// Provider ID ("anthropic", "openrouter", "openai", "zhipu", "ollama", ...)
+    /// Provider ID ("anthropic", "openrouter", "openai", "zhipu")
     provider: String,
     /// Context window size in tokens, if known
     context_window: Option<u64>,
@@ -2856,14 +3272,10 @@ async fn get_models(
         .filter(|m| configured.contains(&m.provider.as_str()))
         .collect();
 
-    // Add cached dynamic models if fresh.
-    // Ollama is resolved live from its /api/tags endpoint.
+    // Add cached dynamic models if fresh
     let cache = DYNAMIC_MODELS.read().await;
     if !cache.0.is_empty() && cache.1.elapsed() < MODEL_CACHE_TTL {
         for model in &cache.0 {
-            if model.provider == "ollama" {
-                continue;
-            }
             if configured.contains(&model.provider.as_str()) {
                 // Skip if already in curated list
                 if !models.iter().any(|m| m.id == model.id) {
@@ -2873,17 +3285,6 @@ async fn get_models(
         }
     }
     drop(cache);
-
-    // Only suggest currently installed Ollama models.
-    if configured.contains(&"ollama") {
-        if let Ok(ollama_models) = fetch_ollama_models(&config_path).await {
-            for model in ollama_models {
-                if !models.iter().any(|existing| existing.id == model.id) {
-                    models.push(model);
-                }
-            }
-        }
-    }
 
     Ok(Json(ModelsResponse { models }))
 }
@@ -2902,6 +3303,7 @@ async fn refresh_models(
             dynamic.extend(models);
         }
     }
+
     // Cache the results
     let mut cache = DYNAMIC_MODELS.write().await;
     *cache = (dynamic, std::time::Instant::now());
@@ -2915,21 +3317,23 @@ async fn refresh_models(
 async fn configured_providers(config_path: &std::path::Path) -> Vec<&'static str> {
     let mut providers = Vec::new();
 
-    let config_doc = tokio::fs::read_to_string(config_path)
-        .await
-        .ok()
-        .and_then(|content| content.parse::<toml_edit::DocumentMut>().ok());
+    let content = match tokio::fs::read_to_string(config_path).await {
+        Ok(c) => c,
+        Err(_) => return providers,
+    };
+    let doc: toml_edit::DocumentMut = match content.parse() {
+        Ok(d) => d,
+        Err(_) => return providers,
+    };
 
     let has_key = |key: &str, env_var: &str| -> bool {
-        if let Some(doc) = &config_doc {
-            if let Some(llm) = doc.get("llm") {
-                if let Some(val) = llm.get(key) {
-                    if let Some(s) = val.as_str() {
-                        if let Some(var_name) = s.strip_prefix("env:") {
-                            return std::env::var(var_name).is_ok();
-                        }
-                        return !s.is_empty();
+        if let Some(llm) = doc.get("llm") {
+            if let Some(val) = llm.get(key) {
+                if let Some(s) = val.as_str() {
+                    if let Some(var_name) = s.strip_prefix("env:") {
+                        return std::env::var(var_name).is_ok();
                     }
+                    return !s.is_empty();
                 }
             }
         }
@@ -2965,11 +3369,6 @@ async fn configured_providers(config_path: &std::path::Path) -> Vec<&'static str
     }
     if has_key("mistral_key", "MISTRAL_API_KEY") {
         providers.push("mistral");
-    }
-    if has_key("ollama_base_url", "OLLAMA_BASE_URL")
-        || has_key("ollama_key", "OLLAMA_API_KEY")
-    {
-        providers.push("ollama");
     }
     if has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY") {
         providers.push("opencode-zen");
@@ -3033,96 +3432,6 @@ async fn fetch_openrouter_models(
             provider: "openrouter".into(),
             context_window: m.context_length,
             curated: false,
-        })
-        .collect())
-}
-
-fn normalize_ollama_base_url(configured: Option<String>) -> String {
-    let mut base_url = configured
-        .unwrap_or_else(|| "http://localhost:11434".to_string())
-        .trim()
-        .trim_end_matches('/')
-        .to_string();
-
-    if base_url.ends_with("/api") {
-        base_url.truncate(base_url.len() - "/api".len());
-    } else if base_url.ends_with("/v1") {
-        base_url.truncate(base_url.len() - "/v1".len());
-    }
-
-    base_url
-}
-
-/// Fetch available models from Ollama's local API.
-async fn fetch_ollama_models(
-    config_path: &std::path::Path,
-) -> anyhow::Result<Vec<ModelInfo>> {
-    let (configured_base_url, configured_api_key) = match tokio::fs::read_to_string(config_path).await {
-        Ok(content) => match content.parse::<toml_edit::DocumentMut>() {
-            Ok(doc) => {
-                let resolve_value = |key: &str| -> Option<String> {
-                    doc.get("llm")
-                        .and_then(|table| table.get(key))
-                        .and_then(|value| value.as_str())
-                        .and_then(|raw| {
-                            if let Some(env_var) = raw.strip_prefix("env:") {
-                                std::env::var(env_var).ok()
-                            } else {
-                                Some(raw.to_string())
-                            }
-                        })
-                };
-                (resolve_value("ollama_base_url"), resolve_value("ollama_key"))
-            }
-            Err(_) => (None, None),
-        },
-        Err(_) => (None, None),
-    };
-
-    let base_url = normalize_ollama_base_url(
-        configured_base_url.or_else(|| std::env::var("OLLAMA_BASE_URL").ok()),
-    );
-    let endpoint = format!("{base_url}/api/tags");
-    let api_key = configured_api_key.or_else(|| std::env::var("OLLAMA_API_KEY").ok());
-
-    let client = reqwest::Client::new();
-    let request = client
-        .get(endpoint)
-        .timeout(std::time::Duration::from_secs(10));
-    let request = if let Some(api_key) = api_key {
-        request.header("Authorization", format!("Bearer {api_key}"))
-    } else {
-        request
-    };
-    let response = request.send().await?.error_for_status()?;
-
-    #[derive(Deserialize)]
-    struct OllamaTagsResponse {
-        models: Vec<OllamaModel>,
-    }
-
-    #[derive(Deserialize)]
-    struct OllamaModel {
-        name: String,
-        model: Option<String>,
-    }
-
-    let body: OllamaTagsResponse = response.json().await?;
-
-    Ok(body
-        .models
-        .into_iter()
-        .map(|model| {
-            let model_name = model.name;
-            ModelInfo {
-                id: format!("ollama/{model_name}"),
-                name: model
-                    .model
-                    .unwrap_or_else(|| model_name.trim_end_matches(":latest").to_string()),
-                provider: "ollama".into(),
-                context_window: None,
-                curated: false,
-            }
         })
         .collect())
 }
@@ -3301,6 +3610,227 @@ async fn delete_ingest_file(
     Ok(Json(IngestDeleteResponse { success: true }))
 }
 
+// -- Skills --
+
+#[derive(Deserialize)]
+struct SkillsQuery {
+    agent_id: String,
+}
+
+/// List installed skills for an agent.
+async fn list_skills(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<SkillsQuery>,
+) -> Result<Json<SkillsListResponse>, StatusCode> {
+    let configs = state.agent_configs.load();
+    let agent = configs.iter().find(|a| a.id == query.agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    
+    let instance_dir = state.instance_dir.load();
+    let instance_skills_dir = instance_dir.join("skills");
+    let workspace_skills_dir = agent.workspace.join("skills");
+    
+    let skills = crate::skills::SkillSet::load(&instance_skills_dir, &workspace_skills_dir).await;
+    
+    let skill_infos: Vec<SkillInfo> = skills
+        .list()
+        .into_iter()
+        .map(|s| SkillInfo {
+            name: s.name,
+            description: s.description,
+            file_path: s.file_path.display().to_string(),
+            base_dir: s.base_dir.display().to_string(),
+            source: match s.source {
+                crate::skills::SkillSource::Instance => "instance".to_string(),
+                crate::skills::SkillSource::Workspace => "workspace".to_string(),
+            },
+        })
+        .collect();
+    
+    Ok(Json(SkillsListResponse { skills: skill_infos }))
+}
+
+/// Install a skill from GitHub.
+async fn install_skill(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Json(req): axum::extract::Json<InstallSkillRequest>,
+) -> Result<Json<InstallSkillResponse>, StatusCode> {
+    let configs = state.agent_configs.load();
+    let agent = configs.iter().find(|a| a.id == req.agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    
+    let target_dir = if req.instance {
+        state.instance_dir.load().as_ref().join("skills")
+    } else {
+        agent.workspace.join("skills")
+    };
+    
+    let installed = crate::skills::install_from_github(&req.spec, &target_dir)
+        .await
+        .map_err(|e| {
+            tracing::warn!("failed to install skill: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    state.send_event(ApiEvent::ConfigReloaded);
+    
+    Ok(Json(InstallSkillResponse { installed }))
+}
+
+/// Remove an installed skill.
+async fn remove_skill(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Json(req): axum::extract::Json<RemoveSkillRequest>,
+) -> Result<Json<RemoveSkillResponse>, StatusCode> {
+    let configs = state.agent_configs.load();
+    let agent = configs.iter().find(|a| a.id == req.agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    
+    let instance_dir = state.instance_dir.load();
+    let instance_skills_dir = instance_dir.join("skills");
+    let workspace_skills_dir = agent.workspace.join("skills");
+    
+    let mut skills = crate::skills::SkillSet::load(&instance_skills_dir, &workspace_skills_dir).await;
+    
+    let removed_path = skills.remove(&req.name).await.map_err(|error| {
+        tracing::warn!(%error, skill = %req.name, "failed to remove skill");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    
+    // Trigger a config reload to update the skill list
+    state.send_event(ApiEvent::ConfigReloaded);
+    
+    tracing::info!(
+        agent_id = %req.agent_id,
+        skill = %req.name,
+        "skill removed"
+    );
+    
+    Ok(Json(RemoveSkillResponse {
+        success: removed_path.is_some(),
+        path: removed_path.map(|p| p.display().to_string()),
+    }))
+}
+
+// -- Skills Registry Proxy --
+
+#[derive(Deserialize)]
+struct RegistryBrowseQuery {
+    /// One of: all-time, trending, hot
+    #[serde(default = "default_registry_view")]
+    view: String,
+    #[serde(default)]
+    page: u32,
+}
+
+fn default_registry_view() -> String {
+    "all-time".into()
+}
+
+/// Proxy browse requests to skills.sh leaderboard API.
+async fn registry_browse(
+    Query(query): Query<RegistryBrowseQuery>,
+) -> Result<Json<RegistryBrowseResponse>, StatusCode> {
+    let view = match query.view.as_str() {
+        "all-time" | "trending" | "hot" => &query.view,
+        _ => "all-time",
+    };
+
+    let url = format!(
+        "https://skills.sh/api/skills/{}/{}",
+        view, query.page
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "skills.sh registry browse request failed");
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    if !response.status().is_success() {
+        tracing::warn!(status = %response.status(), "skills.sh returned error");
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    #[derive(Deserialize)]
+    struct UpstreamResponse {
+        skills: Vec<RegistrySkill>,
+        #[serde(default)]
+        #[serde(rename = "hasMore")]
+        has_more: bool,
+    }
+
+    let body: UpstreamResponse = response.json().await.map_err(|error| {
+        tracing::warn!(%error, "failed to parse skills.sh response");
+        StatusCode::BAD_GATEWAY
+    })?;
+
+    Ok(Json(RegistryBrowseResponse {
+        skills: body.skills,
+        has_more: body.has_more,
+    }))
+}
+
+#[derive(Deserialize)]
+struct RegistrySearchQuery {
+    q: String,
+    #[serde(default = "default_registry_search_limit")]
+    limit: u32,
+}
+
+fn default_registry_search_limit() -> u32 {
+    50
+}
+
+/// Proxy search requests to skills.sh search API.
+async fn registry_search(
+    Query(query): Query<RegistrySearchQuery>,
+) -> Result<Json<RegistrySearchResponse>, StatusCode> {
+    if query.q.len() < 2 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://skills.sh/api/search")
+        .query(&[("q", &query.q), ("limit", &query.limit.min(100).to_string())])
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "skills.sh search request failed");
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    if !response.status().is_success() {
+        tracing::warn!(status = %response.status(), "skills.sh search returned error");
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    #[derive(Deserialize)]
+    struct UpstreamSearchResponse {
+        skills: Vec<RegistrySkill>,
+        count: usize,
+        query: String,
+    }
+
+    let body: UpstreamSearchResponse = response.json().await.map_err(|error| {
+        tracing::warn!(%error, "failed to parse skills.sh search response");
+        StatusCode::BAD_GATEWAY
+    })?;
+
+    Ok(Json(RegistrySearchResponse {
+        skills: body.skills,
+        query: body.query,
+        count: body.count,
+    }))
+}
+
 // -- Messaging / Bindings --
 
 #[derive(Serialize, Clone)]
@@ -3313,6 +3843,7 @@ struct PlatformStatus {
 struct MessagingStatusResponse {
     discord: PlatformStatus,
     slack: PlatformStatus,
+    telegram: PlatformStatus,
     webhook: PlatformStatus,
 }
 
@@ -3322,7 +3853,7 @@ async fn messaging_status(
 ) -> Result<Json<MessagingStatusResponse>, StatusCode> {
     let config_path = state.config_path.read().await.clone();
 
-    let (discord, slack, webhook) = if config_path.exists() {
+    let (discord, slack, telegram, webhook) = if config_path.exists() {
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|error| {
@@ -3400,20 +3931,272 @@ async fn messaging_status(
                 enabled: false,
             });
 
-        (discord_status, slack_status, webhook_status)
+        let telegram_status = doc
+            .get("messaging")
+            .and_then(|m| m.get("telegram"))
+            .map(|t| {
+                let has_token = t
+                    .get("token")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty());
+                let enabled = t
+                    .get("enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                PlatformStatus {
+                    configured: has_token,
+                    enabled: has_token && enabled,
+                }
+            })
+            .unwrap_or(PlatformStatus {
+                configured: false,
+                enabled: false,
+            });
+
+        (discord_status, slack_status, telegram_status, webhook_status)
     } else {
         let default = PlatformStatus {
             configured: false,
             enabled: false,
         };
-        (default.clone(), default.clone(), default)
+        (default.clone(), default.clone(), default.clone(), default)
     };
 
     Ok(Json(MessagingStatusResponse {
         discord,
         slack,
+        telegram,
         webhook,
     }))
+}
+
+/// Disconnect a messaging platform: remove credentials from config, remove all
+/// bindings for that platform, and shut down the adapter.
+async fn disconnect_platform(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<DisconnectPlatformRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let platform = &request.platform;
+    let config_path = state.config_path.read().await.clone();
+
+    let content = tokio::fs::read_to_string(&config_path).await.map_err(|error| {
+        tracing::warn!(%error, "failed to read config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
+        tracing::warn!(%error, "failed to parse config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Remove the platform section from [messaging]
+    if let Some(messaging) = doc.get_mut("messaging").and_then(|m| m.as_table_mut()) {
+        messaging.remove(platform);
+    }
+
+    // Remove all bindings for this platform
+    if let Some(bindings) = doc.get_mut("bindings").and_then(|b| b.as_array_of_tables_mut()) {
+        let mut i = 0;
+        while i < bindings.len() {
+            let matches = bindings
+                .get(i)
+                .and_then(|t| t.get("channel"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|ch| ch == platform);
+            if matches {
+                bindings.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // Write back
+    tokio::fs::write(&config_path, doc.to_string()).await.map_err(|error| {
+        tracing::warn!(%error, "failed to write config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Hot-reload bindings
+    if let Ok(new_config) = crate::config::Config::load_from_path(&config_path) {
+        let bindings_guard = state.bindings.read().await;
+        if let Some(bindings_swap) = bindings_guard.as_ref() {
+            bindings_swap.store(std::sync::Arc::new(new_config.bindings.clone()));
+        }
+    }
+
+    // Shut down the adapter
+    let manager_guard = state.messaging_manager.read().await;
+    if let Some(manager) = manager_guard.as_ref() {
+        if let Err(error) = manager.remove_adapter(platform).await {
+            tracing::warn!(%error, platform = %platform, "failed to shut down adapter during disconnect");
+        }
+    }
+
+    tracing::info!(platform = %platform, "platform disconnected via API");
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": format!("{platform} disconnected")
+    })))
+}
+
+#[derive(Deserialize)]
+struct DisconnectPlatformRequest {
+    platform: String,
+}
+
+#[derive(Deserialize)]
+struct TogglePlatformRequest {
+    platform: String,
+    enabled: bool,
+}
+
+/// Toggle a messaging platform's enabled state. When disabling, shuts down the
+/// adapter. When enabling, reads credentials from config and hot-starts it.
+async fn toggle_platform(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<TogglePlatformRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let platform = &request.platform;
+    let config_path = state.config_path.read().await.clone();
+
+    let content = tokio::fs::read_to_string(&config_path).await.map_err(|error| {
+        tracing::warn!(%error, "failed to read config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
+        tracing::warn!(%error, "failed to parse config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Check the platform section exists
+    let platform_table = doc
+        .get_mut("messaging")
+        .and_then(|m| m.as_table_mut())
+        .and_then(|m| m.get_mut(platform.as_str()))
+        .and_then(|p| p.as_table_mut());
+
+    let Some(table) = platform_table else {
+        return Ok(Json(serde_json::json!({
+            "success": false,
+            "message": format!("{platform} is not configured")
+        })));
+    };
+
+    table["enabled"] = toml_edit::value(request.enabled);
+
+    tokio::fs::write(&config_path, doc.to_string()).await.map_err(|error| {
+        tracing::warn!(%error, "failed to write config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let manager_guard = state.messaging_manager.read().await;
+    let manager = manager_guard.as_ref();
+
+    if request.enabled {
+        // Re-read the full config to get credentials and start the adapter
+        if let Ok(new_config) = crate::config::Config::load_from_path(&config_path) {
+            if let Some(manager) = manager {
+                match platform.as_str() {
+                    "discord" => {
+                        if let Some(discord_config) = &new_config.messaging.discord {
+                            let perms = {
+                                let perms_guard = state.discord_permissions.read().await;
+                                match perms_guard.as_ref() {
+                                    Some(existing) => existing.clone(),
+                                    None => {
+                                        drop(perms_guard);
+                                        let perms = crate::config::DiscordPermissions::from_config(
+                                            discord_config,
+                                            &new_config.bindings,
+                                        );
+                                        let arc_swap = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
+                                        state.set_discord_permissions(arc_swap.clone()).await;
+                                        arc_swap
+                                    }
+                                }
+                            };
+                            let adapter = crate::messaging::discord::DiscordAdapter::new(&discord_config.token, perms);
+                            if let Err(error) = manager.register_and_start(adapter).await {
+                                tracing::error!(%error, "failed to start discord adapter on toggle");
+                            }
+                        }
+                    }
+                    "slack" => {
+                        if let Some(slack_config) = &new_config.messaging.slack {
+                            let perms = {
+                                let perms_guard = state.slack_permissions.read().await;
+                                match perms_guard.as_ref() {
+                                    Some(existing) => existing.clone(),
+                                    None => {
+                                        drop(perms_guard);
+                                        let perms = crate::config::SlackPermissions::from_config(
+                                            slack_config,
+                                            &new_config.bindings,
+                                        );
+                                        let arc_swap = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
+                                        state.set_slack_permissions(arc_swap.clone()).await;
+                                        arc_swap
+                                    }
+                                }
+                            };
+                            let adapter = crate::messaging::slack::SlackAdapter::new(
+                                &slack_config.bot_token,
+                                &slack_config.app_token,
+                                perms,
+                            );
+                            if let Err(error) = manager.register_and_start(adapter).await {
+                                tracing::error!(%error, "failed to start slack adapter on toggle");
+                            }
+                        }
+                    }
+                    "telegram" => {
+                        if let Some(telegram_config) = &new_config.messaging.telegram {
+                            let perms = crate::config::TelegramPermissions::from_config(
+                                telegram_config,
+                                &new_config.bindings,
+                            );
+                            let arc_swap = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
+                            let adapter = crate::messaging::telegram::TelegramAdapter::new(
+                                &telegram_config.token,
+                                arc_swap,
+                            );
+                            if let Err(error) = manager.register_and_start(adapter).await {
+                                tracing::error!(%error, "failed to start telegram adapter on toggle");
+                            }
+                        }
+                    }
+                    "webhook" => {
+                        if let Some(webhook_config) = &new_config.messaging.webhook {
+                            let adapter = crate::messaging::webhook::WebhookAdapter::new(
+                                webhook_config.port,
+                                &webhook_config.bind,
+                            );
+                            if let Err(error) = manager.register_and_start(adapter).await {
+                                tracing::error!(%error, "failed to start webhook adapter on toggle");
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    } else {
+        // Shut down the adapter
+        if let Some(manager) = manager {
+            if let Err(error) = manager.remove_adapter(platform).await {
+                tracing::warn!(%error, platform = %platform, "failed to shut down adapter on toggle");
+            }
+        }
+    }
+
+    let action = if request.enabled { "enabled" } else { "disabled" };
+    tracing::info!(platform = %platform, action, "platform toggled via API");
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": format!("{platform} {action}")
+    })))
 }
 
 #[derive(Serialize)]
