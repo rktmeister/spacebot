@@ -1,14 +1,14 @@
 import {useState, useEffect, useRef} from "react";
 import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
-import {api, type PlatformStatus, type GlobalSettingsResponse, type BindingInfo} from "@/api/client";
+import {api, type GlobalSettingsResponse} from "@/api/client";
 import {Button, Input, SettingSidebarButton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, Select, SelectTrigger, SelectValue, SelectContent, SelectItem} from "@/ui";
 import {useSearch, useNavigate} from "@tanstack/react-router";
-import {PlatformIcon} from "@/lib/platformIcons";
+import {ChannelSettingCard, DisabledChannelCard} from "@/components/ChannelSettingCard";
 import {ProviderIcon} from "@/lib/providerIcons";
-import {TagInput} from "@/components/TagInput";
+
 import {parse as parseToml} from "smol-toml";
 
-type SectionId = "providers" | "channels" | "bindings" | "api-keys" | "server" | "opencode" | "worker-logs" | "config-file";
+type SectionId = "providers" | "channels" | "api-keys" | "server" | "opencode" | "worker-logs" | "config-file";
 
 const SECTIONS = [
 	{
@@ -21,13 +21,7 @@ const SECTIONS = [
 		id: "channels" as const,
 		label: "Channels",
 		group: "messaging" as const,
-		description: "Messaging platform credentials",
-	},
-	{
-		id: "bindings" as const,
-		label: "Bindings",
-		group: "messaging" as const,
-		description: "Route conversations to agents",
+		description: "Messaging platforms and bindings",
 	},
 	{
 		id: "api-keys" as const,
@@ -328,8 +322,6 @@ export function Settings() {
 					</div>
 					) : activeSection === "channels" ? (
 						<ChannelsSection />
-					) : activeSection === "bindings" ? (
-						<BindingsSection />
 					) : activeSection === "api-keys" ? (
 						<ApiKeysSection settings={globalSettings} isLoading={globalSettingsLoading} />
 					) : activeSection === "server" ? (
@@ -393,86 +385,37 @@ export function Settings() {
 }
 
 function ChannelsSection() {
-	const queryClient = useQueryClient();
-	const [editingPlatform, setEditingPlatform] = useState<"discord" | "slack" | "telegram" | "webhook" | null>(null);
-	const [platformInputs, setPlatformInputs] = useState<Record<string, string>>({});
-	const [message, setMessage] = useState<{
-		text: string;
-		type: "success" | "error";
-	} | null>(null);
+	const [expandedPlatform, setExpandedPlatform] = useState<string | null>(null);
 
-	const {data: messagingStatus, isLoading: statusLoading} = useQuery({
+	const {data: messagingStatus, isLoading} = useQuery({
 		queryKey: ["messaging-status"],
 		queryFn: api.messagingStatus,
 		staleTime: 5_000,
 	});
 
-	const createPlatformMutation = useMutation({
-		mutationFn: api.createBinding,
-		onSuccess: (result) => {
-			if (result.success) {
-				setEditingPlatform(null);
-				setPlatformInputs({});
-				setMessage({text: result.message, type: "success"});
-				queryClient.invalidateQueries({queryKey: ["messaging-status"]});
-				queryClient.invalidateQueries({queryKey: ["bindings"]});
-			} else {
-				setMessage({text: result.message, type: "error"});
-			}
-		},
-		onError: (error) => {
-			setMessage({text: `Failed: ${error.message}`, type: "error"});
-		},
-	});
+	const PLATFORMS = [
+		{platform: "discord" as const, name: "Discord", description: "Discord bot integration"},
+		{platform: "slack" as const, name: "Slack", description: "Slack bot integration"},
+		{platform: "telegram" as const, name: "Telegram", description: "Telegram bot integration"},
+		{platform: "webhook" as const, name: "Webhook", description: "HTTP webhook receiver"},
+	] as const;
 
-	const isLoading = statusLoading;
-
-	const handleClose = () => {
-		setEditingPlatform(null);
-		setPlatformInputs({});
-		setMessage(null);
-	};
-
-	const handleSavePlatform = () => {
-		if (!editingPlatform) return;
-
-		const request: any = {
-			agent_id: "main",
-			channel: editingPlatform,
-		};
-
-		if (editingPlatform === "discord") {
-			if (!platformInputs.discord_token?.trim()) return;
-			request.platform_credentials = {
-				discord_token: platformInputs.discord_token.trim(),
-			};
-		} else if (editingPlatform === "slack") {
-			if (!platformInputs.slack_bot_token?.trim() || !platformInputs.slack_app_token?.trim()) return;
-			request.platform_credentials = {
-				slack_bot_token: platformInputs.slack_bot_token.trim(),
-				slack_app_token: platformInputs.slack_app_token.trim(),
-			};
-		} else if (editingPlatform === "telegram") {
-			if (!platformInputs.telegram_token?.trim()) return;
-			request.platform_credentials = {
-				telegram_token: platformInputs.telegram_token.trim(),
-			};
-		}
-
-		createPlatformMutation.mutate(request);
-	};
-
-
+	const COMING_SOON = [
+		{platform: "email", name: "Email", description: "IMAP polling for inbound, SMTP for outbound"},
+		{platform: "whatsapp", name: "WhatsApp", description: "Meta Cloud API integration"},
+		{platform: "matrix", name: "Matrix", description: "Decentralized chat protocol"},
+		{platform: "imessage", name: "iMessage", description: "macOS-only AppleScript bridge"},
+		{platform: "irc", name: "IRC", description: "TLS socket connection"},
+		{platform: "lark", name: "Lark", description: "Feishu/Lark webhook integration"},
+		{platform: "dingtalk", name: "DingTalk", description: "Chinese enterprise webhook integration"},
+	];
 
 	return (
 		<div className="mx-auto max-w-2xl px-6 py-6">
-			{/* Section header */}
 			<div className="mb-6">
-				<h2 className="font-plex text-sm font-semibold text-ink">
-					Messaging Platforms
-				</h2>
+				<h2 className="font-plex text-sm font-semibold text-ink">Messaging Platforms</h2>
 				<p className="mt-1 text-sm text-ink-dull">
-					Configure messaging platform credentials. Once enabled, create bindings to route conversations to agents.
+					Connect messaging platforms and configure how conversations route to agents.
 				</p>
 			</div>
 
@@ -482,760 +425,28 @@ function ChannelsSection() {
 					Loading channels...
 				</div>
 			) : (
-				<>
-					{/* Platform Status Cards */}
-					<div className="mb-6 flex flex-col gap-3">
-						<PlatformCard
-							platform="discord"
-							name="Discord"
-							description="Discord bot integration"
-							status={messagingStatus?.discord}
-							onSetup={() => {
-								setEditingPlatform("discord");
-								setPlatformInputs({});
-								setMessage(null);
-							}}
+				<div className="flex flex-col gap-3">
+					{PLATFORMS.map(({platform: p, name: n, description: d}) => (
+						<ChannelSettingCard
+							key={p}
+							platform={p}
+							name={n}
+							description={d}
+							status={messagingStatus?.[p]}
+							expanded={expandedPlatform === p}
+							onToggle={() => setExpandedPlatform(expandedPlatform === p ? null : p)}
 						/>
-						<PlatformCard
-							platform="slack"
-							name="Slack"
-							description="Slack bot integration"
-							status={messagingStatus?.slack}
-							onSetup={() => {
-								setEditingPlatform("slack");
-								setPlatformInputs({});
-								setMessage(null);
-							}}
-						/>
-						<PlatformCard
-							platform="telegram"
-							name="Telegram"
-							description="Telegram bot integration"
-							status={messagingStatus?.telegram}
-							onSetup={() => {
-								setEditingPlatform("telegram");
-								setPlatformInputs({});
-								setMessage(null);
-							}}
-						/>
-						<PlatformCard
-							platform="webhook"
-							name="Webhook"
-							description="HTTP webhook receiver"
-							status={messagingStatus?.webhook}
-							onSetup={() => {
-								setEditingPlatform("webhook");
-								setPlatformInputs({});
-								setMessage(null);
-							}}
-						/>
-						
-						{/* Coming Soon Platforms */}
-						<PlatformCard
-							platform="email"
-							name="Email"
-							description="IMAP polling for inbound, SMTP for outbound"
-							disabled
-						/>
-						<PlatformCard
-							platform="whatsapp"
-							name="WhatsApp"
-							description="Meta Cloud API integration"
-							disabled
-						/>
-						<PlatformCard
-							platform="matrix"
-							name="Matrix"
-							description="Decentralized chat protocol"
-							disabled
-						/>
-						<PlatformCard
-							platform="imessage"
-							name="iMessage"
-							description="macOS-only AppleScript bridge"
-							disabled
-						/>
-						<PlatformCard
-							platform="irc"
-							name="IRC"
-							description="TLS socket connection"
-							disabled
-						/>
-						<PlatformCard
-							platform="lark"
-							name="Lark"
-							description="Feishu/Lark webhook integration"
-							disabled
-						/>
-						<PlatformCard
-							platform="dingtalk"
-							name="DingTalk"
-							description="Chinese enterprise webhook integration"
-							disabled
-						/>
-					</div>
-				</>
+					))}
+					{COMING_SOON.map(({platform: p, name: n, description: d}) => (
+						<DisabledChannelCard key={p} platform={p} name={n} description={d} />
+					))}
+				</div>
 			)}
-
-			{/* Info note */}
-			<div className="mt-6 rounded-md border border-app-line bg-app-darkBox/20 px-4 py-3">
-				<p className="text-sm text-ink-faint">
-					Platform credentials are stored in{" "}
-					<code className="rounded bg-app-box px-1 py-0.5 text-tiny text-ink-dull">
-						config.toml
-					</code>
-					. Once configured, go to the Bindings tab to route conversations to agents.
-				</p>
-			</div>
-
-			{/* Platform Setup Modal */}
-			<Dialog open={!!editingPlatform} onOpenChange={(open) => { if (!open) handleClose(); }}>
-				<DialogContent className="max-w-md">
-					<DialogHeader>
-						<DialogTitle>
-							{editingPlatform === "discord" && "Configure Discord"}
-							{editingPlatform === "slack" && "Configure Slack"}
-							{editingPlatform === "telegram" && "Configure Telegram"}
-							{editingPlatform === "webhook" && "Configure Webhook"}
-						</DialogTitle>
-						<DialogDescription>
-							{editingPlatform === "discord" && "Enter your Discord bot token to enable Discord integration."}
-							{editingPlatform === "slack" && "Enter your Slack bot and app tokens to enable Slack integration."}
-							{editingPlatform === "telegram" && "Enter your Telegram bot token to enable Telegram integration."}
-							{editingPlatform === "webhook" && "Configure webhook receiver settings."}
-						</DialogDescription>
-					</DialogHeader>
-					
-					{editingPlatform === "discord" && (
-						<div className="flex flex-col gap-3">
-							<div>
-								<label className="mb-1.5 block text-sm font-medium text-ink">Bot Token</label>
-								<Input
-									type="password"
-									value={platformInputs.discord_token ?? ""}
-									onChange={(e) => setPlatformInputs({...platformInputs, discord_token: e.target.value})}
-									placeholder="MTk4NjIyNDgzNDcxOTI1MjQ4.D..."
-									autoFocus
-									onKeyDown={(e) => {
-										if (e.key === "Enter") handleSavePlatform();
-									}}
-								/>
-								<p className="mt-1 text-tiny text-ink-faint">
-									Get this from the Discord Developer Portal
-								</p>
-							</div>
-						</div>
-					)}
-
-					{editingPlatform === "slack" && (
-						<div className="flex flex-col gap-3">
-							<div>
-								<label className="mb-1.5 block text-sm font-medium text-ink">Bot Token</label>
-								<Input
-									type="password"
-									value={platformInputs.slack_bot_token ?? ""}
-									onChange={(e) => setPlatformInputs({...platformInputs, slack_bot_token: e.target.value})}
-									placeholder="xoxb-..."
-									autoFocus
-									onKeyDown={(e) => {
-										if (e.key === "Enter" && platformInputs.slack_app_token?.trim()) handleSavePlatform();
-									}}
-								/>
-							</div>
-							<div>
-								<label className="mb-1.5 block text-sm font-medium text-ink">App Token</label>
-								<Input
-									type="password"
-									value={platformInputs.slack_app_token ?? ""}
-									onChange={(e) => setPlatformInputs({...platformInputs, slack_app_token: e.target.value})}
-									placeholder="xapp-..."
-									onKeyDown={(e) => {
-										if (e.key === "Enter") handleSavePlatform();
-									}}
-								/>
-							</div>
-							<p className="text-tiny text-ink-faint">
-								Get these from your Slack app settings
-							</p>
-						</div>
-					)}
-
-					{editingPlatform === "telegram" && (
-						<div className="flex flex-col gap-3">
-							<div>
-								<label className="mb-1.5 block text-sm font-medium text-ink">Bot Token</label>
-								<Input
-									type="password"
-									value={platformInputs.telegram_token ?? ""}
-									onChange={(e) => setPlatformInputs({...platformInputs, telegram_token: e.target.value})}
-									placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-									autoFocus
-									onKeyDown={(e) => {
-										if (e.key === "Enter") handleSavePlatform();
-									}}
-								/>
-								<p className="mt-1 text-tiny text-ink-faint">
-									Get this from @BotFather on Telegram
-								</p>
-							</div>
-						</div>
-					)}
-
-					{editingPlatform === "webhook" && (
-						<div className="flex flex-col gap-3">
-							<p className="text-sm text-ink-dull">
-								Webhook receiver is configured in <code className="rounded bg-app-box px-1 py-0.5 text-tiny">config.toml</code>. 
-								No additional setup required here.
-							</p>
-						</div>
-					)}
-
-					{message && (
-						<div
-							className={`rounded-md border px-3 py-2 text-sm ${
-								message.type === "success"
-									? "border-green-500/20 bg-green-500/10 text-green-400"
-									: "border-red-500/20 bg-red-500/10 text-red-400"
-							}`}
-						>
-							{message.text}
-						</div>
-					)}
-
-					<DialogFooter>
-						<Button onClick={handleClose} variant="ghost" size="sm">
-							Cancel
-						</Button>
-						{editingPlatform !== "webhook" && (
-							<Button
-								onClick={handleSavePlatform}
-								disabled={
-									editingPlatform === "discord" ? !platformInputs.discord_token?.trim() :
-									editingPlatform === "slack" ? (!platformInputs.slack_bot_token?.trim() || !platformInputs.slack_app_token?.trim()) :
-									editingPlatform === "telegram" ? !platformInputs.telegram_token?.trim() :
-									false
-								}
-								loading={createPlatformMutation.isPending}
-								size="sm"
-							>
-								Save
-							</Button>
-						)}
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
 		</div>
 	);
 }
 
-function BindingsSection() {
-	const queryClient = useQueryClient();
-	const [addingBinding, setAddingBinding] = useState(false);
-	const [editingBinding, setEditingBinding] = useState<BindingInfo | null>(null);
-	const [bindingForm, setBindingForm] = useState({
-		agent_id: "main",
-		channel: "discord" as "discord" | "slack" | "telegram" | "webhook",
-		guild_id: "",
-		workspace_id: "",
-		chat_id: "",
-		channel_ids: [] as string[],
-		dm_allowed_users: [] as string[],
-	});
-	const [message, setMessage] = useState<{
-		text: string;
-		type: "success" | "error";
-	} | null>(null);
 
-	const {data: bindingsData, isLoading: bindingsLoading} = useQuery({
-		queryKey: ["bindings"],
-		queryFn: () => api.bindings(),
-		staleTime: 5_000,
-	});
-
-	const {data: agentsData} = useQuery({
-		queryKey: ["agents"],
-		queryFn: api.agents,
-		staleTime: 10_000,
-	});
-
-	const addBindingMutation = useMutation({
-		mutationFn: api.createBinding,
-		onSuccess: (result) => {
-			if (result.success) {
-				setAddingBinding(false);
-				setBindingForm({
-					agent_id: "main",
-					channel: "discord",
-					guild_id: "",
-					workspace_id: "",
-					chat_id: "",
-					channel_ids: [],
-					dm_allowed_users: [],
-				});
-				setMessage({text: result.message, type: "success"});
-				queryClient.invalidateQueries({queryKey: ["bindings"]});
-			} else {
-				setMessage({text: result.message, type: "error"});
-			}
-		},
-		onError: (error) => {
-			setMessage({text: `Failed: ${error.message}`, type: "error"});
-		},
-	});
-
-	const updateBindingMutation = useMutation({
-		mutationFn: api.updateBinding,
-		onSuccess: (result) => {
-			if (result.success) {
-				setEditingBinding(null);
-				setBindingForm({
-					agent_id: "main",
-					channel: "discord",
-					guild_id: "",
-					workspace_id: "",
-					chat_id: "",
-					channel_ids: [],
-					dm_allowed_users: [],
-				});
-				setMessage({text: result.message, type: "success"});
-				queryClient.invalidateQueries({queryKey: ["bindings"]});
-			} else {
-				setMessage({text: result.message, type: "error"});
-			}
-		},
-		onError: (error) => {
-			setMessage({text: `Failed: ${error.message}`, type: "error"});
-		},
-	});
-
-	const deleteBindingMutation = useMutation({
-		mutationFn: api.deleteBinding,
-		onSuccess: (result) => {
-			if (result.success) {
-				setMessage({text: result.message, type: "success"});
-				queryClient.invalidateQueries({queryKey: ["bindings"]});
-			} else {
-				setMessage({text: result.message, type: "error"});
-			}
-		},
-		onError: (error) => {
-			setMessage({text: `Failed: ${error.message}`, type: "error"});
-		},
-	});
-
-	const handleAddBinding = () => {
-		const request: any = {
-			agent_id: bindingForm.agent_id,
-			channel: bindingForm.channel,
-		};
-
-		if (bindingForm.channel === "discord" && bindingForm.guild_id.trim()) {
-			request.guild_id = bindingForm.guild_id.trim();
-		}
-		if (bindingForm.channel === "slack" && bindingForm.workspace_id.trim()) {
-			request.workspace_id = bindingForm.workspace_id.trim();
-		}
-		if (bindingForm.channel === "telegram" && bindingForm.chat_id.trim()) {
-			request.chat_id = bindingForm.chat_id.trim();
-		}
-
-		if (bindingForm.channel_ids.length > 0) {
-			request.channel_ids = bindingForm.channel_ids;
-		}
-
-		if (bindingForm.dm_allowed_users.length > 0) {
-			request.dm_allowed_users = bindingForm.dm_allowed_users;
-		}
-
-		addBindingMutation.mutate(request);
-	};
-
-	const handleEditBinding = (binding: BindingInfo) => {
-		setEditingBinding(binding);
-		setBindingForm({
-			agent_id: binding.agent_id,
-			channel: binding.channel as any,
-			guild_id: binding.guild_id || "",
-			workspace_id: binding.workspace_id || "",
-			chat_id: binding.chat_id || "",
-			channel_ids: binding.channel_ids,
-			dm_allowed_users: binding.dm_allowed_users,
-		});
-	};
-
-	const handleUpdateBinding = () => {
-		if (!editingBinding) return;
-
-		const request: any = {
-			original_agent_id: editingBinding.agent_id,
-			original_channel: editingBinding.channel,
-			original_guild_id: editingBinding.guild_id || undefined,
-			original_workspace_id: editingBinding.workspace_id || undefined,
-			original_chat_id: editingBinding.chat_id || undefined,
-			agent_id: bindingForm.agent_id,
-			channel: bindingForm.channel,
-		};
-
-		if (bindingForm.channel === "discord" && bindingForm.guild_id.trim()) {
-			request.guild_id = bindingForm.guild_id.trim();
-		}
-		if (bindingForm.channel === "slack" && bindingForm.workspace_id.trim()) {
-			request.workspace_id = bindingForm.workspace_id.trim();
-		}
-		if (bindingForm.channel === "telegram" && bindingForm.chat_id.trim()) {
-			request.chat_id = bindingForm.chat_id.trim();
-		}
-
-		request.channel_ids = bindingForm.channel_ids;
-		request.dm_allowed_users = bindingForm.dm_allowed_users;
-
-		updateBindingMutation.mutate(request);
-	};
-
-	const handleDeleteBinding = (binding: any) => {
-		const request: any = {
-			agent_id: binding.agent_id,
-			channel: binding.channel,
-		};
-
-		if (binding.guild_id) request.guild_id = binding.guild_id;
-		if (binding.workspace_id) request.workspace_id = binding.workspace_id;
-		if (binding.chat_id) request.chat_id = binding.chat_id;
-
-		deleteBindingMutation.mutate(request);
-	};
-
-	return (
-		<div className="mx-auto max-w-2xl px-6 py-6">
-			<div className="mb-6">
-				<h2 className="font-plex text-sm font-semibold text-ink">Conversation Bindings</h2>
-				<p className="mt-1 text-sm text-ink-dull">
-					Route conversations from messaging platforms to agents. The first matching binding wins.
-				</p>
-			</div>
-
-			{bindingsLoading ? (
-				<div className="flex items-center gap-2 text-ink-dull">
-					<div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
-					Loading bindings...
-				</div>
-			) : (
-				<>
-					<div className="mb-4 flex items-center justify-between">
-						<h3 className="font-plex text-sm font-medium text-ink">Active Bindings</h3>
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() => {
-								setAddingBinding(true);
-								setEditingBinding(null);
-								setBindingForm({
-									agent_id: agentsData?.agents?.[0]?.id ?? "main",
-									channel: "discord",
-									guild_id: "",
-									workspace_id: "",
-									chat_id: "",
-									channel_ids: [],
-									dm_allowed_users: [],
-								});
-								setMessage(null);
-							}}
-						>
-							Add Binding
-						</Button>
-					</div>
-
-					{bindingsData?.bindings && bindingsData.bindings.length > 0 ? (
-						<div className="rounded-lg border border-app-line bg-app-box">
-							{bindingsData.bindings.map((binding, idx) => (
-								<div
-									key={idx}
-									className="flex items-center gap-3 border-b border-app-line/50 px-4 py-3 last:border-b-0"
-								>
-									<PlatformIcon platform={binding.channel} size="1x" className="text-ink-faint" />
-									<div className="flex-1">
-										<div className="flex items-center gap-2">
-											<span className="text-sm font-medium text-ink">
-												{binding.agent_id}
-											</span>
-											<span className="text-sm text-ink-faint">→</span>
-											<span className="text-sm text-ink-dull">
-												{binding.channel}
-											</span>
-										</div>
-										<div className="mt-1 flex items-center gap-2 text-tiny text-ink-faint">
-											{binding.guild_id && (
-												<span>Guild: {binding.guild_id}</span>
-											)}
-											{binding.workspace_id && (
-												<span>Workspace: {binding.workspace_id}</span>
-											)}
-											{binding.chat_id && (
-												<span>Chat: {binding.chat_id}</span>
-											)}
-											{binding.channel_ids.length > 0 && (
-												<span>Channels: {binding.channel_ids.length}</span>
-											)}
-											{binding.dm_allowed_users.length > 0 && (
-												<span>DM Users: {binding.dm_allowed_users.length}</span>
-											)}
-										</div>
-									</div>
-									<div className="flex items-center gap-2">
-										<Button 
-											size="sm" 
-											variant="ghost"
-											onClick={() => handleEditBinding(binding)}
-										>
-											Edit
-										</Button>
-										<Button 
-											size="sm" 
-											variant="ghost"
-											onClick={() => handleDeleteBinding(binding)}
-											loading={deleteBindingMutation.isPending}
-										>
-											Remove
-										</Button>
-									</div>
-								</div>
-							))}
-						</div>
-					) : (
-						<div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-app-line/50 bg-app-darkBox/20 py-12">
-							<p className="text-sm text-ink-faint">No bindings configured</p>
-							<p className="mt-1 text-tiny text-ink-faint/70">
-								Add a binding to route messages to an agent
-							</p>
-						</div>
-					)}
-
-					{message && (
-						<div
-							className={`mt-4 rounded-md border px-3 py-2 text-sm ${
-								message.type === "success"
-									? "border-green-500/20 bg-green-500/10 text-green-400"
-									: "border-red-500/20 bg-red-500/10 text-red-400"
-							}`}
-						>
-							{message.text}
-						</div>
-					)}
-				</>
-			)}
-
-			<div className="mt-6 rounded-md border border-app-line bg-app-darkBox/20 px-4 py-3">
-				<p className="text-sm text-ink-faint">
-					Bindings match conversations to agents based on platform, server/workspace, channel, and user filters. 
-					Configure platform credentials in the <strong>Channels</strong> tab first.
-				</p>
-			</div>
-
-			<Dialog open={addingBinding || editingBinding !== null} onOpenChange={(open) => { 
-				if (!open) {
-					setAddingBinding(false);
-					setEditingBinding(null);
-					setMessage(null);
-				}
-			}}>
-				<DialogContent className="max-w-md">
-					<DialogHeader>
-						<DialogTitle>{editingBinding ? "Edit Binding" : "Add Binding"}</DialogTitle>
-						<DialogDescription>
-							Route messages from a specific platform location to an agent.
-						</DialogDescription>
-					</DialogHeader>
-
-					<div className="flex flex-col gap-4">
-						<div>
-							<label className="mb-1.5 block text-sm font-medium text-ink">Agent</label>
-							<Select
-								value={bindingForm.agent_id}
-								onValueChange={(value) => setBindingForm({...bindingForm, agent_id: value})}
-							>
-								<SelectTrigger>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									{agentsData?.agents?.map((agent) => (
-										<SelectItem key={agent.id} value={agent.id}>
-											{agent.id}
-										</SelectItem>
-									)) ?? (
-										<SelectItem value="main">main</SelectItem>
-									)}
-								</SelectContent>
-							</Select>
-						</div>
-
-						<div>
-							<label className="mb-1.5 block text-sm font-medium text-ink">Platform</label>
-							<Select
-								value={bindingForm.channel}
-								onValueChange={(value: any) => setBindingForm({...bindingForm, channel: value})}
-							>
-								<SelectTrigger>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="discord">Discord</SelectItem>
-									<SelectItem value="slack">Slack</SelectItem>
-									<SelectItem value="telegram">Telegram</SelectItem>
-									<SelectItem value="webhook">Webhook</SelectItem>
-								</SelectContent>
-							</Select>
-						</div>
-
-						{bindingForm.channel === "discord" && (
-							<div>
-								<label className="mb-1.5 block text-sm font-medium text-ink">Guild ID</label>
-								<Input
-									value={bindingForm.guild_id}
-									onChange={(e) => setBindingForm({...bindingForm, guild_id: e.target.value})}
-									placeholder="123456789 (optional)"
-								/>
-								<p className="mt-1 text-tiny text-ink-faint">
-									Leave empty to match any server
-								</p>
-							</div>
-						)}
-
-						{bindingForm.channel === "slack" && (
-							<div>
-								<label className="mb-1.5 block text-sm font-medium text-ink">Workspace ID</label>
-								<Input
-									value={bindingForm.workspace_id}
-									onChange={(e) => setBindingForm({...bindingForm, workspace_id: e.target.value})}
-									placeholder="T0123456789 (optional)"
-								/>
-								<p className="mt-1 text-tiny text-ink-faint">
-									Leave empty to match any workspace
-								</p>
-							</div>
-						)}
-
-						{bindingForm.channel === "telegram" && (
-							<div>
-								<label className="mb-1.5 block text-sm font-medium text-ink">Chat ID</label>
-								<Input
-									value={bindingForm.chat_id}
-									onChange={(e) => setBindingForm({...bindingForm, chat_id: e.target.value})}
-									placeholder="-1001234567890 (optional)"
-								/>
-								<p className="mt-1 text-tiny text-ink-faint">
-									Leave empty to match any chat
-								</p>
-							</div>
-						)}
-
-						{(bindingForm.channel === "discord" || bindingForm.channel === "slack") && (
-							<div>
-								<label className="mb-1.5 block text-sm font-medium text-ink">Channel IDs</label>
-								<TagInput
-									value={bindingForm.channel_ids}
-									onChange={(ids) => setBindingForm({...bindingForm, channel_ids: ids})}
-									placeholder="Add channel ID..."
-								/>
-								<p className="mt-1 text-tiny text-ink-faint">
-									Leave empty to match all channels
-								</p>
-							</div>
-						)}
-
-						<div>
-							<label className="mb-1.5 block text-sm font-medium text-ink">DM Allowed Users</label>
-							<TagInput
-								value={bindingForm.dm_allowed_users}
-								onChange={(users) => setBindingForm({...bindingForm, dm_allowed_users: users})}
-								placeholder="Add user ID..."
-							/>
-							<p className="mt-1 text-tiny text-ink-faint">
-								User IDs allowed to send DMs
-							</p>
-						</div>
-					</div>
-
-					{message && (
-						<div
-							className={`rounded-md border px-3 py-2 text-sm ${
-								message.type === "success"
-									? "border-green-500/20 bg-green-500/10 text-green-400"
-									: "border-red-500/20 bg-red-500/10 text-red-400"
-							}`}
-						>
-							{message.text}
-						</div>
-					)}
-
-					<DialogFooter>
-						<Button 
-							onClick={() => {
-								setAddingBinding(false);
-								setEditingBinding(null);
-								setMessage(null);
-							}} 
-							variant="ghost" 
-							size="sm"
-						>
-							Cancel
-						</Button>
-						<Button
-							onClick={editingBinding ? handleUpdateBinding : handleAddBinding}
-							loading={editingBinding ? updateBindingMutation.isPending : addBindingMutation.isPending}
-							size="sm"
-						>
-							{editingBinding ? "Update Binding" : "Add Binding"}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
-		</div>
-	);
-}
-
-interface PlatformCardProps {
-	platform: string;
-	name: string;
-	description: string;
-	status?: PlatformStatus;
-	disabled?: boolean;
-	onSetup?: () => void;
-}
-
-function PlatformCard({ platform, name, description, status, disabled = false, onSetup }: PlatformCardProps) {
-	const configured = status?.configured ?? false;
-	const enabled = status?.enabled ?? false;
-
-	return (
-		<div className={`rounded-lg border border-app-line bg-app-box p-4 ${disabled ? "opacity-40" : ""}`}>
-			<div className="flex items-center gap-3">
-				<PlatformIcon platform={platform} size="lg" className={disabled ? "text-ink-faint/50" : "text-ink-faint"} />
-				<div className="flex-1">
-					<div className="flex items-center gap-2">
-						<span className="text-sm font-medium text-ink">{name}</span>
-						{!disabled && configured && (
-							<span className={`text-tiny ${enabled ? "text-green-400" : "text-ink-faint"}`}>
-								{enabled ? "● Active" : "○ Disabled"}
-							</span>
-						)}
-					</div>
-					<p className="mt-0.5 text-sm text-ink-dull">{description}</p>
-				</div>
-				<div className="flex gap-2">
-					{disabled ? (
-						<Button variant="outline" size="sm" disabled>
-							Coming Soon
-						</Button>
-					) : onSetup && (
-						<Button onClick={onSetup} variant="outline" size="sm">
-							{configured ? "Configure" : "Setup"}
-						</Button>
-					)}
-				</div>
-			</div>
-		</div>
-	);
-}
 
 interface GlobalSettingsSectionProps {
 	settings: GlobalSettingsResponse | undefined;

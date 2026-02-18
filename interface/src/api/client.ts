@@ -1177,6 +1177,18 @@ export const api = {
 		return response.json() as Promise<DeleteBindingResponse>;
 	},
 
+	disconnectPlatform: async (platform: string) => {
+		const response = await fetch(`${API_BASE}/messaging/disconnect`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ platform }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ success: boolean; message: string }>;
+	},
+
 	// Global Settings API
 	globalSettings: () => fetchJson<GlobalSettingsResponse>("/settings"),
 	

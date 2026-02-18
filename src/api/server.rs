@@ -539,6 +539,7 @@ pub async fn start_http_server(
         .route("/models", get(get_models))
         .route("/models/refresh", post(refresh_models))
         .route("/messaging/status", get(messaging_status))
+        .route("/messaging/disconnect", post(disconnect_platform))
         .route("/bindings", get(list_bindings).post(create_binding).put(update_binding).delete(delete_binding))
         .route("/settings", get(get_global_settings).put(update_global_settings))
         .route("/config/raw", get(get_raw_config).put(update_raw_config))
@@ -3460,6 +3461,7 @@ struct PlatformStatus {
 struct MessagingStatusResponse {
     discord: PlatformStatus,
     slack: PlatformStatus,
+    telegram: PlatformStatus,
     webhook: PlatformStatus,
 }
 
@@ -3469,7 +3471,7 @@ async fn messaging_status(
 ) -> Result<Json<MessagingStatusResponse>, StatusCode> {
     let config_path = state.config_path.read().await.clone();
 
-    let (discord, slack, webhook) = if config_path.exists() {
+    let (discord, slack, telegram, webhook) = if config_path.exists() {
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|error| {
@@ -3547,20 +3549,118 @@ async fn messaging_status(
                 enabled: false,
             });
 
-        (discord_status, slack_status, webhook_status)
+        let telegram_status = doc
+            .get("messaging")
+            .and_then(|m| m.get("telegram"))
+            .map(|t| {
+                let has_token = t
+                    .get("token")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty());
+                let enabled = t
+                    .get("enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                PlatformStatus {
+                    configured: has_token,
+                    enabled: has_token && enabled,
+                }
+            })
+            .unwrap_or(PlatformStatus {
+                configured: false,
+                enabled: false,
+            });
+
+        (discord_status, slack_status, telegram_status, webhook_status)
     } else {
         let default = PlatformStatus {
             configured: false,
             enabled: false,
         };
-        (default.clone(), default.clone(), default)
+        (default.clone(), default.clone(), default.clone(), default)
     };
 
     Ok(Json(MessagingStatusResponse {
         discord,
         slack,
+        telegram,
         webhook,
     }))
+}
+
+/// Disconnect a messaging platform: remove credentials from config, remove all
+/// bindings for that platform, and shut down the adapter.
+async fn disconnect_platform(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<DisconnectPlatformRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let platform = &request.platform;
+    let config_path = state.config_path.read().await.clone();
+
+    let content = tokio::fs::read_to_string(&config_path).await.map_err(|error| {
+        tracing::warn!(%error, "failed to read config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
+        tracing::warn!(%error, "failed to parse config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Remove the platform section from [messaging]
+    if let Some(messaging) = doc.get_mut("messaging").and_then(|m| m.as_table_mut()) {
+        messaging.remove(platform);
+    }
+
+    // Remove all bindings for this platform
+    if let Some(bindings) = doc.get_mut("bindings").and_then(|b| b.as_array_of_tables_mut()) {
+        let mut i = 0;
+        while i < bindings.len() {
+            let matches = bindings
+                .get(i)
+                .and_then(|t| t.get("channel"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|ch| ch == platform);
+            if matches {
+                bindings.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // Write back
+    tokio::fs::write(&config_path, doc.to_string()).await.map_err(|error| {
+        tracing::warn!(%error, "failed to write config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Hot-reload bindings
+    if let Ok(new_config) = crate::config::Config::load_from_path(&config_path) {
+        let bindings_guard = state.bindings.read().await;
+        if let Some(bindings_swap) = bindings_guard.as_ref() {
+            bindings_swap.store(std::sync::Arc::new(new_config.bindings.clone()));
+        }
+    }
+
+    // Shut down the adapter
+    let manager_guard = state.messaging_manager.read().await;
+    if let Some(manager) = manager_guard.as_ref() {
+        if let Err(error) = manager.remove_adapter(platform).await {
+            tracing::warn!(%error, platform = %platform, "failed to shut down adapter during disconnect");
+        }
+    }
+
+    tracing::info!(platform = %platform, "platform disconnected via API");
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": format!("{platform} disconnected")
+    })))
+}
+
+#[derive(Deserialize)]
+struct DisconnectPlatformRequest {
+    platform: String,
 }
 
 #[derive(Serialize)]

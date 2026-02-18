@@ -163,6 +163,16 @@ impl MessagingManager {
         adapter.fetch_history(message, limit).await
     }
 
+    /// Remove and shut down a single adapter by name.
+    pub async fn remove_adapter(&self, name: &str) -> crate::Result<()> {
+        let adapter = self.adapters.write().await.remove(name);
+        if let Some(adapter) = adapter {
+            adapter.shutdown().await?;
+            tracing::info!(adapter = %name, "adapter removed and shut down");
+        }
+        Ok(())
+    }
+
     /// Shut down all adapters gracefully.
     pub async fn shutdown(&self) {
         let adapters = self.adapters.read().await;

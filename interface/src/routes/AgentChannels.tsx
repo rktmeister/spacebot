@@ -73,9 +73,9 @@ export function AgentChannels({ agentId, liveStates }: AgentChannelsProps) {
 							<div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-app-line bg-app-darkBox">
 								<HugeiconsIcon icon={Settings02Icon} className="h-6 w-6 text-ink-faint" />
 							</div>
-							<h3 className="mb-1 font-plex text-sm font-medium text-ink">No channels connected</h3>
+							<h3 className="mb-1 font-plex text-sm font-medium text-ink">No channels yet</h3>
 							<p className="mb-5 max-w-md text-sm text-ink-faint">
-								Configure messaging platforms and bindings in Settings to connect this agent to Discord, Slack, or Telegram
+								Channels appear here once the bot receives its first message. Make sure a messaging platform is configured and bound to this agent in Settings.
 							</p>
 							<Button 
 								onClick={() => navigate({ to: "/settings", search: { tab: "channels" } })} 
