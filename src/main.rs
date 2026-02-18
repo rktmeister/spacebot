@@ -259,7 +259,13 @@ async fn run(
     spacebot::update::spawn_update_checker(api_state.update_status.clone());
 
     let _http_handle = if config.api.enabled {
-        let bind: std::net::SocketAddr = format!("{}:{}", config.api.bind, config.api.port)
+        // IPv6 addresses need brackets when combined with port: [::]:19898
+        let bind_str = if config.api.bind.contains(':') {
+            format!("[{}]:{}", config.api.bind, config.api.port)
+        } else {
+            format!("{}:{}", config.api.bind, config.api.port)
+        };
+        let bind: std::net::SocketAddr = bind_str
             .parse()
             .context("invalid API bind address")?;
         let http_shutdown = shutdown_rx.clone();

@@ -1,4 +1,5 @@
-const API_BASE = ((window as any).__SPACEBOT_BASE_PATH || "") + "/api";
+export const BASE_PATH: string = (window as any).__SPACEBOT_BASE_PATH || "";
+const API_BASE = BASE_PATH + "/api";
 
 export interface StatusResponse {
 	status: string;

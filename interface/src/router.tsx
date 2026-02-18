@@ -5,6 +5,7 @@ import {
 	createRoute,
 	Outlet,
 } from "@tanstack/react-router";
+import {BASE_PATH} from "@/api/client";
 import {ConnectionBanner} from "@/components/ConnectionBanner";
 import {SetupBanner} from "@/components/SetupBanner";
 import {UpdateBanner} from "@/components/UpdateBanner";
@@ -277,7 +278,7 @@ const routeTree = rootRoute.addChildren([
 
 export const router = createRouter({
 	routeTree,
-	basepath: (window as any).__SPACEBOT_BASE_PATH || "/",
+	basepath: BASE_PATH || "/",
 });
 
 declare module "@tanstack/react-router" {
