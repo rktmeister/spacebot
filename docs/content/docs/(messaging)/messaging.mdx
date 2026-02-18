@@ -72,6 +72,8 @@ chat_id = "-100123456789"
 
 Without any filtering (no guild ID, workspace ID, or chat ID), a binding accepts messages from anywhere on that platform.
 
+If no binding matches an incoming message, it's routed to the default agent automatically. This means the bot responds everywhere out of the box — add bindings to restrict it to specific channels or servers.
+
 ## Multiple Agents
 
 You can run multiple agents on the same Spacebot instance, each connected to different places. Each agent has its own memory, personality, and conversation history.
