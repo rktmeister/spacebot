@@ -120,6 +120,12 @@ semver = "1"
 zip = "2"
 tempfile = "3"
 
+# Prometheus metrics (optional, behind "metrics" feature)
+prometheus = { version = "0.13", optional = true }
+
+[features]
+metrics = ["dep:prometheus"]
+
 [lints.clippy]
 dbg_macro = "forbid"
 todo = "forbid"

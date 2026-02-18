@@ -508,6 +508,19 @@ async fn run(
         None
     };
 
+    // Start metrics server if enabled (feature-gated)
+    #[cfg(feature = "metrics")]
+    let _metrics_handle = if config.metrics.enabled {
+        let metrics_shutdown = shutdown_rx.clone();
+        Some(
+            spacebot::telemetry::start_metrics_server(&config.metrics, metrics_shutdown)
+                .await
+                .context("failed to start metrics server")?,
+        )
+    } else {
+        None
+    };
+
     // Check if we have provider keys
     let has_providers = config.llm.has_any_key();
 
