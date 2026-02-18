@@ -99,6 +99,10 @@ enum SkillCommand {
 /// Tracks an active conversation channel and its message sender.
 struct ActiveChannel {
     message_tx: mpsc::Sender<spacebot::InboundMessage>,
+    /// Latest inbound message for this conversation, shared with the outbound
+    /// routing task so status updates (e.g. typing indicators) target the
+    /// most recent message rather than the first one the channel ever received.
+    latest_message: Arc<tokio::sync::RwLock<spacebot::InboundMessage>>,
     /// Retained so the outbound routing task stays alive.
     _outbound_handle: tokio::task::JoinHandle<()>,
 }
@@ -729,7 +733,8 @@ async fn run(
                     // Spawn outbound response routing: reads from response_rx,
                     // sends to the messaging adapter and forwards to SSE
                     let messaging_for_outbound = messaging_manager.clone();
-                    let outbound_message = message.clone();
+                    let latest_message = Arc::new(tokio::sync::RwLock::new(message.clone()));
+                    let outbound_message = latest_message.clone();
                     let outbound_conversation_id = conversation_id.clone();
                     let api_event_tx = api_state.event_tx.clone();
                     let sse_agent_id = agent_id.to_string();
@@ -769,10 +774,11 @@ async fn run(
                                 _ => {}
                             }
 
+                            let current_message = outbound_message.read().await.clone();
                             match response {
                                 spacebot::OutboundResponse::Status(status) => {
                                     if let Err(error) = messaging_for_outbound
-                                        .send_status(&outbound_message, status)
+                                        .send_status(&current_message, status)
                                         .await
                                     {
                                         tracing::warn!(%error, "failed to send status update");
@@ -784,7 +790,7 @@ async fn run(
                                         "routing outbound response to messaging adapter"
                                     );
                                     if let Err(error) = messaging_for_outbound
-                                        .respond(&outbound_message, response)
+                                        .respond(&current_message, response)
                                         .await
                                     {
                                         tracing::error!(%error, "failed to send outbound response");
@@ -796,6 +802,7 @@ async fn run(
 
                     active_channels.insert(conversation_id.clone(), ActiveChannel {
                         message_tx: channel_tx,
+                        latest_message,
                         _outbound_handle: outbound_handle,
                     });
 
@@ -808,6 +815,10 @@ async fn run(
 
                 // Forward the message to the channel
                 if let Some(active) = active_channels.get(&conversation_id) {
+                    // Update the shared message reference so outbound routing
+                    // (typing indicators, reactions) targets this message
+                    *active.latest_message.write().await = message.clone();
+
                     // Emit inbound message to SSE clients
                     api_state.event_tx.send(spacebot::api::ApiEvent::InboundMessage {
                         agent_id: agent_id.to_string(),
