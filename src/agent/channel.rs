@@ -381,8 +381,10 @@ impl Channel {
         if self.conversation_context.is_none() {
             if let Some(first) = messages.first() {
                 let prompt_engine = self.deps.runtime_config.prompts.load();
-                let server_name = first.metadata.get("discord_guild_name").and_then(|v| v.as_str());
-                let channel_name = first.metadata.get("discord_channel_name").and_then(|v| v.as_str());
+                let server_name = first.metadata.get("discord_guild_name").and_then(|v| v.as_str())
+                    .or_else(|| first.metadata.get("telegram_chat_title").and_then(|v| v.as_str()));
+                let channel_name = first.metadata.get("discord_channel_name").and_then(|v| v.as_str())
+                    .or_else(|| first.metadata.get("telegram_chat_type").and_then(|v| v.as_str()));
                 self.conversation_context = Some(
                     prompt_engine
                         .render_conversation_context(&first.source, server_name, channel_name)
@@ -600,8 +602,10 @@ impl Channel {
         // Capture conversation context from the first message (platform, channel, server)
         if self.conversation_context.is_none() {
             let prompt_engine = self.deps.runtime_config.prompts.load();
-            let server_name = message.metadata.get("discord_guild_name").and_then(|v| v.as_str());
-            let channel_name = message.metadata.get("discord_channel_name").and_then(|v| v.as_str());
+            let server_name = message.metadata.get("discord_guild_name").and_then(|v| v.as_str())
+                .or_else(|| message.metadata.get("telegram_chat_title").and_then(|v| v.as_str()));
+            let channel_name = message.metadata.get("discord_channel_name").and_then(|v| v.as_str())
+                .or_else(|| message.metadata.get("telegram_chat_type").and_then(|v| v.as_str()));
             self.conversation_context = Some(
                 prompt_engine
                     .render_conversation_context(&message.source, server_name, channel_name)
