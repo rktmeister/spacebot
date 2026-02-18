@@ -1,10 +1,12 @@
 import {useState, useEffect, useRef} from "react";
 import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
 import {api, type GlobalSettingsResponse} from "@/api/client";
-import {Button, Input, SettingSidebarButton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, Select, SelectTrigger, SelectValue, SelectContent, SelectItem} from "@/ui";
+import {Button, Input, SettingSidebarButton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Toggle} from "@/ui";
 import {useSearch, useNavigate} from "@tanstack/react-router";
 import {ChannelSettingCard, DisabledChannelCard} from "@/components/ChannelSettingCard";
 import {ProviderIcon} from "@/lib/providerIcons";
+import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
+import {faSearch} from "@fortawesome/free-solid-svg-icons";
 
 import {parse as parseToml} from "smol-toml";
 
@@ -502,9 +504,7 @@ function ApiKeysSection({settings, isLoading}: GlobalSettingsSectionProps) {
 				<div className="flex flex-col gap-3">
 					<div className="rounded-lg border border-app-line bg-app-box p-4">
 						<div className="flex items-center gap-3">
-							<div className="flex h-8 w-8 items-center justify-center rounded-lg bg-app-darkBox text-ink-faint">
-								<span className="text-lg">🔍</span>
-							</div>
+							<FontAwesomeIcon icon={faSearch} className="text-ink-faint" />
 							<div className="flex-1">
 								<div className="flex items-center gap-2">
 									<span className="text-sm font-medium text-ink">Brave Search</span>
@@ -655,20 +655,19 @@ function ServerSection({settings, isLoading}: GlobalSettingsSectionProps) {
 			) : (
 				<div className="flex flex-col gap-4">
 					<div className="rounded-lg border border-app-line bg-app-box p-4">
-						<label className="flex items-center gap-3">
-							<input
-								type="checkbox"
-								checked={apiEnabled}
-								onChange={(e) => setApiEnabled(e.target.checked)}
-								className="h-4 w-4"
-							/>
+						<div className="flex items-center justify-between">
 							<div>
 								<span className="text-sm font-medium text-ink">Enable API Server</span>
 								<p className="mt-0.5 text-sm text-ink-dull">
 									Disable to prevent the HTTP API from starting
 								</p>
 							</div>
-						</label>
+							<Toggle
+								size="sm"
+								checked={apiEnabled}
+								onCheckedChange={setApiEnabled}
+							/>
+						</div>
 					</div>
 
 					<div className="rounded-lg border border-app-line bg-app-box p-4">

@@ -55,13 +55,13 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 			{/* Logo + collapse toggle */}
 			<div className="flex h-12 items-center border-b border-sidebar-line px-3">
 			{collapsed ? (
-				<Button onClick={onToggle} variant="ghost" size="icon" className="h-full w-full">
-					<img src={`${BASE_PATH}/ball.png`} alt="" className="h-6 w-6" draggable={false} />
-				</Button>
+				<button onClick={onToggle} className="flex h-full w-full items-center justify-center">
+					<img src={`${BASE_PATH}/ball.png`} alt="" className="h-6 w-6 transition-transform duration-150 ease-out hover:scale-110 active:scale-95" draggable={false} />
+				</button>
 			) : (
 				<div className="flex flex-1 items-center justify-between">
 					<Link to="/" className="flex items-center gap-2">
-						<img src={`${BASE_PATH}/ball.png`} alt="" className="h-6 w-6 flex-shrink-0" draggable={false} />
+						<img src={`${BASE_PATH}/ball.png`} alt="" className="h-6 w-6 flex-shrink-0 transition-transform duration-150 ease-out hover:scale-110 active:scale-95" draggable={false} />
 						<span className="whitespace-nowrap font-plex text-sm font-semibold text-sidebar-ink">
 							Spacebot
 						</span>
