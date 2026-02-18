@@ -9,6 +9,22 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// OpenTelemetry export configuration.
+///
+/// All fields are optional. If `otlp_endpoint` is not set (and the standard
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` env var is not present), OTLP export is
+/// disabled and the OTel layer is omitted entirely.
+#[derive(Debug, Clone, Default)]
+pub struct TelemetryConfig {
+    /// OTLP HTTP endpoint, e.g. `http://localhost:4318`.
+    /// Falls back to the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable.
+    pub otlp_endpoint: Option<String>,
+    /// `service.name` resource attribute sent with every span.
+    pub service_name: String,
+    /// Trace sample rate in the range 0.0–1.0. Defaults to 1.0 (sample all).
+    pub sample_rate: f64,
+}
+
 /// Top-level Spacebot configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -26,6 +42,8 @@ pub struct Config {
     pub bindings: Vec<Binding>,
     /// HTTP API server configuration.
     pub api: ApiConfig,
+    /// OpenTelemetry export configuration.
+    pub telemetry: TelemetryConfig,
 }
 
 /// HTTP API server configuration.
@@ -832,6 +850,15 @@ struct TomlConfig {
     bindings: Vec<TomlBinding>,
     #[serde(default)]
     api: TomlApiConfig,
+    #[serde(default)]
+    telemetry: TomlTelemetryConfig,
+}
+
+#[derive(Deserialize, Default)]
+struct TomlTelemetryConfig {
+    otlp_endpoint: Option<String>,
+    service_name: Option<String>,
+    sample_rate: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -1233,6 +1260,12 @@ impl Config {
             messaging: MessagingConfig::default(),
             bindings: Vec::new(),
             api: ApiConfig::default(),
+            telemetry: TelemetryConfig {
+                otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
+                service_name: std::env::var("OTEL_SERVICE_NAME")
+                    .unwrap_or_else(|_| "spacebot".into()),
+                sample_rate: 1.0,
+            },
         })
     }
 
@@ -1718,6 +1751,19 @@ impl Config {
             bind: toml.api.bind,
         };
 
+        let telemetry = {
+            // env var takes precedence over config file value
+            let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .ok()
+                .or(toml.telemetry.otlp_endpoint);
+            let service_name = std::env::var("OTEL_SERVICE_NAME")
+                .ok()
+                .or(toml.telemetry.service_name)
+                .unwrap_or_else(|| "spacebot".into());
+            let sample_rate = toml.telemetry.sample_rate.unwrap_or(1.0);
+            TelemetryConfig { otlp_endpoint, service_name, sample_rate }
+        };
+
         Ok(Config {
             instance_dir,
             llm,
@@ -1726,6 +1772,7 @@ impl Config {
             messaging,
             bindings,
             api,
+            telemetry,
         })
     }
 
