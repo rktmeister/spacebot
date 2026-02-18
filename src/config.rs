@@ -93,6 +93,41 @@ impl Default for MetricsConfig {
     }
 }
 
+/// API types supported by LLM providers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApiType {
+    /// OpenAI Completions API (https://api.openai.com/v1/completions)
+    OpenAiCompletions,
+    /// OpenAI Responses API (https://api.openai.com/v1/chat/completions)
+    OpenAiResponses,
+    /// Anthropic Messages API (https://api.anthropic.com/v1/messages)
+    Anthropic,
+}
+
+impl<'de> serde::Deserialize<'de> for ApiType {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "openai_completions" => Ok(Self::OpenAiCompletions),
+            "openai_responses" => Ok(Self::OpenAiResponses),
+            "anthropic" => Ok(Self::Anthropic),
+            other => Err(serde::de::Error::invalid_value(
+                serde::de::Unexpected::Str(other),
+                &"one of \"openai_completions\", \"openai_responses\", or \"anthropic\"",
+            )),
+        }
+    }
+}
+
+/// Configuration for a single LLM provider.
+#[derive(Debug, Clone)]
+pub struct ProviderConfig {
+    pub api_type: ApiType,
+    pub base_url: String,
+    pub api_key: String,
+    pub name: Option<String>,
+}
+
 /// LLM provider credentials (instance-level).
 #[derive(Debug, Clone)]
 pub struct LlmConfig {
@@ -110,6 +145,7 @@ pub struct LlmConfig {
     pub ollama_base_url: Option<String>,
     pub opencode_zen_key: Option<String>,
     pub nvidia_key: Option<String>,
+    pub providers: HashMap<String, ProviderConfig>,
 }
 
 impl LlmConfig {
@@ -129,6 +165,7 @@ impl LlmConfig {
             || self.ollama_base_url.is_some()
             || self.opencode_zen_key.is_some()
             || self.nvidia_key.is_some()
+            || !self.providers.is_empty()
     }
 }
 
@@ -958,6 +995,14 @@ fn default_metrics_bind() -> String {
     "0.0.0.0".into()
 }
 
+#[derive(Deserialize, Debug)]
+struct TomlProviderConfig {
+    api_type: ApiType,
+    base_url: String,
+    api_key: String,
+    name: Option<String>,
+}
+
 #[derive(Deserialize, Default)]
 struct TomlLlmConfig {
     anthropic_key: Option<String>,
@@ -974,6 +1019,8 @@ struct TomlLlmConfig {
     ollama_base_url: Option<String>,
     opencode_zen_key: Option<String>,
     nvidia_key: Option<String>,
+    #[serde(default)]
+    providers: HashMap<String, TomlProviderConfig>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1327,6 +1374,8 @@ impl Config {
             ollama_base_url: std::env::var("OLLAMA_BASE_URL").ok(),
             opencode_zen_key: std::env::var("OPENCODE_ZEN_API_KEY").ok(),
             nvidia_key: std::env::var("NVIDIA_API_KEY").ok(),
+            nvidia_key: std::env::var("NVIDIA_API_KEY").ok(),
+            providers: HashMap::new(),
         };
 
         // Note: We allow boot without provider configuration now. System starts in setup mode.
@@ -1477,6 +1526,24 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("NVIDIA_API_KEY").ok()),
+            nvidia_key: toml
+                .llm
+                .nvidia_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("NVIDIA_API_KEY").ok()),
+            providers: toml.llm.providers.into_iter().map(|(name, config)| {
+                (
+                    name,
+                    ProviderConfig {
+                        api_type: config.api_type,
+                        base_url: config.base_url,
+                        api_key: resolve_env_value(&config.api_key)
+                            .expect("Failed to resolve API key for provider"),
+                        name: config.name,
+                    },
+                )
+            }).collect(),
         };
 
         // Note: We allow boot without provider configuration now. System starts in setup mode.
@@ -2655,4 +2722,85 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
     println!();
 
     Ok(Some(config_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::result::Result as StdResult;
+
+    #[test]
+    fn test_api_type_deserialization() {
+        let toml1 = r#"
+api_type = "openai_completions"
+base_url = "https://api.openai.com"
+api_key = "test-key"
+"#;
+        let result1: StdResult<TomlProviderConfig, toml::de::Error> = toml::from_str(toml1);
+        assert!(result1.is_ok(), "Error: {:?}", result1.err());
+        assert_eq!(result1.unwrap().api_type, ApiType::OpenAiCompletions);
+
+        let toml2 = r#"
+api_type = "openai_responses"
+base_url = "https://api.openai.com"
+api_key = "test-key"
+"#;
+        let result2: StdResult<TomlProviderConfig, toml::de::Error> = toml::from_str(toml2);
+        assert!(result2.is_ok(), "Error: {:?}", result2.err());
+        assert_eq!(result2.unwrap().api_type, ApiType::OpenAiResponses);
+
+        let toml3 = r#"
+api_type = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key = "test-key"
+"#;
+        let result3: StdResult<TomlProviderConfig, toml::de::Error> = toml::from_str(toml3);
+        assert!(result3.is_ok(), "Error: {:?}", result3.err());
+        assert_eq!(result3.unwrap().api_type, ApiType::Anthropic);
+    }
+
+    #[test]
+    fn test_api_type_deserialization_invalid() {
+        let toml = r#"api_type = "invalid_type""#;
+        let result: StdResult<TomlProviderConfig, toml::de::Error> = toml::from_str(toml);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("invalid value"));
+        assert!(error.to_string().contains("openai_completions"));
+        assert!(error.to_string().contains("openai_responses"));
+        assert!(error.to_string().contains("anthropic"));
+    }
+
+    #[test]
+    fn test_provider_config_deserialization() {
+        let toml = r#"
+api_type = "anthropic"
+base_url = "https://api.anthropic.com/v1"
+api_key = "sk-ant-api03-abc123"
+name = "Anthropic"
+"#;
+        let result: StdResult<TomlProviderConfig, toml::de::Error> = toml::from_str(toml);
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.api_type, ApiType::Anthropic);
+        assert_eq!(config.base_url, "https://api.anthropic.com/v1");
+        assert_eq!(config.api_key, "sk-ant-api03-abc123");
+        assert_eq!(config.name, Some("Anthropic".to_string()));
+    }
+
+    #[test]
+    fn test_provider_config_deserialization_no_name() {
+        let toml = r#"
+api_type = "openai_responses"
+base_url = "https://api.openai.com/v1"
+api_key = "sk-proj-xyz789"
+"#;
+        let result: StdResult<TomlProviderConfig, toml::de::Error> = toml::from_str(toml);
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.api_type, ApiType::OpenAiResponses);
+        assert_eq!(config.base_url, "https://api.openai.com/v1");
+        assert_eq!(config.api_key, "sk-proj-xyz789");
+        assert_eq!(config.name, None);
+    }
 }
