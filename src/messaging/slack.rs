@@ -2,7 +2,7 @@
 
 use crate::config::SlackPermissions;
 use crate::messaging::traits::{HistoryMessage, InboundStream, Messaging};
-use crate::{InboundMessage, MessageContent, OutboundResponse, StatusUpdate};
+use crate::{InboundMessage, MessageContent, OutboundResponse};
 
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
@@ -445,51 +445,14 @@ impl Messaging for SlackAdapter {
             OutboundResponse::StreamEnd => {
                 self.active_messages.write().await.remove(&message.id);
             }
-            OutboundResponse::Status(status) => {
-                self.send_status(message, status).await?;
-            }
+            OutboundResponse::Status(_) => {}  // no-op, Slack has no native typing indicator
         }
 
         Ok(())
     }
 
-    async fn send_status(
-        &self,
-        message: &InboundMessage,
-        status: StatusUpdate,
-    ) -> crate::Result<()> {
-        let (client, token) = self.create_session()?;
-        let session = client.open_session(&token);
-        let channel_id = extract_channel_id(message)?;
-
-        match status {
-            StatusUpdate::Thinking => {
-                if let Some(ts) = extract_message_ts(message) {
-                    let req = SlackApiReactionsAddRequest::new(
-                        channel_id,
-                        SlackReactionName("thinking_face".into()),
-                        ts,
-                    );
-                    if let Err(error) = session.reactions_add(&req).await {
-                        tracing::warn!(%error, "failed to add thinking reaction");
-                    }
-                }
-            }
-            _ => {
-                if let Some(ts) = extract_message_ts(message) {
-                    let req = SlackApiReactionsRemoveRequest::new(SlackReactionName(
-                        "thinking_face".into(),
-                    ))
-                    .with_channel(channel_id)
-                    .with_timestamp(ts);
-
-                    let _ = session.reactions_remove(&req).await;
-                }
-            }
-        }
-
-        Ok(())
-    }
+    // send_status: uses the default no-op from the Messaging trait.
+    // Slack has no native typing indicator API.
 
     async fn broadcast(
         &self,

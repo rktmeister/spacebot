@@ -9,8 +9,8 @@ use arc_swap::ArcSwap;
 use teloxide::payloads::setters::*;
 use teloxide::requests::{Request, Requester};
 use teloxide::types::{
-    ChatAction, ChatId, InputFile, MediaKind, MessageId, MessageKind, ReactionType, ReplyParameters,
-    UpdateKind, UserId,
+    ChatAction, ChatId, FileId, InputFile, MediaKind, MessageId, MessageKind, ReactionType,
+    ReplyParameters, UpdateKind, UserId,
 };
 use teloxide::Bot;
 
@@ -189,7 +189,7 @@ impl Messaging for TelegramAdapter {
                                 continue;
                             }
 
-                            let content = build_content(&message, &text);
+                            let content = build_content(&bot, &message, &text).await;
                             let conversation_id = format!("telegram:{chat_id}");
                             let sender_id = message
                                 .from
@@ -463,18 +463,41 @@ fn has_attachments(message: &teloxide::types::Message) -> bool {
 }
 
 /// Build `MessageContent` from a Telegram message.
-fn build_content(
+///
+/// Resolves Telegram file IDs to download URLs via the Bot API.
+async fn build_content(
+    bot: &Bot,
     message: &teloxide::types::Message,
     text: &Option<String>,
 ) -> MessageContent {
     let attachments = extract_attachments(message);
 
     if attachments.is_empty() {
+        return MessageContent::Text(text.clone().unwrap_or_default());
+    }
+
+    let mut resolved = Vec::with_capacity(attachments.len());
+    for mut attachment in attachments {
+        match resolve_file_url(bot, &attachment.url).await {
+            Ok(url) => attachment.url = url,
+            Err(error) => {
+                tracing::warn!(
+                    file_id = %attachment.url,
+                    %error,
+                    "failed to resolve telegram file URL, skipping attachment"
+                );
+                continue;
+            }
+        }
+        resolved.push(attachment);
+    }
+
+    if resolved.is_empty() {
         MessageContent::Text(text.clone().unwrap_or_default())
     } else {
         MessageContent::Media {
             text: text.clone(),
-            attachments,
+            attachments: resolved,
         }
     }
 }
@@ -567,6 +590,30 @@ fn extract_attachments(message: &teloxide::types::Message) -> Vec<Attachment> {
     }
 
     attachments
+}
+
+/// Resolve a Telegram file ID to a download URL via the Bot API.
+///
+/// Telegram doesn't provide direct URLs for file attachments. Instead you get a file ID
+/// that must be resolved through `getFile` to obtain the actual download path.
+async fn resolve_file_url(bot: &Bot, file_id: &str) -> anyhow::Result<String> {
+    let file = bot
+        .get_file(FileId(file_id.to_string()))
+        .send()
+        .await
+        .context("getFile API call failed")?;
+
+    let mut url = bot.api_url();
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("cannot-be-a-base URL"))?;
+        segments.push("file");
+        segments.push(&format!("bot{}", bot.token()));
+        segments.push(&file.path);
+    }
+
+    Ok(url.to_string())
 }
 
 /// Build platform-specific metadata for a Telegram message.
