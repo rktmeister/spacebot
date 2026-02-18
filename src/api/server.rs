@@ -2672,33 +2672,31 @@ async fn update_provider(
         let current_provider =
             crate::llm::routing::provider_from_model(current_channel);
 
-        // Check if the current routing provider has a key configured
+        // Check if the current routing provider has a usable key.
+        // Resolves "env:VAR_NAME" references — the boot script writes these
+        // for common providers even when the env var isn't actually set.
+        let has_provider_key = |toml_key: &str, env_var: &str| -> bool {
+            if let Some(s) = doc.get("llm").and_then(|l| l.get(toml_key)).and_then(|v| v.as_str()) {
+                if let Some(var_name) = s.strip_prefix("env:") {
+                    return std::env::var(var_name).is_ok();
+                }
+                return !s.is_empty();
+            }
+            std::env::var(env_var).is_ok()
+        };
+
         let has_key_for_current = match current_provider {
-            "anthropic" => doc
-                .get("llm")
-                .and_then(|l| l.get("anthropic_key"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "openai" => doc
-                .get("llm")
-                .and_then(|l| l.get("openai_key"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "openrouter" => doc
-                .get("llm")
-                .and_then(|l| l.get("openrouter_key"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "zhipu" => doc
-                .get("llm")
-                .and_then(|l| l.get("zhipu_key"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "opencode-zen" => doc
-                .get("llm")
-                .and_then(|l| l.get("opencode_zen_key"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
+            "anthropic" => has_provider_key("anthropic_key", "ANTHROPIC_API_KEY"),
+            "openai" => has_provider_key("openai_key", "OPENAI_API_KEY"),
+            "openrouter" => has_provider_key("openrouter_key", "OPENROUTER_API_KEY"),
+            "zhipu" => has_provider_key("zhipu_key", "ZHIPU_API_KEY"),
+            "groq" => has_provider_key("groq_key", "GROQ_API_KEY"),
+            "together" => has_provider_key("together_key", "TOGETHER_API_KEY"),
+            "fireworks" => has_provider_key("fireworks_key", "FIREWORKS_API_KEY"),
+            "deepseek" => has_provider_key("deepseek_key", "DEEPSEEK_API_KEY"),
+            "xai" => has_provider_key("xai_key", "XAI_API_KEY"),
+            "mistral" => has_provider_key("mistral_key", "MISTRAL_API_KEY"),
+            "opencode-zen" => has_provider_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
             _ => false,
         };
 
