@@ -131,7 +131,7 @@ impl Messaging for TelegramAdapter {
                         tracing::info!("telegram polling loop shutting down");
                         break;
                     }
-                    result = bot.get_updates().offset(offset).timeout(30).send() => {
+                    result = bot.get_updates().offset(offset).timeout(10).send() => {
                         let updates = match result {
                             Ok(updates) => updates,
                             Err(error) => {
