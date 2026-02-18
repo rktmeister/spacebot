@@ -1256,6 +1256,12 @@ where
     E: std::fmt::Display + Send + 'static,
 {
     tokio::spawn(async move {
+        #[cfg(feature = "metrics")]
+        crate::telemetry::Metrics::global()
+            .active_workers
+            .with_label_values(&[&*agent_id])
+            .inc();
+
         let (result_text, notify) = match future.await {
             Ok(text) => (text, true),
             Err(error) => {
@@ -1263,6 +1269,12 @@ where
                 (format!("Worker failed: {error}"), true)
             }
         };
+        #[cfg(feature = "metrics")]
+        crate::telemetry::Metrics::global()
+            .active_workers
+            .with_label_values(&[&*agent_id])
+            .dec();
+
         let _ = event_tx.send(ProcessEvent::WorkerComplete {
             agent_id,
             worker_id,

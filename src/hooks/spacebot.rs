@@ -85,6 +85,11 @@ impl SpacebotHook {
     }
 }
 
+#[cfg(feature = "metrics")]
+static TOOL_CALL_TIMERS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
 impl<M> PromptHook<M> for SpacebotHook
 where
     M: CompletionModel,
@@ -156,6 +161,11 @@ where
             "tool call started"
         );
 
+        #[cfg(feature = "metrics")]
+        if let Ok(mut timers) = TOOL_CALL_TIMERS.lock() {
+            timers.insert(_internal_call_id.to_string(), std::time::Instant::now());
+        }
+
         ToolCallHookAction::Continue
     }
 
@@ -199,6 +209,24 @@ where
             result_bytes = result.len(),
             "tool call completed"
         );
+
+        #[cfg(feature = "metrics")]
+        {
+            let metrics = crate::telemetry::Metrics::global();
+            metrics
+                .tool_calls_total
+                .with_label_values(&[&*self.agent_id, tool_name])
+                .inc();
+            if let Some(start) = TOOL_CALL_TIMERS
+                .lock()
+                .ok()
+                .and_then(|mut timers| timers.remove(_internal_call_id))
+            {
+                metrics
+                    .tool_call_duration_seconds
+                    .observe(start.elapsed().as_secs_f64());
+            }
+        }
 
         HookAction::Continue
     }

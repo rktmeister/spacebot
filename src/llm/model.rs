@@ -179,6 +179,10 @@ impl CompletionModel for SpacebotModel {
         &self,
         request: CompletionRequest,
     ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        #[cfg(feature = "metrics")]
+        let start = std::time::Instant::now();
+
+        let result = async move {
         let Some(routing) = &self.routing else {
             // No routing config — just call the model directly, no fallback/retry
             return self.attempt_completion(request).await;
@@ -258,6 +262,24 @@ impl CompletionModel for SpacebotModel {
         Err(last_error.unwrap_or_else(|| {
             CompletionError::ProviderError("all models in fallback chain failed".into())
         }))
+        }
+        .await;
+
+        #[cfg(feature = "metrics")]
+        {
+            let elapsed = start.elapsed().as_secs_f64();
+            let metrics = crate::telemetry::Metrics::global();
+            metrics
+                .llm_requests_total
+                .with_label_values(&["unknown", &self.full_model_name, "unknown"])
+                .inc();
+            metrics
+                .llm_request_duration_seconds
+                .with_label_values(&["unknown", &self.full_model_name, "unknown"])
+                .observe(elapsed);
+        }
+
+        result
     }
 
     async fn stream(
