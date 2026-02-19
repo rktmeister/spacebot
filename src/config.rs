@@ -2455,13 +2455,19 @@ pub fn spawn_file_watcher(
                                         Arc::new(arc_swap::ArcSwap::from_pointee(perms))
                                     }
                                 };
-                                let adapter = crate::messaging::slack::SlackAdapter::new(
+                                match crate::messaging::slack::SlackAdapter::new(
                                     &slack_config.bot_token,
                                     &slack_config.app_token,
                                     perms,
-                                );
-                                if let Err(error) = manager.register_and_start(adapter).await {
-                                    tracing::error!(%error, "failed to hot-start slack adapter from config change");
+                                ) {
+                                    Ok(adapter) => {
+                                        if let Err(error) = manager.register_and_start(adapter).await {
+                                            tracing::error!(%error, "failed to hot-start slack adapter from config change");
+                                        }
+                                    }
+                                    Err(error) => {
+                                        tracing::error!(%error, "failed to build slack adapter from config change");
+                                    }
                                 }
                             }
                         }

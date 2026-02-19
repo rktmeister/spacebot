@@ -4,10 +4,10 @@ pub mod agent;
 pub mod api;
 pub mod config;
 pub mod conversation;
+pub mod cron;
 pub mod daemon;
 pub mod db;
 pub mod error;
-pub mod cron;
 pub mod hooks;
 pub mod identity;
 pub mod llm;
@@ -18,9 +18,9 @@ pub mod prompts;
 pub mod secrets;
 pub mod settings;
 pub mod skills;
-pub mod tools;
 #[cfg(feature = "metrics")]
 pub mod telemetry;
+pub mod tools;
 pub mod update;
 
 pub use error::{Error, Result};
@@ -183,8 +183,12 @@ pub struct AgentDeps {
 }
 
 impl AgentDeps {
-    pub fn memory_search(&self) -> &Arc<memory::MemorySearch> { &self.memory_search }
-    pub fn llm_manager(&self) -> &Arc<llm::LlmManager> { &self.llm_manager }
+    pub fn memory_search(&self) -> &Arc<memory::MemorySearch> {
+        &self.memory_search
+    }
+    pub fn llm_manager(&self) -> &Arc<llm::LlmManager> {
+        &self.llm_manager
+    }
 
     /// Load the current routing config snapshot.
     pub fn routing(&self) -> arc_swap::Guard<Arc<llm::RoutingConfig>> {
@@ -273,6 +277,33 @@ pub enum OutboundResponse {
     },
     /// Add a reaction emoji to the triggering message.
     Reaction(String),
+    /// Remove a reaction emoji from the triggering message.
+    /// No-op on platforms that don't support reaction removal.
+    RemoveReaction(String),
+    /// Send a message visible only to the triggering user (ephemeral).
+    /// Falls back to a regular `Text` message on platforms that don't support it.
+    Ephemeral {
+        /// The message text (mrkdwn on Slack, plain text on others).
+        text: String,
+        /// The user ID who should see the message. Required on Slack; ignored elsewhere.
+        user_id: String,
+    },
+    /// Send a message with Block Kit rich formatting (Slack) or plain text fallback.
+    /// Other adapters use `text` as-is.
+    RichMessage {
+        /// Plain-text fallback — always present, used for notifications and non-Slack adapters.
+        text: String,
+        /// Slack Block Kit blocks. Serialised as raw JSON so callers don't need to depend on
+        /// slack-morphism types. The Slack adapter deserialises these at send time.
+        blocks: Vec<serde_json::Value>,
+    },
+    /// Schedule a message to be posted at a future Unix timestamp (Slack only).
+    /// Other adapters send immediately as a regular `Text` message.
+    ScheduledMessage {
+        text: String,
+        /// Unix epoch seconds when the message should be delivered.
+        post_at: i64,
+    },
     StreamStart,
     StreamChunk(String),
     StreamEnd,
@@ -303,9 +334,21 @@ pub enum StatusUpdate {
     Thinking,
     /// Cancel the typing indicator (e.g. when the skip tool fires).
     StopTyping,
-    ToolStarted { tool_name: String },
-    ToolCompleted { tool_name: String },
-    BranchStarted { branch_id: BranchId },
-    WorkerStarted { worker_id: WorkerId, task: String },
-    WorkerCompleted { worker_id: WorkerId, result: String },
+    ToolStarted {
+        tool_name: String,
+    },
+    ToolCompleted {
+        tool_name: String,
+    },
+    BranchStarted {
+        branch_id: BranchId,
+    },
+    WorkerStarted {
+        worker_id: WorkerId,
+        task: String,
+    },
+    WorkerCompleted {
+        worker_id: WorkerId,
+        result: String,
+    },
 }
