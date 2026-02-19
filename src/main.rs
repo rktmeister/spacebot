@@ -505,11 +505,14 @@ async fn run(
     let (provider_tx, mut provider_rx) = mpsc::channel::<spacebot::ProviderSetupEvent>(1);
     // Channel for newly created agents to be registered in the main event loop
     let (agent_tx, mut agent_rx) = mpsc::channel::<spacebot::Agent>(8);
+    // Channel for removing agents from the main event loop
+    let (agent_remove_tx, mut agent_remove_rx) = mpsc::channel::<String>(8);
 
     // Start HTTP API server if enabled
     let api_state = Arc::new(spacebot::api::ApiState::new_with_provider_sender(
         provider_tx,
         agent_tx,
+        agent_remove_tx,
     ));
 
     // Start background update checker
@@ -612,6 +615,7 @@ async fn run(
         let mut discord_permissions = None;
         let mut slack_permissions = None;
         let mut telegram_permissions = None;
+        let mut twitch_permissions = None;
         initialize_agents(
             &config,
             &llm_manager,
@@ -628,6 +632,7 @@ async fn run(
             &mut discord_permissions,
             &mut slack_permissions,
             &mut telegram_permissions,
+            &mut twitch_permissions,
         )
         .await?;
         agents_initialized = true;
@@ -640,8 +645,10 @@ async fn run(
             discord_permissions,
             slack_permissions,
             telegram_permissions,
+            twitch_permissions,
             bindings.clone(),
             Some(messaging_manager.clone()),
+            llm_manager.clone(),
         );
     } else {
         // Start file watcher in setup mode (no agents to watch yet)
@@ -652,8 +659,10 @@ async fn run(
             None,
             None,
             None,
+            None,
             bindings.clone(),
             None,
+            llm_manager.clone(),
         );
     }
 
@@ -882,6 +891,14 @@ async fn run(
                 tracing::info!(agent_id = %agent.id, "registering new agent in main loop");
                 agents.insert(agent.id.clone(), agent);
             }
+            Some(agent_id) = agent_remove_rx.recv() => {
+                let key: spacebot::AgentId = Arc::from(agent_id.as_str());
+                if agents.remove(&key).is_some() {
+                    tracing::info!(agent_id = %agent_id, "removed agent from main loop");
+                } else {
+                    tracing::warn!(agent_id = %agent_id, "agent not found in main loop for removal");
+                }
+            }
             Some(_event) = provider_rx.recv(), if !agents_initialized => {
                 tracing::info!("providers configured, initializing agents");
 
@@ -905,6 +922,7 @@ async fn run(
                                 let mut new_discord_permissions = None;
                                 let mut new_slack_permissions = None;
                                 let mut new_telegram_permissions = None;
+                                let mut new_twitch_permissions = None;
                                 match initialize_agents(
                                     &new_config,
                                     &new_llm_manager,
@@ -921,6 +939,7 @@ async fn run(
                                     &mut new_discord_permissions,
                                     &mut new_slack_permissions,
                                     &mut new_telegram_permissions,
+                                    &mut new_twitch_permissions,
                                 ).await {
                                     Ok(()) => {
                                         agents_initialized = true;
@@ -932,8 +951,10 @@ async fn run(
                                             new_discord_permissions,
                                             new_slack_permissions,
                                             new_telegram_permissions,
+                                            new_twitch_permissions,
                                             bindings.clone(),
                                             Some(messaging_manager.clone()),
+                                            new_llm_manager.clone(),
                                         );
                                         tracing::info!("agents initialized after provider setup");
                                     }
@@ -1023,6 +1044,7 @@ async fn initialize_agents(
     discord_permissions: &mut Option<Arc<ArcSwap<spacebot::config::DiscordPermissions>>>,
     slack_permissions: &mut Option<Arc<ArcSwap<spacebot::config::SlackPermissions>>>,
     telegram_permissions: &mut Option<Arc<ArcSwap<spacebot::config::TelegramPermissions>>>,
+    twitch_permissions: &mut Option<Arc<ArcSwap<spacebot::config::TwitchPermissions>>>,
 ) -> anyhow::Result<()> {
     let resolved_agents = config.resolve_agents();
 
@@ -1270,6 +1292,28 @@ async fn initialize_agents(
             let adapter = spacebot::messaging::webhook::WebhookAdapter::new(
                 webhook_config.port,
                 &webhook_config.bind,
+            );
+            new_messaging_manager.register(adapter).await;
+        }
+    }
+
+    // Shared Twitch permissions (hot-reloadable via file watcher)
+    *twitch_permissions = config.messaging.twitch.as_ref().map(|twitch_config| {
+        let perms =
+            spacebot::config::TwitchPermissions::from_config(twitch_config, &config.bindings);
+        Arc::new(ArcSwap::from_pointee(perms))
+    });
+
+    if let Some(twitch_config) = &config.messaging.twitch {
+        if twitch_config.enabled {
+            let adapter = spacebot::messaging::twitch::TwitchAdapter::new(
+                &twitch_config.username,
+                &twitch_config.oauth_token,
+                twitch_config.channels.clone(),
+                twitch_config.trigger_prefix.clone(),
+                twitch_permissions
+                    .clone()
+                    .expect("twitch permissions initialized when twitch is enabled"),
             );
             new_messaging_manager.register(adapter).await;
         }

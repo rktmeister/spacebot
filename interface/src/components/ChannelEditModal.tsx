@@ -18,7 +18,7 @@ import {
 import {PlatformIcon} from "@/lib/platformIcons";
 import {TagInput} from "@/components/TagInput";
 
-type Platform = "discord" | "slack" | "telegram" | "webhook";
+type Platform = "discord" | "slack" | "telegram" | "twitch" | "webhook";
 
 interface ChannelEditModalProps {
 	platform: Platform;
@@ -158,6 +158,12 @@ export function ChannelEditModal({platform, name, status, open, onOpenChange}: C
 		} else if (platform === "telegram") {
 			if (!credentialInputs.telegram_token?.trim()) return;
 			request.platform_credentials = {telegram_token: credentialInputs.telegram_token.trim()};
+		} else if (platform === "twitch") {
+			if (!credentialInputs.twitch_username?.trim() || !credentialInputs.twitch_oauth_token?.trim()) return;
+			request.platform_credentials = {
+				twitch_username: credentialInputs.twitch_username.trim(),
+				twitch_oauth_token: credentialInputs.twitch_oauth_token.trim(),
+			};
 		}
 		saveCreds.mutate(request);
 	}
@@ -281,6 +287,35 @@ export function ChannelEditModal({platform, name, status, open, onOpenChange}: C
 								onKeyDown={(e) => { if (e.key === "Enter") handleSaveCredentials(); }}
 							/>
 						</div>
+					)}
+
+					{platform === "twitch" && (
+						<>
+							<div>
+								<label className="mb-1.5 block text-sm font-medium text-ink-dull">Bot Username</label>
+								<Input
+									value={credentialInputs.twitch_username ?? ""}
+									onChange={(e) => setCredentialInputs({...credentialInputs, twitch_username: e.target.value})}
+									placeholder={configured ? "Enter new username to update" : "my_bot"}
+								/>
+							</div>
+							<div>
+								<label className="mb-1.5 block text-sm font-medium text-ink-dull">OAuth Token</label>
+								<Input
+									type="password"
+									value={credentialInputs.twitch_oauth_token ?? ""}
+									onChange={(e) => setCredentialInputs({...credentialInputs, twitch_oauth_token: e.target.value})}
+									placeholder={configured ? "Enter new token to update" : "oauth:abc123..."}
+									onKeyDown={(e) => { if (e.key === "Enter") handleSaveCredentials(); }}
+								/>
+							</div>
+							<p className="text-xs text-ink-faint">
+								Generate a token at{" "}
+								<a href="https://twitchapps.com/tmi/" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+									twitchapps.com/tmi &rarr;
+								</a>
+							</p>
+						</>
 					)}
 
 					{platform === "webhook" && (
@@ -407,6 +442,17 @@ export function ChannelEditModal({platform, name, status, open, onOpenChange}: C
 											value={bindingForm.channel_ids}
 											onChange={(ids) => setBindingForm({...bindingForm, channel_ids: ids})}
 											placeholder="Add channel ID..."
+										/>
+									</div>
+								)}
+
+								{platform === "twitch" && (
+									<div>
+										<label className="mb-1 block text-sm font-medium text-ink-dull">Channels</label>
+										<TagInput
+											value={bindingForm.channel_ids}
+											onChange={(ids) => setBindingForm({...bindingForm, channel_ids: ids})}
+											placeholder="Add channel name..."
 										/>
 									</div>
 								)}

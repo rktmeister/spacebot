@@ -115,6 +115,11 @@ pub(super) struct CreateAgentRequest {
     agent_id: String,
 }
 
+#[derive(Deserialize)]
+pub(super) struct DeleteAgentQuery {
+    agent_id: String,
+}
+
 /// List all configured agents with their config summaries.
 pub(super) async fn list_agents(State(state): State<Arc<ApiState>>) -> Json<AgentsResponse> {
     let agents = state.agent_configs.load();
@@ -443,6 +448,120 @@ pub(super) async fn create_agent(
         "success": true,
         "agent_id": agent_id,
         "message": format!("Agent '{agent_id}' created and running")
+    })))
+}
+
+/// Delete an agent: remove from config.toml, clean up API state, signal main loop.
+pub(super) async fn delete_agent(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<DeleteAgentQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let agent_id = query.agent_id.trim().to_string();
+    if agent_id.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "success": false,
+            "message": "Agent ID cannot be empty"
+        })));
+    }
+
+    // Verify the agent exists
+    {
+        let existing = state.agent_configs.load();
+        if !existing.iter().any(|a| a.id == agent_id) {
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": format!("Agent '{agent_id}' not found")
+            })));
+        }
+    }
+
+    // Remove the [[agents]] entry from config.toml
+    let config_path = state.config_path.read().await.clone();
+    if config_path.exists() {
+        let content = tokio::fs::read_to_string(&config_path).await.map_err(|error| {
+            tracing::warn!(%error, "failed to read config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
+            tracing::warn!(%error, "failed to parse config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        if let Some(agents_array) = doc.get_mut("agents").and_then(|v| v.as_array_of_tables_mut()) {
+            let mut index_to_remove = None;
+            for (i, table) in agents_array.iter().enumerate() {
+                if let Some(id) = table.get("id").and_then(|v| v.as_str()) {
+                    if id == agent_id {
+                        index_to_remove = Some(i);
+                        break;
+                    }
+                }
+            }
+            if let Some(idx) = index_to_remove {
+                agents_array.remove(idx);
+            }
+        }
+
+        tokio::fs::write(&config_path, doc.to_string()).await.map_err(|error| {
+            tracing::warn!(%error, "failed to write config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    }
+
+    // Close the SQLite pool before removing state
+    {
+        let pools = state.agent_pools.load();
+        if let Some(pool) = pools.get(&agent_id) {
+            pool.close().await;
+        }
+    }
+
+    // Remove from all API state maps
+    {
+        let mut pools = (**state.agent_pools.load()).clone();
+        pools.remove(&agent_id);
+        state.agent_pools.store(std::sync::Arc::new(pools));
+
+        let mut searches = (**state.memory_searches.load()).clone();
+        searches.remove(&agent_id);
+        state.memory_searches.store(std::sync::Arc::new(searches));
+
+        let mut workspaces = (**state.agent_workspaces.load()).clone();
+        workspaces.remove(&agent_id);
+        state.agent_workspaces.store(std::sync::Arc::new(workspaces));
+
+        let mut configs = (**state.runtime_configs.load()).clone();
+        configs.remove(&agent_id);
+        state.runtime_configs.store(std::sync::Arc::new(configs));
+
+        let mut agent_infos = (**state.agent_configs.load()).clone();
+        agent_infos.retain(|a| a.id != agent_id);
+        state.agent_configs.store(std::sync::Arc::new(agent_infos));
+
+        let mut cron_stores = (**state.cron_stores.load()).clone();
+        cron_stores.remove(&agent_id);
+        state.cron_stores.store(std::sync::Arc::new(cron_stores));
+
+        let mut cron_schedulers = (**state.cron_schedulers.load()).clone();
+        cron_schedulers.remove(&agent_id);
+        state.cron_schedulers.store(std::sync::Arc::new(cron_schedulers));
+
+        let mut sessions = (**state.cortex_chat_sessions.load()).clone();
+        sessions.remove(&agent_id);
+        state.cortex_chat_sessions.store(std::sync::Arc::new(sessions));
+    }
+
+    // Signal the main event loop to remove the agent
+    if let Err(error) = state.agent_remove_tx.send(agent_id.clone()).await {
+        tracing::error!(%error, "failed to send agent removal to main loop");
+    }
+
+    tracing::info!(agent_id = %agent_id, "agent deleted via API");
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": format!("Agent '{agent_id}' deleted")
     })))
 }
 

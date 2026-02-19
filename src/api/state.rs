@@ -84,6 +84,8 @@ pub struct ApiState {
     pub defaults_config: RwLock<Option<DefaultsConfig>>,
     /// Sender to register newly created agents with the main event loop.
     pub agent_tx: mpsc::Sender<crate::Agent>,
+    /// Sender to remove agents from the main event loop.
+    pub agent_remove_tx: mpsc::Sender<String>,
 }
 
 /// Events sent to SSE clients. Wraps ProcessEvents with agent context.
@@ -168,6 +170,7 @@ impl ApiState {
     pub fn new_with_provider_sender(
         provider_setup_tx: mpsc::Sender<crate::ProviderSetupEvent>,
         agent_tx: mpsc::Sender<crate::Agent>,
+        agent_remove_tx: mpsc::Sender<String>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(512);
         Self {
@@ -196,6 +199,7 @@ impl ApiState {
             prompt_engine: RwLock::new(None),
             defaults_config: RwLock::new(None),
             agent_tx,
+            agent_remove_tx,
         }
     }
 

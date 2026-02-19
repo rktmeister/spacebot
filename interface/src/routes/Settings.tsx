@@ -439,6 +439,7 @@ function ChannelsSection() {
 		{platform: "discord" as const, name: "Discord", description: "Discord bot integration"},
 		{platform: "slack" as const, name: "Slack", description: "Slack bot integration"},
 		{platform: "telegram" as const, name: "Telegram", description: "Telegram bot integration"},
+		{platform: "twitch" as const, name: "Twitch", description: "Twitch chat integration"},
 		{platform: "webhook" as const, name: "Webhook", description: "HTTP webhook receiver"},
 	] as const;
 

@@ -21,10 +21,10 @@ In your application settings, go to **Bot**:
 
 - Click **Add Bot**
 - Copy the **bot token** — you'll need this in a moment
-- Under **Privileged Gateway Intents**, enable **Message Content Intent**
+- Scroll down to **Privileged Gateway Intents** and enable **Message Content Intent**
 
 <Callout type="warn">
-Message Content Intent is required. Without it, all message bodies arrive empty and the bot can't read what anyone says.
+**Message Content Intent is required.** Without it, the bot cannot connect to Discord and will fail with "Disallowed intent(s)" error. Make sure it's enabled and you've clicked **Save Changes** at the bottom of the Bot page.
 </Callout>
 
 ## Step 3: Invite the Bot to Your Server
@@ -187,6 +187,7 @@ Threads get their own separate conversation with isolated history. Messages in t
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
+| `Disallowed intent(s)` error in logs | Message Content Intent not enabled | Discord Developer Portal → Bot → enable Message Content Intent → Save Changes |
 | Bot connects but doesn't see messages | Message Content Intent disabled | Discord Developer Portal → Bot → enable Message Content Intent |
 | Bot doesn't respond in channel | No access | Make sure the bot has permissions in that channel |
 | Bot doesn't respond to DMs | DM filtering | Add user ID to `dm_allowed_users` |

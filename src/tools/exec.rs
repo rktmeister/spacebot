@@ -212,6 +212,13 @@ impl Tool for ExecTool {
             cmd.current_dir(&self.workspace);
         }
 
+        // Prepend persistent tools directory to PATH so user-installed
+        // binaries survive container restarts.
+        let tools_bin = self.instance_dir.join("tools/bin");
+        if let Ok(current_path) = std::env::var("PATH") {
+            cmd.env("PATH", format!("{}:{current_path}", tools_bin.display()));
+        }
+
         for env_var in args.env {
             cmd.env(env_var.key, env_var.value);
         }

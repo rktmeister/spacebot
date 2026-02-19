@@ -3,10 +3,15 @@
 //! The manager is intentionally simple — it holds API keys, an HTTP client,
 //! and shared rate limit state. Routing decisions (which model for which
 //! process) live on the agent's RoutingConfig, not here.
+//!
+//! API keys are hot-reloadable via ArcSwap. The file watcher calls
+//! `reload_config()` when config.toml changes, and all subsequent
+//! `get_api_key()` calls read the new values lock-free.
 
 use crate::config::{LlmConfig, ProviderConfig};
 use crate::error::{LlmError, Result};
 use anyhow::Context as _;
+use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,7 +19,7 @@ use tokio::sync::RwLock;
 
 /// Manages LLM provider clients and tracks rate limit state.
 pub struct LlmManager {
-    pub config: LlmConfig,
+    config: ArcSwap<LlmConfig>,
     http_client: reqwest::Client,
     /// Models currently in rate limit cooldown, with the time they were limited.
     rate_limited: Arc<RwLock<HashMap<String, Instant>>>,
@@ -29,16 +34,23 @@ impl LlmManager {
             .with_context(|| "failed to build HTTP client")?;
 
         Ok(Self {
-            config,
+            config: ArcSwap::from_pointee(config),
             http_client,
             rate_limited: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
+    /// Atomically swap in new provider credentials.
+    pub fn reload_config(&self, config: LlmConfig) {
+        self.config.store(Arc::new(config));
+        tracing::info!("LLM provider keys reloaded");
+    }
+
     pub fn get_provider(&self, provider_id: &str) -> Result<ProviderConfig> {
         let normalized_provider_id = provider_id.to_lowercase();
+        let config = self.config.load();
 
-        self.config
+        config
             .providers
             .get(&normalized_provider_id)
             .cloned()
@@ -58,7 +70,7 @@ impl LlmManager {
 
     /// Get configured Ollama base URL, if provided.
     pub fn ollama_base_url(&self) -> Option<String> {
-        self.config.ollama_base_url.clone()
+        self.config.load().ollama_base_url.clone()
     }
 
     /// Get the HTTP client.

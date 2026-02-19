@@ -777,6 +777,7 @@ export interface MessagingStatusResponse {
 	slack: PlatformStatus;
 	telegram: PlatformStatus;
 	webhook: PlatformStatus;
+	twitch: PlatformStatus;
 }
 
 export interface BindingInfo {
@@ -805,6 +806,8 @@ export interface CreateBindingRequest {
 		discord_token?: string;
 		slack_bot_token?: string;
 		slack_app_token?: string;
+		twitch_username?: string;
+		twitch_oauth_token?: string;
 	};
 }
 
@@ -995,6 +998,17 @@ export const api = {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<{ success: boolean; agent_id: string; message: string }>;
+	},
+
+	deleteAgent: async (agentId: string) => {
+		const params = new URLSearchParams({ agent_id: agentId });
+		const response = await fetch(`${API_BASE}/agents?${params}`, {
+			method: "DELETE",
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ success: boolean; message: string }>;
 	},
 
 	agentConfig: (agentId: string) =>

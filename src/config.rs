@@ -627,16 +627,21 @@ impl Binding {
                 .and_then(|v| v.as_u64())
                 .map(|v| v.to_string());
 
-            // Also check Slack channel IDs
+            // Also check Slack and Twitch channel IDs
             let slack_channel = message
                 .metadata
                 .get("slack_channel_id")
+                .and_then(|v| v.as_str());
+            let twitch_channel = message
+                .metadata
+                .get("twitch_channel")
                 .and_then(|v| v.as_str());
 
             let direct_match = message_channel
                 .as_ref()
                 .is_some_and(|id| self.channel_ids.contains(id))
-                || slack_channel.is_some_and(|id| self.channel_ids.contains(&id.to_string()));
+                || slack_channel.is_some_and(|id| self.channel_ids.contains(&id.to_string()))
+                || twitch_channel.is_some_and(|id| self.channel_ids.contains(&id.to_string()));
             let parent_match = parent_channel
                 .as_ref()
                 .is_some_and(|id| self.channel_ids.contains(id));
@@ -689,6 +694,7 @@ pub struct MessagingConfig {
     pub slack: Option<SlackConfig>,
     pub telegram: Option<TelegramConfig>,
     pub webhook: Option<WebhookConfig>,
+    pub twitch: Option<TwitchConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -901,6 +907,64 @@ impl TelegramPermissions {
         Self {
             chat_filter,
             dm_allowed_users,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TwitchConfig {
+    pub enabled: bool,
+    pub username: String,
+    pub oauth_token: String,
+    /// Channels to join (without the # prefix).
+    pub channels: Vec<String>,
+    /// Optional prefix that triggers the bot (e.g. "!ask"). If empty, all messages are processed.
+    pub trigger_prefix: Option<String>,
+}
+
+/// Hot-reloadable Twitch permission filters.
+///
+/// Shared with the Twitch adapter via `Arc<ArcSwap<..>>` for hot-reloading.
+#[derive(Debug, Clone, Default)]
+pub struct TwitchPermissions {
+    /// Allowed channel names (None = all joined channels accepted).
+    pub channel_filter: Option<Vec<String>>,
+    /// User login names allowed to interact with the bot. Empty = all users.
+    pub allowed_users: Vec<String>,
+}
+
+impl TwitchPermissions {
+    /// Build from the current config's twitch settings and bindings.
+    pub fn from_config(_twitch: &TwitchConfig, bindings: &[Binding]) -> Self {
+        let twitch_bindings: Vec<&Binding> = bindings
+            .iter()
+            .filter(|b| b.channel == "twitch")
+            .collect();
+
+        let channel_filter = {
+            let channel_ids: Vec<String> = twitch_bindings
+                .iter()
+                .flat_map(|b| b.channel_ids.clone())
+                .collect();
+            if channel_ids.is_empty() {
+                None
+            } else {
+                Some(channel_ids)
+            }
+        };
+
+        let mut allowed_users: Vec<String> = Vec::new();
+        for binding in &twitch_bindings {
+            for id in &binding.dm_allowed_users {
+                if !allowed_users.contains(id) {
+                    allowed_users.push(id.clone());
+                }
+            }
+        }
+
+        Self {
+            channel_filter,
+            allowed_users,
         }
     }
 }
@@ -1240,6 +1304,7 @@ struct TomlMessagingConfig {
     slack: Option<TomlSlackConfig>,
     telegram: Option<TomlTelegramConfig>,
     webhook: Option<TomlWebhookConfig>,
+    twitch: Option<TomlTwitchConfig>,
 }
 
 #[derive(Deserialize)]
@@ -1280,6 +1345,17 @@ struct TomlWebhookConfig {
     port: u16,
     #[serde(default = "default_webhook_bind")]
     bind: String,
+}
+
+#[derive(Deserialize)]
+struct TomlTwitchConfig {
+    #[serde(default)]
+    enabled: bool,
+    username: Option<String>,
+    oauth_token: Option<String>,
+    #[serde(default)]
+    channels: Vec<String>,
+    trigger_prefix: Option<String>,
 }
 
 fn default_webhook_port() -> u16 {
@@ -2111,6 +2187,25 @@ impl Config {
                 port: w.port,
                 bind: w.bind,
             }),
+            twitch: toml.messaging.twitch.and_then(|t| {
+                let username = t
+                    .username
+                    .as_deref()
+                    .and_then(resolve_env_value)
+                    .or_else(|| std::env::var("TWITCH_BOT_USERNAME").ok())?;
+                let oauth_token = t
+                    .oauth_token
+                    .as_deref()
+                    .and_then(resolve_env_value)
+                    .or_else(|| std::env::var("TWITCH_OAUTH_TOKEN").ok())?;
+                Some(TwitchConfig {
+                    enabled: t.enabled,
+                    username,
+                    oauth_token,
+                    channels: t.channels,
+                    trigger_prefix: t.trigger_prefix,
+                })
+            }),
         };
 
         let bindings = toml
@@ -2303,8 +2398,9 @@ impl RuntimeConfig {
     /// Reload tunable config values from a freshly parsed Config.
     ///
     /// Finds the matching agent by ID, re-resolves it against defaults, and
-    /// swaps all reloadable fields. Ignores values that require a restart
-    /// (API keys, DB paths, messaging adapters, agent topology).
+    /// swaps all reloadable fields. Does not handle API keys (those are
+    /// reloaded via LlmManager), DB paths, messaging adapters, or agent
+    /// topology.
     pub fn reload_config(&self, config: &Config, agent_id: &str) {
         let agent = config.agents.iter().find(|a| a.id == agent_id);
         let Some(agent) = agent else {
@@ -2370,8 +2466,10 @@ pub fn spawn_file_watcher(
     discord_permissions: Option<Arc<arc_swap::ArcSwap<DiscordPermissions>>>,
     slack_permissions: Option<Arc<arc_swap::ArcSwap<SlackPermissions>>>,
     telegram_permissions: Option<Arc<arc_swap::ArcSwap<TelegramPermissions>>>,
+    twitch_permissions: Option<Arc<arc_swap::ArcSwap<TwitchPermissions>>>,
     bindings: Arc<arc_swap::ArcSwap<Vec<Binding>>>,
     messaging_manager: Option<Arc<crate::messaging::MessagingManager>>,
+    llm_manager: Arc<crate::llm::LlmManager>,
 ) -> tokio::task::JoinHandle<()> {
     use notify::{Event, RecursiveMode, Watcher};
     use std::time::Duration;
@@ -2526,8 +2624,10 @@ pub fn spawn_file_watcher(
                 None
             };
 
-            // Reload instance-level bindings and permissions
+            // Reload instance-level bindings, provider keys, and permissions
             if let Some(config) = &new_config {
+                llm_manager.reload_config(config.llm.clone());
+
                 bindings.store(Arc::new(config.bindings.clone()));
                 tracing::info!("bindings reloaded ({} entries)", config.bindings.len());
 
@@ -2558,6 +2658,15 @@ pub fn spawn_file_watcher(
                     }
                 }
 
+                if let Some(ref perms) = twitch_permissions {
+                    if let Some(twitch_config) = &config.messaging.twitch {
+                        let new_perms =
+                            TwitchPermissions::from_config(twitch_config, &config.bindings);
+                        perms.store(Arc::new(new_perms));
+                        tracing::info!("twitch permissions reloaded");
+                    }
+                }
+
                 // Hot-start adapters that are newly enabled in the config
                 if let Some(ref manager) = messaging_manager {
                     let rt = tokio::runtime::Handle::current();
@@ -2566,6 +2675,7 @@ pub fn spawn_file_watcher(
                     let discord_permissions = discord_permissions.clone();
                     let slack_permissions = slack_permissions.clone();
                     let telegram_permissions = telegram_permissions.clone();
+                    let twitch_permissions = twitch_permissions.clone();
 
                     rt.spawn(async move {
                         // Discord: start if enabled and not already running
@@ -2625,6 +2735,29 @@ pub fn spawn_file_watcher(
                                 );
                                 if let Err(error) = manager.register_and_start(adapter).await {
                                     tracing::error!(%error, "failed to hot-start telegram adapter from config change");
+                                }
+                            }
+                        }
+
+                        // Twitch: start if enabled and not already running
+                        if let Some(twitch_config) = &config.messaging.twitch {
+                            if twitch_config.enabled && !manager.has_adapter("twitch").await {
+                                let perms = match twitch_permissions {
+                                    Some(ref existing) => existing.clone(),
+                                    None => {
+                                        let perms = TwitchPermissions::from_config(twitch_config, &config.bindings);
+                                        Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                    }
+                                };
+                                let adapter = crate::messaging::twitch::TwitchAdapter::new(
+                                    &twitch_config.username,
+                                    &twitch_config.oauth_token,
+                                    twitch_config.channels.clone(),
+                                    twitch_config.trigger_prefix.clone(),
+                                    perms,
+                                );
+                                if let Err(error) = manager.register_and_start(adapter).await {
+                                    tracing::error!(%error, "failed to hot-start twitch adapter from config change");
                                 }
                             }
                         }
