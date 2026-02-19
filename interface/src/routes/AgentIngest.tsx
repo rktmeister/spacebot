@@ -148,7 +148,7 @@ export function AgentIngest({agentId}: AgentIngestProps) {
 				)}
 				<div className="flex-1" />
 				<span className="text-xs text-ink-faint">
-					.txt .md .json .csv .yaml .toml .html .log +more
+					.pdf .txt .md .json .csv .yaml .toml .html .log +more
 				</span>
 			</div>
 
@@ -181,7 +181,8 @@ export function AgentIngest({agentId}: AgentIngestProps) {
 								: "Drop files here or click to browse"}
 					</p>
 					<p className="text-xs text-ink-faint">
-						Text files will be chunked and processed into structured memories
+						Supported files, including PDFs, are chunked and processed into
+						structured memories
 					</p>
 					{uploadMutation.isError && (
 						<p className="mt-2 text-xs text-red-400">
@@ -195,7 +196,7 @@ export function AgentIngest({agentId}: AgentIngestProps) {
 					type="file"
 					multiple
 					className="hidden"
-					accept=".txt,.md,.markdown,.json,.jsonl,.csv,.tsv,.log,.xml,.yaml,.yml,.toml,.rst,.org,.html,.htm"
+					accept=".pdf,.txt,.md,.markdown,.json,.jsonl,.csv,.tsv,.log,.xml,.yaml,.yml,.toml,.rst,.org,.html,.htm"
 					onChange={(e) => {
 						if (e.target.files) {
 							handleFiles(e.target.files);
@@ -220,7 +221,7 @@ export function AgentIngest({agentId}: AgentIngestProps) {
 				{!isLoading && !error && files.length === 0 && (
 					<div className="flex flex-col items-center justify-center py-8 text-center">
 						<p className="text-sm text-ink-dull">
-							No files ingested yet. Drop a text file above to get started.
+							No files ingested yet. Drop a supported file above to get started.
 						</p>
 					</div>
 				)}

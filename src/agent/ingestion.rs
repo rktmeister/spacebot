@@ -1,17 +1,17 @@
 //! Memory ingestion: Background file processing for bulk memory import.
 //!
-//! Polls a directory in the agent workspace for text files, chunks them, and
-//! processes each chunk through the memory recall + save flow. Files are deleted
-//! after all chunks are successfully ingested.
+//! Polls a directory in the agent workspace for supported files, extracts text,
+//! chunks it, and processes each chunk through the memory recall + save flow.
+//! Files are deleted after all chunks are successfully ingested.
 //!
 //! Progress is tracked per-chunk in SQLite using a SHA-256 hash of the file
 //! content. If the server restarts mid-file, already-completed chunks are
 //! skipped on the next run.
 
-use crate::config::IngestionConfig;
-use crate::llm::SpacebotModel;
 use crate::AgentDeps;
 use crate::ProcessType;
+use crate::config::IngestionConfig;
+use crate::llm::SpacebotModel;
 
 use anyhow::Context as _;
 use rig::agent::AgentBuilder;
@@ -27,12 +27,9 @@ use std::time::Duration;
 /// Spawn the ingestion polling loop for an agent.
 ///
 /// Runs until the returned JoinHandle is dropped or aborted. Scans the ingest
-/// directory on a timer, processes any text files found, and deletes them after
-/// successful ingestion.
-pub fn spawn_ingestion_loop(
-    ingest_dir: PathBuf,
-    deps: AgentDeps,
-) -> tokio::task::JoinHandle<()> {
+/// directory on a timer, processes any supported files found, and deletes them
+/// after successful ingestion.
+pub fn spawn_ingestion_loop(ingest_dir: PathBuf, deps: AgentDeps) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if let Err(error) = run_ingestion_loop(&ingest_dir, &deps).await {
             tracing::error!(%error, "ingestion loop exited with error");
@@ -75,7 +72,7 @@ async fn run_ingestion_loop(ingest_dir: &Path, deps: &AgentDeps) -> anyhow::Resu
     }
 }
 
-/// Scan the ingest directory for text files.
+/// Scan the ingest directory for supported ingestion files.
 ///
 /// Returns files sorted by modification time (oldest first) so ingestion
 /// order is predictable.
@@ -89,7 +86,7 @@ async fn scan_ingest_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
 
-        // Skip directories, hidden files, and non-text files
+        // Skip directories, hidden files, and unsupported files.
         if !path.is_file() {
             continue;
         }
@@ -99,13 +96,13 @@ async fn scan_ingest_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
             }
         }
 
-        // Only process files that look like text
-        if is_text_file(&path) {
+        // Only process files that look ingestible.
+        if is_supported_ingest_file(&path) {
             files.push(path);
         } else {
             tracing::warn!(
                 path = %path.display(),
-                "skipping non-text file in ingest directory"
+                "skipping unsupported file in ingest directory"
             );
         }
     }
@@ -120,8 +117,8 @@ async fn scan_ingest_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Check if a file extension suggests text content.
-fn is_text_file(path: &Path) -> bool {
+/// Check if a file extension suggests ingestible content.
+fn is_supported_ingest_file(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         // No extension — try to read as text
         return true;
@@ -129,13 +126,23 @@ fn is_text_file(path: &Path) -> bool {
 
     matches!(
         ext.to_lowercase().as_str(),
-        "txt" | "md" | "markdown"
-            | "json" | "jsonl"
-            | "csv" | "tsv"
+        "txt"
+            | "md"
+            | "markdown"
+            | "json"
+            | "jsonl"
+            | "csv"
+            | "tsv"
             | "log"
-            | "xml" | "yaml" | "yml" | "toml"
-            | "rst" | "org"
-            | "html" | "htm"
+            | "xml"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "rst"
+            | "org"
+            | "html"
+            | "htm"
+            | "pdf"
     )
 }
 
@@ -164,9 +171,7 @@ async fn process_file(
 
     tracing::info!(file = %filename, "starting file ingestion");
 
-    let content = tokio::fs::read_to_string(path)
-        .await
-        .with_context(|| format!("failed to read file: {}", path.display()))?;
+    let content = read_ingest_content(path).await?;
 
     if content.trim().is_empty() {
         tracing::info!(file = %filename, "skipping empty file");
@@ -183,7 +188,14 @@ async fn process_file(
     let remaining = total_chunks - completed.len();
 
     // Record file-level tracking (idempotent — skips if already exists from a previous run)
-    upsert_ingestion_file(&deps.sqlite_pool, &hash, filename, file_size, total_chunks as i64).await?;
+    upsert_ingestion_file(
+        &deps.sqlite_pool,
+        &hash,
+        filename,
+        file_size,
+        total_chunks as i64,
+    )
+    .await?;
 
     if !completed.is_empty() {
         tracing::info!(
@@ -274,15 +286,38 @@ async fn process_file(
     Ok(())
 }
 
+/// Read an ingest file and return extracted text content.
+///
+/// Plaintext-like files are read directly as UTF-8. PDFs are read as bytes and
+/// converted to text through the PDF extractor.
+async fn read_ingest_content(path: &Path) -> anyhow::Result<String> {
+    let extension = path.extension().and_then(|extension| extension.to_str());
+
+    if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("pdf")) {
+        let bytes = tokio::fs::read(path)
+            .await
+            .with_context(|| format!("failed to read pdf file: {}", path.display()))?;
+
+        let extracted =
+            tokio::task::spawn_blocking(move || pdf_extract::extract_text_from_mem(&bytes))
+                .await
+                .context("pdf extraction task failed")?
+                .with_context(|| format!("failed to extract text from pdf: {}", path.display()))?;
+
+        return Ok(extracted);
+    }
+
+    tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("failed to read file: {}", path.display()))
+}
+
 // -- Progress tracking queries --------------------------------------------------
 
 /// Load the set of chunk indices already completed for a given content hash.
-async fn load_completed_chunks(
-    pool: &SqlitePool,
-    hash: &str,
-) -> anyhow::Result<HashSet<i64>> {
+async fn load_completed_chunks(pool: &SqlitePool, hash: &str) -> anyhow::Result<HashSet<i64>> {
     let rows = sqlx::query_scalar::<_, i64>(
-        "SELECT chunk_index FROM ingestion_progress WHERE content_hash = ?"
+        "SELECT chunk_index FROM ingestion_progress WHERE content_hash = ?",
     )
     .bind(hash)
     .fetch_all(pool)
@@ -431,13 +466,17 @@ async fn process_chunk(
 
     let routing = deps.runtime_config.routing.load();
     let model_name = routing.resolve(ProcessType::Branch, None).to_string();
-    let model = SpacebotModel::make(&deps.llm_manager, &model_name)
-        .with_routing((**routing).clone());
+    let model =
+        SpacebotModel::make(&deps.llm_manager, &model_name).with_routing((**routing).clone());
 
-    let conversation_logger = crate::conversation::history::ConversationLogger::new(deps.sqlite_pool.clone());
+    let conversation_logger =
+        crate::conversation::history::ConversationLogger::new(deps.sqlite_pool.clone());
     let channel_store = crate::conversation::ChannelStore::new(deps.sqlite_pool.clone());
-    let tool_server: ToolServerHandle =
-        crate::tools::create_branch_tool_server(deps.memory_search.clone(), conversation_logger, channel_store);
+    let tool_server: ToolServerHandle = crate::tools::create_branch_tool_server(
+        deps.memory_search.clone(),
+        conversation_logger,
+        channel_store,
+    );
 
     let agent = AgentBuilder::new(model)
         .preamble(&ingestion_prompt)
@@ -515,13 +554,14 @@ mod tests {
     }
 
     #[test]
-    fn test_is_text_file() {
-        assert!(is_text_file(Path::new("notes.txt")));
-        assert!(is_text_file(Path::new("data.json")));
-        assert!(is_text_file(Path::new("readme.md")));
-        assert!(is_text_file(Path::new("no_extension")));
-        assert!(!is_text_file(Path::new("image.png")));
-        assert!(!is_text_file(Path::new("binary.exe")));
+    fn test_is_supported_ingest_file() {
+        assert!(is_supported_ingest_file(Path::new("notes.txt")));
+        assert!(is_supported_ingest_file(Path::new("data.json")));
+        assert!(is_supported_ingest_file(Path::new("readme.md")));
+        assert!(is_supported_ingest_file(Path::new("manual.pdf")));
+        assert!(is_supported_ingest_file(Path::new("no_extension")));
+        assert!(!is_supported_ingest_file(Path::new("image.png")));
+        assert!(!is_supported_ingest_file(Path::new("binary.exe")));
     }
 
     #[test]
@@ -554,7 +594,10 @@ mod tests {
         assert!(had_failure, "had_failure must be true after a chunk error");
         // The guard `if had_failure { return Ok(()); }` means remove_file is
         // never reached — assert the condition that triggers the early return.
-        assert!(had_failure, "early return condition must hold to skip file deletion");
+        assert!(
+            had_failure,
+            "early return condition must hold to skip file deletion"
+        );
     }
 
     /// Complement to test_failure_flag_prevents_delete: a clean run must reach
@@ -568,6 +611,9 @@ mod tests {
             had_failure = true;
         }
 
-        assert!(!had_failure, "had_failure must stay false when all chunks succeed");
+        assert!(
+            !had_failure,
+            "had_failure must stay false when all chunks succeed"
+        );
     }
 }
