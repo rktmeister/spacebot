@@ -1386,6 +1386,7 @@ async fn initialize_agents(
         // Per-agent memory system
         let memory_store =
             spacebot::memory::MemoryStore::with_agent_id(db.sqlite.clone(), &agent_config.id);
+        let task_store = Arc::new(spacebot::tasks::TaskStore::new(db.sqlite.clone()));
         let embedding_table = spacebot::memory::EmbeddingTable::open_or_create(&db.lance)
             .await
             .with_context(|| {
@@ -1464,6 +1465,7 @@ async fn initialize_agents(
             memory_search,
             llm_manager: llm_manager.clone(),
             mcp_manager,
+            task_store: task_store.clone(),
             cron_tool: None,
             runtime_config,
             event_tx,
@@ -1493,6 +1495,7 @@ async fn initialize_agents(
         let mut agent_configs = Vec::new();
         let mut memory_searches = std::collections::HashMap::new();
         let mut mcp_managers = std::collections::HashMap::new();
+        let mut task_stores = std::collections::HashMap::new();
         let mut agent_workspaces = std::collections::HashMap::new();
         let mut runtime_configs = std::collections::HashMap::new();
         let mut sandboxes = std::collections::HashMap::new();
@@ -1502,6 +1505,7 @@ async fn initialize_agents(
             agent_pools.insert(agent_id.to_string(), agent.db.sqlite.clone());
             memory_searches.insert(agent_id.to_string(), agent.deps.memory_search.clone());
             mcp_managers.insert(agent_id.to_string(), agent.deps.mcp_manager.clone());
+            task_stores.insert(agent_id.to_string(), agent.deps.task_store.clone());
             agent_workspaces.insert(agent_id.to_string(), agent.config.workspace.clone());
             runtime_configs.insert(agent_id.to_string(), agent.deps.runtime_config.clone());
             sandboxes.insert(agent_id.to_string(), agent.deps.sandbox.clone());
@@ -1520,6 +1524,7 @@ async fn initialize_agents(
         api_state.set_agent_configs(agent_configs);
         api_state.set_memory_searches(memory_searches);
         api_state.set_mcp_managers(mcp_managers);
+        api_state.set_task_stores(task_stores);
         api_state.set_runtime_configs(runtime_configs);
         api_state.set_agent_workspaces(agent_workspaces);
         api_state.set_sandboxes(sandboxes);
@@ -1762,6 +1767,11 @@ async fn initialize_agents(
             spacebot::agent::cortex::spawn_association_loop(agent.deps.clone(), cortex_logger);
         cortex_handles.push(association_handle);
         tracing::info!(agent_id = %agent_id, "cortex association loop started");
+
+        let ready_task_handle =
+            spacebot::agent::cortex::spawn_ready_task_loop(agent.deps.clone(), spacebot::agent::cortex::CortexLogger::new(agent.db.sqlite.clone()));
+        cortex_handles.push(ready_task_handle);
+        tracing::info!(agent_id = %agent_id, "cortex ready-task loop started");
     }
 
     // Create cortex chat sessions for each agent
@@ -1775,11 +1785,12 @@ async fn initialize_agents(
             let channel_store = spacebot::conversation::ChannelStore::new(agent.db.sqlite.clone());
             let run_logger = spacebot::conversation::ProcessRunLogger::new(agent.db.sqlite.clone());
             let tool_server = spacebot::tools::create_cortex_chat_tool_server(
+                agent.deps.agent_id.clone(),
+                agent.deps.task_store.clone(),
                 agent.deps.memory_search.clone(),
                 conversation_logger,
                 channel_store,
                 run_logger,
-                &agent.deps.agent_id,
                 browser_config,
                 agent.config.screenshot_dir(),
                 brave_search_key,

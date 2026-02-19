@@ -175,6 +175,15 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         ("en", "tools/conclude_link") => {
             include_str!("../../prompts/en/tools/conclude_link_description.md.j2")
         }
+        ("en", "tools/task_create") => {
+            include_str!("../../prompts/en/tools/task_create_description.md.j2")
+        }
+        ("en", "tools/task_list") => {
+            include_str!("../../prompts/en/tools/task_list_description.md.j2")
+        }
+        ("en", "tools/task_update") => {
+            include_str!("../../prompts/en/tools/task_update_description.md.j2")
+        }
 
         // Fallback: unknown language or key -> try English
         (lang, key) if lang != "en" => {
