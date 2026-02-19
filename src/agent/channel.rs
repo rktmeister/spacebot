@@ -409,6 +409,10 @@ impl Channel {
                     crate::MessageContent::Media { text, attachments } => {
                         (text.clone().unwrap_or_default(), attachments.clone())
                     }
+                    // Render interactions as their Display form so the LLM sees plain text.
+                    crate::MessageContent::Interaction { .. } => {
+                        (message.content.to_string(), Vec::new())
+                    }
                 };
                 
                 self.state.conversation_logger.log_user_message(
@@ -569,6 +573,10 @@ impl Channel {
             crate::MessageContent::Text(text) => (text.clone(), Vec::new()),
             crate::MessageContent::Media { text, attachments } => {
                 (text.clone().unwrap_or_default(), attachments.clone())
+            }
+            // Render interactions as their Display form so the LLM sees plain text.
+            crate::MessageContent::Interaction { .. } => {
+                (message.content.to_string(), Vec::new())
             }
         };
 

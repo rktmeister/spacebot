@@ -311,6 +311,7 @@ pub(super) async fn toggle_platform(
                                 &slack_config.bot_token,
                                 &slack_config.app_token,
                                 perms,
+                                slack_config.commands.clone(),
                             ) {
                                 Ok(adapter) => {
                                     if let Err(error) = manager.register_and_start(adapter).await {

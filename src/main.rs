@@ -1263,6 +1263,7 @@ async fn initialize_agents(
                 slack_permissions
                     .clone()
                     .expect("slack permissions initialized when slack is enabled"),
+                slack_config.commands.clone(),
             ) {
                 Ok(adapter) => { new_messaging_manager.register(adapter).await; }
                 Err(error) => { tracing::error!(%error, "failed to build slack adapter"); }
