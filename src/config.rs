@@ -1390,14 +1390,36 @@ impl Config {
         if config_path.exists() {
             return false;
         }
+
+        // Check if we have any legacy env keys configured
+        let has_legacy_keys = std::env::var("ANTHROPIC_API_KEY").is_ok()
+            || std::env::var("OPENAI_API_KEY").is_ok()
+            || std::env::var("OPENROUTER_API_KEY").is_ok()
+            || std::env::var("ZHIPU_API_KEY").is_ok()
+            || std::env::var("GROQ_API_KEY").is_ok()
+            || std::env::var("TOGETHER_API_KEY").is_ok()
+            || std::env::var("FIREWORKS_API_KEY").is_ok()
+            || std::env::var("DEEPSEEK_API_KEY").is_ok()
+            || std::env::var("XAI_API_KEY").is_ok()
+            || std::env::var("MISTRAL_API_KEY").is_ok()
+            || std::env::var("NVIDIA_API_KEY").is_ok()
+            || std::env::var("OLLAMA_API_KEY").is_ok()
+            || std::env::var("OLLAMA_BASE_URL").is_ok()
+            || std::env::var("OPENCODE_ZEN_API_KEY").is_ok();
+            
+        // If we have any legacy keys, no onboarding needed
+        if has_legacy_keys {
+            return false;
+        }
         
-        // Check if we have any legacy env keys or providers configured
-        std::env::var("ANTHROPIC_API_KEY").is_err()
-            && std::env::var("OPENAI_API_KEY").is_err()
-            && std::env::var("OPENROUTER_API_KEY").is_err()
-            && std::env::var("OLLAMA_API_KEY").is_err()
-            && std::env::var("OLLAMA_BASE_URL").is_err()
-            && std::env::var("OPENCODE_ZEN_API_KEY").is_err()
+        // Check if we have any provider-specific env variables (provider.<name>.*)
+        let has_provider_env_vars = std::env::vars().any(|(key, _)| {
+            key.starts_with("SPACEBOT_PROVIDER_") 
+            || key.starts_with("PROVIDER_")
+            || key.contains("PROVIDER") && key.contains("API_KEY")
+        });
+        
+        !has_provider_env_vars
     }
 
     /// Load configuration from the default config file, falling back to env vars.
@@ -1545,6 +1567,34 @@ impl Config {
     }
 
     fn from_toml(toml: TomlConfig, instance_dir: PathBuf) -> Result<Self> {
+        // Validate providers before processing
+        for (provider_id, config) in &toml.llm.providers {
+            // Validate provider_id
+            if provider_id.is_empty() || provider_id.len() > 64 {
+                return Err(ConfigError::Invalid(format!(
+                    "Provider ID '{}' must be between 1 and 64 characters long",
+                    provider_id
+                ))
+                .into());
+            }
+            if provider_id.contains('/') || provider_id.contains(char::is_whitespace) {
+                return Err(ConfigError::Invalid(format!(
+                    "Provider ID '{}' contains invalid characters (cannot contain '/' or whitespace)",
+                    provider_id
+                ))
+                .into());
+            }
+
+            // Validate base_url
+            if let Err(e) = reqwest::Url::parse(&config.base_url) {
+                return Err(ConfigError::Invalid(format!(
+                    "Invalid base URL '{}' for provider '{}': {}",
+                    config.base_url, provider_id, e
+                ))
+                .into());
+            }
+        }
+
         let mut llm = LlmConfig {
             anthropic_key: toml
                 .llm
@@ -2864,6 +2914,68 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use std::result::Result as StdResult;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        vars: Vec<(&'static str, Option<String>)>,
+        test_dir: PathBuf,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            const KEYS: [&str; 4] = [
+                "SPACEBOT_DIR",
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "OPENROUTER_API_KEY",
+            ];
+
+            let vars = KEYS
+                .into_iter()
+                .map(|key| (key, std::env::var(key).ok()))
+                .collect::<Vec<_>>();
+
+            for key in KEYS {
+                unsafe {
+                    std::env::remove_var(key);
+                }
+            }
+
+            let unique = format!(
+                "spacebot-config-tests-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("system time before UNIX_EPOCH")
+                    .as_nanos()
+            );
+            let test_dir = std::env::temp_dir().join(unique);
+            std::fs::create_dir_all(&test_dir).expect("failed to create test dir");
+
+            unsafe {
+                std::env::set_var("SPACEBOT_DIR", &test_dir);
+            }
+
+            Self { vars, test_dir }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.vars {
+                match value {
+                    Some(v) => unsafe { std::env::set_var(key, v) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.test_dir);
+        }
+    }
 
     #[test]
     fn test_api_type_deserialization() {
@@ -3049,5 +3161,47 @@ name = "Custom OpenAI"
         assert_eq!(openai_provider.api_key, "explicit-openai-key");
         assert_eq!(openai_provider.name.as_deref(), Some("Custom OpenAI"));
         assert_eq!(config.llm.openai_key.as_deref(), Some("legacy-openai-key"));
+    }
+
+    #[test]
+    fn test_needs_onboarding_without_config_or_env() {
+        let _lock = env_test_lock().lock().expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        assert!(Config::needs_onboarding());
+    }
+
+    #[test]
+    fn test_needs_onboarding_with_anthropic_env_key() {
+        let _lock = env_test_lock().lock().expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "test-key");
+        }
+
+        assert!(!Config::needs_onboarding());
+    }
+
+    #[test]
+    fn test_load_from_env_populates_legacy_key_and_provider() {
+        let _lock = env_test_lock().lock().expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "test-key");
+        }
+
+        let config = Config::load_from_env(&Config::default_instance_dir())
+            .expect("failed to load config from env");
+
+        assert_eq!(config.llm.anthropic_key.as_deref(), Some("test-key"));
+        let provider = config
+            .llm
+            .providers
+            .get("anthropic")
+            .expect("missing anthropic provider from env");
+        assert_eq!(provider.api_key, "test-key");
+        assert_eq!(provider.base_url, ANTHROPIC_PROVIDER_BASE_URL);
     }
 }
