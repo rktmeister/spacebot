@@ -426,12 +426,19 @@ impl SpacebotModel {
             provider_config.base_url.trim_end_matches('/')
         );
 
-        let response = self
+        let mut request_builder = self
             .llm_manager
             .http_client()
             .post(&chat_completions_url)
             .header("authorization", format!("Bearer {api_key}"))
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+
+        // Kimi Coding API requires a specific user-agent header.
+        if chat_completions_url.contains("kimi.com") {
+            request_builder = request_builder.header("user-agent", "KimiCLI/1.3");
+        }
+
+        let response = request_builder
             .json(&body)
             .send()
             .await
