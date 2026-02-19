@@ -1,6 +1,6 @@
 ---
 title: Messaging
-description: How Spacebot connects to Discord, Slack, Telegram, and webhooks.
+description: How Spacebot connects to Discord, Slack, Telegram, Twitch, and webhooks.
 ---
 
 # Messaging
@@ -14,6 +14,7 @@ Spacebot connects to chat platforms so your agent can talk to people where they 
 | [Discord](/docs/discord-setup) | Supported | Bot token + gateway connection |
 | [Slack](/docs/slack-setup) | Supported | Bot token + app token via Socket Mode |
 | [Telegram](/docs/telegram-setup) | Supported | Bot token via BotFather |
+| [Twitch](/docs/twitch-setup) | Supported | OAuth token via Twitch IRC |
 | Webhook | Supported | HTTP endpoint for programmatic access |
 | Email | Coming soon | IMAP/SMTP |
 | WhatsApp | Coming soon | Meta Cloud API |
@@ -119,13 +120,14 @@ Each chat context maps to its own Spacebot conversation with isolated history:
 | Discord | Each channel, each thread, each DM |
 | Slack | Each channel, each thread, each DM |
 | Telegram | Each chat (group, DM, or channel) |
+| Twitch | Each channel |
 | Webhook | Each unique conversation ID in the request |
 
 Threads are first-class on Discord and Slack — a thread gets its own conversation, separate from the parent channel.
 
 ## Streaming
 
-Responses stream in real-time on platforms that support it. You see the reply being typed out word by word, similar to how ChatGPT works. Discord, Slack, and Telegram all support this.
+Responses stream in real-time on platforms that support it. You see the reply being typed out word by word, similar to how ChatGPT works. Discord, Slack, and Telegram all support this. Twitch sends the final response as a complete message since IRC doesn't support message editing.
 
 ## Webhook
 

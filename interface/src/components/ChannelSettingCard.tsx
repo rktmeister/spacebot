@@ -626,10 +626,10 @@ function CredentialsSection({
 							}}
 						/>
 					</div>
-					<p className="text-xs text-ink-faint">
-						Generate a token at{" "}
-						<a href="https://twitchapps.com/tmi/" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-							twitchapps.com/tmi &rarr;
+					<p className="mt-1.5 text-xs text-ink-faint">
+						Need help?{" "}
+						<a href="https://docs.spacebot.sh/twitch-setup" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+							Read the Twitch setup docs &rarr;
 						</a>
 					</p>
 				</>

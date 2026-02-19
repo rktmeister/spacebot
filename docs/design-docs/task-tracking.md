@@ -23,9 +23,10 @@ User says something actionable in conversation
       → Cortex creates a Task in "pending_approval" state
         → Human reviews on kanban board or via natural language
           → Human approves: "pick up #42"
-            → Agent spawns a worker to execute the task
-              → Worker uses subtasks as execution plan
-                → Task moves to "done" on completion
+            → Channel delegates to a branch
+              → Branch updates task state and spawns a worker
+                → Worker uses subtasks as execution plan
+                  → Task moves to "done" on completion
 ```
 
 Tasks can also be created directly — by the human through the UI or natural language, or by the cortex when it identifies actionable patterns across channels.
@@ -47,7 +48,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     metadata TEXT,                    -- JSON object for arbitrary key-value pairs
     source_memory_id TEXT,           -- FK to memories(id), nullable
     worker_id TEXT,                  -- FK to worker_runs(id), nullable (set when executing)
-    created_by TEXT NOT NULL,        -- 'cortex', 'human', 'channel'
+    created_by TEXT NOT NULL,        -- 'cortex', 'human', 'branch'
     approved_at TIMESTAMP,
     approved_by TEXT,                -- user identifier or null
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -144,17 +145,25 @@ A new cortex loop that runs on a configurable interval (default: 15 minutes). It
 
 The LLM call is cheap — it's a single evaluation per todo, not a multi-turn agent loop. The prompt receives the todo content, the current bulletin, and recent task titles (to avoid duplicates).
 
-### Task Execution Loop
+### Task Execution Paths
 
-A separate cortex loop that monitors approved tasks. When a task moves to `ready`:
+There are two distinct execution paths for `ready` tasks. Both use the same branch -> worker execution model.
 
-1. The cortex does NOT auto-execute. The task sits in `ready` until the human explicitly triggers it.
-2. When the human says "pick up #42" (via any channel or the cortex chat), the system:
-   - Moves the task to `in_progress`
-   - Spawns a worker with the task description as the prompt
-   - Sets `worker_id` on the task
+1. **Human-driven path (active channel use)**
+   - A human says "pick up #42" (or similar) in a channel or cortex chat
+   - The user-facing process delegates to a branch
+   - The branch validates that the task is in `ready`
+   - The branch moves the task to `in_progress`
+   - The branch spawns a worker with the task description as the prompt
+   - The branch sets `worker_id` on the task
    - If subtasks exist, they're included in the worker's system prompt as an execution plan
-3. As the worker completes subtasks, it can update them via a new `task_update` tool
+
+2. **Cortex-driven path (system idle / background pickup)**
+   - A cortex loop monitors `ready` tasks
+   - When pickup conditions are met (for example: no active human-driven task execution), cortex starts execution
+   - Cortex follows the same execution steps via a branch: validate `ready` -> set `in_progress` -> spawn worker -> set `worker_id`
+
+3. As the worker executes, it can only update progress for its assigned task via `task_update`
 4. When the worker completes, the task moves to `done` with `completed_at` set
 
 ### Bulletin Integration
@@ -175,7 +184,7 @@ This requires a small extension to the bulletin gathering — a direct SQLite qu
 
 ### New Tools
 
-**`task_create`** — Available to channels and cortex. Creates a task directly.
+**`task_create`** — Available to branches. Creates a task directly.
 
 ```
 Arguments:
@@ -184,10 +193,10 @@ Arguments:
   priority: String (optional, default "medium")
   subtasks: Vec<String> (optional, list of subtask titles)
   metadata: JSON (optional)
-  status: String (optional, default "backlog" for human-created, "pending_approval" for cortex-created)
+  status: String (optional, default "backlog" for branch-created tasks; cortex promotion sets `pending_approval` programmatically)
 ```
 
-**`task_update`** — Available to workers executing a task, cortex, and channels.
+**`task_update`** — Available to branches and workers.
 
 ```
 Arguments:
@@ -201,7 +210,7 @@ Arguments:
   complete_subtask: i32 (optional, index of subtask to mark complete)
 ```
 
-**`task_list`** — Available to channels and cortex. Lists tasks with optional filters.
+**`task_list`** — Available to branches. Lists tasks with optional filters.
 
 ```
 Arguments:
@@ -211,7 +220,7 @@ Arguments:
 
 ### Natural Language Commands
 
-The channel prompt should be updated to recognize task-related intents:
+The user-facing prompts (channel and cortex chat) should be updated to recognize task-related intents and delegate them to a branch:
 
 - "pick up #42" / "start #42" / "execute #42" → approve and begin execution
 - "approve #42" → move from `pending_approval` to `ready`
@@ -219,7 +228,7 @@ The channel prompt should be updated to recognize task-related intents:
 - "cancel #42" → cancel a task
 - "#42 is done" → mark complete
 
-These don't need special parsing — the channel LLM handles intent recognition naturally and calls the appropriate tool.
+These don't need special parsing — the LLM handles intent recognition naturally, delegates to a branch, and the branch calls the appropriate task tool. User-facing processes do not call task tools directly.
 
 ## API Endpoints
 
@@ -285,16 +294,17 @@ The Tasks tab in the agent navigation should show a badge with the count of `pen
 
 - REST endpoints for task CRUD
 - `task_create`, `task_update`, `task_list` tools
-- Wire tools into channel, cortex, and worker tool servers
-- Update channel prompt to recognize task intents
+- Wire tools into branch and worker tool servers
+- Update user-facing prompts to recognize task intents and delegate to branches
 
-### Phase 3: Cortex Loops
+### Phase 3: Cortex + Execution Path
 
 - Todo promotion loop (scan todos, evaluate, create tasks)
 - Promotion prompt template (`cortex_task_promotion.md.j2`)
 - Bulletin section for active tasks
-- Task execution trigger (approve → spawn worker with task context)
-- Wire `task_update` into worker tool server so workers can update subtask progress
+- Task execution path (approve/execute intent → branch validates ready task and spawns worker with task context)
+- Cortex ready-task pickup loop (idle/background execution using the same branch -> worker path)
+- Wire `task_update` into worker tool server so workers can update subtask progress only for assigned tasks
 
 ### Phase 4: Interface
 
@@ -308,7 +318,7 @@ The Tasks tab in the agent navigation should show a badge with the count of `pen
 
 - SSE events for task state changes (real-time board updates)
 - Worker completion → auto-move task to `done`
-- Cortex chat integration (ask cortex about tasks)
+- Cortex chat integration (same branch -> worker execution pattern as normal channels)
 - Telegram/Discord natural language commands for task management
 
 ## Phase Ordering
@@ -316,7 +326,7 @@ The Tasks tab in the agent navigation should show a badge with the count of `pen
 ```
 Phase 1 (data)      — standalone
 Phase 2 (API)       — depends on Phase 1
-Phase 3 (cortex)    — depends on Phase 2
+Phase 3 (cortex+exec) — depends on Phase 2
 Phase 4 (interface) — depends on Phase 2, independent of Phase 3
 Phase 5 (polish)    — depends on Phases 3 + 4
 ```
@@ -325,12 +335,12 @@ Phases 3 and 4 can run in parallel after Phase 2.
 
 ## Open Questions
 
-**Todo memory type retention.** The current design keeps `Todo` as a memory type and adds tasks as a separate system. This means a todo captured in conversation lives in the memory graph (searchable, associated, decayable) while its promoted task lives in the tasks table. The `source_memory_id` FK connects them. If we later decide todos are redundant, we can drop the type and have channels create tasks directly — but the two-tier model gives the cortex room to filter and enrich before things hit the board.
+**Todo memory type retention.** The current design keeps `Todo` as a memory type and adds tasks as a separate system. This means a todo captured in conversation lives in the memory graph (searchable, associated, decayable) while its promoted task lives in the tasks table. The `source_memory_id` FK connects them. If we later decide todos are redundant, we can drop the type and have branches create tasks directly from channel intent — but the two-tier model gives the cortex room to filter and enrich before things hit the board.
 
 **Task archival.** Done tasks accumulate. Options: auto-archive after N days, move to a separate `archived` status, or just filter them out in the UI. Not urgent for v1.
 
 **Multi-agent task references.** With per-agent numbering, `#42` is unambiguous within an agent. If a user manages multiple agents, they'd need to specify which agent. The current routing (messages go to a specific agent's channel) handles this naturally — `#42` in agent A's channel refers to agent A's task #42.
 
-**Worker task awareness.** Workers currently have no memory tools. When a worker executes a task, it gets the task description and subtasks in its system prompt. The `task_update` tool is the only task-system tool a worker gets. If a worker needs to recall related memories to execute a task, that context should be pre-gathered by the cortex and included in the task description or worker prompt.
+**Worker task awareness.** Workers currently have no memory tools. When a worker executes a task, it gets the task description and subtasks in its system prompt. The `task_update` tool is the only task-system tool a worker gets, and it should only allow updates to that worker's assigned task. If a worker needs related memories, that context should be pre-gathered by a branch and included in the task description or worker prompt.
 
 **Rejection feedback.** When a human rejects a pending task, should that feedback be saved as a memory or a cortex event? Saving it as a memory helps the cortex learn what's not actionable. Saving it as a cortex event is simpler. Could do both.
