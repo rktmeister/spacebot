@@ -1,12 +1,17 @@
 //! Process daemonization and IPC for background operation.
 
-use crate::config::Config;
+use crate::config::{Config, TelemetryConfig};
 
 use anyhow::{Context as _, anyhow};
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_otlp::WithHttpConfig;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -24,13 +29,8 @@ pub enum IpcCommand {
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum IpcResponse {
     Ok,
-    Status {
-        pid: u32,
-        uptime_seconds: u64,
-    },
-    Error {
-        message: String,
-    },
+    Status { pid: u32, uptime_seconds: u64 },
+    Error { message: String },
 }
 
 /// Paths for daemon runtime files, all derived from the instance directory.
@@ -84,8 +84,12 @@ pub fn is_running(paths: &DaemonPaths) -> Option<u32> {
 /// Daemonize the current process. Returns in the child; the parent prints
 /// a message and exits.
 pub fn daemonize(paths: &DaemonPaths) -> anyhow::Result<()> {
-    std::fs::create_dir_all(&paths.log_dir)
-        .with_context(|| format!("failed to create log directory: {}", paths.log_dir.display()))?;
+    std::fs::create_dir_all(&paths.log_dir).with_context(|| {
+        format!(
+            "failed to create log directory: {}",
+            paths.log_dir.display()
+        )
+    })?;
 
     let stdout = std::fs::OpenOptions::new()
         .create(true)
@@ -105,13 +109,23 @@ pub fn daemonize(paths: &DaemonPaths) -> anyhow::Result<()> {
         .stdout(stdout)
         .stderr(stderr);
 
-    daemonize.start().map_err(|error| anyhow!("failed to daemonize: {error}"))?;
+    daemonize
+        .start()
+        .map_err(|error| anyhow!("failed to daemonize: {error}"))?;
 
     Ok(())
 }
 
-/// Initialize tracing for background mode with daily log rotation.
-pub fn init_background_tracing(paths: &DaemonPaths, debug: bool) {
+/// Initialize tracing for background (daemon) mode.
+///
+/// Returns an `SdkTracerProvider` if OTLP export is configured. The caller must
+/// hold onto it for the process lifetime and call `.shutdown()` before exit so
+/// the batch exporter flushes buffered spans.
+pub fn init_background_tracing(
+    paths: &DaemonPaths,
+    debug: bool,
+    telemetry: &TelemetryConfig,
+) -> Option<SdkTracerProvider> {
     let file_appender = tracing_appender::rolling::daily(&paths.log_dir, "spacebot.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
@@ -119,30 +133,129 @@ pub fn init_background_tracing(paths: &DaemonPaths, debug: bool) {
     // The process owns this — it's cleaned up on exit.
     std::mem::forget(_guard);
 
-    let filter = if debug {
-        tracing_subscriber::EnvFilter::new("debug")
-    } else {
-        tracing_subscriber::EnvFilter::new("info")
-    };
-
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let filter = build_env_filter(debug);
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
-        .with_ansi(false)
-        .init();
+        .with_ansi(false);
+
+    match build_otlp_provider(telemetry) {
+        Some(provider) => {
+            let tracer = provider.tracer("spacebot");
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer)
+                .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                .init();
+            Some(provider)
+        }
+        None => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer)
+                .init();
+            None
+        }
+    }
 }
 
-/// Initialize tracing for foreground mode (stdout).
-pub fn init_foreground_tracing(debug: bool) {
-    let filter = if debug {
+/// Initialize tracing for foreground (terminal) mode.
+///
+/// Returns an `SdkTracerProvider` if OTLP export is configured.
+pub fn init_foreground_tracing(
+    debug: bool,
+    telemetry: &TelemetryConfig,
+) -> Option<SdkTracerProvider> {
+    let filter = build_env_filter(debug);
+    let fmt_layer = tracing_subscriber::fmt::layer();
+
+    match build_otlp_provider(telemetry) {
+        Some(provider) => {
+            let tracer = provider.tracer("spacebot");
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer)
+                .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                .init();
+            Some(provider)
+        }
+        None => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer)
+                .init();
+            None
+        }
+    }
+}
+
+fn build_env_filter(debug: bool) -> tracing_subscriber::EnvFilter {
+    if debug {
         tracing_subscriber::EnvFilter::new("debug")
     } else {
         tracing_subscriber::EnvFilter::new("info")
+    }
+}
+
+/// Build an OTLP `SdkTracerProvider` when an endpoint is configured.
+///
+/// Returns `None` if neither the config field nor the `OTEL_EXPORTER_OTLP_ENDPOINT`
+/// environment variable is set, allowing the OTel layer to be omitted entirely.
+fn build_otlp_provider(telemetry: &TelemetryConfig) -> Option<SdkTracerProvider> {
+    use opentelemetry_otlp::WithExportConfig as _;
+
+    let endpoint = telemetry.otlp_endpoint.as_deref()?;
+
+    // The HTTP/protobuf endpoint path is /v1/traces by default. Append it only
+    // when the caller provided a bare host:port so both forms work.
+    let endpoint = if endpoint.ends_with("/v1/traces") {
+        endpoint.to_owned()
+    } else {
+        format!("{}/v1/traces", endpoint.trim_end_matches('/'))
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .init();
+    let mut exporter_builder = opentelemetry_otlp::SpanExporter::builder()
+        .with_http()
+        .with_endpoint(endpoint);
+    if !telemetry.otlp_headers.is_empty() {
+        exporter_builder = exporter_builder.with_headers(telemetry.otlp_headers.clone());
+    }
+    let exporter = exporter_builder
+        .build()
+        .map_err(|error| eprintln!("failed to build OTLP exporter: {error}"))
+        .ok()?;
+
+    let resource = opentelemetry_sdk::Resource::builder()
+        .with_service_name(telemetry.service_name.clone())
+        .build();
+
+    let sampler: opentelemetry_sdk::trace::Sampler =
+        if (telemetry.sample_rate - 1.0).abs() < f64::EPSILON {
+            opentelemetry_sdk::trace::Sampler::AlwaysOn
+        } else {
+            opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
+                opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(telemetry.sample_rate),
+            ))
+        };
+
+    // Use the async-runtime-aware BatchSpanProcessor so the export future is
+    // driven by tokio::spawn rather than a plain OS thread using
+    // futures_executor::block_on. The sync variant panics because reqwest
+    // calls tokio::time::sleep internally, which requires an active Tokio
+    // runtime on the calling thread — something the plain thread never has.
+    let batch_processor =
+        opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor::builder(
+            exporter,
+            opentelemetry_sdk::runtime::Tokio,
+        )
+        .build();
+
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(batch_processor)
+        .with_resource(resource)
+        .with_sampler(sampler)
+        .build();
+
+    Some(provider)
 }
 
 /// Start the IPC server. Returns a shutdown receiver that the main event
@@ -150,10 +263,17 @@ pub fn init_foreground_tracing(debug: bool) {
 pub async fn start_ipc_server(
     paths: &DaemonPaths,
 ) -> anyhow::Result<(watch::Receiver<bool>, tokio::task::JoinHandle<()>)> {
+    // Ensure the instance directory exists (e.g. on first run)
+    if let Some(parent) = paths.socket.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create instance directory: {}", parent.display()))?;
+    }
+
     // Clean up any stale socket file
     if paths.socket.exists() {
-        std::fs::remove_file(&paths.socket)
-            .with_context(|| format!("failed to remove stale socket: {}", paths.socket.display()))?;
+        std::fs::remove_file(&paths.socket).with_context(|| {
+            format!("failed to remove stale socket: {}", paths.socket.display())
+        })?;
     }
 
     let listener = UnixListener::bind(&paths.socket)
@@ -170,7 +290,9 @@ pub async fn start_ipc_server(
                     let shutdown_tx = shutdown_tx.clone();
                     let uptime = start_time.elapsed();
                     tokio::spawn(async move {
-                        if let Err(error) = handle_ipc_connection(stream, &shutdown_tx, uptime).await {
+                        if let Err(error) =
+                            handle_ipc_connection(stream, &shutdown_tx, uptime).await
+                        {
                             tracing::warn!(%error, "IPC connection handler failed");
                         }
                     });
@@ -213,12 +335,10 @@ async fn handle_ipc_connection(
             shutdown_tx.send(true).ok();
             IpcResponse::Ok
         }
-        IpcCommand::Status => {
-            IpcResponse::Status {
-                pid: std::process::id(),
-                uptime_seconds: uptime.as_secs(),
-            }
-        }
+        IpcCommand::Status => IpcResponse::Status {
+            pid: std::process::id(),
+            uptime_seconds: uptime.as_secs(),
+        },
     };
 
     let mut response_bytes = serde_json::to_vec(&response)?;

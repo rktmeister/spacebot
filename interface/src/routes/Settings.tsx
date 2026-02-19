@@ -69,6 +69,7 @@ const PROVIDERS = [
 		description: "Multi-provider gateway with unified API",
 		placeholder: "sk-or-...",
 		envVar: "OPENROUTER_API_KEY",
+		defaultModel: "anthropic/claude-sonnet-4",
 	},
 	{
 		id: "opencode-zen",
@@ -76,6 +77,7 @@ const PROVIDERS = [
 		description: "Multi-format gateway (Kimi, GLM, MiniMax, Qwen)",
 		placeholder: "...",
 		envVar: "OPENCODE_ZEN_API_KEY",
+		defaultModel: "kimi-k2.5",
 	},
 	{
 		id: "anthropic",
@@ -83,6 +85,7 @@ const PROVIDERS = [
 		description: "Claude models (Sonnet, Opus, Haiku)",
 		placeholder: "sk-ant-...",
 		envVar: "ANTHROPIC_API_KEY",
+		defaultModel: "claude-sonnet-4",
 	},
 	{
 		id: "openai",
@@ -90,6 +93,7 @@ const PROVIDERS = [
 		description: "GPT models",
 		placeholder: "sk-...",
 		envVar: "OPENAI_API_KEY",
+		defaultModel: "gpt-4.1",
 	},
 	{
 		id: "zhipu",
@@ -97,6 +101,7 @@ const PROVIDERS = [
 		description: "GLM models (GLM-4, GLM-4-Flash)",
 		placeholder: "...",
 		envVar: "ZHIPU_API_KEY",
+		defaultModel: "glm-4-plus",
 	},
 	{
 		id: "groq",
@@ -104,6 +109,7 @@ const PROVIDERS = [
 		description: "Fast inference for Llama, Mixtral models",
 		placeholder: "gsk_...",
 		envVar: "GROQ_API_KEY",
+		defaultModel: "llama-3.3-70b-versatile",
 	},
 	{
 		id: "together",
@@ -111,6 +117,7 @@ const PROVIDERS = [
 		description: "Wide model selection with competitive pricing",
 		placeholder: "...",
 		envVar: "TOGETHER_API_KEY",
+		defaultModel: "Meta-Llama-3.1-405B-Instruct-Turbo",
 	},
 	{
 		id: "fireworks",
@@ -118,6 +125,7 @@ const PROVIDERS = [
 		description: "Fast inference for popular OSS models",
 		placeholder: "...",
 		envVar: "FIREWORKS_API_KEY",
+		defaultModel: "llama-v3p3-70b-instruct",
 	},
 	{
 		id: "deepseek",
@@ -125,6 +133,7 @@ const PROVIDERS = [
 		description: "DeepSeek Chat and Reasoner models",
 		placeholder: "sk-...",
 		envVar: "DEEPSEEK_API_KEY",
+		defaultModel: "deepseek-chat",
 	},
 	{
 		id: "xai",
@@ -132,6 +141,7 @@ const PROVIDERS = [
 		description: "Grok models",
 		placeholder: "xai-...",
 		envVar: "XAI_API_KEY",
+		defaultModel: "grok-2-latest",
 	},
 	{
 		id: "mistral",
@@ -139,6 +149,7 @@ const PROVIDERS = [
 		description: "Mistral Large, Small, Codestral models",
 		placeholder: "...",
 		envVar: "MISTRAL_API_KEY",
+		defaultModel: "mistral-large-latest",
 	},
 ] as const;
 
@@ -280,6 +291,14 @@ export function Settings() {
 							</p>
 						</div>
 
+						<div className="mb-4 rounded-md border border-app-line bg-app-darkBox/20 px-4 py-3">
+							<p className="text-sm text-ink-faint">
+								To customise which model is used, go to{" "}
+								<span className="text-ink-dull">Agent &gt; Config &gt; Model Routing</span>.
+								{" "}Model routing is configured per agent.
+							</p>
+						</div>
+
 						{isLoading ? (
 							<div className="flex items-center gap-2 text-ink-dull">
 								<div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
@@ -294,6 +313,7 @@ export function Settings() {
 										name={provider.name}
 										description={provider.description}
 										configured={isConfigured(provider.id)}
+										defaultModel={provider.defaultModel}
 										onEdit={() => {
 											setEditingProvider(provider.id);
 											setKeyInput("");
@@ -1281,12 +1301,13 @@ interface ProviderCardProps {
 	name: string;
 	description: string;
 	configured: boolean;
+	defaultModel: string;
 	onEdit: () => void;
 	onRemove: () => void;
 	removing: boolean;
 }
 
-function ProviderCard({ provider, name, description, configured, onEdit, onRemove, removing }: ProviderCardProps) {
+function ProviderCard({ provider, name, description, configured, defaultModel, onEdit, onRemove, removing }: ProviderCardProps) {
 	return (
 		<div className="rounded-lg border border-app-line bg-app-box p-4">
 			<div className="flex items-center gap-3">
@@ -1301,6 +1322,9 @@ function ProviderCard({ provider, name, description, configured, onEdit, onRemov
 						)}
 					</div>
 					<p className="mt-0.5 text-sm text-ink-dull">{description}</p>
+					<p className="mt-1 text-tiny text-ink-faint">
+						Default model: <span className="text-ink-dull">{defaultModel}</span>
+					</p>
 				</div>
 				<div className="flex gap-2">
 					<Button onClick={onEdit} variant="outline" size="sm">

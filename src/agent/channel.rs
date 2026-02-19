@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio::sync::broadcast;
+use tracing::Instrument as _;
 use std::collections::HashMap;
 
 /// Shared state that channel tools need to act on the channel.
@@ -347,6 +348,7 @@ impl Channel {
     /// Formats all messages with attribution and timestamps, persists each
     /// individually to conversation history, then presents them as one user turn
     /// with a coalesce hint telling the LLM this is a fast-moving conversation.
+    #[tracing::instrument(skip(self, messages), fields(channel_id = %self.id, agent_id = %self.deps.agent_id, message_count = messages.len()))]
     async fn handle_message_batch(&mut self, messages: Vec<InboundMessage>) -> Result<()> {
         let message_count = messages.len();
         let first_timestamp = messages.first().map(|m| m.timestamp).unwrap_or_else(chrono::Utc::now);
@@ -525,6 +527,8 @@ impl Channel {
             .render_coalesce_hint(message_count, &elapsed_str, unique_senders)
             .ok();
         
+        let available_channels = self.build_available_channels().await;
+
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
         
         prompt_engine
@@ -536,6 +540,7 @@ impl Channel {
                 self.conversation_context.clone(),
                 empty_to_none(status_text),
                 coalesce_hint,
+                available_channels,
             )
             .expect("failed to render channel prompt")
     }
@@ -545,6 +550,7 @@ impl Channel {
     /// The LLM decides which tools to call: reply (to respond), branch (to think),
     /// spawn_worker (to delegate), route (to follow up with a worker), cancel, or
     /// memory_save. The tools act on the channel's shared state directly.
+    #[tracing::instrument(skip(self, message), fields(channel_id = %self.id, agent_id = %self.deps.agent_id, message_id = %message.id))]
     async fn handle_message(&mut self, message: InboundMessage) -> Result<()> {
         tracing::info!(
             channel_id = %self.id,
@@ -628,6 +634,45 @@ impl Channel {
         Ok(())
     }
 
+    /// Build the rendered available channels fragment for cross-channel awareness.
+    async fn build_available_channels(&self) -> Option<String> {
+        if self.deps.messaging_manager.is_none() {
+            return None;
+        }
+
+        let channels = match self.state.channel_store.list_active().await {
+            Ok(channels) => channels,
+            Err(error) => {
+                tracing::warn!(%error, "failed to list channels for system prompt");
+                return None;
+            }
+        };
+
+        // Filter out the current channel and cron channels
+        let entries: Vec<crate::prompts::engine::ChannelEntry> = channels
+            .into_iter()
+            .filter(|channel| {
+                channel.id.as_str() != self.id.as_ref()
+                    && channel.platform != "cron"
+                    && channel.platform != "webhook"
+            })
+            .map(|channel| crate::prompts::engine::ChannelEntry {
+                name: channel
+                    .display_name
+                    .unwrap_or_else(|| channel.id.clone()),
+                platform: channel.platform,
+                id: channel.id,
+            })
+            .collect();
+
+        if entries.is_empty() {
+            return None;
+        }
+
+        let prompt_engine = self.deps.runtime_config.prompts.load();
+        prompt_engine.render_available_channels(entries).ok()
+    }
+
     /// Assemble the full system prompt using the PromptEngine.
     async fn build_system_prompt(&self) -> String {
         let rc = &self.deps.runtime_config;
@@ -650,6 +695,8 @@ impl Channel {
             status.render()
         };
 
+        let available_channels = self.build_available_channels().await;
+
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
 
         prompt_engine
@@ -661,6 +708,7 @@ impl Channel {
                 self.conversation_context.clone(),
                 empty_to_none(status_text),
                 None, // coalesce_hint - only set for batched messages
+                available_channels,
             )
             .expect("failed to render channel prompt")
     }
@@ -668,6 +716,7 @@ impl Channel {
     /// Register per-turn tools, run the LLM agentic loop, and clean up.
     ///
     /// Returns the prompt result and skip flag for the caller to dispatch.
+    #[tracing::instrument(skip(self, user_text, system_prompt, attachment_content), fields(channel_id = %self.id, agent_id = %self.deps.agent_id))]
     async fn run_agent_turn(
         &self,
         user_text: &str,
@@ -1026,11 +1075,20 @@ async fn spawn_branch(
     let branch_id = branch.id;
     let prompt = prompt.to_owned();
 
-    let handle = tokio::spawn(async move {
-        if let Err(error) = branch.run(&prompt).await {
-            tracing::error!(branch_id = %branch_id, %error, "branch failed");
+    let branch_span = tracing::info_span!(
+        "branch.run",
+        branch_id = %branch_id,
+        channel_id = %state.channel_id,
+        description = %description,
+    );
+    let handle = tokio::spawn(
+        async move {
+            if let Err(error) = branch.run(&prompt).await {
+                tracing::error!(branch_id = %branch_id, %error, "branch failed");
+            }
         }
-    });
+        .instrument(branch_span),
+    );
 
     {
         let mut branches = state.active_branches.write().await;
@@ -1130,12 +1188,18 @@ pub async fn spawn_worker_from_state(
     
     let worker_id = worker.id;
 
+    let worker_span = tracing::info_span!(
+        "worker.run",
+        worker_id = %worker_id,
+        channel_id = %state.channel_id,
+        task = %task,
+    );
     let handle = spawn_worker_task(
         worker_id,
         state.deps.event_tx.clone(),
         state.deps.agent_id.clone(),
         Some(state.channel_id.clone()),
-        worker.run(),
+        worker.run().instrument(worker_span),
     );
 
     state.worker_handles.write().await.insert(worker_id, handle);
@@ -1208,6 +1272,13 @@ pub async fn spawn_opencode_worker_from_state(
 
     let worker_id = worker.id;
 
+    let worker_span = tracing::info_span!(
+        "worker.run",
+        worker_id = %worker_id,
+        channel_id = %state.channel_id,
+        task = %task,
+        worker_type = "opencode",
+    );
     let handle = spawn_worker_task(
         worker_id,
         state.deps.event_tx.clone(),
@@ -1216,7 +1287,8 @@ pub async fn spawn_opencode_worker_from_state(
         async move {
             let result = worker.run().await?;
             Ok::<String, anyhow::Error>(result.result_text)
-        },
+        }
+        .instrument(worker_span),
     );
 
     state.worker_handles.write().await.insert(worker_id, handle);

@@ -26,29 +26,54 @@ impl Clone for EmbeddingTable {
 
 impl EmbeddingTable {
     /// Open existing table or create a new one.
+    ///
+    /// If the table exists but is corrupted (e.g. process killed mid-write),
+    /// it is dropped and recreated. Embeddings can be regenerated from SQLite.
     pub async fn open_or_create(connection: &lancedb::Connection) -> Result<Self> {
-        // Try to open existing table first
+        // Try to open existing table
         match connection.open_table(TABLE_NAME).execute().await {
-            Ok(table) => Ok(Self { table }),
-            Err(_) => {
-                // Create new table with empty batch
-                let schema = Self::schema();
-                
-                // Create empty RecordBatchIterator
-                let batches = RecordBatchIterator::new(
-                    vec![].into_iter().map(Ok),
-                    Arc::new(schema),
-                );
-                
-                let table = connection
-                    .create_table(TABLE_NAME, Box::new(batches))
-                    .execute()
-                    .await
-                    .map_err(|e| DbError::LanceDb(e.to_string()))?;
-                
-                Ok(Self { table })
+            Ok(table) => return Ok(Self { table }),
+            Err(error) => {
+                tracing::debug!(%error, "failed to open embeddings table, will create");
             }
         }
+
+        // Table doesn't exist or is unreadable — try creating it
+        match Self::create_empty_table(connection).await {
+            Ok(table) => return Ok(Self { table }),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "failed to create embeddings table, attempting recovery from corrupted state"
+                );
+            }
+        }
+
+        // Both open and create failed — table data exists but is corrupted.
+        // Drop it and recreate from scratch.
+        if let Err(error) = connection.drop_table(TABLE_NAME, &[]).await {
+            tracing::warn!(%error, "drop_table failed during recovery, proceeding anyway");
+        }
+
+        let table = Self::create_empty_table(connection).await?;
+        tracing::info!("embeddings table recovered — embeddings will be rebuilt from memory store");
+
+        Ok(Self { table })
+    }
+
+    /// Create an empty embeddings table.
+    async fn create_empty_table(connection: &lancedb::Connection) -> Result<lancedb::Table> {
+        let schema = Self::schema();
+        let batches = RecordBatchIterator::new(
+            vec![].into_iter().map(Ok),
+            Arc::new(schema),
+        );
+
+        connection
+            .create_table(TABLE_NAME, Box::new(batches))
+            .execute()
+            .await
+            .map_err(|e| DbError::LanceDb(e.to_string()).into())
     }
     
     /// Store an embedding with content for a memory.

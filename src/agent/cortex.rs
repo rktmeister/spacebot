@@ -419,6 +419,7 @@ async fn gather_bulletin_sections(deps: &AgentDeps) -> String {
 ///
 /// On failure, the previous bulletin is preserved (not blanked out).
 /// Returns `true` if the bulletin was successfully generated.
+#[tracing::instrument(skip(deps, logger), fields(agent_id = %deps.agent_id))]
 pub async fn generate_bulletin(deps: &AgentDeps, logger: &CortexLogger) -> bool {
     tracing::info!("cortex generating memory bulletin");
     let started = Instant::now();
@@ -571,6 +572,7 @@ struct ProfileLlmResponse {
 ///
 /// Uses the current memory bulletin and identity files as context, then asks
 /// an LLM to produce a display name, status line, and short bio.
+#[tracing::instrument(skip(deps, logger), fields(agent_id = %deps.agent_id))]
 async fn generate_profile(deps: &AgentDeps, logger: &CortexLogger) {
     tracing::info!("cortex generating agent profile");
     let started = Instant::now();
