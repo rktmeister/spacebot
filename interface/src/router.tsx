@@ -20,6 +20,7 @@ import {AgentConfig} from "@/routes/AgentConfig";
 import {AgentCron} from "@/routes/AgentCron";
 import {AgentIngest} from "@/routes/AgentIngest";
 import {AgentSkills} from "@/routes/AgentSkills";
+import {AgentChat} from "@/routes/AgentChat";
 import {Settings} from "@/routes/Settings";
 import {useLiveContext} from "@/hooks/useLiveContext";
 import {AgentTabs} from "@/components/AgentTabs";
@@ -112,6 +113,22 @@ const agentRoute = createRoute({
 				<AgentHeader agentId={agentId} />
 				<div className="flex-1 overflow-hidden">
 					<AgentDetail agentId={agentId} liveStates={liveStates} />
+				</div>
+			</div>
+		);
+	},
+});
+
+const agentChatRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: "/agents/$agentId/chat",
+	component: function AgentChatPage() {
+		const {agentId} = agentChatRoute.useParams();
+		return (
+			<div className="flex h-full flex-col">
+				<AgentHeader agentId={agentId} />
+				<div className="flex-1 overflow-hidden">
+					<AgentChat agentId={agentId} />
 				</div>
 			</div>
 		);
@@ -283,6 +300,7 @@ const routeTree = rootRoute.addChildren([
 	settingsRoute,
 	logsRoute,
 	agentRoute,
+	agentChatRoute,
 	agentChannelsRoute,
 	agentMemoriesRoute,
 	agentIngestRoute,
