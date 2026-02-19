@@ -19,6 +19,8 @@ pub mod secrets;
 pub mod settings;
 pub mod skills;
 pub mod tools;
+#[cfg(feature = "metrics")]
+pub mod telemetry;
 pub mod update;
 
 pub use error::{Error, Result};

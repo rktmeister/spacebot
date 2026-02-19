@@ -45,6 +45,8 @@ pub struct Config {
     pub bindings: Vec<Binding>,
     /// HTTP API server configuration.
     pub api: ApiConfig,
+    /// Prometheus metrics endpoint configuration.
+    pub metrics: MetricsConfig,
     /// OpenTelemetry export configuration.
     pub telemetry: TelemetryConfig,
 }
@@ -66,6 +68,27 @@ impl Default for ApiConfig {
             enabled: true,
             port: 19898,
             bind: "127.0.0.1".into(),
+        }
+    }
+}
+
+/// Prometheus metrics endpoint configuration.
+#[derive(Debug, Clone)]
+pub struct MetricsConfig {
+    /// Whether the metrics endpoint is enabled.
+    pub enabled: bool,
+    /// Port to bind the metrics HTTP server on.
+    pub port: u16,
+    /// Address to bind the metrics HTTP server on.
+    pub bind: String,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 9090,
+            bind: "0.0.0.0".into(),
         }
     }
 }
@@ -865,6 +888,8 @@ struct TomlConfig {
     #[serde(default)]
     api: TomlApiConfig,
     #[serde(default)]
+    metrics: TomlMetricsConfig,
+    #[serde(default)]
     telemetry: TomlTelemetryConfig,
 }
 
@@ -904,6 +929,33 @@ fn default_api_port() -> u16 {
 }
 fn default_api_bind() -> String {
     "127.0.0.1".into()
+}
+
+#[derive(Deserialize)]
+struct TomlMetricsConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_metrics_port")]
+    port: u16,
+    #[serde(default = "default_metrics_bind")]
+    bind: String,
+}
+
+impl Default for TomlMetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_metrics_port(),
+            bind: default_metrics_bind(),
+        }
+    }
+}
+
+fn default_metrics_port() -> u16 {
+    9090
+}
+fn default_metrics_bind() -> String {
+    "0.0.0.0".into()
 }
 
 #[derive(Deserialize, Default)]
@@ -1316,6 +1368,7 @@ impl Config {
             messaging: MessagingConfig::default(),
             bindings: Vec::new(),
             api: ApiConfig::default(),
+            metrics: MetricsConfig::default(),
             telemetry: TelemetryConfig {
                 otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
                 otlp_headers: parse_otlp_headers(std::env::var("OTEL_EXPORTER_OTLP_HEADERS").ok())?,
@@ -1826,6 +1879,12 @@ impl Config {
             bind: toml.api.bind,
         };
 
+        let metrics = MetricsConfig {
+            enabled: toml.metrics.enabled,
+            port: toml.metrics.port,
+            bind: toml.metrics.bind,
+        };
+
         let telemetry = {
             // env var takes precedence over config file value
             let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -1857,6 +1916,7 @@ impl Config {
             messaging,
             bindings,
             api,
+            metrics,
             telemetry,
         })
     }

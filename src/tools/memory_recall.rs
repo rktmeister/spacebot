@@ -250,6 +250,9 @@ impl Tool for MemoryRecallTool {
         let total_found = search_results.len();
         let summary = format_memories(&memories);
 
+        #[cfg(feature = "metrics")]
+        crate::telemetry::Metrics::global().memory_reads_total.inc();
+
         Ok(MemoryRecallOutput {
             memories,
             total_found,

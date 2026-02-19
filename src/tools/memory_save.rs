@@ -240,6 +240,9 @@ impl Tool for MemorySaveTool {
             tracing::warn!(%error, "failed to ensure FTS index after memory save");
         }
 
+        #[cfg(feature = "metrics")]
+        crate::telemetry::Metrics::global().memory_writes_total.inc();
+
         Ok(MemorySaveOutput {
             memory_id: memory.id,
             success: true,
