@@ -8,7 +8,7 @@
 //! `reload_config()` when config.toml changes, and all subsequent
 //! `get_api_key()` calls read the new values lock-free.
 
-use crate::config::LlmConfig;
+use crate::config::{LlmConfig, ProviderConfig};
 use crate::error::{LlmError, Result};
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
@@ -46,38 +46,26 @@ impl LlmManager {
         tracing::info!("LLM provider keys reloaded");
     }
 
-    /// Get the appropriate API key for a provider.
-    pub fn get_api_key(&self, provider: &str) -> Result<String> {
+    pub fn get_provider(&self, provider_id: &str) -> Result<ProviderConfig> {
+        let normalized_provider_id = provider_id.to_lowercase();
         let config = self.config.load();
-        match provider {
-            "anthropic" => config.anthropic_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("anthropic".into()).into()),
-            "openai" => config.openai_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("openai".into()).into()),
-            "openrouter" => config.openrouter_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("openrouter".into()).into()),
-            "zhipu" => config.zhipu_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("zhipu".into()).into()),
-            "groq" => config.groq_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("groq".into()).into()),
-            "together" => config.together_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("together".into()).into()),
-            "fireworks" => config.fireworks_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("fireworks".into()).into()),
-            "deepseek" => config.deepseek_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("deepseek".into()).into()),
-            "xai" => config.xai_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("xai".into()).into()),
-            "mistral" => config.mistral_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("mistral".into()).into()),
-            "ollama" => config.ollama_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("ollama".into()).into()),
-            "opencode-zen" => config.opencode_zen_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("opencode-zen".into()).into()),
-            "nvidia" => config.nvidia_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("nvidia".into()).into()),
-            _ => Err(LlmError::UnknownProvider(provider.into()).into()),
+
+        config
+            .providers
+            .get(&normalized_provider_id)
+            .cloned()
+            .ok_or_else(|| LlmError::UnknownProvider(provider_id.to_string()).into())
+    }
+
+    /// Get the appropriate API key for a provider.
+    pub fn get_api_key(&self, provider_id: &str) -> Result<String> {
+        let provider = self.get_provider(provider_id)?;
+
+        if provider.api_key.is_empty() {
+            return Err(LlmError::MissingProviderKey(provider_id.to_string()).into());
         }
+
+        Ok(provider.api_key)
     }
 
     /// Get configured Ollama base URL, if provided.

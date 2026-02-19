@@ -19,11 +19,37 @@ spacebot --config /path/to.toml  # CLI override
 
 ```toml
 # --- LLM Provider Credentials ---
-# Instance-level, shared by all agents. At least one key is required.
+# Instance-level, shared by all agents. At least one key or provider is required.
 [llm]
 anthropic_key = "env:ANTHROPIC_API_KEY"
 openai_key = "env:OPENAI_API_KEY"
 openrouter_key = "env:OPENROUTER_API_KEY"
+zhipu_key = "env:ZHIPU_API_KEY"
+groq_key = "env:GROQ_API_KEY"
+together_key = "env:TOGETHER_API_KEY"
+fireworks_key = "env:FIREWORKS_API_KEY"
+deepseek_key = "env:DEEPSEEK_API_KEY"
+xai_key = "env:XAI_API_KEY"
+mistral_key = "env:MISTRAL_API_KEY"
+opencode_zen_key = "env:OPENCODE_ZEN_API_KEY"
+
+# Custom LLM providers (alternative to legacy keys)
+[llm.provider.my_anthropic]
+api_type = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key = "env:MY_ANTHROPIC_KEY"
+name = "My Custom Anthropic"
+
+[llm.provider.my_openai]
+api_type = "openai_responses"
+base_url = "https://api.openai.com"
+api_key = "env:MY_OPENAI_KEY"
+
+[llm.provider.local_openai]
+api_type = "openai_completions"
+base_url = "http://localhost:8080" # do not include /v1; Spacebot appends endpoint paths
+api_key = "env:LOCAL_OPENAI_KEY"
+name = "Local OpenAI Compatible"
 
 # --- Instance Defaults ---
 # All agents inherit these. Individual agents can override any field.
@@ -168,6 +194,7 @@ Model names include the provider as a prefix:
 | Anthropic | `anthropic/<model>` | `anthropic/claude-sonnet-4-20250514` |
 | OpenAI | `openai/<model>` | `openai/gpt-4o` |
 | OpenRouter | `openrouter/<provider>/<model>` | `openrouter/anthropic/claude-sonnet-4-20250514` |
+| Custom provider | `<provider_id>/<model>` | `my_openai/gpt-4o-mini` |
 
 You can mix providers across process types. See [Routing](/docs/routing) for the full routing system.
 
@@ -254,15 +281,109 @@ System prompts (channel, branch, worker, compactor, cortex, etc.) are Jinja2 tem
 
 ## Sections Reference
 
-### `[llm]`
+### Migration from Legacy Keys
+
+Legacy keys (`anthropic_key`, `openai_key`, etc.) are still supported and automatically converted to provider entries internally. For example:
+
+**Legacy format:**
+```toml
+[llm]
+anthropic_key = "env:ANTHROPIC_API_KEY"
+openai_key = "env:OPENAI_API_KEY"
+```
+
+**Internal representation (auto-created):**
+```toml
+[llm.provider.anthropic]
+api_type = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key = "env:ANTHROPIC_API_KEY"
+
+[llm.provider.openai]
+api_type = "openai_completions"
+base_url = "https://api.openai.com"
+api_key = "env:OPENAI_API_KEY"
+```
+
+If you define a custom provider with the same ID as a legacy key, your custom configuration takes precedence.
+
+#### Legacy Keys
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `anthropic_key` | string | None | Anthropic API key (or `env:VAR_NAME`) |
 | `openai_key` | string | None | OpenAI API key (or `env:VAR_NAME`) |
 | `openrouter_key` | string | None | OpenRouter API key (or `env:VAR_NAME`) |
+| `zhipu_key` | string | None | Zhipu AI (GLM) API key (or `env:VAR_NAME`) |
+| `groq_key` | string | None | Groq API key (or `env:VAR_NAME`) |
+| `together_key` | string | None | Together AI API key (or `env:VAR_NAME`) |
+| `fireworks_key` | string | None | Fireworks AI API key (or `env:VAR_NAME`) |
+| `deepseek_key` | string | None | DeepSeek API key (or `env:VAR_NAME`) |
+| `xai_key` | string | None | XAI API key (or `env:VAR_NAME`) |
+| `mistral_key` | string | None | Mistral API key (or `env:VAR_NAME`) |
+| `opencode_zen_key` | string | None | OpenCode Zen API key (or `env:VAR_NAME`) |
 
-At least one key must be provided (via config or environment).
+#### Custom Providers
+
+Custom providers allow configuring LLM providers with custom endpoints and API types. Use either legacy keys **or** custom providers.
+
+```toml
+[llm.provider.<id>]
+api_type = "anthropic"          # Required - one of: anthropic, openai_completions, openai_responses
+base_url = "https://api..."     # Required - valid URL
+api_key = "env:API_KEY"         # Required - API key (supports env:VAR_NAME format)
+name = "My Provider"            # Optional - friendly name for display
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `api_type` | string | Yes | API protocol type. One of: `anthropic` (Anthropic Messages API), `openai_completions` (OpenAI Chat Completions-compatible API), or `openai_responses` (OpenAI Responses API-compatible) |
+| `base_url` | string | Yes | Base URL of the API endpoint. Must be a valid URL (including protocol) |
+| `api_key` | string | Yes | API key for authentication. Supports `env:VAR_NAME` syntax to reference environment variables |
+| `name` | string | No | Optional friendly name for the provider (displayed in logs and UI) |
+
+> Note:
+> - For `openai_completions` and `openai_responses`, configure `base_url` as the provider root URL (usually without a trailing `/v1`).
+> - Spacebot appends the endpoint path automatically:
+>   - `openai_completions` -> `/v1/chat/completions`
+>   - `openai_responses` -> `/v1/responses`
+> - If you include `/v1` in `base_url`, requests can end up with duplicated paths such as `/v1/v1/...`.
+
+**Provider ID Requirements:**
+- 1-64 characters long
+- Cannot contain `/` or whitespace
+- Case-insensitive (stored as lowercase)
+
+#### Examples
+
+**Anthropic-compatible provider:**
+```toml
+[llm.provider.custom_anthropic]
+api_type = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key = "env:CUSTOM_ANTHROPIC_KEY"
+name = "Anthropic EU"
+```
+
+**OpenAI Chat Completions provider:**
+```toml
+[llm.provider.azure_openai]
+api_type = "openai_responses"
+base_url = "https://my-azure-openai.openai.azure.com"
+api_key = "env:AZURE_OPENAI_KEY"
+name = "Azure OpenAI GPT-4"
+```
+
+**OpenAI Completions provider:**
+```toml
+[llm.provider.local_llm]
+api_type = "openai_completions"
+base_url = "http://localhost:8080" # no /v1 in base_url
+api_key = "env:LOCAL_LLM_KEY"
+name = "Local LLaMA Server"
+```
+
+At least one provider (legacy key or custom provider) must be configured.
 
 ### `[defaults]`
 
@@ -284,6 +405,26 @@ At least one key must be provided (via config or environment).
 | `compactor` | string | `anthropic/claude-haiku-4.5-20250514` | Model for summarization |
 | `cortex` | string | `anthropic/claude-haiku-4.5-20250514` | Model for system observation |
 | `rate_limit_cooldown_secs` | integer | 60 | How long to deprioritize a rate-limited model |
+
+Routing selects providers by the prefix before the first `/` in the model name.
+
+```toml
+[defaults.routing]
+channel = "my_openai/gpt-4o-mini"
+worker = "custom_anthropic/claude-3-5-sonnet"
+
+[llm.provider.my_openai]
+api_type = "openai_completions"
+base_url = "https://api.openai.com"
+api_key = "env:OPENAI_API_KEY"
+
+[llm.provider.custom_anthropic]
+api_type = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key = "env:ANTHROPIC_API_KEY"
+```
+
+If no prefix is provided (for example `claude-sonnet-4-20250514`), Spacebot defaults to the `anthropic` provider.
 
 ### `[defaults.routing.task_overrides]`
 
