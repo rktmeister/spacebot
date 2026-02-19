@@ -131,7 +131,7 @@ impl Messaging for TelegramAdapter {
                         tracing::info!("telegram polling loop shutting down");
                         break;
                     }
-                    result = bot.get_updates().offset(offset).timeout(30).send() => {
+                    result = bot.get_updates().offset(offset).timeout(10).send() => {
                         let updates = match result {
                             Ok(updates) => updates,
                             Err(error) => {
@@ -174,10 +174,8 @@ impl Messaging for TelegramAdapter {
                                         continue;
                                     }
                                 }
-                            }
-
-                            // Chat filter: if configured, only allow listed chats
-                            if let Some(filter) = &permissions.chat_filter {
+                            } else if let Some(filter) = &permissions.chat_filter {
+                                // Chat filter: if configured, only allow listed group/channel chats
                                 if !filter.contains(&chat_id) {
                                     continue;
                                 }
