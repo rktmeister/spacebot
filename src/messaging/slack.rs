@@ -754,7 +754,6 @@ impl Messaging for SlackAdapter {
                         .context("failed to send slack message")?;
                 }
             }
-
             OutboundResponse::ThreadReply {
                 thread_name: _,
                 text,
@@ -854,7 +853,7 @@ impl Messaging for SlackAdapter {
                     .context("failed to send slack ephemeral message")?;
             }
 
-            OutboundResponse::RichMessage { text, blocks } => {
+            OutboundResponse::RichMessage { text, blocks, .. } => {
                 let thread_ts = extract_thread_ts(message);
                 let attempted = blocks.len();
                 let slack_blocks = deserialize_blocks(&blocks);
@@ -981,7 +980,7 @@ impl Messaging for SlackAdapter {
                         .context("failed to broadcast slack message")?;
                 }
             }
-            OutboundResponse::RichMessage { text, blocks } => {
+            OutboundResponse::RichMessage { text, blocks, .. } => {
                 let slack_blocks = deserialize_blocks(&blocks);
                 let content = if slack_blocks.is_empty() {
                     SlackMessageContent::new().with_text(text)
@@ -1005,6 +1004,18 @@ impl Messaging for SlackAdapter {
                     target = %target,
                     "broadcast() received a variant that is not supported for broadcast — ignoring"
                 );
+            }
+        } else if let OutboundResponse::RichMessage { text, .. } = response {
+            for chunk in split_message(&text, 12_000) {
+                let req = SlackApiChatPostMessageRequest::new(
+                    channel_id.clone(),
+                    markdown_content(chunk),
+                );
+
+                session
+                    .chat_post_message(&req)
+                    .await
+                    .context("failed to broadcast slack message")?;
             }
         }
 

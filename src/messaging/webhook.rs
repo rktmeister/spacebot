@@ -143,6 +143,12 @@ impl Messaging for WebhookAdapter {
                 filename: None,
                 caption: None,
             },
+            OutboundResponse::RichMessage { text, .. } => WebhookResponse {
+                response_type: "text".into(),
+                content: Some(text),
+                filename: None,
+                caption: None,
+            },
             OutboundResponse::ThreadReply { text, .. } => WebhookResponse {
                 response_type: "text".into(),
                 content: Some(text),
