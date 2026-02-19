@@ -10,7 +10,10 @@ use async_trait::async_trait;
 use serenity::all::{
     ChannelId, ChannelType, Context, CreateAttachment, CreateMessage, CreateThread, EditMessage,
     EventHandler, GatewayIntents, GetMessages, Http, Message, MessageId, Ready, ReactionType,
-    ShardManager, User, UserId,
+    ShardManager, User, UserId, CreateEmbed, CreateEmbedFooter, CreateActionRow, CreateButton,
+    CreateSelectMenu, CreateSelectMenuOption, CreateSelectMenuKind, ButtonStyle, CreatePoll,
+    CreatePollAnswer, Interaction, ComponentInteraction, CreateInteractionResponse,
+    CreateInteractionResponseMessage,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -135,6 +138,40 @@ impl Messaging for DiscordAdapter {
                         .say(&*http, &chunk)
                         .await
                         .context("failed to send discord message")?;
+                }
+            }
+            OutboundResponse::RichMessage { text, cards, interactive_elements, poll } => {
+                self.stop_typing(message).await;
+
+                let chunks = split_message(&text, 2000);
+                for (i, chunk) in chunks.iter().enumerate() {
+                    let is_last = i == chunks.len() - 1;
+                    let mut msg = CreateMessage::new();
+                    if !chunk.is_empty() {
+                        msg = msg.content(chunk);
+                    }
+
+                    // Attach rich content only to the final chunk
+                    if is_last {
+                        let embeds: Vec<_> = cards.iter().take(10).map(build_embed).collect();
+                        if !embeds.is_empty() {
+                            msg = msg.embeds(embeds);
+                        }
+
+                        let components: Vec<_> = interactive_elements.iter().take(5).map(build_action_row).collect();
+                        if !components.is_empty() {
+                            msg = msg.components(components);
+                        }
+
+                        if let Some(poll_data) = &poll {
+                            msg = msg.poll(build_poll(poll_data));
+                        }
+                    }
+
+                    channel_id
+                        .send_message(&*http, msg)
+                        .await
+                        .context("failed to send discord rich message")?;
                 }
             }
             OutboundResponse::ThreadReply { thread_name, text } => {
@@ -346,6 +383,37 @@ impl Messaging for DiscordAdapter {
                     .say(&*http, &chunk)
                     .await
                     .context("failed to broadcast discord message")?;
+            }
+        } else if let OutboundResponse::RichMessage { text, cards, interactive_elements, poll } = response {
+            let chunks = split_message(&text, 2000);
+            for (i, chunk) in chunks.iter().enumerate() {
+                let is_last = i == chunks.len() - 1;
+                let mut msg = CreateMessage::new();
+                if !chunk.is_empty() {
+                    msg = msg.content(chunk);
+                }
+
+                // Attach rich content only to the final chunk
+                if is_last {
+                    let embeds: Vec<_> = cards.iter().take(10).map(build_embed).collect();
+                    if !embeds.is_empty() {
+                        msg = msg.embeds(embeds);
+                    }
+
+                    let components: Vec<_> = interactive_elements.iter().take(5).map(build_action_row).collect();
+                    if !components.is_empty() {
+                        msg = msg.components(components);
+                    }
+
+                    if let Some(poll_data) = &poll {
+                        msg = msg.poll(build_poll(poll_data));
+                    }
+                }
+
+                channel_id
+                    .send_message(&*http, msg)
+                    .await
+                    .context("failed to broadcast discord rich message")?;
             }
         }
 
@@ -700,4 +768,123 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
     }
 
     chunks
+}
+
+// --- Rich Message Builders ---
+
+fn build_embed(card: &crate::Card) -> CreateEmbed {
+    let mut embed = CreateEmbed::new();
+
+    if let Some(title) = &card.title {
+        embed = embed.title(title);
+    }
+    if let Some(desc) = &card.description {
+        embed = embed.description(desc);
+    }
+    if let Some(color) = card.color {
+        embed = embed.color(color);
+    }
+    if let Some(url) = &card.url {
+        embed = embed.url(url);
+    }
+    if let Some(footer) = &card.footer {
+        embed = embed.footer(CreateEmbedFooter::new(footer));
+    }
+
+    for (i, field) in card.fields.iter().enumerate() {
+        if i >= 25 {
+            break; // Discord limit: max 25 fields per embed
+        }
+        embed = embed.field(&field.name, &field.value, field.inline);
+    }
+
+    embed
+}
+
+fn build_action_row(elements: &crate::InteractiveElements) -> CreateActionRow {
+    match elements {
+        crate::InteractiveElements::Buttons { buttons } => {
+            let mut discord_buttons = Vec::new();
+            for (i, btn) in buttons.iter().enumerate() {
+                if i >= 5 {
+                    break; // Discord limit: max 5 buttons per action row
+                }
+                
+                let mut b = match btn.style {
+                    crate::ButtonStyle::Link => {
+                        let url = btn.url.as_deref().unwrap_or("https://example.com");
+                        CreateButton::new_link(url).label(&btn.label)
+                    }
+                    style => {
+                        let serenity_style = match style {
+                            crate::ButtonStyle::Primary => ButtonStyle::Primary,
+                            crate::ButtonStyle::Secondary => ButtonStyle::Secondary,
+                            crate::ButtonStyle::Success => ButtonStyle::Success,
+                            crate::ButtonStyle::Danger => ButtonStyle::Danger,
+                            _ => ButtonStyle::Primary, // fallback
+                        };
+                        let custom_id = btn.custom_id.as_deref().unwrap_or("btn");
+                        // Discord limit: custom_id max 100 characters
+                        let custom_id = if custom_id.len() > 100 {
+                            &custom_id[..100]
+                        } else {
+                            custom_id
+                        };
+                        CreateButton::new(custom_id).label(&btn.label).style(serenity_style)
+                    }
+                };
+                
+                discord_buttons.push(b);
+            }
+            CreateActionRow::Buttons(discord_buttons)
+        }
+        crate::InteractiveElements::Select { select } => {
+            let mut options = Vec::new();
+            for opt in &select.options {
+                let mut discord_opt = CreateSelectMenuOption::new(&opt.label, &opt.value);
+                if let Some(desc) = &opt.description {
+                    discord_opt = discord_opt.description(desc);
+                }
+                // (Emoji not mapped for now)
+                options.push(discord_opt);
+            }
+            
+            // Discord limit: custom_id max 100 characters
+            let custom_id = if select.custom_id.len() > 100 {
+                &select.custom_id[..100]
+            } else {
+                &select.custom_id
+            };
+            
+            let mut discord_select = CreateSelectMenu::new(
+                custom_id,
+                CreateSelectMenuKind::String { options },
+            );
+            if let Some(placeholder) = &select.placeholder {
+                discord_select = discord_select.placeholder(placeholder);
+            }
+            
+            CreateActionRow::SelectMenu(discord_select)
+        }
+    }
+}
+
+fn build_poll(poll: &crate::Poll) -> serenity::builder::CreatePoll<serenity::builder::create_poll::Ready> {
+    // Discord limits: max 10 answers
+    let answers: Vec<_> = poll.answers.iter().take(10).map(|a| CreatePollAnswer::new().text(a)).collect();
+    
+    // Duration must be at least 1 hour, usually up to 720 hours (30 days).
+    // The builder just takes std::time::Duration but it has specific allowed values.
+    let hours = poll.duration_hours.max(1).min(720);
+    
+    let mut p = CreatePoll::new()
+        .question(&poll.question)
+        .answers(answers)
+        .duration(std::time::Duration::from_secs((hours as u64) * 3600));
+        
+    if poll.allow_multiselect {
+        p = p.allow_multiselect();
+    }
+    
+    p
 }
