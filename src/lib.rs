@@ -230,6 +230,29 @@ pub enum MessageContent {
         text: Option<String>,
         attachments: Vec<Attachment>,
     },
+    /// A Slack Block Kit interactive component was actioned (button click, select menu, etc.).
+    ///
+    /// **Only produced by the Slack adapter.** Discord, Telegram, and Webhook never emit
+    /// this variant. Placing it in the shared enum is a deliberate pragmatic tradeoff:
+    /// the alternatives (a separate `SlackInboundMessage` type, or a `PlatformEvent` wrapper)
+    /// would fork the entire agent pipeline without meaningful benefit — the compiler's
+    /// exhaustive match enforcement already ensures every consumer handles it. If a future
+    /// adapter gains a similar concept (e.g. Discord components), this variant can be
+    /// generalised or a new one added alongside it.
+    ///
+    /// The agent can correlate the interaction back to the original message via `message_ts`.
+    Interaction {
+        /// `action_id` of the block element that was actioned.
+        action_id: String,
+        /// `block_id` of the containing block, if present.
+        block_id: Option<String>,
+        /// The value submitted — button `value`, or selected option value.
+        value: Option<String>,
+        /// Human-readable label of the selected option (select menus only).
+        label: Option<String>,
+        /// `ts` of the original message carrying the interactive blocks.
+        message_ts: Option<String>,
+    },
 }
 
 impl std::fmt::Display for MessageContent {
@@ -241,6 +264,16 @@ impl std::fmt::Display for MessageContent {
                     write!(f, "{}", t)
                 } else {
                     write!(f, "[media]")
+                }
+            }
+            MessageContent::Interaction { action_id, value, label, .. } => {
+                // Render a compact description the LLM can read as plain text context.
+                if let Some(l) = label {
+                    write!(f, "[interaction: {} → {}]", action_id, l)
+                } else if let Some(v) = value {
+                    write!(f, "[interaction: {} → {}]", action_id, v)
+                } else {
+                    write!(f, "[interaction: {}]", action_id)
                 }
             }
         }

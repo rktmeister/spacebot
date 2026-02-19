@@ -652,15 +652,12 @@ impl Binding {
         }
 
         if let Some(chat_id) = &self.chat_id {
-            let message_chat = message
-                .metadata
-                .get("telegram_chat_id")
-                .and_then(|value| {
-                    value
-                        .as_str()
-                        .map(std::borrow::ToOwned::to_owned)
-                        .or_else(|| value.as_i64().map(|id| id.to_string()))
-                });
+            let message_chat = message.metadata.get("telegram_chat_id").and_then(|value| {
+                value
+                    .as_str()
+                    .map(std::borrow::ToOwned::to_owned)
+                    .or_else(|| value.as_i64().map(|id| id.to_string()))
+            });
             if message_chat.as_deref() != Some(chat_id.as_str()) {
                 return false;
             }
@@ -707,6 +704,20 @@ pub struct DiscordConfig {
     pub allow_bot_messages: bool,
 }
 
+/// A single slash command definition for the Slack adapter.
+///
+/// Maps a Slack slash command (e.g. `/ask`) to a target agent.
+/// Commands not listed here are acknowledged but produce a "not configured" reply.
+#[derive(Debug, Clone)]
+pub struct SlackCommandConfig {
+    /// The slash command string exactly as Slack sends it, e.g. `"/ask"`.
+    pub command: String,
+    /// ID of the agent that should handle this command.
+    pub agent_id: String,
+    /// Short description shown in Slack's command autocomplete hint (optional).
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SlackConfig {
     pub enabled: bool,
@@ -714,6 +725,8 @@ pub struct SlackConfig {
     pub app_token: String,
     /// User IDs allowed to DM the bot. If empty, DMs are ignored entirely.
     pub dm_allowed_users: Vec<String>,
+    /// Slash command definitions. If empty, all slash commands are ignored.
+    pub commands: Vec<SlackCommandConfig>,
 }
 
 /// Hot-reloadable Discord permission filters.
@@ -1326,6 +1339,15 @@ struct TomlSlackConfig {
     app_token: Option<String>,
     #[serde(default)]
     dm_allowed_users: Vec<String>,
+    #[serde(default)]
+    commands: Vec<TomlSlackCommandConfig>,
+}
+
+#[derive(Deserialize)]
+struct TomlSlackCommandConfig {
+    command: String,
+    agent_id: String,
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2168,6 +2190,15 @@ impl Config {
                     bot_token,
                     app_token,
                     dm_allowed_users: s.dm_allowed_users,
+                    commands: s
+                        .commands
+                        .into_iter()
+                        .map(|c| SlackCommandConfig {
+                            command: c.command,
+                            agent_id: c.agent_id,
+                            description: c.description,
+                        })
+                        .collect(),
                 })
             }),
             telegram: toml.messaging.telegram.and_then(|t| {
@@ -2712,6 +2743,7 @@ pub fn spawn_file_watcher(
                                     &slack_config.bot_token,
                                     &slack_config.app_token,
                                     perms,
+                                    slack_config.commands.clone(),
                                 ) {
                                     Ok(adapter) => {
                                         if let Err(error) = manager.register_and_start(adapter).await {

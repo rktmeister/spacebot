@@ -21,7 +21,7 @@
 //! - Typing indicator via `assistant.threads.setStatus`
 //! - DM broadcast via `conversations.open`
 
-use crate::config::SlackPermissions;
+use crate::config::{SlackCommandConfig, SlackPermissions};
 use crate::messaging::traits::{HistoryMessage, InboundStream, Messaging};
 use crate::{InboundMessage, MessageContent, OutboundResponse, StatusUpdate};
 
@@ -38,6 +38,9 @@ struct SlackAdapterState {
     permissions: Arc<ArcSwap<SlackPermissions>>,
     bot_token: String,
     bot_user_id: String,
+    /// Maps slash command string (e.g. `"/ask"`) → agent_id.
+    /// Built once at start() from the config; read-only afterwards.
+    commands: Arc<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +63,8 @@ pub struct SlackAdapter {
     /// Maps InboundMessage.id → Slack ts for streaming edits.
     active_messages: Arc<RwLock<HashMap<String, String>>>,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
+    /// Slash command routing: command string → agent_id.
+    commands: Arc<HashMap<String, String>>,
 }
 
 impl SlackAdapter {
@@ -67,12 +72,19 @@ impl SlackAdapter {
         bot_token: impl Into<String>,
         app_token: impl Into<String>,
         permissions: Arc<ArcSwap<SlackPermissions>>,
+        commands: Vec<SlackCommandConfig>,
     ) -> anyhow::Result<Self> {
         let bot_token = bot_token.into();
-        let client = Arc::new(SlackClient::new(
-            SlackClientHyperConnector::new().context("failed to create slack HTTP connector")?,
-        ));
+        let client = Arc::new(
+            SlackClient::new(
+                SlackClientHyperConnector::new().context("failed to create slack HTTP connector")?,
+            ),
+        );
         let token = SlackApiToken::new(SlackApiTokenValue(bot_token.clone()));
+        let commands_map: HashMap<String, String> = commands
+            .into_iter()
+            .map(|c| (c.command, c.agent_id))
+            .collect();
         Ok(Self {
             bot_token,
             app_token: app_token.into(),
@@ -81,6 +93,7 @@ impl SlackAdapter {
             token,
             active_messages: Arc::new(RwLock::new(HashMap::new())),
             shutdown_tx: Arc::new(RwLock::new(None)),
+            commands: Arc::new(commands_map),
         })
     }
 
@@ -297,6 +310,279 @@ fn slack_error_handler(
     HttpStatusCode::OK
 }
 
+/// Handle Slack slash command events (e.g. `/ask What is the weather?`).
+///
+/// Slack requires an acknowledgement within 3 seconds. This handler acks
+/// immediately with an empty 200 and dispatches the command as an `InboundMessage`
+/// asynchronously. The agent's reply arrives via the normal `respond()` path.
+///
+/// Commands not listed in the config are acknowledged but produce a brief
+/// "not configured" reply so the user gets feedback instead of silence.
+///
+/// Workspace and channel permission filters are applied identically to how
+/// regular messages are filtered — a command from an unauthorized workspace
+/// or channel is silently dropped (Slack does not expect an error response
+/// for permission denials, only for unhandled commands).
+async fn handle_command_event(
+    event: SlackCommandEvent,
+    _client: Arc<SlackHyperClient>,
+    states: SlackClientEventsUserState,
+) -> UserCallbackResult<SlackCommandEventResponse> {
+    let state_guard = states.read().await;
+    let adapter_state = state_guard
+        .get_user_state::<Arc<SlackAdapterState>>()
+        .expect("SlackAdapterState must be in user_state");
+
+    let command_str = event.command.0.clone();
+    let team_id = event.team_id.0.clone();
+    let channel_id = event.channel_id.0.clone();
+    let user_id = event.user_id.0.clone();
+    let msg_id = event.trigger_id.0.clone();
+    let text = event.text.clone().unwrap_or_default();
+
+    // Apply the same workspace / channel permission filters as regular messages.
+    // An unauthorized command is silently acked with no reply — same as a message
+    // from an unauthorized channel being dropped.
+    {
+        let perms = adapter_state.permissions.load();
+
+        if let Some(ref filter) = perms.workspace_filter {
+            if !filter.contains(&team_id) {
+                tracing::debug!(
+                    team_id = %team_id,
+                    command = %command_str,
+                    "slash command from unauthorized workspace — dropping"
+                );
+                return Ok(SlackCommandEventResponse {
+                    content: SlackMessageContent::new(),
+                    response_type: Some(SlackMessageResponseType::Ephemeral),
+                });
+            }
+        }
+
+        if let Some(allowed) = perms.channel_filter.get(&team_id) {
+            if !allowed.is_empty() && !allowed.contains(&channel_id) {
+                tracing::debug!(
+                    channel_id = %channel_id,
+                    command = %command_str,
+                    "slash command from unauthorized channel — dropping"
+                );
+                return Ok(SlackCommandEventResponse {
+                    content: SlackMessageContent::new(),
+                    response_type: Some(SlackMessageResponseType::Ephemeral),
+                });
+            }
+        }
+    }
+
+    if !adapter_state.commands.contains_key(&command_str) {
+        tracing::warn!(
+            command = %command_str,
+            user_id = %user_id,
+            "slash command not configured — ignoring"
+        );
+        return Ok(SlackCommandEventResponse {
+            content: SlackMessageContent::new()
+                .with_text(format!("`{}` is not configured on this Spacebot instance.", command_str)),
+            response_type: Some(SlackMessageResponseType::Ephemeral),
+        });
+    }
+
+    let agent_id = adapter_state.commands[&command_str].clone();
+
+    let conversation_id = format!("slack:{}:{}", team_id, channel_id);
+
+    let mut metadata = HashMap::new();
+    metadata.insert("slack_workspace_id".into(), serde_json::Value::String(team_id.clone()));
+    metadata.insert("slack_channel_id".into(), serde_json::Value::String(channel_id.clone()));
+    metadata.insert("slack_user_id".into(), serde_json::Value::String(user_id.clone()));
+    metadata.insert("sender_id".into(), serde_json::Value::String(user_id.clone()));
+    metadata.insert("slack_command".into(), serde_json::Value::String(command_str.clone()));
+    metadata.insert(
+        "slack_user_mention".into(),
+        serde_json::Value::String(format!("<@{}>", user_id)),
+    );
+    // Embed the agent_id hint so the router can honour command-specific routing
+    // without requiring a separate binding entry per command.
+    metadata.insert("slack_command_agent_id".into(), serde_json::Value::String(agent_id));
+
+    let content = MessageContent::Text(format!("{} {}", command_str, text).trim().to_string());
+
+    let inbound = InboundMessage {
+        id: msg_id,
+        source: "slack".into(),
+        conversation_id,
+        sender_id: user_id.clone(),
+        agent_id: None,
+        content,
+        timestamp: chrono::Utc::now(),
+        metadata,
+        formatted_author: Some(format!("<@{}>", user_id)),
+    };
+
+    if let Err(error) = adapter_state.inbound_tx.send(inbound).await {
+        tracing::warn!(%error, "failed to enqueue slash command as inbound message");
+    }
+
+    // Ack immediately with an empty body — the real reply comes via respond().
+    Ok(SlackCommandEventResponse {
+        content: SlackMessageContent::new(),
+        response_type: Some(SlackMessageResponseType::Ephemeral),
+    })
+}
+
+/// Handle Slack Block Kit interaction events (button clicks, select menus, etc.).
+///
+/// Only `block_actions` is turned into an `InboundMessage`; other interaction
+/// types (view submissions, shortcuts, etc.) are logged and acknowledged.
+async fn handle_interaction_event(
+    event: SlackInteractionEvent,
+    _client: Arc<SlackHyperClient>,
+    states: SlackClientEventsUserState,
+) -> UserCallbackResult<()> {
+    let SlackInteractionEvent::BlockActions(block_actions) = event else {
+        // Acknowledge non-block-action interactions without processing.
+        tracing::debug!("received non-block-action interaction event — ignoring");
+        return Ok(());
+    };
+
+    let state_guard = states.read().await;
+    let adapter_state = state_guard
+        .get_user_state::<Arc<SlackAdapterState>>()
+        .expect("SlackAdapterState must be in user_state");
+
+    let user_id = block_actions
+        .user
+        .as_ref()
+        .map(|u| u.id.0.clone())
+        .unwrap_or_default();
+
+    let team_id = block_actions.team.id.0.clone();
+
+    let channel_id = block_actions
+        .channel
+        .as_ref()
+        .map(|c| c.id.0.clone())
+        .unwrap_or_default();
+
+    // Apply workspace / channel permission filters — interactions are subject to
+    // the same access rules as regular messages.
+    {
+        let perms = adapter_state.permissions.load();
+
+        if let Some(ref filter) = perms.workspace_filter {
+            if !filter.contains(&team_id) {
+                tracing::debug!(
+                    team_id = %team_id,
+                    "block_actions interaction from unauthorized workspace — dropping"
+                );
+                return Ok(());
+            }
+        }
+
+        if !channel_id.is_empty() {
+            if let Some(allowed) = perms.channel_filter.get(&team_id) {
+                if !allowed.is_empty() && !allowed.contains(&channel_id) {
+                    tracing::debug!(
+                        channel_id = %channel_id,
+                        "block_actions interaction from unauthorized channel — dropping"
+                    );
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    let message_ts = match &block_actions.container {
+        SlackInteractionActionContainer::Message(msg_container) => {
+            Some(msg_container.message_ts.0.clone())
+        }
+        _ => None,
+    };
+
+    // Use trigger_id as the unique message id for this interaction turn.
+    let msg_id = block_actions.trigger_id.0.clone();
+
+    let conversation_id = if let Some(ref ts) = message_ts {
+        format!("slack:{}:{}:{}", team_id, channel_id, ts)
+    } else {
+        format!("slack:{}:{}", team_id, channel_id)
+    };
+
+    // Process each action in the payload as a separate inbound message.
+    // In practice Slack sends one action per interaction, but the API allows many.
+    let actions = block_actions.actions.unwrap_or_default();
+
+    if actions.is_empty() {
+        tracing::debug!("block_actions interaction had no actions — ignoring");
+        return Ok(());
+    }
+
+    for (idx, action) in actions.iter().enumerate() {
+        let action_id = action.action_id.0.clone();
+        let block_id = action.block_id.as_ref().map(|b| b.0.clone());
+        let value = action.value.clone();
+        let label = action
+            .selected_option
+            .as_ref()
+            .and_then(|o| match &o.text {
+                SlackBlockText::Plain(pt) => Some(pt.text.clone()),
+                SlackBlockText::MarkDown(md) => Some(md.text.clone()),
+            });
+
+        let content = MessageContent::Interaction {
+            action_id: action_id.clone(),
+            block_id: block_id.clone(),
+            value: value.clone(),
+            label: label.clone(),
+            message_ts: message_ts.clone(),
+        };
+
+        // Use trigger_id for the first action, trigger_id:index for subsequent ones.
+        let id = if idx == 0 {
+            msg_id.clone()
+        } else {
+            format!("{}:{}", msg_id, idx)
+        };
+
+        let mut metadata = HashMap::new();
+        metadata.insert("slack_workspace_id".into(), serde_json::Value::String(team_id.clone()));
+        metadata.insert("slack_channel_id".into(), serde_json::Value::String(channel_id.clone()));
+        metadata.insert("slack_user_id".into(), serde_json::Value::String(user_id.clone()));
+        metadata.insert("sender_id".into(), serde_json::Value::String(user_id.clone()));
+        metadata.insert(
+            "slack_user_mention".into(),
+            serde_json::Value::String(format!("<@{}>", user_id)),
+        );
+        if let Some(ref ts) = message_ts {
+            metadata.insert("slack_thread_ts".into(), serde_json::Value::String(ts.clone()));
+            metadata.insert("slack_message_ts".into(), serde_json::Value::String(ts.clone()));
+        }
+        metadata.insert("slack_action_id".into(), serde_json::Value::String(action_id));
+        if let Some(ref bid) = block_id {
+            metadata.insert("slack_block_id".into(), serde_json::Value::String(bid.clone()));
+        }
+
+        let inbound = InboundMessage {
+            id,
+            source: "slack".into(),
+            conversation_id: conversation_id.clone(),
+            sender_id: user_id.clone(),
+            agent_id: None,
+            content,
+            timestamp: chrono::Utc::now(),
+            metadata,
+            formatted_author: Some(format!("<@{}>", user_id)),
+        };
+
+        if let Err(error) = adapter_state.inbound_tx.send(inbound).await {
+            tracing::warn!(%error, "failed to enqueue block interaction as inbound message");
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Messaging trait impl
 // ---------------------------------------------------------------------------
@@ -326,9 +612,23 @@ impl Messaging for SlackAdapter {
             permissions: self.permissions.clone(),
             bot_token: self.bot_token.clone(),
             bot_user_id,
+            commands: self.commands.clone(),
         });
 
-        let callbacks = SlackSocketModeListenerCallbacks::new().with_push_events(handle_push_event);
+        let callbacks = SlackSocketModeListenerCallbacks::new()
+            .with_push_events(handle_push_event)
+            .with_command_events(handle_command_event)
+            .with_interaction_events(handle_interaction_event);
+
+        // The socket mode listener needs its own client instance — it manages
+        // a persistent WebSocket connection internally and owns that client for
+        // the lifetime of the connection. The shared `self.client` is for REST calls.
+        let listener_client = Arc::new(
+            SlackClient::new(
+                SlackClientHyperConnector::new()
+                    .context("failed to create slack socket mode connector")?,
+            ),
+        );
 
         // The socket mode listener needs its own client — it owns a persistent
         // WebSocket connection. The shared self.client is for REST calls only.
