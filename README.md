@@ -28,7 +28,7 @@
   <a href="#architecture">Architecture</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#tech-stack">Tech Stack</a> •
-  <a href="docs.spacebot.sh">Docs</a>
+  <a href="https://docs.spacebot.sh">Docs</a>
 </p>
 
 > **One-click deploy with [spacebot.sh](https://spacebot.sh)** — connect your Discord, Slack, or Telegram, configure your agent, and go. No self-hosting required.
