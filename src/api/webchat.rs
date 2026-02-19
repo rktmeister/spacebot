@@ -1,12 +1,14 @@
 use super::state::ApiState;
+use crate::conversation::ConversationLogger;
 use crate::messaging::webchat::WebChatEvent;
 use crate::{InboundMessage, MessageContent};
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Sse;
+use axum::Json;
 use futures::stream::Stream;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -44,7 +46,7 @@ pub(super) async fn webchat_send(
         .clone()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
-    let conversation_id = format!("webchat:{}", request.session_id);
+    let conversation_id = request.session_id.clone();
 
     let mut event_rx = webchat.register_session(&conversation_id).await;
 
@@ -105,4 +107,53 @@ pub(super) async fn webchat_send(
     };
 
     Ok(Sse::new(stream))
+}
+
+#[derive(Deserialize)]
+pub(super) struct WebChatHistoryQuery {
+    agent_id: String,
+    session_id: String,
+    #[serde(default = "default_limit")]
+    limit: i64,
+}
+
+fn default_limit() -> i64 {
+    100
+}
+
+#[derive(Serialize)]
+pub(super) struct WebChatHistoryMessage {
+    id: String,
+    role: String,
+    content: String,
+}
+
+pub(super) async fn webchat_history(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<WebChatHistoryQuery>,
+) -> Result<Json<Vec<WebChatHistoryMessage>>, StatusCode> {
+    let pools = state.agent_pools.load();
+    let pool = pools.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let logger = ConversationLogger::new(pool.clone());
+
+    let channel_id: crate::ChannelId = Arc::from(query.session_id.as_str());
+
+    let messages = logger
+        .load_recent(&channel_id, query.limit.min(200))
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to load webchat history");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let result: Vec<WebChatHistoryMessage> = messages
+        .into_iter()
+        .map(|m| WebChatHistoryMessage {
+            id: m.id,
+            role: m.role,
+            content: m.content,
+        })
+        .collect();
+
+    Ok(Json(result))
 }

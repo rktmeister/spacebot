@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 
 const tabs = [
 	{ label: "Overview", to: "/agents/$agentId" as const, exact: true },
+	{ label: "Chat", to: "/agents/$agentId/chat" as const, exact: false },
 	{ label: "Channels", to: "/agents/$agentId/channels" as const, exact: false },
 	{ label: "Memories", to: "/agents/$agentId/memories" as const, exact: false },
 	{ label: "Ingest", to: "/agents/$agentId/ingest" as const, exact: false },

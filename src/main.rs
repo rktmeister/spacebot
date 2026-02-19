@@ -689,14 +689,18 @@ async fn run(
         };
         tokio::select! {
             Some(mut message) = inbound_next, if agents_initialized => {
-                // Resolve which agent handles this message (bindings hot-reload on config change)
-                let current_bindings = bindings.load();
-                let agent_id = spacebot::config::resolve_agent_for_message(
-                    &current_bindings,
-                    &message,
-                    &default_agent_id,
-                );
-                message.agent_id = Some(agent_id.clone());
+                let agent_id = if let Some(existing) = message.agent_id.as_ref() {
+                    existing.clone()
+                } else {
+                    let current_bindings = bindings.load();
+                    let resolved = spacebot::config::resolve_agent_for_message(
+                        &current_bindings,
+                        &message,
+                        &default_agent_id,
+                    );
+                    message.agent_id = Some(resolved.clone());
+                    resolved
+                };
 
                 let conversation_id = message.conversation_id.clone();
 

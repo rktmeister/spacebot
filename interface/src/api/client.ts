@@ -1315,5 +1315,21 @@ export const api = {
 			`/skills/registry/search?q=${encodeURIComponent(query)}&limit=${limit}`,
 		),
 
+	// Web Chat API
+	webChatSend: (agentId: string, sessionId: string, message: string, senderName?: string) =>
+		fetch(`${API_BASE}/webchat/send`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				agent_id: agentId,
+				session_id: sessionId,
+				sender_name: senderName ?? "user",
+				message,
+			}),
+		}),
+
+	webChatHistory: (agentId: string, sessionId: string, limit = 100) =>
+		fetch(`${API_BASE}/webchat/history?agent_id=${encodeURIComponent(agentId)}&session_id=${encodeURIComponent(sessionId)}&limit=${limit}`),
+
 	eventsUrl: `${API_BASE}/events`,
 };

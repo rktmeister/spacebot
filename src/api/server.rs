@@ -78,7 +78,8 @@ pub async fn start_http_server(
         .route("/config/raw", get(settings::get_raw_config).put(settings::update_raw_config))
         .route("/update/check", get(settings::update_check).post(settings::update_check_now))
         .route("/update/apply", post(settings::update_apply))
-        .route("/webchat/send", post(webchat::webchat_send));
+        .route("/webchat/send", post(webchat::webchat_send))
+        .route("/webchat/history", get(webchat::webchat_history));
 
     let app = Router::new()
         .nest("/api", api_routes)
