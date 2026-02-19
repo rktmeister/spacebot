@@ -19,6 +19,9 @@ pub struct TelemetryConfig {
     /// OTLP HTTP endpoint, e.g. `http://localhost:4318`.
     /// Falls back to the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable.
     pub otlp_endpoint: Option<String>,
+    /// Extra OTLP headers for the exporter (e.g. `Authorization`).
+    /// Loaded from the `OTEL_EXPORTER_OTLP_HEADERS` environment variable.
+    pub otlp_headers: HashMap<String, String>,
     /// `service.name` resource attribute sent with every span.
     pub service_name: String,
     /// Trace sample rate in the range 0.0–1.0. Defaults to 1.0 (sample all).
@@ -857,6 +860,7 @@ struct TomlConfig {
 #[derive(Deserialize, Default)]
 struct TomlTelemetryConfig {
     otlp_endpoint: Option<String>,
+    otlp_headers: Option<String>,
     service_name: Option<String>,
     sample_rate: Option<f64>,
 }
@@ -1124,6 +1128,38 @@ fn resolve_env_value(value: &str) -> Option<String> {
     }
 }
 
+fn parse_otlp_headers(value: Option<String>) -> Result<HashMap<String, String>> {
+    let Some(raw) = value else { return Ok(HashMap::new()) };
+
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut headers = HashMap::new();
+    for entry in raw.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = entry.split_once('=') else {
+            return Err(ConfigError::Invalid(format!(
+                "invalid OTEL_EXPORTER_OTLP_HEADERS entry '{entry}', expected key=value"
+            )));
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() {
+            return Err(ConfigError::Invalid(
+                "invalid OTEL_EXPORTER_OTLP_HEADERS entry: empty header name".into(),
+            ));
+        }
+        headers.insert(key.to_string(), value.to_string());
+    }
+
+    Ok(headers)
+}
+
 /// Resolve a TomlRoutingConfig against a base RoutingConfig.
 fn resolve_routing(toml: Option<TomlRoutingConfig>, base: &RoutingConfig) -> RoutingConfig {
     let Some(t) = toml else { return base.clone() };
@@ -1262,6 +1298,9 @@ impl Config {
             api: ApiConfig::default(),
             telemetry: TelemetryConfig {
                 otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
+                otlp_headers: parse_otlp_headers(
+                    std::env::var("OTEL_EXPORTER_OTLP_HEADERS").ok(),
+                )?,
                 service_name: std::env::var("OTEL_SERVICE_NAME")
                     .unwrap_or_else(|_| "spacebot".into()),
                 sample_rate: 1.0,
@@ -1756,12 +1795,17 @@ impl Config {
             let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
                 .ok()
                 .or(toml.telemetry.otlp_endpoint);
+            let otlp_headers = parse_otlp_headers(
+                std::env::var("OTEL_EXPORTER_OTLP_HEADERS")
+                    .ok()
+                    .or(toml.telemetry.otlp_headers),
+            )?;
             let service_name = std::env::var("OTEL_SERVICE_NAME")
                 .ok()
                 .or(toml.telemetry.service_name)
                 .unwrap_or_else(|| "spacebot".into());
             let sample_rate = toml.telemetry.sample_rate.unwrap_or(1.0);
-            TelemetryConfig { otlp_endpoint, service_name, sample_rate }
+            TelemetryConfig { otlp_endpoint, otlp_headers, service_name, sample_rate }
         };
 
         Ok(Config {

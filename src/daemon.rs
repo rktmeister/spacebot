@@ -208,9 +208,13 @@ fn build_otlp_provider(telemetry: &TelemetryConfig) -> Option<SdkTracerProvider>
         format!("{}/v1/traces", endpoint.trim_end_matches('/'))
     };
 
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
+    let mut exporter_builder = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
-        .with_endpoint(endpoint)
+        .with_endpoint(endpoint);
+    if !telemetry.otlp_headers.is_empty() {
+        exporter_builder = exporter_builder.with_headers(telemetry.otlp_headers.clone());
+    }
+    let exporter = exporter_builder
         .build()
         .map_err(|error| eprintln!("failed to build OTLP exporter: {error}"))
         .ok()?;
