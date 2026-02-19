@@ -4,7 +4,7 @@
 //! and shared rate limit state. Routing decisions (which model for which
 //! process) live on the agent's RoutingConfig, not here.
 
-use crate::config::LlmConfig;
+use crate::config::{LlmConfig, ProviderConfig};
 use crate::error::{LlmError, Result};
 use anyhow::Context as _;
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 
 /// Manages LLM provider clients and tracks rate limit state.
 pub struct LlmManager {
-    config: LlmConfig,
+    pub config: LlmConfig,
     http_client: reqwest::Client,
     /// Models currently in rate limit cooldown, with the time they were limited.
     rate_limited: Arc<RwLock<HashMap<String, Instant>>>,
@@ -35,37 +35,25 @@ impl LlmManager {
         })
     }
 
+    pub fn get_provider(&self, provider_id: &str) -> Result<ProviderConfig> {
+        let normalized_provider_id = provider_id.to_lowercase();
+
+        self.config
+            .providers
+            .get(&normalized_provider_id)
+            .cloned()
+            .ok_or_else(|| LlmError::UnknownProvider(provider_id.to_string()).into())
+    }
+
     /// Get the appropriate API key for a provider.
-    pub fn get_api_key(&self, provider: &str) -> Result<String> {
-        match provider {
-            "anthropic" => self.config.anthropic_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("anthropic".into()).into()),
-            "openai" => self.config.openai_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("openai".into()).into()),
-            "openrouter" => self.config.openrouter_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("openrouter".into()).into()),
-            "zhipu" => self.config.zhipu_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("zhipu".into()).into()),
-            "groq" => self.config.groq_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("groq".into()).into()),
-            "together" => self.config.together_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("together".into()).into()),
-            "fireworks" => self.config.fireworks_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("fireworks".into()).into()),
-            "deepseek" => self.config.deepseek_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("deepseek".into()).into()),
-            "xai" => self.config.xai_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("xai".into()).into()),
-            "mistral" => self.config.mistral_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("mistral".into()).into()),
-            "ollama" => self.config.ollama_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("ollama".into()).into()),
-            "opencode-zen" => self.config.opencode_zen_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("opencode-zen".into()).into()),
-            "nvidia" => self.config.nvidia_key.clone()
-                .ok_or_else(|| LlmError::MissingProviderKey("nvidia".into()).into()),
-            _ => Err(LlmError::UnknownProvider(provider.into()).into()),
+    pub fn get_api_key(&self, provider_id: &str) -> Result<String> {
+        let provider = self.get_provider(provider_id)?;
+
+        if provider.api_key.is_empty() {
+            return Err(LlmError::MissingProviderKey(provider_id.to_string()).into());
         }
+
+        Ok(provider.api_key)
     }
 
     /// Get configured Ollama base URL, if provided.
