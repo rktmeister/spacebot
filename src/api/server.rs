@@ -39,7 +39,7 @@ pub async fn start_http_server(
         .route("/status", get(system::status))
         .route("/overview", get(agents::instance_overview))
         .route("/events", get(system::events_sse))
-        .route("/agents", get(agents::list_agents).post(agents::create_agent))
+        .route("/agents", get(agents::list_agents).post(agents::create_agent).delete(agents::delete_agent))
         .route("/agents/overview", get(agents::agent_overview))
         .route("/channels", get(channels::list_channels))
         .route("/channels/messages", get(channels::channel_messages))

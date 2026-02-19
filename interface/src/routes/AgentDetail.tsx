@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, type CortexEvent, type CronJobInfo, MEMORY_TYPES } from "@/api/client";
 import type { ChannelLiveState } from "@/hooks/useChannelLiveState";
 import { formatTimeAgo, formatDuration } from "@/lib/format";
+import { DeleteAgentDialog } from "@/components/DeleteAgentDialog";
 import {
 	ResponsiveContainer,
 	AreaChart,
@@ -74,6 +75,8 @@ export function AgentDetail({ agentId, liveStates }: AgentDetailProps) {
 		return { workers, branches, typing };
 	}, [agentChannels, liveStates]);
 
+	const [deleteOpen, setDeleteOpen] = useState(false);
+
 	if (!agent) {
 		return (
 			<div className="flex h-full items-center justify-center">
@@ -94,7 +97,9 @@ export function AgentDetail({ agentId, liveStates }: AgentDetailProps) {
 					workers={activity.workers}
 					branches={activity.branches}
 					hasLiveActivity={hasLiveActivity}
+					onDelete={() => setDeleteOpen(true)}
 				/>
+				<DeleteAgentDialog open={deleteOpen} onOpenChange={setDeleteOpen} agentId={agentId} />
 
 				{/* Bulletin - the most important text */}
 				{overviewData?.latest_bulletin && (
@@ -207,12 +212,14 @@ function HeroSection({
 	workers,
 	branches,
 	hasLiveActivity,
+	onDelete,
 }: {
 	agentId: string;
 	channelCount: number;
 	workers: number;
 	branches: number;
 	hasLiveActivity: boolean;
+	onDelete: () => void;
 }) {
 	return (
 		<div className="flex flex-col gap-4 border-b border-app-line pb-6">
@@ -233,6 +240,12 @@ function HeroSection({
 						</Link>
 					</div>
 				</div>
+				<button
+					onClick={onDelete}
+					className="rounded-md px-3 py-1.5 text-sm text-ink-faint transition-colors hover:bg-red-500/10 hover:text-red-400"
+				>
+					Delete
+				</button>
 			</div>
 
 			{(workers > 0 || branches > 0) && (

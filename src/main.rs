@@ -505,11 +505,14 @@ async fn run(
     let (provider_tx, mut provider_rx) = mpsc::channel::<spacebot::ProviderSetupEvent>(1);
     // Channel for newly created agents to be registered in the main event loop
     let (agent_tx, mut agent_rx) = mpsc::channel::<spacebot::Agent>(8);
+    // Channel for removing agents from the main event loop
+    let (agent_remove_tx, mut agent_remove_rx) = mpsc::channel::<String>(8);
 
     // Start HTTP API server if enabled
     let api_state = Arc::new(spacebot::api::ApiState::new_with_provider_sender(
         provider_tx,
         agent_tx,
+        agent_remove_tx,
     ));
 
     // Start background update checker
@@ -887,6 +890,14 @@ async fn run(
             Some(agent) = agent_rx.recv() => {
                 tracing::info!(agent_id = %agent.id, "registering new agent in main loop");
                 agents.insert(agent.id.clone(), agent);
+            }
+            Some(agent_id) = agent_remove_rx.recv() => {
+                let key: spacebot::AgentId = Arc::from(agent_id.as_str());
+                if agents.remove(&key).is_some() {
+                    tracing::info!(agent_id = %agent_id, "removed agent from main loop");
+                } else {
+                    tracing::warn!(agent_id = %agent_id, "agent not found in main loop for removal");
+                }
             }
             Some(_event) = provider_rx.recv(), if !agents_initialized => {
                 tracing::info!("providers configured, initializing agents");
