@@ -1,12 +1,16 @@
 //! Process daemonization and IPC for background operation.
 
-use crate::config::Config;
+use crate::config::{Config, TelemetryConfig};
 
 use anyhow::{Context as _, anyhow};
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -110,8 +114,16 @@ pub fn daemonize(paths: &DaemonPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Initialize tracing for background mode with daily log rotation.
-pub fn init_background_tracing(paths: &DaemonPaths, debug: bool) {
+/// Initialize tracing for background (daemon) mode.
+///
+/// Returns an `SdkTracerProvider` if OTLP export is configured. The caller must
+/// hold onto it for the process lifetime and call `.shutdown()` before exit so
+/// the batch exporter flushes buffered spans.
+pub fn init_background_tracing(
+    paths: &DaemonPaths,
+    debug: bool,
+    telemetry: &TelemetryConfig,
+) -> Option<SdkTracerProvider> {
     let file_appender = tracing_appender::rolling::daily(&paths.log_dir, "spacebot.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
@@ -119,30 +131,113 @@ pub fn init_background_tracing(paths: &DaemonPaths, debug: bool) {
     // The process owns this — it's cleaned up on exit.
     std::mem::forget(_guard);
 
-    let filter = if debug {
-        tracing_subscriber::EnvFilter::new("debug")
-    } else {
-        tracing_subscriber::EnvFilter::new("info")
-    };
-
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let filter = build_env_filter(debug);
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
-        .with_ansi(false)
-        .init();
+        .with_ansi(false);
+
+    match build_otlp_provider(telemetry) {
+        Some(provider) => {
+            let tracer = provider.tracer("spacebot");
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer)
+                .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                .init();
+            Some(provider)
+        }
+        None => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer)
+                .init();
+            None
+        }
+    }
 }
 
-/// Initialize tracing for foreground mode (stdout).
-pub fn init_foreground_tracing(debug: bool) {
-    let filter = if debug {
+/// Initialize tracing for foreground (terminal) mode.
+///
+/// Returns an `SdkTracerProvider` if OTLP export is configured.
+pub fn init_foreground_tracing(debug: bool, telemetry: &TelemetryConfig) -> Option<SdkTracerProvider> {
+    let filter = build_env_filter(debug);
+    let fmt_layer = tracing_subscriber::fmt::layer();
+
+    match build_otlp_provider(telemetry) {
+        Some(provider) => {
+            let tracer = provider.tracer("spacebot");
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer)
+                .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                .init();
+            Some(provider)
+        }
+        None => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer)
+                .init();
+            None
+        }
+    }
+}
+
+fn build_env_filter(debug: bool) -> tracing_subscriber::EnvFilter {
+    if debug {
         tracing_subscriber::EnvFilter::new("debug")
     } else {
         tracing_subscriber::EnvFilter::new("info")
+    }
+}
+
+/// Build an OTLP `SdkTracerProvider` when an endpoint is configured.
+///
+/// Returns `None` if neither the config field nor the `OTEL_EXPORTER_OTLP_ENDPOINT`
+/// environment variable is set, allowing the OTel layer to be omitted entirely.
+fn build_otlp_provider(telemetry: &TelemetryConfig) -> Option<SdkTracerProvider> {
+    use opentelemetry_otlp::WithExportConfig as _;
+
+    let endpoint = telemetry.otlp_endpoint.as_deref()?;
+
+    // The HTTP/protobuf endpoint path is /v1/traces by default. Append it only
+    // when the caller provided a bare host:port so both forms work.
+    let endpoint = if endpoint.ends_with("/v1/traces") {
+        endpoint.to_owned()
+    } else {
+        format!("{}/v1/traces", endpoint.trim_end_matches('/'))
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .init();
+    let mut exporter_builder = opentelemetry_otlp::SpanExporter::builder()
+        .with_http()
+        .with_endpoint(endpoint);
+    if !telemetry.otlp_headers.is_empty() {
+        exporter_builder = exporter_builder.with_headers(telemetry.otlp_headers.clone());
+    }
+    let exporter = exporter_builder
+        .build()
+        .map_err(|error| eprintln!("failed to build OTLP exporter: {error}"))
+        .ok()?;
+
+    let resource = opentelemetry_sdk::Resource::builder()
+        .with_service_name(telemetry.service_name.clone())
+        .build();
+
+    let sampler: opentelemetry_sdk::trace::Sampler = if (telemetry.sample_rate - 1.0).abs() < f64::EPSILON {
+        opentelemetry_sdk::trace::Sampler::AlwaysOn
+    } else {
+        opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
+            opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(telemetry.sample_rate),
+        ))
+    };
+
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(resource)
+        .with_sampler(sampler)
+        .build();
+
+    Some(provider)
 }
 
 /// Start the IPC server. Returns a shutdown receiver that the main event

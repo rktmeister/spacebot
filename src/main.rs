@@ -154,21 +154,21 @@ fn cmd_start(
     // Validate config loads successfully before forking
     let config = load_config(&resolved_config_path)?;
 
-    if foreground {
-        spacebot::daemon::init_foreground_tracing(debug);
+    let otel_provider = if foreground {
+        spacebot::daemon::init_foreground_tracing(debug, &config.telemetry)
     } else {
         // Derive paths from the loaded config's instance dir
         let paths = spacebot::daemon::DaemonPaths::new(&config.instance_dir);
         spacebot::daemon::daemonize(&paths)?;
-        spacebot::daemon::init_background_tracing(&paths, debug);
-    }
+        spacebot::daemon::init_background_tracing(&paths, debug, &config.telemetry)
+    };
 
     // Build and run the tokio runtime for the async main
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("failed to build tokio runtime")?
-        .block_on(run(config, foreground))
+        .block_on(run(config, foreground, otel_provider))
 }
 
 fn cmd_stop() -> anyhow::Result<()> {
@@ -465,6 +465,7 @@ fn load_config(config_path: &Option<std::path::PathBuf>) -> anyhow::Result<space
 async fn run(
     config: spacebot::config::Config,
     foreground: bool,
+    otel_provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
 ) -> anyhow::Result<()> {
     let paths = spacebot::daemon::DaemonPaths::new(&config.instance_dir);
 
@@ -948,6 +949,14 @@ async fn run(
     }
 
     tracing::info!("spacebot stopped");
+
+    // Flush buffered OTLP spans before the process exits. Without this the
+    // batch exporter drops any spans recorded in the last export interval.
+    if let Some(provider) = otel_provider {
+        if let Err(error) = provider.shutdown() {
+            tracing::warn!(%error, "failed to flush OTel spans on shutdown");
+        }
+    }
 
     spacebot::daemon::cleanup(&paths);
 

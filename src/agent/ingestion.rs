@@ -151,6 +151,7 @@ pub fn content_hash(content: &str) -> String {
 ///
 /// Checks the ingestion_progress table to skip chunks that were already
 /// completed in a previous run (e.g. before a server restart).
+#[tracing::instrument(skip(deps, config), fields(agent_id = %deps.agent_id, path = %path.display()))]
 async fn process_file(
     path: &Path,
     deps: &AgentDeps,
@@ -403,6 +404,7 @@ fn chunk_text(text: &str, chunk_size: usize) -> Vec<String> {
 ///
 /// Creates a fresh LLM agent with memory tools for each chunk. No history
 /// carries over between chunks — each chunk is independent.
+#[tracing::instrument(skip(chunk, deps), fields(agent_id = %deps.agent_id, filename, chunk_number, total_chunks))]
 async fn process_chunk(
     chunk: &str,
     filename: &str,
