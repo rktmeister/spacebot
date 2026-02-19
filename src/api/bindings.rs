@@ -368,9 +368,15 @@ pub(super) async fn create_binding(
                         }
                     }
                 };
-                let adapter = crate::messaging::slack::SlackAdapter::new(&bot_token, &app_token, slack_perms);
-                if let Err(error) = manager.register_and_start(adapter).await {
-                    tracing::error!(%error, "failed to hot-start slack adapter");
+                match crate::messaging::slack::SlackAdapter::new(&bot_token, &app_token, slack_perms) {
+                    Ok(adapter) => {
+                        if let Err(error) = manager.register_and_start(adapter).await {
+                            tracing::error!(%error, "failed to hot-start slack adapter");
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "failed to build slack adapter");
+                    }
                 }
             }
 

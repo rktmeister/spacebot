@@ -1,8 +1,29 @@
 //! Slack messaging adapter using slack-morphism.
+//!
+//! ## Features
+//!
+//! **Inbound**
+//! - Plain text and file-attachment messages (Socket Mode)
+//! - `app_mention` events — agent responds when @-mentioned in any channel
+//! - Message subtype filtering (edits/deletes ignored)
+//! - Per-workspace / per-channel / DM permission filtering (hot-reloadable)
+//! - Full user identity resolution (display name, mention tag)
+//!
+//! **Outbound**
+//! - Plain text with smart UTF-8-safe chunking
+//! - Thread replies
+//! - File uploads (v2 flow)
+//! - Emoji reactions (add + remove)
+//! - Ephemeral messages (visible only to the triggering user)
+//! - Block Kit rich messages with plain-text fallback
+//! - Scheduled messages (`chat.scheduleMessage`)
+//! - Streaming via `chat.update` edits
+//! - Typing indicator via `assistant.threads.setStatus`
+//! - DM broadcast via `conversations.open`
 
 use crate::config::SlackPermissions;
 use crate::messaging::traits::{HistoryMessage, InboundStream, Messaging};
-use crate::{InboundMessage, MessageContent, OutboundResponse};
+use crate::{InboundMessage, MessageContent, OutboundResponse, StatusUpdate};
 
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
@@ -25,12 +46,18 @@ struct SlackUserIdentity {
     username: Option<String>,
 }
 
-/// Slack adapter state.
+/// Slack adapter.
 pub struct SlackAdapter {
     bot_token: String,
     app_token: String,
     permissions: Arc<ArcSwap<SlackPermissions>>,
-    /// Maps InboundMessage.id to the Slack message timestamp (ts) for editing during streaming.
+    /// Shared HTTP client — constructed once, reused across all API calls.
+    /// Holds a hyper connection pool internally; allocating one per call would
+    /// discard that pool on every status update / respond / broadcast.
+    client: Arc<SlackHyperClient>,
+    /// Pre-built API token wrapping `bot_token`. Created once alongside `client`.
+    token: SlackApiToken,
+    /// Maps InboundMessage.id → Slack ts for streaming edits.
     active_messages: Arc<RwLock<HashMap<String, String>>>,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
 }
@@ -40,39 +67,58 @@ impl SlackAdapter {
         bot_token: impl Into<String>,
         app_token: impl Into<String>,
         permissions: Arc<ArcSwap<SlackPermissions>>,
-    ) -> Self {
-        Self {
-            bot_token: bot_token.into(),
+    ) -> anyhow::Result<Self> {
+        let bot_token = bot_token.into();
+        let client = Arc::new(SlackClient::new(
+            SlackClientHyperConnector::new().context("failed to create slack HTTP connector")?,
+        ));
+        let token = SlackApiToken::new(SlackApiTokenValue(bot_token.clone()));
+        Ok(Self {
+            bot_token,
             app_token: app_token.into(),
             permissions,
+            client,
+            token,
             active_messages: Arc::new(RwLock::new(HashMap::new())),
             shutdown_tx: Arc::new(RwLock::new(None)),
-        }
+        })
     }
 
-    /// Create a session for making API calls.
-    fn create_session(&self) -> anyhow::Result<(Arc<SlackHyperClient>, SlackApiToken)> {
-        let client = Arc::new(SlackClient::new(
-            SlackClientHyperConnector::new().context("failed to create slack connector")?,
-        ));
-        let token = SlackApiToken::new(SlackApiTokenValue(self.bot_token.clone()));
-        Ok((client, token))
+    /// Open a session against the cached client using the cached bot token.
+    fn session(&self) -> SlackClientSession<'_, SlackClientHyperHttpsConnector> {
+        self.client.open_session(&self.token)
     }
 }
 
-/// Socket mode push event handler. Must be a `fn` pointer (not a closure)
-/// because slack-morphism requires `UserCallbackFunction` which is a fn pointer type.
+// ---------------------------------------------------------------------------
+// Inbound event handlers (fn pointers — slack-morphism requirement)
+// ---------------------------------------------------------------------------
+
+/// Handle regular channel/DM messages.
 async fn handle_push_event(
     event: SlackPushEventCallback,
     client: Arc<SlackHyperClient>,
     states: SlackClientEventsUserState,
 ) -> UserCallbackResult<()> {
-    let msg_event = match event.event {
-        SlackEventCallbackBody::Message(msg) => msg,
-        _ => return Ok(()),
-    };
+    match event.event {
+        SlackEventCallbackBody::Message(msg) => {
+            handle_message_event(msg, &event.team_id, client, states).await
+        }
+        SlackEventCallbackBody::AppMention(mention) => {
+            handle_app_mention_event(mention, &event.team_id, client, states).await
+        }
+        _ => Ok(()),
+    }
+}
 
-    // Skip message edits/deletes
+/// Core logic shared by Message and AppMention handlers.
+async fn handle_message_event(
+    msg_event: SlackMessageEvent,
+    team_id: &SlackTeamId,
+    client: Arc<SlackHyperClient>,
+    states: SlackClientEventsUserState,
+) -> UserCallbackResult<()> {
+    // Skip message edits / deletes / bot_message subtypes
     if msg_event.subtype.is_some() {
         return Ok(());
     }
@@ -84,16 +130,14 @@ async fn handle_push_event(
 
     let user_id = msg_event.sender.user.as_ref().map(|u| u.0.clone());
 
-    // Skip messages from the bot itself
     if user_id.as_deref() == Some(&adapter_state.bot_user_id) {
-        return Ok(());
+        return Ok(()); // ignore self
+    }
+    if user_id.is_none() {
+        return Ok(()); // system message
     }
 
-    // Skip messages with no user (system messages)
-    if user_id.is_none() {
-        return Ok(());
-    }
-    let team_id = event.team_id.0.clone();
+    let team_id_str = team_id.0.clone();
     let channel_id = msg_event
         .origin
         .channel
@@ -102,10 +146,9 @@ async fn handle_push_event(
         .unwrap_or_default();
     let ts = msg_event.origin.ts.0.clone();
 
-    // Load permissions snapshot
     let perms = adapter_state.permissions.load();
 
-    // DM filter: Slack DM channel IDs start with "D"
+    // DM filter
     if channel_id.starts_with('D') {
         if perms.dm_allowed_users.is_empty() {
             return Ok(());
@@ -119,137 +162,128 @@ async fn handle_push_event(
 
     // Workspace filter
     if let Some(ref filter) = perms.workspace_filter {
-        if !filter.contains(&team_id) {
+        if !filter.contains(&team_id_str) {
             return Ok(());
         }
     }
 
     // Channel filter
-    if let Some(allowed_channels) = perms.channel_filter.get(&team_id) {
-        if !allowed_channels.is_empty() && !allowed_channels.contains(&channel_id) {
+    if let Some(allowed) = perms.channel_filter.get(&team_id_str) {
+        if !allowed.is_empty() && !allowed.contains(&channel_id) {
             return Ok(());
         }
     }
 
-    // Build conversation ID (threaded conversations get their own channel)
     let conversation_id = if let Some(ref thread_ts) = msg_event.origin.thread_ts {
-        format!("slack:{}:{}:{}", team_id, channel_id, thread_ts.0)
+        format!("slack:{}:{}:{}", team_id_str, channel_id, thread_ts.0)
     } else {
-        format!("slack:{}:{}", team_id, channel_id)
+        format!("slack:{}:{}", team_id_str, channel_id)
     };
 
-    // Extract content
-    let content = if let Some(ref msg_content) = msg_event.content {
-        if let Some(ref files) = msg_content.files {
-            let attachments: Vec<crate::Attachment> = files
-                .iter()
-                .filter_map(|f| {
-                    let url = f.url_private.as_ref()?;
-                    Some(crate::Attachment {
-                        filename: f.name.clone().unwrap_or_else(|| "unnamed".into()),
-                        mime_type: f.mimetype.as_ref().map(|m| m.0.clone()).unwrap_or_default(),
-                        url: url.to_string(),
-                        size_bytes: None,
-                    })
-                })
-                .collect();
+    let content = extract_message_content(&msg_event.content);
 
-            if attachments.is_empty() {
-                MessageContent::Text(msg_content.text.clone().unwrap_or_default())
-            } else {
-                MessageContent::Media {
-                    text: msg_content.text.clone(),
-                    attachments,
-                }
-            }
-        } else {
-            MessageContent::Text(msg_content.text.clone().unwrap_or_default())
-        }
-    } else {
-        MessageContent::Text(String::new())
-    };
+    let (metadata, formatted_author) = build_metadata_and_author(
+        &team_id_str,
+        &channel_id,
+        &ts,
+        msg_event.origin.thread_ts.as_ref().map(|t| t.0.as_str()),
+        user_id.as_deref(),
+        msg_event.sender.user.as_ref(),
+        &client,
+        &adapter_state.bot_token,
+    )
+    .await;
 
-    // Build metadata
-    let mut metadata = HashMap::new();
-    metadata.insert(
-        "slack_workspace_id".into(),
-        serde_json::Value::String(team_id),
-    );
-    metadata.insert(
-        "slack_channel_id".into(),
-        serde_json::Value::String(channel_id),
-    );
-    metadata.insert(
-        "slack_message_ts".into(),
-        serde_json::Value::String(ts.clone()),
-    );
-    if let Some(ref thread_ts) = msg_event.origin.thread_ts {
-        metadata.insert(
-            "slack_thread_ts".into(),
-            serde_json::Value::String(thread_ts.0.clone()),
-        );
-    }
-    if let Some(ref uid) = user_id {
-        metadata.insert(
-            "slack_user_id".into(),
-            serde_json::Value::String(uid.clone()),
-        );
-        metadata.insert("sender_id".into(), serde_json::Value::String(uid.clone()));
-        metadata.insert(
-            "slack_user_mention".into(),
-            serde_json::Value::String(format!("<@{uid}>")),
-        );
-    }
-
-    // Resolve username/display name for better attribution and mention support.
-    if let Some(ref uid) = msg_event.sender.user {
-        let token = SlackApiToken::new(SlackApiTokenValue(adapter_state.bot_token.clone()));
-        let session = client.open_session(&token);
-        if let Ok(user_info) = session
-            .users_info(&SlackApiUsersInfoRequest::new(uid.clone()))
-            .await
-        {
-            let identity = resolve_slack_user_identity(&user_info.user, &uid.0);
-            let display_with_mention = format!("{} (<@{}>)", identity.display_name, uid.0);
-            metadata.insert(
-                "sender_display_name".into(),
-                serde_json::Value::String(display_with_mention.clone()),
-            );
-            if let Some(name) = identity.username {
-                metadata.insert(
-                    "sender_username".into(),
-                    serde_json::Value::String(name),
-                );
-            }
-        }
-    }
-
-    // For Slack, formatted_author is the display_with_mention if user info was resolved
-    let formatted_author = if let Some(uid) = &user_id {
-        metadata
-            .get("sender_display_name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| Some(uid.clone()))
-    } else {
-        None
-    };
-
-    let inbound = InboundMessage {
-        id: ts,
-        source: "slack".into(),
+    send_inbound(
+        &adapter_state.inbound_tx,
+        ts,
         conversation_id,
-        sender_id: user_id.unwrap_or_default(),
-        agent_id: None,
+        user_id.unwrap_or_default(),
         content,
-        timestamp: chrono::Utc::now(),
         metadata,
         formatted_author,
+    )
+    .await;
+
+    Ok(())
+}
+
+/// Handle `app_mention` events — fired when the bot is @-mentioned in a channel
+/// it may not be a primary member of.
+///
+/// `SlackAppMentionEvent` has a flat `user: SlackUserId` field (not a `sender` sub-struct)
+/// and a flat `channel: SlackChannelId` field (not nested in `origin`).
+async fn handle_app_mention_event(
+    mention: SlackAppMentionEvent,
+    team_id: &SlackTeamId,
+    client: Arc<SlackHyperClient>,
+    states: SlackClientEventsUserState,
+) -> UserCallbackResult<()> {
+    let state_guard = states.read().await;
+    let adapter_state = state_guard
+        .get_user_state::<Arc<SlackAdapterState>>()
+        .expect("SlackAdapterState must be in user_state");
+
+    let user_id = mention.user.0.clone();
+
+    if user_id == adapter_state.bot_user_id {
+        return Ok(());
+    }
+
+    let team_id_str = team_id.0.clone();
+    let channel_id = mention.channel.0.clone();
+    let ts = mention.origin.ts.0.clone();
+
+    let perms = adapter_state.permissions.load();
+
+    // Workspace filter applies to mentions too
+    if let Some(ref filter) = perms.workspace_filter {
+        if !filter.contains(&team_id_str) {
+            return Ok(());
+        }
+    }
+
+    // Channel filter — same logic as handle_message_event
+    if let Some(allowed) = perms.channel_filter.get(&team_id_str) {
+        if !allowed.is_empty() && !allowed.contains(&channel_id) {
+            return Ok(());
+        }
+    }
+
+    let conversation_id = if let Some(ref thread_ts) = mention.origin.thread_ts {
+        format!("slack:{}:{}:{}", team_id_str, channel_id, thread_ts.0)
+    } else {
+        format!("slack:{}:{}", team_id_str, channel_id)
     };
 
-    if let Err(error) = adapter_state.inbound_tx.send(inbound).await {
-        tracing::warn!(%error, "failed to send inbound message from Slack");
-    }
+    // Strip the leading @-mention from the text so the agent sees clean input
+    let raw_text = mention.content.text.clone().unwrap_or_default();
+    let text = strip_bot_mention(&raw_text, &adapter_state.bot_user_id);
+    let content = MessageContent::Text(text);
+
+    let slack_uid = SlackUserId(user_id.clone());
+    let (metadata, formatted_author) = build_metadata_and_author(
+        &team_id_str,
+        &channel_id,
+        &ts,
+        mention.origin.thread_ts.as_ref().map(|t| t.0.as_str()),
+        Some(&user_id),
+        Some(&slack_uid),
+        &client,
+        &adapter_state.bot_token,
+    )
+    .await;
+
+    send_inbound(
+        &adapter_state.inbound_tx,
+        ts,
+        conversation_id,
+        user_id,
+        content,
+        metadata,
+        formatted_author,
+    )
+    .await;
 
     Ok(())
 }
@@ -263,6 +297,10 @@ fn slack_error_handler(
     HttpStatusCode::OK
 }
 
+// ---------------------------------------------------------------------------
+// Messaging trait impl
+// ---------------------------------------------------------------------------
+
 impl Messaging for SlackAdapter {
     fn name(&self) -> &str {
         "slack"
@@ -274,14 +312,9 @@ impl Messaging for SlackAdapter {
 
         *self.shutdown_tx.write().await = Some(shutdown_tx);
 
-        let client = Arc::new(SlackClient::new(
-            SlackClientHyperConnector::new().context("failed to create slack connector")?,
-        ));
-
-        // Fetch bot's own user ID so we can filter out self-messages
-        let bot_token = SlackApiToken::new(SlackApiTokenValue(self.bot_token.clone()));
-        let session = client.open_session(&bot_token);
-        let auth_response = session
+        // Reuse the shared client for auth.test; no new allocation needed.
+        let auth_response = self
+            .session()
             .auth_test()
             .await
             .context("failed to call auth.test for bot user ID")?;
@@ -295,11 +328,16 @@ impl Messaging for SlackAdapter {
             bot_user_id,
         });
 
-        let callbacks = SlackSocketModeListenerCallbacks::new()
-            .with_push_events(handle_push_event);
+        let callbacks = SlackSocketModeListenerCallbacks::new().with_push_events(handle_push_event);
+
+        // The socket mode listener needs its own client — it owns a persistent
+        // WebSocket connection. The shared self.client is for REST calls only.
+        let listener_client = Arc::new(SlackClient::new(
+            SlackClientHyperConnector::new().context("failed to create slack socket mode connector")?,
+        ));
 
         let listener_environment = Arc::new(
-            SlackClientEventsListenerEnvironment::new(client.clone())
+            SlackClientEventsListenerEnvironment::new(listener_client.clone())
                 .with_error_handler(slack_error_handler)
                 .with_user_state(adapter_state),
         );
@@ -331,8 +369,65 @@ impl Messaging for SlackAdapter {
             }
         });
 
-        let stream = tokio_stream::wrappers::ReceiverStream::new(inbound_rx);
-        Ok(Box::pin(stream))
+        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
+            inbound_rx,
+        )))
+    }
+
+    /// Show a typing-style status in Slack Assistant threads while the agent is thinking.
+    ///
+    /// Uses `assistant.threads.setStatus` — the correct API for Socket Mode bots running
+    /// in Slack Assistant thread contexts.
+    ///
+    /// **Scope limitation (Slack API):** this API only works inside Slack Assistant threads
+    /// (i.e. messages that carry a `thread_ts`). Regular channel messages and DMs do not
+    /// support `setStatus`; this function no-ops for them rather than erroring. If you are
+    /// not seeing typing indicators, verify the conversation is inside an Assistant thread.
+    ///
+    /// Pass an empty string to clear the status (e.g. on `StopTyping`).
+    async fn send_status(
+        &self,
+        message: &InboundMessage,
+        status: StatusUpdate,
+    ) -> crate::Result<()> {
+        let thread_ts = match extract_thread_ts(message) {
+            Some(ts) => ts,
+            None => {
+                tracing::debug!(
+                    message_id = %message.id,
+                    "skipping assistant.threads.setStatus — message has no thread_ts \
+                     (typing indicators only work in Slack Assistant threads)"
+                );
+                return Ok(());
+            }
+        };
+        let channel_id = match extract_channel_id(message) {
+            Ok(id) => id,
+            Err(_) => return Ok(()),
+        };
+
+        let status_text = match &status {
+            StatusUpdate::Thinking => "Thinking…".to_string(),
+            StatusUpdate::StopTyping => String::new(), // empty string clears the status
+            StatusUpdate::ToolStarted { .. } => "Working…".to_string(),
+            StatusUpdate::ToolCompleted { .. } => "Working…".to_string(),
+            _ => "Working…".to_string(),
+        };
+
+        let session = self.session();
+
+        let req = SlackApiAssistantThreadsSetStatusRequest {
+            channel_id,
+            thread_ts,
+            status: status_text,
+        };
+
+        // Best-effort — don't propagate status errors into the main response pipeline.
+        if let Err(err) = session.assistant_threads_set_status(&req).await {
+            tracing::debug!(error = %err, "failed to set slack assistant thread status (non-fatal)");
+        }
+
+        Ok(())
     }
 
     async fn respond(
@@ -340,9 +435,7 @@ impl Messaging for SlackAdapter {
         message: &InboundMessage,
         response: OutboundResponse,
     ) -> crate::Result<()> {
-        let (client, token) = self.create_session()?;
-        let session = client.open_session(&token);
-
+        let session = self.session();
         let channel_id = extract_channel_id(message)?;
 
         match response {
@@ -355,18 +448,17 @@ impl Messaging for SlackAdapter {
                         markdown_content(chunk),
                     );
                     req = req.opt_thread_ts(thread_ts.clone());
-
                     session
                         .chat_post_message(&req)
                         .await
                         .context("failed to send slack message")?;
                 }
             }
+
             OutboundResponse::ThreadReply {
                 thread_name: _,
                 text,
             } => {
-                // Use existing thread_ts, or create a thread from the source message
                 let thread_ts = extract_thread_ts(message).or_else(|| extract_message_ts(message));
 
                 for chunk in split_message(&text, 12_000) {
@@ -375,19 +467,24 @@ impl Messaging for SlackAdapter {
                         markdown_content(chunk),
                     );
                     req = req.opt_thread_ts(thread_ts.clone());
-
                     session
                         .chat_post_message(&req)
                         .await
                         .context("failed to send slack thread reply")?;
                 }
             }
-            OutboundResponse::File { filename, data, mime_type, caption } => {
-                // Slack's v2 upload flow: get upload URL, upload bytes, complete
+
+            OutboundResponse::File {
+                filename,
+                data,
+                mime_type,
+                caption,
+            } => {
                 let upload_url_response = session
-                    .get_upload_url_external(
-                        &SlackApiFilesGetUploadUrlExternalRequest::new(filename.clone(), data.len()),
-                    )
+                    .get_upload_url_external(&SlackApiFilesGetUploadUrlExternalRequest::new(
+                        filename.clone(),
+                        data.len(),
+                    ))
                     .await
                     .context("failed to get slack upload URL")?;
 
@@ -401,55 +498,129 @@ impl Messaging for SlackAdapter {
                     .context("failed to upload file to slack")?;
 
                 let thread_ts = extract_thread_ts(message);
-                let file_complete = SlackApiFilesComplete::new(upload_url_response.file_id)
-                    .with_title(filename);
-
-                let mut complete_request = SlackApiFilesCompleteUploadExternalRequest::new(
-                    vec![file_complete],
-                )
-                .with_channel_id(channel_id.clone());
-
+                let file_complete =
+                    SlackApiFilesComplete::new(upload_url_response.file_id).with_title(filename);
+                let mut complete_request =
+                    SlackApiFilesCompleteUploadExternalRequest::new(vec![file_complete])
+                        .with_channel_id(channel_id.clone());
                 complete_request = complete_request.opt_initial_comment(caption);
                 complete_request = complete_request.opt_thread_ts(thread_ts);
-
                 session
                     .files_complete_upload_external(&complete_request)
                     .await
                     .context("failed to complete slack file upload")?;
             }
+
             OutboundResponse::Reaction(emoji) => {
-                let ts = extract_message_ts(message)
-                    .context("missing slack_message_ts for reaction")?;
-
-                let reaction_name = sanitize_reaction_name(&emoji);
-
+                let ts =
+                    extract_message_ts(message).context("missing slack_message_ts for reaction")?;
                 let req = SlackApiReactionsAddRequest::new(
                     channel_id.clone(),
-                    SlackReactionName(reaction_name),
+                    SlackReactionName(sanitize_reaction_name(&emoji)),
                     ts,
                 );
-
                 session
                     .reactions_add(&req)
                     .await
                     .context("failed to add slack reaction")?;
             }
+
+            OutboundResponse::RemoveReaction(emoji) => {
+                let ts = extract_message_ts(message)
+                    .context("missing slack_message_ts for reaction removal")?;
+                // channel and timestamp are Optional on the remove request
+                let req = SlackApiReactionsRemoveRequest::new(SlackReactionName(
+                    sanitize_reaction_name(&emoji),
+                ))
+                .with_channel(channel_id.clone())
+                .with_timestamp(ts);
+                session
+                    .reactions_remove(&req)
+                    .await
+                    .context("failed to remove slack reaction")?;
+            }
+
+            OutboundResponse::Ephemeral { text, user_id } => {
+                let thread_ts = extract_thread_ts(message);
+                let req = SlackApiChatPostEphemeralRequest::new(
+                    channel_id.clone(),
+                    SlackUserId(user_id),
+                    SlackMessageContent::new().with_text(text),
+                )
+                .opt_thread_ts(thread_ts);
+                session
+                    .chat_post_ephemeral(&req)
+                    .await
+                    .context("failed to send slack ephemeral message")?;
+            }
+
+            OutboundResponse::RichMessage { text, blocks } => {
+                let thread_ts = extract_thread_ts(message);
+                let attempted = blocks.len();
+                let slack_blocks = deserialize_blocks(&blocks);
+                let dropped = attempted - slack_blocks.len();
+                let content = if slack_blocks.is_empty() {
+                    if attempted > 0 {
+                        tracing::warn!(
+                            attempted,
+                            "all {} block(s) failed to deserialise — sending plain text fallback",
+                            attempted
+                        );
+                    }
+                    SlackMessageContent::new().with_text(text)
+                } else {
+                    if dropped > 0 {
+                        tracing::warn!(
+                            dropped,
+                            attempted,
+                            "{} of {} block(s) dropped due to deserialisation errors",
+                            dropped,
+                            attempted
+                        );
+                    }
+                    SlackMessageContent::new()
+                        .with_text(text)
+                        .with_blocks(slack_blocks)
+                };
+                let mut req = SlackApiChatPostMessageRequest::new(channel_id.clone(), content);
+                req = req.opt_thread_ts(thread_ts);
+                session
+                    .chat_post_message(&req)
+                    .await
+                    .context("failed to send slack rich message")?;
+            }
+
+            OutboundResponse::ScheduledMessage { text, post_at } => {
+                let thread_ts = extract_thread_ts(message);
+                let post_at_dt = chrono::DateTime::<chrono::Utc>::from_timestamp(post_at, 0)
+                    .context("invalid post_at unix timestamp for scheduled message")?;
+                let req = SlackApiChatScheduleMessageRequest::new(
+                    channel_id.clone(),
+                    SlackMessageContent::new().with_text(text),
+                    SlackDateTime(post_at_dt),
+                )
+                .opt_thread_ts(thread_ts);
+                session
+                    .chat_schedule_message(&req)
+                    .await
+                    .context("failed to schedule slack message")?;
+            }
+
             OutboundResponse::StreamStart => {
                 let req = SlackApiChatPostMessageRequest::new(
                     channel_id.clone(),
                     SlackMessageContent::new().with_text("\u{200B}".into()),
                 );
-
                 let resp = session
                     .chat_post_message(&req)
                     .await
                     .context("failed to send stream placeholder")?;
-
                 self.active_messages
                     .write()
                     .await
                     .insert(message.id.clone(), resp.ts.0);
             }
+
             OutboundResponse::StreamChunk(text) => {
                 let active = self.active_messages.read().await;
                 if let Some(ts) = active.get(&message.id) {
@@ -459,43 +630,35 @@ impl Messaging for SlackAdapter {
                     } else {
                         text
                     };
-
                     let req = SlackApiChatUpdateRequest::new(
                         channel_id.clone(),
                         markdown_content(display_text),
                         SlackTs(ts.clone()),
                     );
-
                     if let Err(error) = session.chat_update(&req).await {
                         tracing::warn!(%error, "failed to edit streaming message");
                     }
                 }
             }
+
             OutboundResponse::StreamEnd => {
                 self.active_messages.write().await.remove(&message.id);
             }
-            OutboundResponse::Status(_) => {}  // no-op, Slack has no native typing indicator
+
+            OutboundResponse::Status(_) => {
+                // Status updates are handled via send_status(); ignored here.
+            }
         }
 
         Ok(())
     }
 
-    // send_status: uses the default no-op from the Messaging trait.
-    // Slack has no native typing indicator API.
+    async fn broadcast(&self, target: &str, response: OutboundResponse) -> crate::Result<()> {
+        let session = self.session();
 
-    async fn broadcast(
-        &self,
-        target: &str,
-        response: OutboundResponse,
-    ) -> crate::Result<()> {
-        let (client, token) = self.create_session()?;
-        let session = client.open_session(&token);
-
-        // Support "dm:{user_id}" targets by opening a DM conversation first
         let channel_id = if let Some(user_id_str) = target.strip_prefix("dm:") {
-            let user_id = SlackUserId(user_id_str.to_string());
             let open_req = SlackApiConversationsOpenRequest::new()
-                .with_users(vec![user_id]);
+                .with_users(vec![SlackUserId(user_id_str.to_string())]);
             let open_resp = session
                 .conversations_open(&open_req)
                 .await
@@ -505,17 +668,43 @@ impl Messaging for SlackAdapter {
             SlackChannelId(target.to_string())
         };
 
-        if let OutboundResponse::Text(text) = response {
-            for chunk in split_message(&text, 12_000) {
-                let req = SlackApiChatPostMessageRequest::new(
-                    channel_id.clone(),
-                    markdown_content(chunk),
-                );
-
+        match response {
+            OutboundResponse::Text(text) => {
+                for chunk in split_message(&text, 12_000) {
+                    let req = SlackApiChatPostMessageRequest::new(
+                        channel_id.clone(),
+                        markdown_content(chunk),
+                    );
+                    session
+                        .chat_post_message(&req)
+                        .await
+                        .context("failed to broadcast slack message")?;
+                }
+            }
+            OutboundResponse::RichMessage { text, blocks } => {
+                let slack_blocks = deserialize_blocks(&blocks);
+                let content = if slack_blocks.is_empty() {
+                    SlackMessageContent::new().with_text(text)
+                } else {
+                    SlackMessageContent::new()
+                        .with_text(text)
+                        .with_blocks(slack_blocks)
+                };
+                let req = SlackApiChatPostMessageRequest::new(channel_id.clone(), content);
                 session
                     .chat_post_message(&req)
                     .await
-                    .context("failed to broadcast slack message")?;
+                    .context("failed to broadcast slack rich message")?;
+            }
+            // Other variants are not meaningful for broadcast (e.g. Ephemeral requires a
+            // specific user_id from a live conversation, Reaction requires an existing ts,
+            // Scheduled/Stream are respond()-only flows).
+            other => {
+                tracing::warn!(
+                    variant = %variant_name(&other),
+                    target = %target,
+                    "broadcast() received a variant that is not supported for broadcast — ignoring"
+                );
             }
         }
 
@@ -527,8 +716,7 @@ impl Messaging for SlackAdapter {
         message: &InboundMessage,
         limit: usize,
     ) -> crate::Result<Vec<HistoryMessage>> {
-        let (client, token) = self.create_session()?;
-        let session = client.open_session(&token);
+        let session = self.session();
         let channel_id = extract_channel_id(message)?;
         let thread_ts = extract_thread_ts(message);
         let capped_limit = limit.min(100) as u16;
@@ -536,7 +724,6 @@ impl Messaging for SlackAdapter {
         let messages = if let Some(ts) = thread_ts {
             let req = SlackApiConversationsRepliesRequest::new(channel_id.clone(), ts)
                 .with_limit(capped_limit);
-
             session
                 .conversations_replies(&req)
                 .await
@@ -546,7 +733,6 @@ impl Messaging for SlackAdapter {
             let req = SlackApiConversationsHistoryRequest::new()
                 .with_channel(channel_id.clone())
                 .with_limit(capped_limit);
-
             session
                 .conversations_history(&req)
                 .await
@@ -557,14 +743,13 @@ impl Messaging for SlackAdapter {
         let mut user_identity_by_id = HashMap::new();
         for user_id in messages
             .iter()
-            .filter_map(|msg| msg.sender.user.as_ref().map(|user| user.0.clone()))
+            .filter_map(|msg| msg.sender.user.as_ref().map(|u| u.0.clone()))
         {
             if user_identity_by_id.contains_key(&user_id) {
                 continue;
             }
-            let slack_user_id = SlackUserId(user_id.clone());
             if let Ok(user_info) = session
-                .users_info(&SlackApiUsersInfoRequest::new(slack_user_id))
+                .users_info(&SlackApiUsersInfoRequest::new(SlackUserId(user_id.clone())))
                 .await
             {
                 let identity = resolve_slack_user_identity(&user_info.user, &user_id);
@@ -572,7 +757,7 @@ impl Messaging for SlackAdapter {
             }
         }
 
-        // Slack returns newest-first, reverse to chronological.
+        // Slack returns newest-first; reverse to chronological.
         let result: Vec<HistoryMessage> = messages
             .into_iter()
             .rev()
@@ -581,23 +766,18 @@ impl Messaging for SlackAdapter {
                 let is_bot = user_id.is_none() || msg.sender.bot_id.is_some();
                 let author = if is_bot {
                     "bot".to_string()
-                } else if let Some(user_id) = user_id {
+                } else if let Some(uid) = user_id {
                     let display_name = user_identity_by_id
-                        .get(&user_id)
-                        .map(|identity| identity.display_name.clone())
-                        .unwrap_or_else(|| user_id.clone());
-                    format!("{display_name} (<@{user_id}>)")
+                        .get(&uid)
+                        .map(|i| i.display_name.clone())
+                        .unwrap_or_else(|| uid.clone());
+                    format!("{display_name} (<@{uid}>)")
                 } else {
                     "unknown".to_string()
                 };
-
                 HistoryMessage {
                     author,
-                    content: msg
-                        .content
-                        .text
-                        .clone()
-                        .unwrap_or_default(),
+                    content: msg.content.text.clone().unwrap_or_default(),
                     is_bot,
                 }
             })
@@ -613,30 +793,27 @@ impl Messaging for SlackAdapter {
     }
 
     async fn health_check(&self) -> crate::Result<()> {
-        let (client, token) = self.create_session()?;
-        let session = client.open_session(&token);
-
+        let session = self.session();
         session
             .api_test(&SlackApiTestRequest::new())
             .await
             .context("slack health check failed")?;
-
         Ok(())
     }
 
     async fn shutdown(&self) -> crate::Result<()> {
         self.active_messages.write().await.clear();
-
         if let Some(tx) = self.shutdown_tx.write().await.take() {
             let _ = tx.send(()).await;
         }
-
         tracing::info!("slack adapter shut down");
         Ok(())
     }
 }
 
-// -- Helper functions --
+// ---------------------------------------------------------------------------
+// Helper functions
+// ---------------------------------------------------------------------------
 
 fn extract_channel_id(message: &InboundMessage) -> anyhow::Result<SlackChannelId> {
     message
@@ -685,8 +862,180 @@ fn markdown_content(text: impl Into<String>) -> SlackMessageContent {
     }
 }
 
-/// Split a message into chunks that fit within Slack's character limit.
-/// Tries to split at newlines, then spaces, then hard-cuts.
+/// Extract `MessageContent` from an optional `SlackMessageContent`.
+fn extract_message_content(content: &Option<SlackMessageContent>) -> MessageContent {
+    let Some(msg_content) = content else {
+        return MessageContent::Text(String::new());
+    };
+
+    if let Some(ref files) = msg_content.files {
+        let attachments: Vec<crate::Attachment> = files
+            .iter()
+            .filter_map(|f| {
+                let url = f.url_private.as_ref()?;
+                Some(crate::Attachment {
+                    filename: f.name.clone().unwrap_or_else(|| "unnamed".into()),
+                    mime_type: f.mimetype.as_ref().map(|m| m.0.clone()).unwrap_or_default(),
+                    url: url.to_string(),
+                    size_bytes: None,
+                })
+            })
+            .collect();
+
+        if !attachments.is_empty() {
+            return MessageContent::Media {
+                text: msg_content.text.clone(),
+                attachments,
+            };
+        }
+    }
+
+    MessageContent::Text(msg_content.text.clone().unwrap_or_default())
+}
+
+/// Build the metadata map and formatted author string shared by all inbound paths.
+#[allow(clippy::too_many_arguments)]
+async fn build_metadata_and_author(
+    team_id: &str,
+    channel_id: &str,
+    ts: &str,
+    thread_ts: Option<&str>,
+    user_id: Option<&str>,
+    slack_user_id: Option<&SlackUserId>,
+    client: &Arc<SlackHyperClient>,
+    bot_token: &str,
+) -> (HashMap<String, serde_json::Value>, Option<String>) {
+    let mut metadata = HashMap::new();
+
+    metadata.insert(
+        "slack_workspace_id".into(),
+        serde_json::Value::String(team_id.into()),
+    );
+    metadata.insert(
+        "slack_channel_id".into(),
+        serde_json::Value::String(channel_id.into()),
+    );
+    metadata.insert(
+        "slack_message_ts".into(),
+        serde_json::Value::String(ts.into()),
+    );
+
+    if let Some(tts) = thread_ts {
+        metadata.insert(
+            "slack_thread_ts".into(),
+            serde_json::Value::String(tts.into()),
+        );
+    }
+
+    if let Some(uid) = user_id {
+        metadata.insert(
+            "slack_user_id".into(),
+            serde_json::Value::String(uid.into()),
+        );
+        metadata.insert("sender_id".into(), serde_json::Value::String(uid.into()));
+        metadata.insert(
+            "slack_user_mention".into(),
+            serde_json::Value::String(format!("<@{uid}>")),
+        );
+    }
+
+    // Resolve display name and username
+    let mut formatted_author = user_id.map(|u| u.to_string());
+
+    if let Some(uid) = slack_user_id {
+        let token = SlackApiToken::new(SlackApiTokenValue(bot_token.to_string()));
+        let session = client.open_session(&token);
+        if let Ok(user_info) = session
+            .users_info(&SlackApiUsersInfoRequest::new(uid.clone()))
+            .await
+        {
+            let identity = resolve_slack_user_identity(&user_info.user, &uid.0);
+            let display_with_mention = format!("{} (<@{}>)", identity.display_name, uid.0);
+            metadata.insert(
+                "sender_display_name".into(),
+                serde_json::Value::String(display_with_mention.clone()),
+            );
+            if let Some(name) = identity.username {
+                metadata.insert("sender_username".into(), serde_json::Value::String(name));
+            }
+            formatted_author = Some(display_with_mention);
+        }
+    }
+
+    (metadata, formatted_author)
+}
+
+/// Dispatch a fully-constructed `InboundMessage` to the inbound channel.
+async fn send_inbound(
+    tx: &mpsc::Sender<InboundMessage>,
+    ts: String,
+    conversation_id: String,
+    sender_id: String,
+    content: MessageContent,
+    metadata: HashMap<String, serde_json::Value>,
+    formatted_author: Option<String>,
+) {
+    let inbound = InboundMessage {
+        id: ts,
+        source: "slack".into(),
+        conversation_id,
+        sender_id,
+        agent_id: None,
+        content,
+        timestamp: chrono::Utc::now(),
+        metadata,
+        formatted_author,
+    };
+    if let Err(error) = tx.send(inbound).await {
+        tracing::warn!(%error, "failed to send inbound message from Slack");
+    }
+}
+
+/// Deserialise a `Vec<serde_json::Value>` into `Vec<SlackBlock>`.
+///
+/// Blocks that fail to deserialise are silently skipped with a warning so a
+/// single bad block doesn't kill the whole message.
+fn deserialize_blocks(values: &[serde_json::Value]) -> Vec<SlackBlock> {
+    values
+        .iter()
+        .filter_map(|v| match serde_json::from_value::<SlackBlock>(v.clone()) {
+            Ok(block) => Some(block),
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to deserialise slack block, skipping");
+                None
+            }
+        })
+        .collect()
+}
+
+/// Strip the leading `<@BOT_USER_ID>` mention from an `app_mention` event text.
+///
+/// Slack always formats user IDs in uppercase (e.g. `<@U012AB3CD>`), so a
+/// simple prefix strip is sufficient — no case-folding is needed.
+fn strip_bot_mention(text: &str, bot_user_id: &str) -> String {
+    let mention = format!("<@{}>", bot_user_id);
+    text.trim_start_matches(mention.as_str()).trim_start().to_string()
+}
+
+/// Return a short human-readable name for an `OutboundResponse` variant for log messages.
+fn variant_name(response: &OutboundResponse) -> &'static str {
+    match response {
+        OutboundResponse::Text(_) => "Text",
+        OutboundResponse::ThreadReply { .. } => "ThreadReply",
+        OutboundResponse::File { .. } => "File",
+        OutboundResponse::Reaction(_) => "Reaction",
+        OutboundResponse::RemoveReaction(_) => "RemoveReaction",
+        OutboundResponse::Ephemeral { .. } => "Ephemeral",
+        OutboundResponse::RichMessage { .. } => "RichMessage",
+        OutboundResponse::ScheduledMessage { .. } => "ScheduledMessage",
+        OutboundResponse::StreamStart => "StreamStart",
+        OutboundResponse::StreamChunk(_) => "StreamChunk",
+        OutboundResponse::StreamEnd => "StreamEnd",
+        OutboundResponse::Status(_) => "Status",
+    }
+}
+
+/// Split a message into UTF-8-safe chunks at line/word boundaries.
 fn split_message(text: &str, max_len: usize) -> Vec<String> {
     if text.len() <= max_len {
         return vec![text.to_string()];
@@ -701,10 +1050,16 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
             break;
         }
 
-        let split_at = remaining[..max_len]
+        // Walk back to a valid char boundary before slicing
+        let mut safe_max = max_len.min(remaining.len());
+        while !remaining.is_char_boundary(safe_max) {
+            safe_max -= 1;
+        }
+
+        let split_at = remaining[..safe_max]
             .rfind('\n')
-            .or_else(|| remaining[..max_len].rfind(' '))
-            .unwrap_or(max_len);
+            .or_else(|| remaining[..safe_max].rfind(' '))
+            .unwrap_or(safe_max);
 
         chunks.push(remaining[..split_at].to_string());
         remaining = remaining[split_at..].trim_start();
@@ -713,7 +1068,7 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
     chunks
 }
 
-/// Sanitize an emoji string for Slack reactions (remove colons, lowercase).
+/// Sanitize an emoji name for Slack reactions (strip colons, lowercase).
 fn sanitize_reaction_name(emoji: &str) -> String {
     emoji
         .trim()
@@ -723,21 +1078,14 @@ fn sanitize_reaction_name(emoji: &str) -> String {
 }
 
 fn resolve_slack_user_identity(user: &SlackUser, user_id: &str) -> SlackUserIdentity {
-    let username = user.name.clone().filter(|name| !name.trim().is_empty());
-
+    let username = user.name.clone().filter(|n| !n.trim().is_empty());
     let display_name = user
         .profile
         .as_ref()
-        .and_then(|profile| {
-            profile
-                .display_name
-                .clone()
-                .or(profile.real_name.clone())
-        })
-        .filter(|name| !name.trim().is_empty())
+        .and_then(|p| p.display_name.clone().or_else(|| p.real_name.clone()))
+        .filter(|n| !n.trim().is_empty())
         .or_else(|| username.clone())
         .unwrap_or_else(|| user_id.to_string());
-
     SlackUserIdentity {
         display_name,
         username,

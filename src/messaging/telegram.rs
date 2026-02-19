@@ -359,6 +359,26 @@ impl Messaging for TelegramAdapter {
             OutboundResponse::Status(status) => {
                 self.send_status(message, status).await?;
             }
+            // Slack-specific variants — graceful fallbacks for Telegram
+            OutboundResponse::RemoveReaction(_) => {} // no-op
+            OutboundResponse::Ephemeral { text, .. } => {
+                // Telegram has no ephemeral messages — send as regular text
+                let chat_id = self.extract_chat_id(message)?;
+                self.bot.send_message(chat_id, text).await
+                    .context("failed to send ephemeral fallback on telegram")?;
+            }
+            OutboundResponse::RichMessage { text, .. } => {
+                // No Block Kit on Telegram — plain text fallback
+                let chat_id = self.extract_chat_id(message)?;
+                self.bot.send_message(chat_id, text).await
+                    .context("failed to send rich message fallback on telegram")?;
+            }
+            OutboundResponse::ScheduledMessage { text, .. } => {
+                // Telegram has no scheduled messages — send immediately
+                let chat_id = self.extract_chat_id(message)?;
+                self.bot.send_message(chat_id, text).await
+                    .context("failed to send scheduled message fallback on telegram")?;
+            }
         }
 
         Ok(())

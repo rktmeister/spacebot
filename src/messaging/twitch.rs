@@ -270,8 +270,31 @@ impl Messaging for TwitchAdapter {
                 // which sends a Text response after StreamEnd.
             }
             OutboundResponse::StreamEnd => {}
-            // Reactions and status updates aren't meaningful in Twitch chat
-            OutboundResponse::Reaction(_) | OutboundResponse::Status(_) => {}
+            // Reactions, status updates, and Slack-specific variants aren't meaningful in Twitch chat
+            OutboundResponse::Reaction(_)
+            | OutboundResponse::RemoveReaction(_)
+            | OutboundResponse::Status(_) => {}
+            OutboundResponse::Ephemeral { text, .. } => {
+                // No ephemeral concept in Twitch — send as regular chat message
+                client
+                    .say(channel.to_owned(), text)
+                    .await
+                    .context("failed to send ephemeral fallback on twitch")?;
+            }
+            OutboundResponse::RichMessage { text, .. } => {
+                // No Block Kit on Twitch — plain text fallback
+                client
+                    .say(channel.to_owned(), text)
+                    .await
+                    .context("failed to send rich message fallback on twitch")?;
+            }
+            OutboundResponse::ScheduledMessage { text, .. } => {
+                // No scheduled messages on Twitch — send immediately
+                client
+                    .say(channel.to_owned(), text)
+                    .await
+                    .context("failed to send scheduled message fallback on twitch")?;
+            }
         }
 
         Ok(())

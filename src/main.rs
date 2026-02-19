@@ -1257,14 +1257,16 @@ async fn initialize_agents(
 
     if let Some(slack_config) = &config.messaging.slack {
         if slack_config.enabled {
-            let adapter = spacebot::messaging::slack::SlackAdapter::new(
+            match spacebot::messaging::slack::SlackAdapter::new(
                 &slack_config.bot_token,
                 &slack_config.app_token,
                 slack_permissions
                     .clone()
                     .expect("slack permissions initialized when slack is enabled"),
-            );
-            new_messaging_manager.register(adapter).await;
+            ) {
+                Ok(adapter) => { new_messaging_manager.register(adapter).await; }
+                Err(error) => { tracing::error!(%error, "failed to build slack adapter"); }
+            }
         }
     }
 

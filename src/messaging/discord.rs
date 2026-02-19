@@ -250,6 +250,40 @@ impl Messaging for DiscordAdapter {
             OutboundResponse::Status(status) => {
                 self.send_status(message, status).await?;
             }
+            // Slack-specific variants — graceful fallbacks for Discord
+            OutboundResponse::RemoveReaction(_) => {} // no-op
+            OutboundResponse::Ephemeral { text, .. } => {
+                // Discord has no ephemeral equivalent here; send as regular text
+                if let Ok(channel_id) = self.extract_channel_id(message) {
+                    let http = self.get_http().await?;
+                    channel_id
+                        .say(&*http, &text)
+                        .await
+                        .context("failed to send ephemeral fallback on discord")?;
+                }
+            }
+            OutboundResponse::RichMessage { text, .. } => {
+                // No Block Kit on Discord — plain text fallback
+                if let Ok(channel_id) = self.extract_channel_id(message) {
+                    let http = self.get_http().await?;
+                    for chunk in split_message(&text, 2000) {
+                        channel_id
+                            .say(&*http, &chunk)
+                            .await
+                            .context("failed to send rich message fallback on discord")?;
+                    }
+                }
+            }
+            OutboundResponse::ScheduledMessage { text, .. } => {
+                // Discord has no native scheduled messages — send immediately
+                if let Ok(channel_id) = self.extract_channel_id(message) {
+                    let http = self.get_http().await?;
+                    channel_id
+                        .say(&*http, &text)
+                        .await
+                        .context("failed to send scheduled message fallback on discord")?;
+                }
+            }
         }
 
         Ok(())
