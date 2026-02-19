@@ -1598,7 +1598,8 @@ fn format_user_message(raw_text: &str, message: &InboundMessage) -> String {
         .map(|author| {
             let content_preview = message
                 .metadata
-                .get("reply_to_content")
+                .get("reply_to_text")
+                .or_else(|| message.metadata.get("reply_to_content"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if content_preview.is_empty() {
