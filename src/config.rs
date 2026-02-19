@@ -89,9 +89,9 @@ pub struct LlmConfig {
 impl LlmConfig {
     /// Check if any provider key is configured.
     pub fn has_any_key(&self) -> bool {
-        self.anthropic_key.is_some() 
-            || self.openai_key.is_some() 
-            || self.openrouter_key.is_some() 
+        self.anthropic_key.is_some()
+            || self.openai_key.is_some()
+            || self.openrouter_key.is_some()
             || self.zhipu_key.is_some()
             || self.groq_key.is_some()
             || self.together_key.is_some()
@@ -1134,7 +1134,9 @@ fn resolve_env_value(value: &str) -> Option<String> {
 }
 
 fn parse_otlp_headers(value: Option<String>) -> Result<HashMap<String, String>> {
-    let Some(raw) = value else { return Ok(HashMap::new()) };
+    let Some(raw) = value else {
+        return Ok(HashMap::new());
+    };
 
     let raw = raw.trim();
     if raw.is_empty() {
@@ -1150,14 +1152,14 @@ fn parse_otlp_headers(value: Option<String>) -> Result<HashMap<String, String>> 
         let Some((key, value)) = entry.split_once('=') else {
             return Err(ConfigError::Invalid(format!(
                 "invalid OTEL_EXPORTER_OTLP_HEADERS entry '{entry}', expected key=value"
-            )));
+            )))?;
         };
         let key = key.trim();
         let value = value.trim();
         if key.is_empty() {
             return Err(ConfigError::Invalid(
                 "invalid OTEL_EXPORTER_OTLP_HEADERS entry: empty header name".into(),
-            ));
+            ))?;
         }
         headers.insert(key.to_string(), value.to_string());
     }
@@ -1303,9 +1305,7 @@ impl Config {
             api: ApiConfig::default(),
             telemetry: TelemetryConfig {
                 otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
-                otlp_headers: parse_otlp_headers(
-                    std::env::var("OTEL_EXPORTER_OTLP_HEADERS").ok(),
-                )?,
+                otlp_headers: parse_otlp_headers(std::env::var("OTEL_EXPORTER_OTLP_HEADERS").ok())?,
                 service_name: std::env::var("OTEL_SERVICE_NAME")
                     .unwrap_or_else(|_| "spacebot".into()),
                 sample_rate: 1.0,
@@ -1316,8 +1316,8 @@ impl Config {
     /// Validate a raw TOML string as a valid Spacebot config.
     /// Returns Ok(()) if the config is structurally valid, or an error describing what's wrong.
     pub fn validate_toml(content: &str) -> Result<()> {
-        let toml_config: TomlConfig = toml::from_str(content)
-            .context("failed to parse config TOML")?;
+        let toml_config: TomlConfig =
+            toml::from_str(content).context("failed to parse config TOML")?;
         // Run full conversion to catch semantic errors (env resolution, defaults, etc.)
         let instance_dir = Self::default_instance_dir();
         Self::from_toml(toml_config, instance_dir)?;
@@ -1810,7 +1810,12 @@ impl Config {
                 .or(toml.telemetry.service_name)
                 .unwrap_or_else(|| "spacebot".into());
             let sample_rate = toml.telemetry.sample_rate.unwrap_or(1.0);
-            TelemetryConfig { otlp_endpoint, otlp_headers, service_name, sample_rate }
+            TelemetryConfig {
+                otlp_endpoint,
+                otlp_headers,
+                service_name,
+                sample_rate,
+            }
         };
 
         Ok(Config {
@@ -2035,7 +2040,9 @@ pub fn spawn_file_watcher(
                     // Only forward data modification events, not metadata/access changes
                     use notify::EventKind;
                     match &event.kind {
-                        EventKind::Create(_) | EventKind::Modify(notify::event::ModifyKind::Data(_)) | EventKind::Remove(_) => {
+                        EventKind::Create(_)
+                        | EventKind::Modify(notify::event::ModifyKind::Data(_))
+                        | EventKind::Remove(_) => {
                             let _ = tx.send(event);
                         }
                         // Also forward Any/Other modify events (some backends don't distinguish)
