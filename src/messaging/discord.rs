@@ -601,6 +601,105 @@ impl EventHandler for Handler {
             );
         }
     }
+
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        let component = match interaction {
+            Interaction::Component(c) => c,
+            _ => return, // Only handle component interactions
+        };
+
+        // Acknowledge the interaction immediately to prevent "This interaction failed" in the UI.
+        // We use Defer to indicate we've received it and might edit the message soon.
+        if let Err(error) = component
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()),
+            )
+            .await
+        {
+            tracing::warn!(%error, "failed to acknowledge interaction");
+        }
+
+        let user = &component.user;
+        let permissions = self.permissions.load();
+
+        if component.guild_id.is_none() {
+            if permissions.dm_allowed_users.is_empty()
+                || !permissions.dm_allowed_users.contains(&user.id.get())
+            {
+                return;
+            }
+        }
+
+        if let Some(filter) = &permissions.guild_filter {
+            if let Some(guild_id) = component.guild_id {
+                if !filter.contains(&guild_id.get()) {
+                    return;
+                }
+            }
+        }
+
+        let conversation_id = match component.guild_id {
+            Some(guild_id) => format!("discord:{}:{}", guild_id, component.channel_id),
+            None => format!("discord:dm:{}", user.id),
+        };
+
+        let values = match &component.data.kind {
+            serenity::all::ComponentInteractionDataKind::StringSelect { values } => values.clone(),
+            _ => Vec::new(),
+        };
+
+        let content = MessageContent::InteractionEvent {
+            custom_id: component.data.custom_id.clone(),
+            values,
+            label: None,
+        };
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "discord_channel_id".into(),
+            serde_json::Value::Number(component.channel_id.get().into()),
+        );
+        metadata.insert(
+            "discord_message_id".into(),
+            serde_json::Value::Number(component.message.id.get().into()),
+        );
+        if let Some(guild_id) = component.guild_id {
+            metadata.insert(
+                "discord_guild_id".into(),
+                serde_json::Value::Number(guild_id.get().into()),
+            );
+        }
+
+        let formatted_author = format!("{} (<@{}>)", user.name, user.id);
+        metadata.insert(
+            "discord_user_id".into(),
+            serde_json::Value::Number(user.id.get().into()),
+        );
+        metadata.insert(
+            "sender_display_name".into(),
+            serde_json::Value::String(formatted_author.clone()),
+        );
+
+        let inbound = InboundMessage {
+            id: component.id.to_string(), // Use interaction ID to ensure uniqueness
+            source: "discord".into(),
+            conversation_id,
+            sender_id: user.id.to_string(),
+            agent_id: None,
+            content,
+            timestamp: chrono::Utc::now(),
+            metadata,
+            formatted_author: Some(formatted_author),
+        };
+
+        if let Err(error) = self.inbound_tx.send(inbound).await {
+            tracing::warn!(
+                %error,
+                "failed to send inbound interaction from Discord (receiver dropped)"
+            );
+        }
+    }
 }
 
 // -- Helper functions --
