@@ -1138,7 +1138,15 @@ fn parse_anthropic_response(
     }
 
     let choice = OneOrMany::many(assistant_content)
-        .map_err(|_| CompletionError::ResponseError("empty response from Anthropic".into()))?;
+        .map_err(|_| {
+            tracing::debug!(
+                stop_reason = body["stop_reason"].as_str().unwrap_or("unknown"),
+                content_blocks = content_blocks.len(),
+                raw_content = %body["content"],
+                "empty assistant_content after parsing Anthropic response"
+            );
+            CompletionError::ResponseError("empty response from Anthropic".into())
+        })?;
 
     let input_tokens = body["usage"]["input_tokens"].as_u64().unwrap_or(0);
     let output_tokens = body["usage"]["output_tokens"].as_u64().unwrap_or(0);
