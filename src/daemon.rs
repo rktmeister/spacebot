@@ -4,6 +4,7 @@ use crate::config::{Config, TelemetryConfig};
 
 use anyhow::{Context as _, anyhow};
 use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -28,13 +29,8 @@ pub enum IpcCommand {
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum IpcResponse {
     Ok,
-    Status {
-        pid: u32,
-        uptime_seconds: u64,
-    },
-    Error {
-        message: String,
-    },
+    Status { pid: u32, uptime_seconds: u64 },
+    Error { message: String },
 }
 
 /// Paths for daemon runtime files, all derived from the instance directory.
@@ -88,8 +84,12 @@ pub fn is_running(paths: &DaemonPaths) -> Option<u32> {
 /// Daemonize the current process. Returns in the child; the parent prints
 /// a message and exits.
 pub fn daemonize(paths: &DaemonPaths) -> anyhow::Result<()> {
-    std::fs::create_dir_all(&paths.log_dir)
-        .with_context(|| format!("failed to create log directory: {}", paths.log_dir.display()))?;
+    std::fs::create_dir_all(&paths.log_dir).with_context(|| {
+        format!(
+            "failed to create log directory: {}",
+            paths.log_dir.display()
+        )
+    })?;
 
     let stdout = std::fs::OpenOptions::new()
         .create(true)
@@ -109,7 +109,9 @@ pub fn daemonize(paths: &DaemonPaths) -> anyhow::Result<()> {
         .stdout(stdout)
         .stderr(stderr);
 
-    daemonize.start().map_err(|error| anyhow!("failed to daemonize: {error}"))?;
+    daemonize
+        .start()
+        .map_err(|error| anyhow!("failed to daemonize: {error}"))?;
 
     Ok(())
 }
@@ -159,7 +161,10 @@ pub fn init_background_tracing(
 /// Initialize tracing for foreground (terminal) mode.
 ///
 /// Returns an `SdkTracerProvider` if OTLP export is configured.
-pub fn init_foreground_tracing(debug: bool, telemetry: &TelemetryConfig) -> Option<SdkTracerProvider> {
+pub fn init_foreground_tracing(
+    debug: bool,
+    telemetry: &TelemetryConfig,
+) -> Option<SdkTracerProvider> {
     let filter = build_env_filter(debug);
     let fmt_layer = tracing_subscriber::fmt::layer();
 
@@ -223,13 +228,14 @@ fn build_otlp_provider(telemetry: &TelemetryConfig) -> Option<SdkTracerProvider>
         .with_service_name(telemetry.service_name.clone())
         .build();
 
-    let sampler: opentelemetry_sdk::trace::Sampler = if (telemetry.sample_rate - 1.0).abs() < f64::EPSILON {
-        opentelemetry_sdk::trace::Sampler::AlwaysOn
-    } else {
-        opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
-            opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(telemetry.sample_rate),
-        ))
-    };
+    let sampler: opentelemetry_sdk::trace::Sampler =
+        if (telemetry.sample_rate - 1.0).abs() < f64::EPSILON {
+            opentelemetry_sdk::trace::Sampler::AlwaysOn
+        } else {
+            opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
+                opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(telemetry.sample_rate),
+            ))
+        };
 
     let provider = SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
@@ -253,8 +259,9 @@ pub async fn start_ipc_server(
 
     // Clean up any stale socket file
     if paths.socket.exists() {
-        std::fs::remove_file(&paths.socket)
-            .with_context(|| format!("failed to remove stale socket: {}", paths.socket.display()))?;
+        std::fs::remove_file(&paths.socket).with_context(|| {
+            format!("failed to remove stale socket: {}", paths.socket.display())
+        })?;
     }
 
     let listener = UnixListener::bind(&paths.socket)
@@ -271,7 +278,9 @@ pub async fn start_ipc_server(
                     let shutdown_tx = shutdown_tx.clone();
                     let uptime = start_time.elapsed();
                     tokio::spawn(async move {
-                        if let Err(error) = handle_ipc_connection(stream, &shutdown_tx, uptime).await {
+                        if let Err(error) =
+                            handle_ipc_connection(stream, &shutdown_tx, uptime).await
+                        {
                             tracing::warn!(%error, "IPC connection handler failed");
                         }
                     });
@@ -314,12 +323,10 @@ async fn handle_ipc_connection(
             shutdown_tx.send(true).ok();
             IpcResponse::Ok
         }
-        IpcCommand::Status => {
-            IpcResponse::Status {
-                pid: std::process::id(),
-                uptime_seconds: uptime.as_secs(),
-            }
-        }
+        IpcCommand::Status => IpcResponse::Status {
+            pid: std::process::id(),
+            uptime_seconds: uptime.as_secs(),
+        },
     };
 
     let mut response_bytes = serde_json::to_vec(&response)?;
