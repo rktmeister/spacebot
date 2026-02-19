@@ -648,10 +648,18 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
             break;
         }
 
-        let split_at = remaining[..max_len]
+        let safe_max = {
+            let mut i = max_len.min(remaining.len());
+            while !remaining.is_char_boundary(i) {
+                i -= 1;
+            }
+            i
+        };
+
+        let split_at = remaining[..safe_max]
             .rfind('\n')
-            .or_else(|| remaining[..max_len].rfind(' '))
-            .unwrap_or(max_len);
+            .or_else(|| remaining[..safe_max].rfind(' '))
+            .unwrap_or(safe_max);
 
         chunks.push(remaining[..split_at].to_string());
         remaining = remaining[split_at..].trim_start();
