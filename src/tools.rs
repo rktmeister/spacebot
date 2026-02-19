@@ -121,6 +121,7 @@ pub async fn add_channel_tools(
         conversation_id,
         state.conversation_logger.clone(),
         state.channel_id.clone(),
+        skip_flag.clone(),
     )).await?;
     handle.add_tool(BranchTool::new(state.clone())).await?;
     handle.add_tool(SpawnWorkerTool::new(state.clone())).await?;
