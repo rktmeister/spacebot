@@ -145,6 +145,7 @@ pub struct LlmConfig {
     pub ollama_base_url: Option<String>,
     pub opencode_zen_key: Option<String>,
     pub nvidia_key: Option<String>,
+    pub minimax_key: Option<String>,
     pub providers: HashMap<String, ProviderConfig>,
 }
 
@@ -165,6 +166,7 @@ impl LlmConfig {
             || self.ollama_base_url.is_some()
             || self.opencode_zen_key.is_some()
             || self.nvidia_key.is_some()
+            || self.minimax_key.is_some()
             || !self.providers.is_empty()
     }
 }
@@ -172,6 +174,7 @@ impl LlmConfig {
 const ANTHROPIC_PROVIDER_BASE_URL: &str = "https://api.anthropic.com";
 const OPENAI_PROVIDER_BASE_URL: &str = "https://api.openai.com";
 const OPENROUTER_PROVIDER_BASE_URL: &str = "https://openrouter.ai/api";
+const MINIMAX_PROVIDER_BASE_URL: &str = "https://api.minimax.io/anthropic";
 
 /// Defaults inherited by all agents. Individual agents can override any field.
 #[derive(Debug, Clone)]
@@ -1100,6 +1103,7 @@ struct TomlLlmConfigFields {
     ollama_base_url: Option<String>,
     opencode_zen_key: Option<String>,
     nvidia_key: Option<String>,
+    minimax_key: Option<String>,
     #[serde(default)]
     providers: HashMap<String, TomlProviderConfig>,
     #[serde(default)]
@@ -1123,6 +1127,7 @@ struct TomlLlmConfig {
     ollama_base_url: Option<String>,
     opencode_zen_key: Option<String>,
     nvidia_key: Option<String>,
+    minimax_key: Option<String>,
     providers: HashMap<String, TomlProviderConfig>,
 }
 
@@ -1171,6 +1176,7 @@ impl<'de> Deserialize<'de> for TomlLlmConfig {
             ollama_base_url: fields.ollama_base_url,
             opencode_zen_key: fields.opencode_zen_key,
             nvidia_key: fields.nvidia_key,
+            minimax_key: fields.minimax_key,
             providers: fields.providers,
         })
     }
@@ -1509,8 +1515,9 @@ impl Config {
             || std::env::var("NVIDIA_API_KEY").is_ok()
             || std::env::var("OLLAMA_API_KEY").is_ok()
             || std::env::var("OLLAMA_BASE_URL").is_ok()
-            || std::env::var("OPENCODE_ZEN_API_KEY").is_ok();
-            
+            || std::env::var("OPENCODE_ZEN_API_KEY").is_ok()
+            || std::env::var("MINIMAX_API_KEY").is_ok();
+
         // If we have any legacy keys, no onboarding needed
         if has_legacy_keys {
             return false;
@@ -1571,6 +1578,7 @@ impl Config {
             ollama_base_url: std::env::var("OLLAMA_BASE_URL").ok(),
             opencode_zen_key: std::env::var("OPENCODE_ZEN_API_KEY").ok(),
             nvidia_key: std::env::var("NVIDIA_API_KEY").ok(),
+            minimax_key: std::env::var("MINIMAX_API_KEY").ok(),
             providers: HashMap::new(),
         };
 
@@ -1604,6 +1612,17 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: OPENROUTER_PROVIDER_BASE_URL.to_string(),
                     api_key: openrouter_key,
+                    name: None,
+                });
+        }
+
+        if let Some(minimax_key) = llm.minimax_key.clone() {
+            llm.providers
+                .entry("minimax".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::Anthropic,
+                    base_url: MINIMAX_PROVIDER_BASE_URL.to_string(),
+                    api_key: minimax_key,
                     name: None,
                 });
         }
@@ -1784,6 +1803,12 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("NVIDIA_API_KEY").ok()),
+            minimax_key: toml
+                .llm
+                .minimax_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("MINIMAX_API_KEY").ok()),
             providers: toml
                 .llm
                 .providers
@@ -1832,6 +1857,17 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: OPENROUTER_PROVIDER_BASE_URL.to_string(),
                     api_key: openrouter_key,
+                    name: None,
+                });
+        }
+
+        if let Some(minimax_key) = llm.minimax_key.clone() {
+            llm.providers
+                .entry("minimax".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::Anthropic,
+                    base_url: MINIMAX_PROVIDER_BASE_URL.to_string(),
+                    api_key: minimax_key,
                     name: None,
                 });
         }
@@ -2882,6 +2918,7 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         "Mistral AI",
         "Ollama",
         "OpenCode Zen",
+        "MiniMax",
     ];
     let provider_idx = Select::new()
         .with_prompt("Which LLM provider do you want to use?")
@@ -2902,6 +2939,7 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         9 => ("Mistral AI API key", "mistral_key", "mistral"),
         10 => ("Ollama base URL", "ollama_base_url", "ollama"),
         11 => ("OpenCode Zen API key", "opencode_zen_key", "opencode-zen"),
+        12 => ("MiniMax API key", "minimax_key", "minimax"),
         _ => unreachable!(),
     };
     let is_secret = provider_id != "ollama";
