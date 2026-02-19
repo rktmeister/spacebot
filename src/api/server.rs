@@ -2820,12 +2820,14 @@ struct ModelInfo {
     id: String,
     /// Human-readable name
     name: String,
-    /// Provider ID ("anthropic", "openrouter", "openai", "zhipu")
+    /// Provider ID for routing ("anthropic", "openrouter", "openai", etc.)
     provider: String,
     /// Context window size in tokens, if known
     context_window: Option<u64>,
-    /// Whether this is a curated/recommended model
-    curated: bool,
+    /// Whether this model supports tool/function calling
+    tool_call: bool,
+    /// Whether this model has reasoning/thinking capability
+    reasoning: bool,
 }
 
 #[derive(Serialize)]
@@ -2833,458 +2835,248 @@ struct ModelsResponse {
     models: Vec<ModelInfo>,
 }
 
-/// Static curated model list — the "known good" models we recommend.
-fn curated_models() -> Vec<ModelInfo> {
+/// Maps models.dev provider IDs to spacebot's internal provider IDs for
+/// providers with direct integrations. Handles naming mismatches
+/// (e.g. "fireworks-ai" in models.dev vs "fireworks" in spacebot).
+fn direct_provider_mapping(models_dev_id: &str) -> Option<&'static str> {
+    match models_dev_id {
+        "anthropic" => Some("anthropic"),
+        "openai" => Some("openai"),
+        "deepseek" => Some("deepseek"),
+        "xai" => Some("xai"),
+        "mistral" => Some("mistral"),
+        "groq" => Some("groq"),
+        "togetherai" => Some("together"),
+        "fireworks-ai" => Some("fireworks"),
+        "zhipuai" => Some("zhipu"),
+        _ => None,
+    }
+}
+
+/// Cached model catalog fetched from models.dev.
+static MODELS_CACHE: std::sync::LazyLock<
+    tokio::sync::RwLock<(Vec<ModelInfo>, std::time::Instant)>,
+> = std::sync::LazyLock::new(|| {
+    tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now()))
+});
+
+const MODELS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Models from providers not in models.dev (private/custom endpoints).
+fn extra_models() -> Vec<ModelInfo> {
     vec![
-        // Anthropic (direct)
-        ModelInfo {
-            id: "anthropic/claude-sonnet-4-20250514".into(),
-            name: "Claude Sonnet 4".into(),
-            provider: "anthropic".into(),
-            context_window: Some(200_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "anthropic/claude-haiku-4.5-20250514".into(),
-            name: "Claude Haiku 4.5".into(),
-            provider: "anthropic".into(),
-            context_window: Some(200_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "anthropic/claude-opus-4-20250514".into(),
-            name: "Claude Opus 4".into(),
-            provider: "anthropic".into(),
-            context_window: Some(200_000),
-            curated: true,
-        },
-        // OpenRouter
-        ModelInfo {
-            id: "openrouter/anthropic/claude-sonnet-4-20250514".into(),
-            name: "Claude Sonnet 4".into(),
-            provider: "openrouter".into(),
-            context_window: Some(200_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/anthropic/claude-haiku-4.5-20250514".into(),
-            name: "Claude Haiku 4.5".into(),
-            provider: "openrouter".into(),
-            context_window: Some(200_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/anthropic/claude-opus-4-20250514".into(),
-            name: "Claude Opus 4".into(),
-            provider: "openrouter".into(),
-            context_window: Some(200_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/google/gemini-2.5-pro-preview".into(),
-            name: "Gemini 2.5 Pro".into(),
-            provider: "openrouter".into(),
-            context_window: Some(1_048_576),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/google/gemini-2.5-flash-preview".into(),
-            name: "Gemini 2.5 Flash".into(),
-            provider: "openrouter".into(),
-            context_window: Some(1_048_576),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/deepseek/deepseek-r1".into(),
-            name: "DeepSeek R1".into(),
-            provider: "openrouter".into(),
-            context_window: Some(163_840),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/deepseek/deepseek-chat-v3-0324".into(),
-            name: "DeepSeek V3".into(),
-            provider: "openrouter".into(),
-            context_window: Some(163_840),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/moonshotai/kimi-k2".into(),
-            name: "Kimi K2".into(),
-            provider: "openrouter".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/moonshotai/kimi-k2.5".into(),
-            name: "Kimi K2.5".into(),
-            provider: "openrouter".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/openai/gpt-4.1".into(),
-            name: "GPT-4.1".into(),
-            provider: "openrouter".into(),
-            context_window: Some(1_047_576),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/openai/gpt-4.1-mini".into(),
-            name: "GPT-4.1 Mini".into(),
-            provider: "openrouter".into(),
-            context_window: Some(1_047_576),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/x-ai/grok-3-mini".into(),
-            name: "Grok 3 Mini".into(),
-            provider: "openrouter".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openrouter/mistralai/mistral-medium-3".into(),
-            name: "Mistral Medium 3".into(),
-            provider: "openrouter".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        // OpenAI (direct)
-        ModelInfo {
-            id: "openai/gpt-4.1".into(),
-            name: "GPT-4.1".into(),
-            provider: "openai".into(),
-            context_window: Some(1_047_576),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openai/gpt-4.1-mini".into(),
-            name: "GPT-4.1 Mini".into(),
-            provider: "openai".into(),
-            context_window: Some(1_047_576),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openai/gpt-4.1-nano".into(),
-            name: "GPT-4.1 Nano".into(),
-            provider: "openai".into(),
-            context_window: Some(1_047_576),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openai/o3".into(),
-            name: "o3".into(),
-            provider: "openai".into(),
-            context_window: Some(200_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openai/o3-mini".into(),
-            name: "o3 Mini".into(),
-            provider: "openai".into(),
-            context_window: Some(200_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "openai/o4-mini".into(),
-            name: "o4 Mini".into(),
-            provider: "openai".into(),
-            context_window: Some(200_000),
-            curated: true,
-        },
-        // Z.ai (GLM)
-        ModelInfo {
-            id: "zhipu/glm-4-plus".into(),
-            name: "GLM-4 Plus".into(),
-            provider: "zhipu".into(),
-            context_window: Some(128_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "zhipu/glm-4-flash".into(),
-            name: "GLM-4 Flash".into(),
-            provider: "zhipu".into(),
-            context_window: Some(128_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "zhipu/glm-4-flashx".into(),
-            name: "GLM-4 FlashX".into(),
-            provider: "zhipu".into(),
-            context_window: Some(128_000),
-            curated: true,
-        },
-        // Groq
-        ModelInfo {
-            id: "groq/llama-3.3-70b-versatile".into(),
-            name: "Llama 3.3 70B Versatile".into(),
-            provider: "groq".into(),
-            context_window: Some(32_768),
-            curated: true,
-        },
-        ModelInfo {
-            id: "groq/llama-3.3-70b-specdec".into(),
-            name: "Llama 3.3 70B Speculative Decoding".into(),
-            provider: "groq".into(),
-            context_window: Some(8192),
-            curated: true,
-        },
-        ModelInfo {
-            id: "groq/llama-3.1-70b-versatile".into(),
-            name: "Llama 3.1 70B Versatile".into(),
-            provider: "groq".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "groq/mixtral-8x7b-32768".into(),
-            name: "Mixtral 8x7B".into(),
-            provider: "groq".into(),
-            context_window: Some(32_768),
-            curated: true,
-        },
-        ModelInfo {
-            id: "groq/gemma2-9b-it".into(),
-            name: "Gemma 2 9B".into(),
-            provider: "groq".into(),
-            context_window: Some(8192),
-            curated: true,
-        },
-        // Together AI
-        ModelInfo {
-            id: "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo".into(),
-            name: "Llama 3.1 405B Instruct Turbo".into(),
-            provider: "together".into(),
-            context_window: Some(130_815),
-            curated: true,
-        },
-        ModelInfo {
-            id: "together/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo".into(),
-            name: "Llama 3.1 70B Instruct Turbo".into(),
-            provider: "together".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "together/meta-llama/Meta-Llama-3.3-70B-Instruct-Turbo".into(),
-            name: "Llama 3.3 70B Instruct Turbo".into(),
-            provider: "together".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "together/Qwen/Qwen2.5-72B-Instruct-Turbo".into(),
-            name: "Qwen 2.5 72B Instruct Turbo".into(),
-            provider: "together".into(),
-            context_window: Some(32_768),
-            curated: true,
-        },
-        ModelInfo {
-            id: "together/deepseek-ai/DeepSeek-V3".into(),
-            name: "DeepSeek V3".into(),
-            provider: "together".into(),
-            context_window: Some(65_536),
-            curated: true,
-        },
-        // Fireworks AI
-        ModelInfo {
-            id: "fireworks/accounts/fireworks/models/llama-v3p3-70b-instruct".into(),
-            name: "Llama 3.3 70B Instruct".into(),
-            provider: "fireworks".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "fireworks/accounts/fireworks/models/llama-v3p1-405b-instruct".into(),
-            name: "Llama 3.1 405B Instruct".into(),
-            provider: "fireworks".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "fireworks/accounts/fireworks/models/llama-v3p1-70b-instruct".into(),
-            name: "Llama 3.1 70B Instruct".into(),
-            provider: "fireworks".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct".into(),
-            name: "Llama 3.1 8B Instruct".into(),
-            provider: "fireworks".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "fireworks/accounts/fireworks/models/qwen2p5-72b-instruct".into(),
-            name: "Qwen 2.5 72B Instruct".into(),
-            provider: "fireworks".into(),
-            context_window: Some(32_768),
-            curated: true,
-        },
-        // DeepSeek
-        ModelInfo {
-            id: "deepseek/deepseek-chat".into(),
-            name: "DeepSeek Chat".into(),
-            provider: "deepseek".into(),
-            context_window: Some(65_536),
-            curated: true,
-        },
-        ModelInfo {
-            id: "deepseek/deepseek-reasoner".into(),
-            name: "DeepSeek Reasoner".into(),
-            provider: "deepseek".into(),
-            context_window: Some(65_536),
-            curated: true,
-        },
-        // xAI
-        ModelInfo {
-            id: "xai/grok-2-latest".into(),
-            name: "Grok 2".into(),
-            provider: "xai".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        ModelInfo {
-            id: "xai/grok-2-vision-latest".into(),
-            name: "Grok 2 Vision".into(),
-            provider: "xai".into(),
-            context_window: Some(32_768),
-            curated: true,
-        },
-        ModelInfo {
-            id: "xai/grok-beta".into(),
-            name: "Grok Beta".into(),
-            provider: "xai".into(),
-            context_window: Some(131_072),
-            curated: true,
-        },
-        // Mistral AI
-        ModelInfo {
-            id: "mistral/mistral-large-latest".into(),
-            name: "Mistral Large".into(),
-            provider: "mistral".into(),
-            context_window: Some(128_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "mistral/mistral-small-latest".into(),
-            name: "Mistral Small".into(),
-            provider: "mistral".into(),
-            context_window: Some(128_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "mistral/mistral-medium-latest".into(),
-            name: "Mistral Medium".into(),
-            provider: "mistral".into(),
-            context_window: Some(128_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "mistral/codestral-latest".into(),
-            name: "Codestral".into(),
-            provider: "mistral".into(),
-            context_window: Some(32_000),
-            curated: true,
-        },
-        ModelInfo {
-            id: "mistral/pixtral-large-latest".into(),
-            name: "Pixtral Large".into(),
-            provider: "mistral".into(),
-            context_window: Some(128_000),
-            curated: true,
-        },
-        // OpenCode Zen (OpenAI-compatible)
         ModelInfo {
             id: "opencode-zen/kimi-k2.5".into(),
             name: "Kimi K2.5".into(),
             provider: "opencode-zen".into(),
             context_window: None,
-            curated: true,
+            tool_call: true,
+            reasoning: true,
         },
         ModelInfo {
             id: "opencode-zen/kimi-k2".into(),
             name: "Kimi K2".into(),
             provider: "opencode-zen".into(),
             context_window: None,
-            curated: true,
+            tool_call: true,
+            reasoning: false,
         },
         ModelInfo {
             id: "opencode-zen/kimi-k2-thinking".into(),
             name: "Kimi K2 Thinking".into(),
             provider: "opencode-zen".into(),
             context_window: None,
-            curated: true,
+            tool_call: true,
+            reasoning: true,
         },
         ModelInfo {
             id: "opencode-zen/glm-5".into(),
             name: "GLM 5".into(),
             provider: "opencode-zen".into(),
             context_window: None,
-            curated: true,
+            tool_call: true,
+            reasoning: false,
         },
         ModelInfo {
             id: "opencode-zen/minimax-m2.5".into(),
             name: "MiniMax M2.5".into(),
             provider: "opencode-zen".into(),
             context_window: None,
-            curated: true,
+            tool_call: true,
+            reasoning: false,
         },
         ModelInfo {
             id: "opencode-zen/qwen3-coder".into(),
             name: "Qwen3 Coder 480B".into(),
             provider: "opencode-zen".into(),
             context_window: None,
-            curated: true,
+            tool_call: true,
+            reasoning: false,
         },
         ModelInfo {
             id: "opencode-zen/big-pickle".into(),
             name: "Big Pickle".into(),
             provider: "opencode-zen".into(),
             context_window: None,
-            curated: true,
+            tool_call: true,
+            reasoning: false,
         },
     ]
 }
 
-/// In-memory cache for dynamically fetched models.
-static DYNAMIC_MODELS: std::sync::LazyLock<
-    tokio::sync::RwLock<(Vec<ModelInfo>, std::time::Instant)>,
-> = std::sync::LazyLock::new(|| {
-    tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now()))
-});
+/// Fetch the full model catalog from models.dev and transform into ModelInfo entries.
+///
+/// Provider mapping strategy:
+/// - Direct providers (anthropic, openai, etc.) get their spacebot prefix: `anthropic/{model}`
+/// - The `openrouter` provider's model IDs are already prefixed (e.g. `anthropic/claude-sonnet-4`),
+///   so they become `openrouter/{model_id}` without doubling the prefix
+/// - All other providers route through openrouter: `openrouter/{provider}/{model}`
+async fn fetch_models_dev() -> anyhow::Result<Vec<ModelInfo>> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://models.dev/api.json")
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await?
+        .error_for_status()?;
 
-const MODEL_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+    let catalog: HashMap<String, ModelsDevProvider> = response.json().await?;
+    let mut models = Vec::new();
+
+    for (provider_id, provider) in &catalog {
+        for (model_id, model) in &provider.models {
+            if model.status.as_deref() == Some("deprecated") {
+                continue;
+            }
+
+            let has_text_output = model
+                .modalities
+                .as_ref()
+                .and_then(|m| m.output.as_ref())
+                .is_some_and(|outputs| outputs.iter().any(|o| o == "text"));
+            if !has_text_output {
+                continue;
+            }
+
+            let (routing_id, routing_provider) =
+                if let Some(spacebot_provider) = direct_provider_mapping(provider_id) {
+                    // Direct integration: anthropic/claude-sonnet-4, openai/gpt-4.1, etc.
+                    (
+                        format!("{spacebot_provider}/{model_id}"),
+                        spacebot_provider.to_string(),
+                    )
+                } else if provider_id == "openrouter" {
+                    // OpenRouter model IDs are already prefixed (e.g. "anthropic/claude-sonnet-4")
+                    (format!("openrouter/{model_id}"), "openrouter".into())
+                } else {
+                    // Everything else routes through openrouter
+                    (
+                        format!("openrouter/{provider_id}/{model_id}"),
+                        "openrouter".into(),
+                    )
+                };
+
+            let context_window = model.limit.as_ref().map(|l| l.context);
+
+            models.push(ModelInfo {
+                id: routing_id,
+                name: model.name.clone(),
+                provider: routing_provider,
+                context_window,
+                tool_call: model.tool_call,
+                reasoning: model.reasoning,
+            });
+        }
+    }
+
+    // Sort by provider then name for stable ordering
+    models.sort_by(|a, b| a.provider.cmp(&b.provider).then(a.name.cmp(&b.name)));
+
+    Ok(models)
+}
+
+/// Deserialization types for the models.dev API response.
+
+#[derive(Deserialize)]
+struct ModelsDevProvider {
+    #[allow(dead_code)]
+    id: Option<String>,
+    #[allow(dead_code)]
+    name: Option<String>,
+    #[serde(default)]
+    models: HashMap<String, ModelsDevModel>,
+}
+
+#[derive(Deserialize)]
+struct ModelsDevModel {
+    #[allow(dead_code)]
+    id: Option<String>,
+    name: String,
+    #[serde(default)]
+    tool_call: bool,
+    #[serde(default)]
+    reasoning: bool,
+    limit: Option<ModelsDevLimit>,
+    modalities: Option<ModelsDevModalities>,
+    status: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ModelsDevLimit {
+    context: u64,
+}
+
+#[derive(Deserialize)]
+struct ModelsDevModalities {
+    #[allow(dead_code)]
+    input: Option<Vec<String>>,
+    output: Option<Vec<String>>,
+}
+
+/// Ensure the cache is populated (fetches on first call, then uses TTL).
+async fn ensure_models_cache() -> Vec<ModelInfo> {
+    // Fast path: cache is fresh
+    {
+        let cache = MODELS_CACHE.read().await;
+        if !cache.0.is_empty() && cache.1.elapsed() < MODELS_CACHE_TTL {
+            return cache.0.clone();
+        }
+    }
+
+    // Slow path: fetch and cache
+    match fetch_models_dev().await {
+        Ok(models) => {
+            let mut cache = MODELS_CACHE.write().await;
+            *cache = (models.clone(), std::time::Instant::now());
+            models
+        }
+        Err(error) => {
+            tracing::warn!(%error, "failed to fetch models from models.dev, using stale cache");
+            let cache = MODELS_CACHE.read().await;
+            cache.0.clone()
+        }
+    }
+}
 
 async fn get_models(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<ModelsResponse>, StatusCode> {
     let config_path = state.config_path.read().await.clone();
-
-    // Determine which providers are configured
     let configured = configured_providers(&config_path).await;
 
-    // Start with curated models, filtered to configured providers
-    let mut models: Vec<ModelInfo> = curated_models()
+    let catalog = ensure_models_cache().await;
+
+    let mut models: Vec<ModelInfo> = catalog
         .into_iter()
         .filter(|m| configured.contains(&m.provider.as_str()))
         .collect();
 
-    // Add cached dynamic models if fresh
-    let cache = DYNAMIC_MODELS.read().await;
-    if !cache.0.is_empty() && cache.1.elapsed() < MODEL_CACHE_TTL {
-        for model in &cache.0 {
-            if configured.contains(&model.provider.as_str()) {
-                // Skip if already in curated list
-                if !models.iter().any(|m| m.id == model.id) {
-                    models.push(model.clone());
-                }
-            }
+    // Append extra models (opencode-zen, etc.) if configured
+    for model in extra_models() {
+        if configured.contains(&model.provider.as_str()) {
+            models.push(model);
         }
     }
-    drop(cache);
 
     Ok(Json(ModelsResponse { models }))
 }
@@ -3292,24 +3084,12 @@ async fn get_models(
 async fn refresh_models(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<ModelsResponse>, StatusCode> {
-    let config_path = state.config_path.read().await.clone();
-    let configured = configured_providers(&config_path).await;
-
-    let mut dynamic = Vec::new();
-
-    // Query OpenRouter if configured
-    if configured.contains(&"openrouter") {
-        if let Ok(models) = fetch_openrouter_models(&config_path).await {
-            dynamic.extend(models);
-        }
+    // Force re-fetch by clearing the cache
+    {
+        let mut cache = MODELS_CACHE.write().await;
+        *cache = (Vec::new(), std::time::Instant::now() - MODELS_CACHE_TTL);
     }
 
-    // Cache the results
-    let mut cache = DYNAMIC_MODELS.write().await;
-    *cache = (dynamic, std::time::Instant::now());
-    drop(cache);
-
-    // Return full list (curated + dynamic)
     get_models(State(state)).await
 }
 
@@ -3377,64 +3157,7 @@ async fn configured_providers(config_path: &std::path::Path) -> Vec<&'static str
     providers
 }
 
-/// Fetch available models from OpenRouter's API.
-async fn fetch_openrouter_models(
-    config_path: &std::path::Path,
-) -> anyhow::Result<Vec<ModelInfo>> {
-    let content = tokio::fs::read_to_string(config_path).await?;
-    let doc: toml_edit::DocumentMut = content.parse()?;
 
-    let api_key = doc
-        .get("llm")
-        .and_then(|l| l.get("openrouter_key"))
-        .and_then(|v| v.as_str())
-        .map(|s| {
-            if let Some(var) = s.strip_prefix("env:") {
-                std::env::var(var).unwrap_or_default()
-            } else {
-                s.to_string()
-            }
-        })
-        .unwrap_or_default();
-
-    if api_key.is_empty() {
-        anyhow::bail!("no openrouter key");
-    }
-
-    let client = reqwest::Client::new();
-    let response = client
-        .get("https://openrouter.ai/api/v1/models")
-        .header("Authorization", format!("Bearer {api_key}"))
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await?
-        .error_for_status()?;
-
-    #[derive(Deserialize)]
-    struct OpenRouterModelsResponse {
-        data: Vec<OpenRouterModel>,
-    }
-    #[derive(Deserialize)]
-    struct OpenRouterModel {
-        id: String,
-        name: Option<String>,
-        context_length: Option<u64>,
-    }
-
-    let body: OpenRouterModelsResponse = response.json().await?;
-
-    Ok(body
-        .data
-        .into_iter()
-        .map(|m| ModelInfo {
-            id: format!("openrouter/{}", m.id),
-            name: m.name.unwrap_or_else(|| m.id.clone()),
-            provider: "openrouter".into(),
-            context_window: m.context_length,
-            curated: false,
-        })
-        .collect())
-}
 
 // -- Ingest handlers --
 

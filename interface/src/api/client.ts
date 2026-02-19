@@ -674,7 +674,8 @@ export interface ModelInfo {
 	name: string;
 	provider: string;
 	context_window: number | null;
-	curated: boolean;
+	tool_call: boolean;
+	reasoning: boolean;
 }
 
 export interface ModelsResponse {

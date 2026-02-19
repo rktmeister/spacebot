@@ -369,6 +369,7 @@ impl Scheduler {
 }
 
 /// Execute a single cron job: create a fresh channel, run the prompt, deliver the result.
+#[tracing::instrument(skip(context), fields(cron_id = %job.id, agent_id = %context.deps.agent_id))]
 async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
     let channel_id: crate::ChannelId = Arc::from(format!("cron:{}", job.id).as_str());
 

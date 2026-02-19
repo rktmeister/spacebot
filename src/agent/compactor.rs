@@ -181,6 +181,7 @@ impl Compactor {
 }
 
 /// Run the actual compaction: summarize via LLM, extract memories, swap summary into history.
+#[tracing::instrument(skip(deps, compactor_prompt, history), fields(agent_id = %deps.agent_id))]
 async fn run_compaction(
     deps: &AgentDeps,
     compactor_prompt: &str,

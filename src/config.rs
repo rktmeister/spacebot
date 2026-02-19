@@ -9,6 +9,25 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// OpenTelemetry export configuration.
+///
+/// All fields are optional. If `otlp_endpoint` is not set (and the standard
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` env var is not present), OTLP export is
+/// disabled and the OTel layer is omitted entirely.
+#[derive(Debug, Clone, Default)]
+pub struct TelemetryConfig {
+    /// OTLP HTTP endpoint, e.g. `http://localhost:4318`.
+    /// Falls back to the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable.
+    pub otlp_endpoint: Option<String>,
+    /// Extra OTLP headers for the exporter (e.g. `Authorization`).
+    /// Loaded from the `OTEL_EXPORTER_OTLP_HEADERS` environment variable.
+    pub otlp_headers: HashMap<String, String>,
+    /// `service.name` resource attribute sent with every span.
+    pub service_name: String,
+    /// Trace sample rate in the range 0.0–1.0. Defaults to 1.0 (sample all).
+    pub sample_rate: f64,
+}
+
 /// Top-level Spacebot configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -26,6 +45,8 @@ pub struct Config {
     pub bindings: Vec<Binding>,
     /// HTTP API server configuration.
     pub api: ApiConfig,
+    /// OpenTelemetry export configuration.
+    pub telemetry: TelemetryConfig,
 }
 
 /// HTTP API server configuration.
@@ -70,9 +91,9 @@ pub struct LlmConfig {
 impl LlmConfig {
     /// Check if any provider configuration is set.
     pub fn has_any_key(&self) -> bool {
-        self.anthropic_key.is_some() 
-            || self.openai_key.is_some() 
-            || self.openrouter_key.is_some() 
+        self.anthropic_key.is_some()
+            || self.openai_key.is_some()
+            || self.openrouter_key.is_some()
             || self.zhipu_key.is_some()
             || self.groq_key.is_some()
             || self.together_key.is_some()
@@ -841,6 +862,16 @@ struct TomlConfig {
     bindings: Vec<TomlBinding>,
     #[serde(default)]
     api: TomlApiConfig,
+    #[serde(default)]
+    telemetry: TomlTelemetryConfig,
+}
+
+#[derive(Deserialize, Default)]
+struct TomlTelemetryConfig {
+    otlp_endpoint: Option<String>,
+    otlp_headers: Option<String>,
+    service_name: Option<String>,
+    sample_rate: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -1108,6 +1139,40 @@ fn resolve_env_value(value: &str) -> Option<String> {
     }
 }
 
+fn parse_otlp_headers(value: Option<String>) -> Result<HashMap<String, String>> {
+    let Some(raw) = value else {
+        return Ok(HashMap::new());
+    };
+
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut headers = HashMap::new();
+    for entry in raw.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = entry.split_once('=') else {
+            return Err(ConfigError::Invalid(format!(
+                "invalid OTEL_EXPORTER_OTLP_HEADERS entry '{entry}', expected key=value"
+            )))?;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() {
+            return Err(ConfigError::Invalid(
+                "invalid OTEL_EXPORTER_OTLP_HEADERS entry: empty header name".into(),
+            ))?;
+        }
+        headers.insert(key.to_string(), value.to_string());
+    }
+
+    Ok(headers)
+}
+
 /// Resolve a TomlRoutingConfig against a base RoutingConfig.
 fn resolve_routing(toml: Option<TomlRoutingConfig>, base: &RoutingConfig) -> RoutingConfig {
     let Some(t) = toml else { return base.clone() };
@@ -1248,14 +1313,21 @@ impl Config {
             messaging: MessagingConfig::default(),
             bindings: Vec::new(),
             api: ApiConfig::default(),
+            telemetry: TelemetryConfig {
+                otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
+                otlp_headers: parse_otlp_headers(std::env::var("OTEL_EXPORTER_OTLP_HEADERS").ok())?,
+                service_name: std::env::var("OTEL_SERVICE_NAME")
+                    .unwrap_or_else(|_| "spacebot".into()),
+                sample_rate: 1.0,
+            },
         })
     }
 
     /// Validate a raw TOML string as a valid Spacebot config.
     /// Returns Ok(()) if the config is structurally valid, or an error describing what's wrong.
     pub fn validate_toml(content: &str) -> Result<()> {
-        let toml_config: TomlConfig = toml::from_str(content)
-            .context("failed to parse config TOML")?;
+        let toml_config: TomlConfig =
+            toml::from_str(content).context("failed to parse config TOML")?;
         // Run full conversion to catch semantic errors (env resolution, defaults, etc.)
         let instance_dir = Self::default_instance_dir();
         Self::from_toml(toml_config, instance_dir)?;
@@ -1745,6 +1817,29 @@ impl Config {
             bind: toml.api.bind,
         };
 
+        let telemetry = {
+            // env var takes precedence over config file value
+            let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .ok()
+                .or(toml.telemetry.otlp_endpoint);
+            let otlp_headers = parse_otlp_headers(
+                std::env::var("OTEL_EXPORTER_OTLP_HEADERS")
+                    .ok()
+                    .or(toml.telemetry.otlp_headers),
+            )?;
+            let service_name = std::env::var("OTEL_SERVICE_NAME")
+                .ok()
+                .or(toml.telemetry.service_name)
+                .unwrap_or_else(|| "spacebot".into());
+            let sample_rate = toml.telemetry.sample_rate.unwrap_or(1.0);
+            TelemetryConfig {
+                otlp_endpoint,
+                otlp_headers,
+                service_name,
+                sample_rate,
+            }
+        };
+
         Ok(Config {
             instance_dir,
             llm,
@@ -1753,6 +1848,7 @@ impl Config {
             messaging,
             bindings,
             api,
+            telemetry,
         })
     }
 
@@ -1966,7 +2062,9 @@ pub fn spawn_file_watcher(
                     // Only forward data modification events, not metadata/access changes
                     use notify::EventKind;
                     match &event.kind {
-                        EventKind::Create(_) | EventKind::Modify(notify::event::ModifyKind::Data(_)) | EventKind::Remove(_) => {
+                        EventKind::Create(_)
+                        | EventKind::Modify(notify::event::ModifyKind::Data(_))
+                        | EventKind::Remove(_) => {
                             let _ = tx.send(event);
                         }
                         // Also forward Any/Other modify events (some backends don't distinguish)
