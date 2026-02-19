@@ -14,6 +14,12 @@ const PROVIDER_LABELS: Record<string, string> = {
 	anthropic: "Anthropic",
 	openrouter: "OpenRouter",
 	openai: "OpenAI",
+	deepseek: "DeepSeek",
+	xai: "xAI",
+	mistral: "Mistral",
+	groq: "Groq",
+	together: "Together AI",
+	fireworks: "Fireworks AI",
 	zhipu: "Z.ai (GLM)",
 	"opencode-zen": "OpenCode Zen",
 };
@@ -53,18 +59,12 @@ export function ModelSelect({ label, description, value, onChange }: ModelSelect
 	const grouped = useMemo(() => {
 		const groups: Record<string, ModelInfo[]> = {};
 		for (const model of filtered) {
-			// Curated first within each provider
 			const key = model.provider;
 			if (!groups[key]) groups[key] = [];
 			groups[key].push(model);
 		}
-		// Sort: curated models first within each group
 		for (const key of Object.keys(groups)) {
-			groups[key].sort((a, b) => {
-				if (a.curated && !b.curated) return -1;
-				if (!a.curated && b.curated) return 1;
-				return a.name.localeCompare(b.name);
-			});
+			groups[key].sort((a, b) => a.name.localeCompare(b.name));
 		}
 		return groups;
 	}, [filtered]);
@@ -109,7 +109,10 @@ export function ModelSelect({ label, description, value, onChange }: ModelSelect
 		}
 	};
 
-	const providerOrder = ["openrouter", "anthropic", "openai", "opencode-zen", "zhipu"];
+	const providerOrder = [
+		"openrouter", "anthropic", "openai", "deepseek", "xai", "mistral",
+		"groq", "together", "fireworks", "zhipu", "opencode-zen",
+	];
 	const sortedProviders = Object.keys(grouped).sort(
 		(a, b) => (providerOrder.indexOf(a) ?? 99) - (providerOrder.indexOf(b) ?? 99),
 	);
@@ -152,15 +155,20 @@ export function ModelSelect({ label, description, value, onChange }: ModelSelect
 											<span className="truncate font-medium">{model.name}</span>
 											<span className="text-xs text-ink-faint truncate">{model.id}</span>
 										</div>
-										<div className="flex items-center gap-2 shrink-0">
+										<div className="flex items-center gap-1.5 shrink-0">
 											{model.context_window && (
 												<span className="text-xs text-ink-faint">
 													{formatContextWindow(model.context_window)}
 												</span>
 											)}
-											{model.curated && (
-												<span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent font-medium">
-													rec
+											{model.tool_call && (
+												<span className="text-[10px] px-1 py-0.5 rounded bg-accent/15 text-accent font-medium" title="Tool calling">
+													tools
+												</span>
+											)}
+											{model.reasoning && (
+												<span className="text-[10px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-400 font-medium" title="Reasoning">
+													think
 												</span>
 											)}
 										</div>

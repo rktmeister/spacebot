@@ -484,6 +484,12 @@ function CredentialsSection({
 							if (e.key === "Enter") onSave();
 						}}
 					/>
+					<p className="mt-1.5 text-xs text-ink-faint">
+						Need help?{" "}
+						<a href="https://docs.spacebot.sh/discord-setup" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+							Read the Discord setup docs &rarr;
+						</a>
+					</p>
 				</div>
 			)}
 
@@ -530,6 +536,12 @@ function CredentialsSection({
 							}}
 						/>
 					</div>
+					<p className="text-xs text-ink-faint">
+						Need help?{" "}
+						<a href="https://docs.spacebot.sh/slack-setup" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+							Read the Slack setup docs &rarr;
+						</a>
+					</p>
 				</>
 			)}
 
@@ -557,6 +569,12 @@ function CredentialsSection({
 							if (e.key === "Enter") onSave();
 						}}
 					/>
+					<p className="mt-1.5 text-xs text-ink-faint">
+						Need help?{" "}
+						<a href="https://docs.spacebot.sh/telegram-setup" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+							Read the Telegram setup docs &rarr;
+						</a>
+					</p>
 				</div>
 			)}
 
