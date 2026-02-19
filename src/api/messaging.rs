@@ -18,6 +18,7 @@ pub(super) struct MessagingStatusResponse {
     slack: PlatformStatus,
     telegram: PlatformStatus,
     webhook: PlatformStatus,
+    twitch: PlatformStatus,
 }
 
 #[derive(Deserialize)]
@@ -37,7 +38,7 @@ pub(super) async fn messaging_status(
 ) -> Result<Json<MessagingStatusResponse>, StatusCode> {
     let config_path = state.config_path.read().await.clone();
 
-    let (discord, slack, telegram, webhook) = if config_path.exists() {
+    let (discord, slack, telegram, webhook, twitch) = if config_path.exists() {
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|error| {
@@ -122,13 +123,36 @@ pub(super) async fn messaging_status(
             })
             .unwrap_or(PlatformStatus { configured: false, enabled: false });
 
-        (discord_status, slack_status, telegram_status, webhook_status)
+        let twitch_status = doc
+            .get("messaging")
+            .and_then(|m| m.get("twitch"))
+            .map(|t| {
+                let has_username = t
+                    .get("username")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty());
+                let has_token = t
+                    .get("oauth_token")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty());
+                let enabled = t
+                    .get("enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                PlatformStatus {
+                    configured: has_username && has_token,
+                    enabled: has_username && has_token && enabled,
+                }
+            })
+            .unwrap_or(PlatformStatus { configured: false, enabled: false });
+
+        (discord_status, slack_status, telegram_status, webhook_status, twitch_status)
     } else {
         let default = PlatformStatus { configured: false, enabled: false };
-        (default.clone(), default.clone(), default.clone(), default)
+        (default.clone(), default.clone(), default.clone(), default.clone(), default)
     };
 
-    Ok(Json(MessagingStatusResponse { discord, slack, telegram, webhook }))
+    Ok(Json(MessagingStatusResponse { discord, slack, telegram, webhook, twitch }))
 }
 
 /// Disconnect a messaging platform: remove credentials from config, remove all
@@ -317,6 +341,25 @@ pub(super) async fn toggle_platform(
                             );
                             if let Err(error) = manager.register_and_start(adapter).await {
                                 tracing::error!(%error, "failed to start webhook adapter on toggle");
+                            }
+                        }
+                    }
+                    "twitch" => {
+                        if let Some(twitch_config) = &new_config.messaging.twitch {
+                            let perms = crate::config::TwitchPermissions::from_config(
+                                twitch_config,
+                                &new_config.bindings,
+                            );
+                            let arc_swap = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
+                            let adapter = crate::messaging::twitch::TwitchAdapter::new(
+                                &twitch_config.username,
+                                &twitch_config.oauth_token,
+                                twitch_config.channels.clone(),
+                                twitch_config.trigger_prefix.clone(),
+                                arc_swap,
+                            );
+                            if let Err(error) = manager.register_and_start(adapter).await {
+                                tracing::error!(%error, "failed to start twitch adapter on toggle");
                             }
                         }
                     }

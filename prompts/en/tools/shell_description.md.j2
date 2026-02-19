@@ -1,1 +1,3 @@
 Execute a shell command. Use this for file operations, running scripts, building projects, git commands, and any system-level operations. Be careful with destructive operations. The command runs with a 60 second timeout by default.
+
+To install tools that persist across restarts, place binaries in the persistent tools directory at $SPACEBOT_DIR/tools/bin (already on PATH). For example: `curl -fsSL https://example.com/tool -o $SPACEBOT_DIR/tools/bin/tool && chmod +x $SPACEBOT_DIR/tools/bin/tool`

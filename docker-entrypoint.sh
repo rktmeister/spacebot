@@ -2,6 +2,7 @@
 set -e
 
 mkdir -p "$SPACEBOT_DIR"
+mkdir -p "$SPACEBOT_DIR/tools/bin"
 
 # Generate config.toml from environment variables when no config file exists.
 # Once a config.toml is present on the volume, this is skipped entirely.

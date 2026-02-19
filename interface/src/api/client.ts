@@ -777,6 +777,7 @@ export interface MessagingStatusResponse {
 	slack: PlatformStatus;
 	telegram: PlatformStatus;
 	webhook: PlatformStatus;
+	twitch: PlatformStatus;
 }
 
 export interface BindingInfo {
@@ -805,6 +806,8 @@ export interface CreateBindingRequest {
 		discord_token?: string;
 		slack_bot_token?: string;
 		slack_app_token?: string;
+		twitch_username?: string;
+		twitch_oauth_token?: string;
 	};
 }
 

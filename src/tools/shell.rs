@@ -241,6 +241,13 @@ impl Tool for ShellTool {
             cmd.current_dir(&self.workspace);
         }
 
+        // Prepend persistent tools directory to PATH so user-installed
+        // binaries survive container restarts.
+        let tools_bin = self.instance_dir.join("tools/bin");
+        if let Ok(current_path) = std::env::var("PATH") {
+            cmd.env("PATH", format!("{}:{current_path}", tools_bin.display()));
+        }
+
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
