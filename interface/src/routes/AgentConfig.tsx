@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AgentConfigResponse, type AgentConfigUpdateRequest } from "@/api/client";
-import { Button, SettingSidebarButton, Input, TextArea, Toggle, NumberStepper } from "@/ui";
+import { Button, SettingSidebarButton, Input, TextArea, Toggle, NumberStepper, cx } from "@/ui";
 import { ModelSelect } from "@/components/ModelSelect";
+import { Markdown } from "@/components/Markdown";
 import { motion, AnimatePresence } from "framer-motion";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 
@@ -264,6 +265,7 @@ interface IdentityEditorProps {
 function IdentityEditor({ label, description, content, onDirtyChange, saveHandlerRef, onSave }: IdentityEditorProps) {
 	const [value, setValue] = useState(content ?? "");
 	const [localDirty, setLocalDirty] = useState(false);
+	const [mode, setMode] = useState<"edit" | "preview">("edit");
 
 	useEffect(() => {
 		if (!localDirty) {
@@ -317,21 +319,47 @@ function IdentityEditor({ label, description, content, onDirtyChange, saveHandle
 					<h3 className="text-sm font-medium text-ink">{label}</h3>
 					<span className="rounded bg-app-darkBox px-1.5 py-0.5 font-mono text-tiny text-ink-faint">{description}</span>
 				</div>
-				{localDirty ? (
-					<span className="text-tiny text-amber-400">Unsaved changes</span>
-				) : (
-					<span className="text-tiny text-ink-faint/50">Cmd+S to save</span>
-				)}
+				<div className="flex items-center gap-3">
+					<div className="flex items-center rounded border border-app-line/50 text-tiny">
+						<button
+							onClick={() => setMode("edit")}
+							className={cx("px-2 py-0.5 rounded-l transition-colors", mode === "edit" ? "bg-app-darkBox text-ink" : "text-ink-faint hover:text-ink")}
+						>
+							Edit
+						</button>
+						<button
+							onClick={() => setMode("preview")}
+							className={cx("px-2 py-0.5 rounded-r transition-colors", mode === "preview" ? "bg-app-darkBox text-ink" : "text-ink-faint hover:text-ink")}
+						>
+							Preview
+						</button>
+					</div>
+					{localDirty ? (
+						<span className="text-tiny text-amber-400">Unsaved changes</span>
+					) : (
+						<span className="text-tiny text-ink-faint/50">Cmd+S to save</span>
+					)}
+				</div>
 			</div>
 			<div className="flex-1 overflow-y-auto p-4">
-				<TextArea
-					value={value}
-					onChange={handleChange}
-					onKeyDown={handleKeyDown}
-					placeholder={`Write ${label.toLowerCase()} content here...`}
-					className="h-full w-full resize-none border-transparent bg-app-darkBox/30 px-4 py-3 font-mono leading-relaxed placeholder:text-ink-faint/40"
-					spellCheck={false}
-				/>
+				{mode === "edit" ? (
+					<TextArea
+						value={value}
+						onChange={handleChange}
+						onKeyDown={handleKeyDown}
+						placeholder={`Write ${label.toLowerCase()} content here...`}
+						className="h-full w-full resize-none border-transparent bg-app-darkBox/30 px-4 py-3 font-mono leading-relaxed placeholder:text-ink-faint/40"
+						spellCheck={false}
+					/>
+				) : (
+					<div className="prose-sm px-4 py-3">
+						{value ? (
+							<Markdown>{value}</Markdown>
+						) : (
+							<span className="text-ink-faint/40 text-sm">Nothing to preview.</span>
+						)}
+					</div>
+				)}
 			</div>
 		</>
 	);
