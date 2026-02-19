@@ -937,6 +937,7 @@ impl Channel {
                     content: crate::MessageContent::Text(retrigger_message),
                     timestamp: chrono::Utc::now(),
                     metadata: std::collections::HashMap::new(),
+                    formatted_author: None,
                 };
                 if let Err(error) = self.self_tx.try_send(synthetic) {
                     tracing::warn!(%error, "failed to re-trigger channel after process completion");
@@ -1411,9 +1412,9 @@ fn format_user_message(raw_text: &str, message: &InboundMessage) -> String {
         return raw_text.to_string();
     }
 
-    let display_name = message.metadata
-        .get("sender_display_name")
-        .and_then(|v| v.as_str())
+    // Use platform-formatted author if available, fall back to metadata
+    let display_name = message.formatted_author.as_deref()
+        .or_else(|| message.metadata.get("sender_display_name").and_then(|v| v.as_str()))
         .unwrap_or(&message.sender_id);
 
     let bot_tag = if message.metadata.get("sender_is_bot").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -1438,7 +1439,7 @@ fn format_user_message(raw_text: &str, message: &InboundMessage) -> String {
         })
         .unwrap_or_default();
 
-    format!("[{display_name}]{bot_tag}{reply_context}: {raw_text}")
+    format!("{display_name}{bot_tag}{reply_context}: {raw_text}")
 }
 
 /// Check if a ProcessEvent is targeted at a specific channel.

@@ -7,6 +7,7 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 
@@ -69,6 +70,81 @@ pub struct ReplyOutput {
     pub content: String,
 }
 
+/// Convert @username mentions to platform-specific syntax using conversation metadata.
+///
+/// Scans recent conversation history to build a name→ID mapping, then replaces
+/// @DisplayName with the platform's mention format (<@ID> for Discord/Slack,
+/// @username for Telegram).
+async fn convert_mentions(
+    content: &str,
+    channel_id: &ChannelId,
+    conversation_logger: &ConversationLogger,
+    source: &str,
+) -> String {
+    // Load recent conversation to extract user mappings
+    let messages = match conversation_logger.load_recent(channel_id, 50).await {
+        Ok(msgs) => msgs,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load conversation for mention conversion");
+            return content.to_string();
+        }
+    };
+
+    // Build display_name → user_id mapping from metadata
+    let mut name_to_id: HashMap<String, String> = HashMap::new();
+    for msg in messages {
+        if let (Some(name), Some(id), Some(meta_str)) = 
+            (&msg.sender_name, &msg.sender_id, &msg.metadata) 
+        {
+            // Parse metadata JSON to get clean display name (without mention syntax)
+            if let Ok(meta) = serde_json::from_str::<HashMap<String, serde_json::Value>>(meta_str) {
+                if let Some(display_name) = meta.get("sender_display_name").and_then(|v| v.as_str()) {
+                    // For Slack (from PR #43), sender_display_name includes mention: "Name (<@ID>)"
+                    // Extract just the name part
+                    let clean_name = display_name
+                        .split(" (<@")
+                        .next()
+                        .unwrap_or(display_name);
+                    name_to_id.insert(clean_name.to_string(), id.clone());
+                }
+            }
+            // Fallback: use sender_name from DB directly
+            name_to_id.insert(name.clone(), id.clone());
+        }
+    }
+
+    if name_to_id.is_empty() {
+        return content.to_string();
+    }
+
+    // Convert @Name patterns to platform-specific mentions
+    let mut result = content.to_string();
+    
+    // Sort by name length (longest first) to avoid partial replacements
+    // e.g., "Alice Smith" before "Alice"
+    let mut names: Vec<_> = name_to_id.keys().cloned().collect();
+    names.sort_by(|a, b| b.len().cmp(&a.len()));
+
+    for name in names {
+        if let Some(user_id) = name_to_id.get(&name) {
+            let mention_pattern = format!("@{}", name);
+            let replacement = match source {
+                "discord" | "slack" => format!("<@{}>", user_id),
+                "telegram" => format!("@{}", name), // Telegram uses @username (already correct)
+                _ => mention_pattern.clone(), // Unknown platform, leave as-is
+            };
+
+            // Only replace if not already in correct format
+            // Avoid double-converting "<@123>" patterns
+            if !result.contains(&format!("<@{}>", user_id)) {
+                result = result.replace(&mention_pattern, &replacement);
+            }
+        }
+    }
+
+    result
+}
+
 impl Tool for ReplyTool {
     const NAME: &'static str = "reply";
 
@@ -105,7 +181,21 @@ impl Tool for ReplyTool {
             "reply tool called"
         );
 
-        self.conversation_logger.log_bot_message(&self.channel_id, &args.content);
+        // Extract source from conversation_id (format: "platform:id")
+        let source = self.conversation_id
+            .split(':')
+            .next()
+            .unwrap_or("unknown");
+
+        // Auto-convert @mentions to platform-specific syntax
+        let converted_content = convert_mentions(
+            &args.content,
+            &self.channel_id,
+            &self.conversation_logger,
+            source,
+        ).await;
+
+        self.conversation_logger.log_bot_message(&self.channel_id, &converted_content);
 
         let response = match args.thread_name {
             Some(ref name) => {
@@ -117,10 +207,10 @@ impl Tool for ReplyTool {
                 };
                 OutboundResponse::ThreadReply {
                     thread_name,
-                    text: args.content.clone(),
+                    text: converted_content.clone(),
                 }
             }
-            None => OutboundResponse::Text(args.content.clone()),
+            None => OutboundResponse::Text(converted_content.clone()),
         };
 
         self.response_tx
@@ -136,7 +226,7 @@ impl Tool for ReplyTool {
         Ok(ReplyOutput {
             success: true,
             conversation_id: self.conversation_id.clone(),
-            content: args.content,
+            content: converted_content,
         })
     }
 }

@@ -197,7 +197,7 @@ impl Messaging for TelegramAdapter {
                                 .map(|u| u.id.0.to_string())
                                 .unwrap_or_default();
 
-                            let metadata = build_metadata(
+                            let (metadata, formatted_author) = build_metadata(
                                 &message,
                                 &*bot_username.read().await,
                             );
@@ -211,6 +211,7 @@ impl Messaging for TelegramAdapter {
                                 content,
                                 timestamp: message.date,
                                 metadata,
+                                formatted_author,
                             };
 
                             if let Err(error) = inbound_tx.send(inbound).await {
@@ -644,7 +645,7 @@ async fn resolve_file_url(bot: &Bot, file_id: &str) -> anyhow::Result<String> {
 fn build_metadata(
     message: &teloxide::types::Message,
     bot_username: &Option<String>,
-) -> HashMap<String, serde_json::Value> {
+) -> (HashMap<String, serde_json::Value>, Option<String>) {
     let mut metadata = HashMap::new();
 
     metadata.insert(
@@ -673,19 +674,30 @@ fn build_metadata(
         metadata.insert("telegram_chat_title".into(), (*title).into());
     }
 
-    if let Some(from) = &message.from {
+    let formatted_author = if let Some(from) = &message.from {
         metadata.insert(
             "telegram_user_id".into(),
             serde_json::Value::Number(from.id.0.into()),
         );
 
         let display_name = build_display_name(from);
-        metadata.insert("display_name".into(), display_name.into());
+        metadata.insert("display_name".into(), display_name.clone().into());
+        metadata.insert("sender_display_name".into(), display_name.clone().into());
 
-        if let Some(username) = &from.username {
+        let author = if let Some(username) = &from.username {
             metadata.insert("telegram_username".into(), username.clone().into());
-        }
-    }
+            metadata.insert(
+                "telegram_user_mention".into(),
+                serde_json::Value::String(format!("@{}", username)),
+            );
+            format!("{} (@{})", display_name, username)
+        } else {
+            display_name
+        };
+        Some(author)
+    } else {
+        None
+    };
 
     if let Some(bot_username) = bot_username {
         metadata.insert("telegram_bot_username".into(), bot_username.clone().into());
@@ -713,7 +725,7 @@ fn build_metadata(
         }
     }
 
-    metadata
+    (metadata, formatted_author)
 }
 
 /// Build a display name from a Telegram user, preferring full name.

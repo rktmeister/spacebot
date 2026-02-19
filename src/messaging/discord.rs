@@ -347,13 +347,13 @@ impl Messaging for DiscordAdapter {
                 let display_name = message.author.global_name.as_deref()
                     .unwrap_or(&message.author.name);
 
-                // Include reply-to attribution if this message is a reply
+                // Include mention and reply-to attribution
                 let author = if let Some(referenced) = &message.referenced_message {
                     let reply_author = referenced.author.global_name.as_deref()
                         .unwrap_or(&referenced.author.name);
-                    format!("{display_name} (replying to {reply_author})")
+                    format!("{display_name} (<@{}>) (replying to {reply_author})", message.author.id)
                 } else {
-                    display_name.to_string()
+                    format!("{display_name} (<@{}>)", message.author.id)
                 };
 
                 HistoryMessage {
@@ -447,7 +447,7 @@ impl EventHandler for Handler {
 
         let conversation_id = build_conversation_id(&message);
         let content = extract_content(&message);
-        let metadata = build_metadata(&ctx, &message).await;
+        let (metadata, formatted_author) = build_metadata(&ctx, &message).await;
 
         // Channel filter: allow if the channel ID or its parent (for threads) is in the allowlist
         if let Some(guild_id) = message.guild_id {
@@ -477,6 +477,7 @@ impl EventHandler for Handler {
             content,
             timestamp: *message.timestamp,
             metadata,
+            formatted_author: Some(formatted_author),
         };
 
         if let Err(error) = self.inbound_tx.send(inbound).await {
@@ -542,7 +543,7 @@ fn resolve_mentions(content: &str, mentions: &[User]) -> String {
     resolved
 }
 
-async fn build_metadata(ctx: &Context, message: &Message) -> HashMap<String, serde_json::Value> {
+async fn build_metadata(ctx: &Context, message: &Message) -> (HashMap<String, serde_json::Value>, String) {
     let mut metadata = HashMap::new();
     metadata.insert("discord_channel_id".into(), message.channel_id.get().into());
     metadata.insert("discord_message_id".into(), message.id.get().into());
@@ -561,8 +562,16 @@ async fn build_metadata(ctx: &Context, message: &Message) -> HashMap<String, ser
         message.author.global_name.clone()
             .unwrap_or_else(|| message.author.name.clone())
     };
-    metadata.insert("sender_display_name".into(), display_name.into());
+    metadata.insert("sender_display_name".into(), display_name.clone().into());
     metadata.insert("sender_id".into(), message.author.id.get().into());
+    metadata.insert(
+        "discord_user_mention".into(),
+        serde_json::Value::String(format!("<@{}>", message.author.id)),
+    );
+    
+    // Platform-formatted author for LLM context
+    let formatted_author = format!("{} (<@{}>)", display_name, message.author.id);
+    
     if message.author.bot {
         metadata.insert("sender_is_bot".into(), true.into());
     }
@@ -608,7 +617,7 @@ async fn build_metadata(ctx: &Context, message: &Message) -> HashMap<String, ser
         metadata.insert("reply_to_content".into(), truncated.into());
     }
 
-    metadata
+    (metadata, formatted_author)
 }
 
 /// Split a message into chunks that fit within Discord's 2000 char limit.

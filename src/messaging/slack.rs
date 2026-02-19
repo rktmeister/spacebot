@@ -213,7 +213,7 @@ async fn handle_push_event(
             let display_with_mention = format!("{} (<@{}>)", identity.display_name, uid.0);
             metadata.insert(
                 "sender_display_name".into(),
-                serde_json::Value::String(display_with_mention),
+                serde_json::Value::String(display_with_mention.clone()),
             );
             if let Some(name) = identity.username {
                 metadata.insert(
@@ -224,6 +224,17 @@ async fn handle_push_event(
         }
     }
 
+    // For Slack, formatted_author is the display_with_mention if user info was resolved
+    let formatted_author = if let Some(uid) = &user_id {
+        metadata
+            .get("sender_display_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| Some(uid.clone()))
+    } else {
+        None
+    };
+
     let inbound = InboundMessage {
         id: ts,
         source: "slack".into(),
@@ -233,6 +244,7 @@ async fn handle_push_event(
         content,
         timestamp: chrono::Utc::now(),
         metadata,
+        formatted_author,
     };
 
     if let Err(error) = adapter_state.inbound_tx.send(inbound).await {

@@ -232,11 +232,12 @@ async fn handle_send(
         id: uuid::Uuid::new_v4().to_string(),
         source: "webhook".into(),
         conversation_id,
-        sender_id: request.sender_id,
+        sender_id: request.sender_id.clone(),
         agent_id: request.agent_id.map(Into::into),
         content: MessageContent::Text(request.content),
         timestamp: chrono::Utc::now(),
         metadata,
+        formatted_author: Some(request.sender_id),
     };
 
     tx.send(inbound)

@@ -1326,6 +1326,7 @@ impl Config {
             ollama_key: std::env::var("OLLAMA_API_KEY").ok(),
             ollama_base_url: std::env::var("OLLAMA_BASE_URL").ok(),
             opencode_zen_key: std::env::var("OPENCODE_ZEN_API_KEY").ok(),
+            nvidia_key: std::env::var("NVIDIA_API_KEY").ok(),
         };
 
         // Note: We allow boot without provider configuration now. System starts in setup mode.

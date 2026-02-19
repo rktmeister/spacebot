@@ -405,6 +405,7 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
         content: MessageContent::Text(job.prompt.clone()),
         timestamp: chrono::Utc::now(),
         metadata: HashMap::new(),
+        formatted_author: None,
     };
 
     channel_tx
