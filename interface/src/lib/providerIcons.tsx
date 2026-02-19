@@ -50,6 +50,26 @@ function OpenCodeZenIcon({ size = 24, className }: IconProps) {
 	);
 }
 
+function OllamaIcon({ size = 24, className }: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			fill="none"
+			xmlns="http://www.w3.org/2000/svg"
+			className={className}
+			aria-hidden="true"
+			focusable="false"
+		>
+			<rect x="3" y="7" width="18" height="14" rx="3" stroke="currentColor" strokeWidth="1.5" />
+			<circle cx="9" cy="13" r="1.5" fill="currentColor" />
+			<circle cx="15" cy="13" r="1.5" fill="currentColor" />
+			<path d="M12 3V7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+		</svg>
+	);
+}
+
 export function ProviderIcon({ provider, className = "text-ink-faint", size = 24 }: ProviderIconProps) {
 	const iconProps: Partial<IconProps> = {
 		size,
@@ -67,6 +87,7 @@ export function ProviderIcon({ provider, className = "text-ink-faint", size = 24
 		together: Together,
 		xai: XAI,
 		zhipu: ZAI,
+		ollama: OllamaIcon,
 		"opencode-zen": OpenCodeZenIcon,
 	};
 

@@ -161,6 +161,20 @@ worker = "zhipu/glm-4.7"
 coding = "zhipu/glm-4.7"
 ```
 
+**Ollama example** — run against a local Ollama instance:
+
+```toml
+[llm]
+ollama_base_url = "http://localhost:11434"
+
+[defaults.routing]
+channel = "ollama/gemma3"
+worker = "ollama/gemma3"
+
+[defaults.routing.task_overrides]
+coding = "ollama/qwen3"
+```
+
 ### Skills
 
 Extensible skill system integrated with [skills.sh](https://skills.sh):

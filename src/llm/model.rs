@@ -76,6 +76,7 @@ impl SpacebotModel {
             "deepseek" => self.call_deepseek(request).await,
             "xai" => self.call_xai(request).await,
             "mistral" => self.call_mistral(request).await,
+            "ollama" => self.call_ollama(request).await,
             "opencode-zen" => self.call_opencode_zen(request).await,
             other => Err(CompletionError::ProviderError(format!(
                 "unknown provider: {other}"
@@ -617,6 +618,22 @@ impl SpacebotModel {
             .llm_manager
             .get_api_key(provider_id)
             .map_err(|e| CompletionError::ProviderError(e.to_string()))?;
+        self.call_openai_compatible_with_optional_auth(
+            request,
+            provider_display_name,
+            endpoint,
+            Some(api_key),
+        ).await
+    }
+
+    /// Generic OpenAI-compatible API call with optional bearer auth.
+    async fn call_openai_compatible_with_optional_auth(
+        &self,
+        request: CompletionRequest,
+        provider_display_name: &str,
+        endpoint: &str,
+        api_key: Option<String>,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
 
         let mut messages = Vec::new();
 
@@ -663,8 +680,13 @@ impl SpacebotModel {
         let response = self
             .llm_manager
             .http_client()
-            .post(endpoint)
-            .header("authorization", format!("Bearer {api_key}"))
+            .post(endpoint);
+        let response = if let Some(api_key) = api_key {
+            response.header("authorization", format!("Bearer {api_key}"))
+        } else {
+            response
+        };
+        let response = response
             .header("content-type", "application/json")
             .json(&body)
             .send()
@@ -766,6 +788,22 @@ impl SpacebotModel {
         ).await
     }
 
+    async fn call_ollama(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
+        let base_url = normalize_ollama_base_url(self.llm_manager.ollama_base_url());
+        let endpoint = format!("{base_url}/v1/chat/completions");
+        let api_key = self.llm_manager.get_api_key("ollama").ok();
+
+        self.call_openai_compatible_with_optional_auth(
+            request,
+            "Ollama",
+            &endpoint,
+            api_key,
+        ).await
+    }
+
     async fn call_opencode_zen(
         &self,
         request: CompletionRequest,
@@ -780,6 +818,22 @@ impl SpacebotModel {
 }
 
 // --- Helpers ---
+
+fn normalize_ollama_base_url(configured: Option<String>) -> String {
+    let mut base_url = configured
+        .unwrap_or_else(|| "http://localhost:11434".to_string())
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+
+    if base_url.ends_with("/api") {
+        base_url.truncate(base_url.len() - "/api".len());
+    } else if base_url.ends_with("/v1") {
+        base_url.truncate(base_url.len() - "/v1".len());
+    }
+
+    base_url
+}
 
 fn tool_result_content_to_string(content: &OneOrMany<rig::message::ToolResultContent>) -> String {
     content
@@ -1076,10 +1130,13 @@ fn parse_openai_response(
         for tc in tool_calls {
             let id = tc["id"].as_str().unwrap_or("").to_string();
             let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-            // OpenAI returns arguments as a JSON string, parse it back to Value
-            let arguments = tc["function"]["arguments"]
+            // OpenAI-compatible APIs usually return arguments as a JSON string.
+            // Some providers return it as a raw JSON object instead.
+            let arguments_field = &tc["function"]["arguments"];
+            let arguments = arguments_field
                 .as_str()
-                .and_then(|s| serde_json::from_str(s).ok())
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .or_else(|| arguments_field.as_object().map(|_| arguments_field.clone()))
                 .unwrap_or(serde_json::json!({}));
             assistant_content
                 .push(AssistantContent::ToolCall(make_tool_call(id, name, arguments)));
