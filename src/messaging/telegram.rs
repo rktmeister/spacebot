@@ -14,11 +14,14 @@ use teloxide::types::{
     ReplyParameters, UpdateKind, UserId,
 };
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
+
+/// Maximum number of rejected DM users to remember.
+const REJECTED_USERS_CAPACITY: usize = 50;
 
 /// Telegram adapter state.
 pub struct TelegramAdapter {
@@ -121,6 +124,10 @@ impl Messaging for TelegramAdapter {
 
         tokio::spawn(async move {
             let mut offset = 0i32;
+            // Track users whose DMs were rejected so we can nudge them when they're allowed.
+            let mut rejected_users: VecDeque<(ChatId, i64)> = VecDeque::new();
+            // Snapshot the current allow list so we can detect changes.
+            let mut last_allowed: Vec<i64> = permissions.load().dm_allowed_users.clone();
 
             loop {
                 tokio::select! {
@@ -137,6 +144,37 @@ impl Messaging for TelegramAdapter {
                                 continue;
                             }
                         };
+
+                        // Check if the allow list changed and nudge newly-allowed users.
+                        let current_permissions = permissions.load();
+                        if current_permissions.dm_allowed_users != last_allowed {
+                            let newly_allowed: Vec<i64> = current_permissions.dm_allowed_users.iter()
+                                .filter(|id| !last_allowed.contains(id))
+                                .copied()
+                                .collect();
+
+                            if !newly_allowed.is_empty() {
+                                // Notify rejected users who are now allowed.
+                                let mut remaining = VecDeque::new();
+                                for (chat_id, user_id) in rejected_users.drain(..) {
+                                    if newly_allowed.contains(&user_id) {
+                                        tracing::info!(
+                                            user_id,
+                                            "notifying previously rejected user they are now allowed"
+                                        );
+                                        let _ = bot.send_message(
+                                            chat_id,
+                                            "You've been added to the allow list — send me a message!",
+                                        ).send().await;
+                                    } else {
+                                        remaining.push_back((chat_id, user_id));
+                                    }
+                                }
+                                rejected_users = remaining;
+                            }
+
+                            last_allowed = current_permissions.dm_allowed_users.clone();
+                        }
 
                         for update in updates {
                             offset = update.id.as_offset() as i32;
@@ -168,6 +206,14 @@ impl Messaging for TelegramAdapter {
                                             .dm_allowed_users
                                             .contains(&(from.id.0 as i64))
                                     {
+                                        // Remember this user so we can nudge them if they're added later.
+                                        let entry = (message.chat.id, from.id.0 as i64);
+                                        if !rejected_users.iter().any(|(_, uid)| *uid == entry.1) {
+                                            if rejected_users.len() >= REJECTED_USERS_CAPACITY {
+                                                rejected_users.pop_front();
+                                            }
+                                            rejected_users.push_back(entry);
+                                        }
                                         continue;
                                     }
                                 }
