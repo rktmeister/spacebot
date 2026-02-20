@@ -312,7 +312,9 @@ async fn dump_worker_context() {
         deps.event_tx.clone(),
         browser_config,
         std::path::PathBuf::from("/tmp/screenshots"),
-        brave_search_key, std::path::PathBuf::from("/tmp"), std::path::PathBuf::from("/tmp"),
+        brave_search_key,
+        std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from("/tmp"),
     );
 
     let tool_defs = worker_tool_server
@@ -457,7 +459,9 @@ async fn dump_all_contexts() {
         deps.event_tx.clone(),
         browser_config,
         std::path::PathBuf::from("/tmp/screenshots"),
-        brave_search_key, std::path::PathBuf::from("/tmp"), std::path::PathBuf::from("/tmp"),
+        brave_search_key,
+        std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from("/tmp"),
     );
     let worker_tool_defs = worker_tool_server.get_tool_defs(None).await.unwrap();
     let worker_tools_text = format_tool_defs(&worker_tool_defs);

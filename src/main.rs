@@ -312,10 +312,7 @@ fn cmd_status() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_auth(
-    config_path: Option<std::path::PathBuf>,
-    auth_cmd: AuthCommand,
-) -> anyhow::Result<()> {
+fn cmd_auth(config_path: Option<std::path::PathBuf>, auth_cmd: AuthCommand) -> anyhow::Result<()> {
     // We need the instance_dir for credential storage. Try loading config,
     // but fall back to the default instance dir if config doesn't exist yet
     // (auth login may be the first thing a user runs).
@@ -643,8 +640,8 @@ async fn run(
     };
 
     // Check if we have provider configuration (API keys or OAuth credentials)
-    let has_providers = config.llm.has_any_key()
-        || spacebot::auth::credentials_path(&config.instance_dir).exists();
+    let has_providers =
+        config.llm.has_any_key() || spacebot::auth::credentials_path(&config.instance_dir).exists();
 
     if !has_providers {
         tracing::info!("No LLM providers configured. Starting in setup mode.");

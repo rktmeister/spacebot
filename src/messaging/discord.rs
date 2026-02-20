@@ -548,11 +548,10 @@ impl EventHandler for Handler {
 
     async fn message(&self, ctx: Context, message: Message) {
         // Always ignore our own messages to prevent self-response loops
-        let bot_user_id = self.bot_user_id_slot.read().await;
+        let bot_user_id = *self.bot_user_id_slot.read().await;
         if bot_user_id.is_some_and(|id| message.author.id == id) {
             return;
         }
-        drop(bot_user_id);
 
         // Load a snapshot of the current permissions (hot-reloadable)
         let permissions = self.permissions.load();
@@ -601,6 +600,19 @@ impl EventHandler for Handler {
                         return;
                     }
                 }
+            }
+
+            let parent_channel_id = metadata
+                .get("discord_parent_channel_id")
+                .and_then(|value| value.as_u64());
+            let requires_mention = requires_mention(
+                &permissions,
+                guild_id.get(),
+                message.channel_id.get(),
+                parent_channel_id,
+            );
+            if requires_mention && !is_mention_or_reply_to_bot(&message, bot_user_id) {
+                return;
             }
         }
 
@@ -724,6 +736,41 @@ impl EventHandler for Handler {
             );
         }
     }
+}
+
+fn requires_mention(
+    permissions: &DiscordPermissions,
+    guild_id: u64,
+    channel_id: u64,
+    parent_channel_id: Option<u64>,
+) -> bool {
+    if permissions.mention_required_guilds.contains(&guild_id) {
+        return true;
+    }
+
+    permissions
+        .mention_required_channels
+        .get(&guild_id)
+        .is_some_and(|channels| {
+            channels.contains(&channel_id)
+                || parent_channel_id.is_some_and(|parent| channels.contains(&parent))
+        })
+}
+
+fn is_mention_or_reply_to_bot(message: &Message, bot_user_id: Option<UserId>) -> bool {
+    let Some(bot_id) = bot_user_id else {
+        return false;
+    };
+
+    let directly_mentioned = message.mentions.iter().any(|user| user.id == bot_id);
+    if directly_mentioned {
+        return true;
+    }
+
+    message
+        .referenced_message
+        .as_ref()
+        .is_some_and(|referenced| referenced.author.id == bot_id)
 }
 
 // -- Helper functions --
@@ -1090,5 +1137,31 @@ mod tests {
         // build_poll should limit answers to 10 and duration to 720
         let _ = build_poll(&poll);
         // Again, can't easily inspect CreatePoll fields, but we verify it runs.
+    }
+
+    #[test]
+    fn test_requires_mention_for_specific_channel_and_thread_parent() {
+        let mut mention_required_channels = HashMap::new();
+        mention_required_channels.insert(42, vec![111]);
+
+        let permissions = DiscordPermissions {
+            mention_required_channels,
+            ..DiscordPermissions::default()
+        };
+
+        assert!(requires_mention(&permissions, 42, 111, None));
+        assert!(requires_mention(&permissions, 42, 222, Some(111)));
+        assert!(!requires_mention(&permissions, 42, 222, None));
+    }
+
+    #[test]
+    fn test_requires_mention_for_entire_guild() {
+        let permissions = DiscordPermissions {
+            mention_required_guilds: vec![7],
+            ..DiscordPermissions::default()
+        };
+
+        assert!(requires_mention(&permissions, 7, 123, None));
+        assert!(!requires_mention(&permissions, 8, 123, None));
     }
 }

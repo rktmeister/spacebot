@@ -185,9 +185,7 @@ impl Scheduler {
             // Look up interval before entering the loop
             let interval_secs = {
                 let j = jobs.read().await;
-                j.get(&job_id)
-                    .map(|j| j.interval_secs)
-                    .unwrap_or(3600)
+                j.get(&job_id).map(|j| j.interval_secs).unwrap_or(3600)
             };
 
             // For sub-daily intervals that divide evenly into 86400 (e.g. 1800s, 3600s, 21600s),
@@ -201,7 +199,11 @@ impl Scheduler {
                     .unwrap_or_default()
                     .as_secs();
                 let remainder = now_unix % interval_secs;
-                let secs_until = if remainder == 0 { interval_secs } else { interval_secs - remainder };
+                let secs_until = if remainder == 0 {
+                    interval_secs
+                } else {
+                    interval_secs - remainder
+                };
                 tracing::info!(
                     cron_id = %job_id,
                     interval_secs,
@@ -213,7 +215,8 @@ impl Scheduler {
                 tokio::time::Instant::now() + Duration::from_secs(interval_secs)
             };
 
-            let mut ticker = tokio::time::interval_at(first_tick, Duration::from_secs(interval_secs));
+            let mut ticker =
+                tokio::time::interval_at(first_tick, Duration::from_secs(interval_secs));
             // Skip catch-up ticks if processing falls behind — maintain original cadence.
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -410,27 +413,31 @@ impl Scheduler {
             let config = configs
                 .into_iter()
                 .find(|c| c.id == job_id)
-                .ok_or_else(|| crate::error::Error::Other(anyhow::anyhow!("cron job not found in store")))?;
+                .ok_or_else(|| {
+                    crate::error::Error::Other(anyhow::anyhow!("cron job not found in store"))
+                })?;
 
-            let delivery_target = DeliveryTarget::parse(&config.delivery_target).unwrap_or_else(|| {
-                DeliveryTarget {
+            let delivery_target =
+                DeliveryTarget::parse(&config.delivery_target).unwrap_or_else(|| DeliveryTarget {
                     adapter: "unknown".into(),
                     target: config.delivery_target.clone(),
-                }
-            });
+                });
 
             {
                 let mut jobs = self.jobs.write().await;
-                jobs.insert(job_id.to_string(), CronJob {
-                    id: config.id.clone(),
-                    prompt: config.prompt,
-                    interval_secs: config.interval_secs,
-                    delivery_target,
-                    active_hours: config.active_hours,
-                    enabled: true,
-                    consecutive_failures: 0,
-                    timeout_secs: config.timeout_secs,
-                });
+                jobs.insert(
+                    job_id.to_string(),
+                    CronJob {
+                        id: config.id.clone(),
+                        prompt: config.prompt,
+                        interval_secs: config.interval_secs,
+                        delivery_target,
+                        active_hours: config.active_hours,
+                        enabled: true,
+                        consecutive_failures: 0,
+                        timeout_secs: config.timeout_secs,
+                    },
+                );
             }
 
             self.start_timer(job_id).await;
@@ -447,7 +454,9 @@ impl Scheduler {
                 old
             } else {
                 // Should not happen (we checked above), but be defensive.
-                return Err(crate::error::Error::Other(anyhow::anyhow!("cron job not found")));
+                return Err(crate::error::Error::Other(anyhow::anyhow!(
+                    "cron job not found"
+                )));
             }
         };
 

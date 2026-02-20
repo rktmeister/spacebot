@@ -5,12 +5,21 @@ use crate::conversation::ConversationLogger;
 use crate::{ChannelId, OutboundResponse};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
+use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
+
+static BROKEN_DISCORD_MENTION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<{2,}@(!?)>\s*(\d{15,22})>").expect("hardcoded broken mention regex")
+});
+
+static DISCORD_ID_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d{15,22}").expect("hardcoded discord id regex"));
 
 /// Shared flag between the ReplyTool and the channel event loop.
 ///
@@ -105,12 +114,14 @@ async fn convert_mentions(
     conversation_logger: &ConversationLogger,
     source: &str,
 ) -> String {
+    let mut result = normalize_discord_mention_tokens(content, source);
+
     // Load recent conversation to extract user mappings
     let messages = match conversation_logger.load_recent(channel_id, 50).await {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::warn!(error = %e, "failed to load conversation for mention conversion");
-            return content.to_string();
+            return result;
         }
     };
 
@@ -135,35 +146,116 @@ async fn convert_mentions(
     }
 
     if name_to_id.is_empty() {
-        return content.to_string();
+        return result;
     }
 
     // Convert @Name patterns to platform-specific mentions
-    let mut result = content.to_string();
-
     // Sort by name length (longest first) to avoid partial replacements
     // e.g., "Alice Smith" before "Alice"
     let mut names: Vec<_> = name_to_id.keys().cloned().collect();
     names.sort_by(|a, b| b.len().cmp(&a.len()));
 
     for name in names {
-        if let Some(user_id) = name_to_id.get(&name) {
+        let name = name.trim();
+        if name.is_empty() || name.contains('<') || name.contains('>') || name.contains('@') {
+            continue;
+        }
+
+        if let Some(user_id) = name_to_id.get(name) {
             let mention_pattern = format!("@{}", name);
             let replacement = match source {
-                "discord" | "slack" => format!("<@{}>", user_id),
+                "discord" => {
+                    let Some(discord_id) = sanitize_discord_user_id(user_id) else {
+                        continue;
+                    };
+                    format!("<@{}>", discord_id)
+                }
+                "slack" => format!("<@{}>", user_id),
                 "telegram" => format!("@{}", name), // Telegram uses @username (already correct)
-                _ => mention_pattern.clone(),       // Unknown platform, leave as-is
+                _ => mention_pattern.clone(),          // Unknown platform, leave as-is
             };
 
-            // Only replace if not already in correct format
-            // Avoid double-converting "<@123>" patterns
-            if !result.contains(&format!("<@{}>", user_id)) {
-                result = result.replace(&mention_pattern, &replacement);
-            }
+            result = result.replace(&mention_pattern, &replacement);
         }
     }
 
     result
+}
+
+fn sanitize_discord_user_id(user_id: &str) -> Option<String> {
+    let trimmed = user_id.trim();
+    if trimmed.len() >= 15
+        && trimmed.len() <= 22
+        && trimmed.chars().all(|c| c.is_ascii_digit())
+    {
+        return Some(trimmed.to_string());
+    }
+
+    DISCORD_ID_REGEX
+        .find(trimmed)
+        .map(|m| m.as_str().to_string())
+}
+
+pub(crate) fn normalize_discord_mention_tokens(content: &str, source: &str) -> String {
+    let _ = source;
+
+    let mut normalized = content
+        .replace("&lt;@!", "<@!")
+        .replace("&lt;@", "<@")
+        .replace("&gt;", ">")
+        .replace("\\<@!", "<@!")
+        .replace("\\<@", "<@")
+        .replace("<<@!>", "<@!")
+        .replace("<<@>", "<@");
+
+    while normalized.contains("<<@") {
+        normalized = normalized.replace("<<@", "<@");
+    }
+
+    normalized = normalized
+        .replace("<@!>", "<@!")
+        .replace("<@>", "<@");
+
+    normalized = BROKEN_DISCORD_MENTION_REGEX
+        .replace_all(&normalized, "<@$1$2>")
+        .into_owned();
+
+    normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_discord_mention_tokens, sanitize_discord_user_id};
+
+    #[test]
+    fn normalizes_broken_discord_mentions() {
+        let input = "hello <<@>123> and <<@!>456>";
+        let output = normalize_discord_mention_tokens(input, "discord");
+
+        assert_eq!(output, "hello <@123> and <@!456>");
+    }
+
+    #[test]
+    fn leaves_plain_text_unchanged() {
+        let input = "hello team";
+        let output = normalize_discord_mention_tokens(input, "slack");
+
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn normalizes_repeated_prefix_and_html_encoded_tokens() {
+        let input = "<<<@>190291964875374603> and &lt;@!234152400653385729&gt;";
+        let output = normalize_discord_mention_tokens(input, "discord");
+
+        assert_eq!(output, "<@190291964875374603> and <@!234152400653385729>");
+    }
+
+    #[test]
+    fn sanitizes_discord_ids_with_prefix_noise() {
+        let parsed = sanitize_discord_user_id(">234152400653385729").expect("should parse id");
+        assert_eq!(parsed, "234152400653385729");
+    }
 }
 
 impl Tool for ReplyTool {

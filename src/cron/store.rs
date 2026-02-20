@@ -81,7 +81,11 @@ impl CronStore {
                     }
                 },
                 enabled: row.try_get::<i64, _>("enabled").unwrap_or(1) != 0,
-                timeout_secs: row.try_get::<Option<i64>, _>("timeout_secs").ok().flatten().map(|t| t as u64),
+                timeout_secs: row
+                    .try_get::<Option<i64>, _>("timeout_secs")
+                    .ok()
+                    .flatten()
+                    .map(|t| t as u64),
             })
             .collect();
 
@@ -166,7 +170,11 @@ impl CronStore {
                     }
                 },
                 enabled: row.try_get::<i64, _>("enabled").unwrap_or(1) != 0,
-                timeout_secs: row.try_get::<Option<i64>, _>("timeout_secs").ok().flatten().map(|t| t as u64),
+                timeout_secs: row
+                    .try_get::<Option<i64>, _>("timeout_secs")
+                    .ok()
+                    .flatten()
+                    .map(|t| t as u64),
             })
             .collect();
 

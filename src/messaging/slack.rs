@@ -1292,15 +1292,12 @@ async fn build_metadata_and_author(
 
     // Resolve channel name via cache or conversations.info API.
     if let Some(name) = channel_name_cache.read().await.get(channel_id).cloned() {
-        metadata.insert(
-            "slack_channel_name".into(),
-            serde_json::Value::String(name),
-        );
+        metadata.insert("slack_channel_name".into(), serde_json::Value::String(name));
     } else {
         match session
-            .conversations_info(
-                &SlackApiConversationsInfoRequest::new(SlackChannelId(channel_id.to_string())),
-            )
+            .conversations_info(&SlackApiConversationsInfoRequest::new(SlackChannelId(
+                channel_id.to_string(),
+            )))
             .await
         {
             Ok(channel_info) => {
@@ -1309,10 +1306,7 @@ async fn build_metadata_and_author(
                         .write()
                         .await
                         .insert(channel_id.to_string(), name.clone());
-                    metadata.insert(
-                        "slack_channel_name".into(),
-                        serde_json::Value::String(name),
-                    );
+                    metadata.insert("slack_channel_name".into(), serde_json::Value::String(name));
                 }
             }
             // DM channels (D-prefixed) don't support conversations.info in all cases
@@ -1369,10 +1363,7 @@ async fn build_metadata_and_author(
 
     // For DMs without a resolved channel name, use the sender's display name.
     if channel_id.starts_with('D') && !metadata.contains_key("slack_channel_name") {
-        if let Some(display_name) = metadata
-            .get("sender_display_name")
-            .and_then(|v| v.as_str())
-        {
+        if let Some(display_name) = metadata.get("sender_display_name").and_then(|v| v.as_str()) {
             metadata.insert(
                 "slack_channel_name".into(),
                 serde_json::Value::String(format!("dm-{display_name}")),

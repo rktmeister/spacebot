@@ -152,7 +152,7 @@ fn extra_models() -> Vec<ModelInfo> {
             tool_call: true,
             reasoning: false,
         },
-                // Z.AI Coding Plan
+        // Z.AI Coding Plan
         ModelInfo {
             id: "zai-coding-plan/glm-4.7".into(),
             name: "GLM 4.7 (Coding)".into(),
@@ -179,7 +179,6 @@ fn extra_models() -> Vec<ModelInfo> {
         },
         // MiniMax
         ModelInfo {
-
             id: "minimax/MiniMax-M1-80k".into(),
             name: "MiniMax M1 80K".into(),
             provider: "minimax".into(),

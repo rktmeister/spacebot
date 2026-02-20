@@ -31,10 +31,7 @@ pub fn resolve_cache_retention(override_value: Option<CacheRetention>) -> CacheR
 
 /// Build a `cache_control` JSON value appropriate for the retention policy
 /// and base URL. Returns `None` when retention is `None`.
-pub fn get_cache_control(
-    base_url: &str,
-    retention: CacheRetention,
-) -> Option<serde_json::Value> {
+pub fn get_cache_control(base_url: &str, retention: CacheRetention) -> Option<serde_json::Value> {
     match retention {
         CacheRetention::None => None,
         CacheRetention::Short => Some(serde_json::json!({"type": "ephemeral"})),
@@ -73,25 +70,40 @@ mod tests {
 
     #[test]
     fn short_returns_ephemeral() {
-        let cc = get_cache_control("https://api.anthropic.com/v1/messages", CacheRetention::Short);
+        let cc = get_cache_control(
+            "https://api.anthropic.com/v1/messages",
+            CacheRetention::Short,
+        );
         assert_eq!(cc, Some(serde_json::json!({"type": "ephemeral"})));
     }
 
     #[test]
     fn long_returns_ttl_for_anthropic() {
-        let cc = get_cache_control("https://api.anthropic.com/v1/messages", CacheRetention::Long);
-        assert_eq!(cc, Some(serde_json::json!({"type": "ephemeral", "ttl": "1h"})));
+        let cc = get_cache_control(
+            "https://api.anthropic.com/v1/messages",
+            CacheRetention::Long,
+        );
+        assert_eq!(
+            cc,
+            Some(serde_json::json!({"type": "ephemeral", "ttl": "1h"}))
+        );
     }
 
     #[test]
     fn long_returns_ephemeral_for_other_hosts() {
-        let cc = get_cache_control("https://custom-proxy.example.com/v1/messages", CacheRetention::Long);
+        let cc = get_cache_control(
+            "https://custom-proxy.example.com/v1/messages",
+            CacheRetention::Long,
+        );
         assert_eq!(cc, Some(serde_json::json!({"type": "ephemeral"})));
     }
 
     #[test]
     fn none_returns_no_cache_control() {
-        let cc = get_cache_control("https://api.anthropic.com/v1/messages", CacheRetention::None);
+        let cc = get_cache_control(
+            "https://api.anthropic.com/v1/messages",
+            CacheRetention::None,
+        );
         assert!(cc.is_none());
     }
 }

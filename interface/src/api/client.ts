@@ -809,6 +809,7 @@ export interface BindingInfo {
 	workspace_id: string | null;
 	chat_id: string | null;
 	channel_ids: string[];
+	require_mention: boolean;
 	dm_allowed_users: string[];
 }
 
@@ -823,6 +824,7 @@ export interface CreateBindingRequest {
 	workspace_id?: string;
 	chat_id?: string;
 	channel_ids?: string[];
+	require_mention?: boolean;
 	dm_allowed_users?: string[];
 	platform_credentials?: {
 		discord_token?: string;
@@ -851,6 +853,7 @@ export interface UpdateBindingRequest {
 	workspace_id?: string;
 	chat_id?: string;
 	channel_ids?: string[];
+	require_mention?: boolean;
 	dm_allowed_users?: string[];
 }
 

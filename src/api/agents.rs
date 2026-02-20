@@ -658,7 +658,11 @@ pub(super) async fn agent_overview(
                     (Some(s), Some(e)) => Some((s as u8, e as u8)),
                     _ => None,
                 },
-                timeout_secs: row.try_get::<Option<i64>, _>("timeout_secs").ok().flatten().map(|t| t as u64),
+                timeout_secs: row
+                    .try_get::<Option<i64>, _>("timeout_secs")
+                    .ok()
+                    .flatten()
+                    .map(|t| t as u64),
             }
         })
         .collect();
