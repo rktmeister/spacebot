@@ -248,6 +248,17 @@ impl Messaging for TelegramAdapter {
                         .context("failed to send telegram message")?;
                 }
             }
+            OutboundResponse::RichMessage { text, .. } => {
+                self.stop_typing(&message.conversation_id).await;
+
+                for chunk in split_message(&text, MAX_MESSAGE_LENGTH) {
+                    self.bot
+                        .send_message(chat_id, &chunk)
+                        .send()
+                        .await
+                        .context("failed to send telegram message")?;
+                }
+            }
             OutboundResponse::ThreadReply { thread_name: _, text } => {
                 self.stop_typing(&message.conversation_id).await;
 
@@ -367,12 +378,6 @@ impl Messaging for TelegramAdapter {
                 self.bot.send_message(chat_id, text).await
                     .context("failed to send ephemeral fallback on telegram")?;
             }
-            OutboundResponse::RichMessage { text, .. } => {
-                // No Block Kit on Telegram — plain text fallback
-                let chat_id = self.extract_chat_id(message)?;
-                self.bot.send_message(chat_id, text).await
-                    .context("failed to send rich message fallback on telegram")?;
-            }
             OutboundResponse::ScheduledMessage { text, .. } => {
                 // Telegram has no scheduled messages — send immediately
                 let chat_id = self.extract_chat_id(message)?;
@@ -434,6 +439,14 @@ impl Messaging for TelegramAdapter {
         );
 
         if let OutboundResponse::Text(text) = response {
+            for chunk in split_message(&text, MAX_MESSAGE_LENGTH) {
+                self.bot
+                    .send_message(chat_id, &chunk)
+                    .send()
+                    .await
+                    .context("failed to broadcast telegram message")?;
+            }
+        } else if let OutboundResponse::RichMessage { text, .. } = response {
             for chunk in split_message(&text, MAX_MESSAGE_LENGTH) {
                 self.bot
                     .send_message(chat_id, &chunk)

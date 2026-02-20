@@ -84,8 +84,8 @@ impl Messaging for WebChatAdapter {
             | OutboundResponse::Reaction(_)
             | OutboundResponse::RemoveReaction(_)
             | OutboundResponse::Ephemeral { .. }
-            | OutboundResponse::RichMessage { .. }
             | OutboundResponse::ScheduledMessage { .. }
+            | OutboundResponse::RichMessage { .. }
             | OutboundResponse::Status(_) => return Ok(()),
         };
 

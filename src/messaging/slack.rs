@@ -533,7 +533,7 @@ async fn handle_interaction_event(
         let content = MessageContent::Interaction {
             action_id: action_id.clone(),
             block_id: block_id.clone(),
-            value: value.clone(),
+            values: value.map(|v| vec![v]).unwrap_or_default(),
             label: label.clone(),
             message_ts: message_ts.clone(),
         };
@@ -754,7 +754,6 @@ impl Messaging for SlackAdapter {
                         .context("failed to send slack message")?;
                 }
             }
-
             OutboundResponse::ThreadReply {
                 thread_name: _,
                 text,
@@ -854,7 +853,7 @@ impl Messaging for SlackAdapter {
                     .context("failed to send slack ephemeral message")?;
             }
 
-            OutboundResponse::RichMessage { text, blocks } => {
+            OutboundResponse::RichMessage { text, blocks, .. } => {
                 let thread_ts = extract_thread_ts(message);
                 let attempted = blocks.len();
                 let slack_blocks = deserialize_blocks(&blocks);
@@ -981,7 +980,7 @@ impl Messaging for SlackAdapter {
                         .context("failed to broadcast slack message")?;
                 }
             }
-            OutboundResponse::RichMessage { text, blocks } => {
+            OutboundResponse::RichMessage { text, blocks, .. } => {
                 let slack_blocks = deserialize_blocks(&blocks);
                 let content = if slack_blocks.is_empty() {
                     SlackMessageContent::new().with_text(text)
