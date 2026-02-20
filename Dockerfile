@@ -49,7 +49,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
     SPACEBOT_SKIP_FRONTEND_BUILD=1 cargo build --release \
-    && cp /build/target/release/spacebot /usr/local/bin/spacebot
+    && mv /build/target/release/spacebot /usr/local/bin/spacebot \
+    && cargo clean -p spacebot --release --target-dir /build/target
 
 # ---- Slim stage ----
 # Minimal runtime with just the binary. No browser.

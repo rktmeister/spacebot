@@ -64,7 +64,7 @@ pub use memory_save::{
     AssociationInput, MemorySaveArgs, MemorySaveError, MemorySaveOutput, MemorySaveTool,
 };
 pub use react::{ReactArgs, ReactError, ReactOutput, ReactTool};
-pub use reply::{ReplyArgs, ReplyError, ReplyOutput, ReplyTool};
+pub use reply::{RepliedFlag, ReplyArgs, ReplyError, ReplyOutput, ReplyTool, new_replied_flag};
 pub use route::{RouteArgs, RouteError, RouteOutput, RouteTool};
 pub use send_file::{SendFileArgs, SendFileError, SendFileOutput, SendFileTool};
 pub use send_message_to_another_channel::{
@@ -129,6 +129,7 @@ pub async fn add_channel_tools(
     response_tx: mpsc::Sender<OutboundResponse>,
     conversation_id: impl Into<String>,
     skip_flag: SkipFlag,
+    replied_flag: RepliedFlag,
     cron_tool: Option<CronTool>,
 ) -> Result<(), rig::tool::server::ToolServerError> {
     handle
@@ -137,7 +138,7 @@ pub async fn add_channel_tools(
             conversation_id,
             state.conversation_logger.clone(),
             state.channel_id.clone(),
-            skip_flag.clone(),
+            replied_flag.clone(),
         ))
         .await?;
     handle.add_tool(BranchTool::new(state.clone())).await?;
