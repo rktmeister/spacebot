@@ -1474,6 +1474,7 @@ async fn initialize_agents(
 
     for (agent_id, agent) in agents.iter_mut() {
         let store = Arc::new(spacebot::cron::CronStore::new(agent.db.sqlite.clone()));
+        agent.deps.messaging_manager = Some(messaging_manager.clone());
 
         // Seed cron jobs from config into the database
         for cron_def in &agent.config.cron {
@@ -1484,6 +1485,7 @@ async fn initialize_agents(
                 delivery_target: cron_def.delivery_target.clone(),
                 active_hours: cron_def.active_hours,
                 enabled: cron_def.enabled,
+                run_once: cron_def.run_once,
                 timeout_secs: cron_def.timeout_secs,
             };
             if let Err(error) = store.save(&cron_config).await {
@@ -1529,7 +1531,6 @@ async fn initialize_agents(
         // Store cron tool on deps so each channel can register it on its own tool server
         let cron_tool = spacebot::tools::CronTool::new(store.clone(), scheduler.clone());
         agent.deps.cron_tool = Some(cron_tool);
-        agent.deps.messaging_manager = Some(messaging_manager.clone());
 
         cron_stores_map.insert(agent_id.to_string(), store);
         cron_schedulers_map.insert(agent_id.to_string(), scheduler.clone());

@@ -445,6 +445,7 @@ pub struct CronDef {
     /// Optional active hours window (start_hour, end_hour) in 24h format.
     pub active_hours: Option<(u8, u8)>,
     pub enabled: bool,
+    pub run_once: bool,
     /// Maximum wall-clock seconds to wait for the job to complete.
     /// `None` uses the default of 120 seconds.
     pub timeout_secs: Option<u64>,
@@ -1114,6 +1115,13 @@ fn default_api_bind() -> String {
     "127.0.0.1".into()
 }
 
+fn hosted_api_bind(bind: String) -> String {
+    match std::env::var("SPACEBOT_DEPLOYMENT") {
+        Ok(deployment) if deployment.eq_ignore_ascii_case("hosted") => "[::]".into(),
+        _ => bind,
+    }
+}
+
 #[derive(Deserialize)]
 struct TomlMetricsConfig {
     #[serde(default)]
@@ -1390,6 +1398,8 @@ struct TomlCronDef {
     active_end_hour: Option<u8>,
     #[serde(default = "default_enabled")]
     enabled: bool,
+    #[serde(default)]
+    run_once: bool,
     timeout_secs: Option<u64>,
 }
 
@@ -1722,7 +1732,7 @@ impl Config {
                     name: None,
                 });
         }
-        
+
         if let Some(zhipu_key) = llm.zhipu_key.clone() {
             llm.providers
                 .entry("zhipu".to_string())
@@ -1733,7 +1743,7 @@ impl Config {
                     name: None,
                 });
         }
-        
+
         if let Some(zai_coding_plan_key) = llm.zai_coding_plan_key.clone() {
             llm.providers
                 .entry("zai-coding-plan".to_string())
@@ -1821,6 +1831,9 @@ impl Config {
             cron: Vec::new(),
         }];
 
+        let mut api = ApiConfig::default();
+        api.bind = hosted_api_bind(api.bind);
+
         Ok(Self {
             instance_dir: instance_dir.to_path_buf(),
             llm,
@@ -1828,7 +1841,7 @@ impl Config {
             agents,
             messaging: MessagingConfig::default(),
             bindings: Vec::new(),
-            api: ApiConfig::default(),
+            api,
             metrics: MetricsConfig::default(),
             telemetry: TelemetryConfig {
                 otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
@@ -2034,7 +2047,7 @@ impl Config {
                     name: None,
                 });
         }
-        
+
         if let Some(zhipu_key) = llm.zhipu_key.clone() {
             llm.providers
                 .entry("zhipu".to_string())
@@ -2045,7 +2058,7 @@ impl Config {
                     name: None,
                 });
         }
-        
+
         if let Some(zai_coding_plan_key) = llm.zai_coding_plan_key.clone() {
             llm.providers
                 .entry("zai-coding-plan".to_string())
@@ -2302,6 +2315,7 @@ impl Config {
                             _ => None,
                         },
                         enabled: h.enabled,
+                        run_once: h.run_once,
                         timeout_secs: h.timeout_secs,
                     })
                     .collect();
@@ -2529,7 +2543,7 @@ impl Config {
         let api = ApiConfig {
             enabled: toml.api.enabled,
             port: toml.api.port,
-            bind: toml.api.bind,
+            bind: hosted_api_bind(toml.api.bind),
         };
 
         let metrics = MetricsConfig {
@@ -3209,7 +3223,11 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         11 => ("OpenCode Zen API key", "opencode_zen_key", "opencode-zen"),
         12 => ("MiniMax API key", "minimax_key", "minimax"),
         13 => ("Moonshot API key", "moonshot_key", "moonshot"),
-        14 => ("Z.AI Coding Plan API key", "zai_coding_plan_key", "zai-coding-plan"),
+        14 => (
+            "Z.AI Coding Plan API key",
+            "zai_coding_plan_key",
+            "zai-coding-plan",
+        ),
         _ => unreachable!(),
     };
     let is_secret = provider_id != "ollama";
@@ -3334,7 +3352,8 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
     let mut config_content = String::new();
     config_content.push_str("[llm]\n");
     if anthropic_oauth.is_some() {
-        config_content.push_str("# Anthropic authentication via OAuth (see anthropic_oauth.json)\n");
+        config_content
+            .push_str("# Anthropic authentication via OAuth (see anthropic_oauth.json)\n");
     } else {
         config_content.push_str(&format!("{toml_key} = \"{provider_value}\"\n"));
     }
@@ -3421,8 +3440,9 @@ mod tests {
 
     impl EnvGuard {
         fn new() -> Self {
-            const KEYS: [&str; 19] = [
+            const KEYS: [&str; 20] = [
                 "SPACEBOT_DIR",
+                "SPACEBOT_DEPLOYMENT",
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_OAUTH_TOKEN",
                 "OPENAI_API_KEY",
@@ -3736,5 +3756,44 @@ name = "Custom OpenAI"
             .expect("missing anthropic provider from env");
         assert_eq!(provider.api_key, "test-key");
         assert_eq!(provider.base_url, ANTHROPIC_PROVIDER_BASE_URL);
+    }
+
+    #[test]
+    fn test_hosted_deployment_forces_api_bind_from_toml() {
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        unsafe {
+            std::env::set_var("SPACEBOT_DEPLOYMENT", "hosted");
+        }
+
+        let toml = r#"
+[api]
+bind = "127.0.0.1"
+"#;
+
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+
+        assert_eq!(config.api.bind, "[::]");
+    }
+
+    #[test]
+    fn test_hosted_deployment_forces_api_bind_from_env_defaults() {
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        unsafe {
+            std::env::set_var("SPACEBOT_DEPLOYMENT", "hosted");
+        }
+
+        let config = Config::load_from_env(&Config::default_instance_dir())
+            .expect("failed to load config from env");
+
+        assert_eq!(config.api.bind, "[::]");
     }
 }

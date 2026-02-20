@@ -212,6 +212,7 @@ export interface CronJobInfo {
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
+	run_once: boolean;
 	active_hours: [number, number] | null;
 }
 
@@ -612,6 +613,7 @@ export interface CronJobWithStats {
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
+	run_once: boolean;
 	active_hours: [number, number] | null;
 	success_count: number;
 	failure_count: number;
@@ -646,6 +648,7 @@ export interface CreateCronRequest {
 	active_start_hour?: number;
 	active_end_hour?: number;
 	enabled: boolean;
+	run_once: boolean;
 }
 
 export interface CronExecutionsParams {
