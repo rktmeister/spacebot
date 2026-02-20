@@ -428,6 +428,9 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
             Ok(Some(OutboundResponse::Text(text))) => {
                 collected_text.push(text);
             }
+            Ok(Some(OutboundResponse::RichMessage { text, .. })) => {
+                collected_text.push(text);
+            }
             Ok(Some(_)) => {
                 // Status updates, stream chunks, etc. — ignore for cron jobs
             }

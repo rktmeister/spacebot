@@ -804,6 +804,13 @@ async fn run(
                                         text: text.clone(),
                                     }).ok();
                                 }
+                                spacebot::OutboundResponse::RichMessage { text, .. } => {
+                                    api_event_tx.send(spacebot::api::ApiEvent::OutboundMessage {
+                                        agent_id: sse_agent_id.clone(),
+                                        channel_id: sse_channel_id.clone(),
+                                        text: text.clone(),
+                                    }).ok();
+                                }
                                 spacebot::OutboundResponse::ThreadReply { text, .. } => {
                                     api_event_tx.send(spacebot::api::ApiEvent::OutboundMessage {
                                         agent_id: sse_agent_id.clone(),
