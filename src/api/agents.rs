@@ -11,6 +11,18 @@ use sqlx::Row as _;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+fn hosted_agent_limit() -> Option<usize> {
+    let deployment = std::env::var("SPACEBOT_DEPLOYMENT").ok()?;
+    if !deployment.eq_ignore_ascii_case("hosted") {
+        return None;
+    }
+
+    std::env::var("SPACEBOT_MAX_AGENTS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+}
+
 #[derive(Serialize)]
 pub(super) struct AgentsResponse {
     agents: Vec<AgentInfo>,
@@ -135,6 +147,16 @@ pub(super) async fn create_agent(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<CreateAgentRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if let Some(limit) = hosted_agent_limit() {
+        let existing = state.agent_configs.load();
+        if existing.len() >= limit {
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": format!("agent limit reached for this instance: up to {limit} agent{}", if limit == 1 { "" } else { "s" })
+            })));
+        }
+    }
+
     let agent_id = request.agent_id.trim().to_string();
     if agent_id.is_empty() {
         return Ok(Json(serde_json::json!({
