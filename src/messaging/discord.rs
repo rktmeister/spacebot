@@ -899,9 +899,11 @@ fn build_action_row(elements: &crate::InteractiveElements) -> CreateActionRow {
                     break; // Discord limit: max 5 buttons per action row
                 }
                 
-                let mut b = match btn.style {
+                let b = match btn.style {
                     crate::ButtonStyle::Link => {
-                        let url = btn.url.as_deref().unwrap_or("https://example.com");
+                        let Some(url) = btn.url.as_deref() else {
+                            continue;
+                        };
                         CreateButton::new_link(url).label(&btn.label)
                     }
                     style => {
@@ -913,12 +915,8 @@ fn build_action_row(elements: &crate::InteractiveElements) -> CreateActionRow {
                             _ => ButtonStyle::Primary, // fallback
                         };
                         let custom_id = btn.custom_id.as_deref().unwrap_or("btn");
-                        // Discord limit: custom_id max 100 characters
-                        let custom_id = if custom_id.len() > 100 {
-                            &custom_id[..100]
-                        } else {
-                            custom_id
-                        };
+                        // Discord limit: custom_id max 100 characters.
+                        let custom_id = &custom_id[..custom_id.floor_char_boundary(100)];
                         CreateButton::new(custom_id).label(&btn.label).style(serenity_style)
                     }
                 };
@@ -938,12 +936,8 @@ fn build_action_row(elements: &crate::InteractiveElements) -> CreateActionRow {
                 options.push(discord_opt);
             }
             
-            // Discord limit: custom_id max 100 characters
-            let custom_id = if select.custom_id.len() > 100 {
-                &select.custom_id[..100]
-            } else {
-                &select.custom_id
-            };
+            // Discord limit: custom_id max 100 characters.
+            let custom_id = &select.custom_id[..select.custom_id.floor_char_boundary(100)];
             
             let mut discord_select = CreateSelectMenu::new(
                 custom_id,
