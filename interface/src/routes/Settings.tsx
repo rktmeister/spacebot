@@ -160,6 +160,14 @@ const PROVIDERS = [
 		defaultModel: "nvidia/meta/llama-3.1-405b-instruct",
 	},
 	{
+		id: "minimax",
+		name: "MiniMax",
+		description: "MiniMax M1 (Anthropic message format)",
+		placeholder: "eyJ...",
+		envVar: "MINIMAX_API_KEY",
+		defaultModel: "MiniMax-M1-80k",
+	},
+	{
 		id: "ollama",
 		name: "Ollama",
 		description: "Local or remote Ollama API endpoint",
