@@ -1,0 +1,212 @@
+---
+title: Twitch Setup
+description: Connect Spacebot to Twitch chat.
+---
+
+# Twitch Setup
+
+Connect Spacebot to Twitch chat. Takes about 5 minutes.
+
+You need a **Twitch account** for the bot and an **OAuth token**.
+
+## Step 1: Create a Twitch Account
+
+Create a Twitch account for your bot (or use an existing one). The bot will send messages as this account.
+
+## Step 2: Get an OAuth Token
+
+Go to [twitchapps.com/tmi](https://twitchapps.com/tmi/) and authorize with the bot account. You'll get a token that looks like `oauth:abc123def456...`.
+
+<Callout type="info">
+For production use, you can create a Twitch application at [dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps) and generate tokens with the `chat:read` and `chat:edit` scopes via the OAuth flow. The TMI token generator is fine for getting started.
+</Callout>
+
+## Step 3: Add Credentials to Spacebot
+
+<Tabs items={["Spacebot UI", "TOML Config"]}>
+<Tab value="Spacebot UI">
+
+1. Open your Spacebot dashboard
+2. Go to **Settings** → **Messaging Platforms**
+3. Click **Setup** on the Twitch card
+4. Enter the bot's **username** and **OAuth token**
+5. Click **Save**
+
+Spacebot connects immediately — no restart needed.
+
+</Tab>
+<Tab value="TOML Config">
+
+```toml
+[messaging.twitch]
+enabled = true
+username = "my_bot"
+oauth_token = "oauth:abc123def456..."
+channels = ["somechannel", "anotherchannel"]
+```
+
+You can also reference environment variables:
+
+```toml
+[messaging.twitch]
+enabled = true
+username = "env:TWITCH_BOT_USERNAME"
+oauth_token = "env:TWITCH_OAUTH_TOKEN"
+channels = ["somechannel"]
+```
+
+Token changes in config require a restart.
+
+</Tab>
+</Tabs>
+
+## Step 4: Join Channels
+
+Specify which Twitch channels the bot should join. Channel names are case-insensitive and should not include the `#` prefix.
+
+<Tabs items={["Spacebot UI", "TOML Config"]}>
+<Tab value="Spacebot UI">
+
+Add channel names in the **Channels** tag input on the Twitch binding form.
+
+</Tab>
+<Tab value="TOML Config">
+
+```toml
+[messaging.twitch]
+channels = ["streamer_name", "another_channel"]
+```
+
+</Tab>
+</Tabs>
+
+## Verify It's Working
+
+The Twitch card on the Settings page shows a green status dot when connected. Send a message (or a trigger command if you configured one) in a joined channel — you should see the bot reply.
+
+## Trigger Prefix
+
+Twitch channels can be extremely high-volume. By default the bot responds to every message, which is probably not what you want in a busy stream.
+
+Set a trigger prefix so the bot only responds to messages that start with it:
+
+<Tabs items={["Spacebot UI", "TOML Config"]}>
+<Tab value="Spacebot UI">
+
+The trigger prefix is configured in the TOML config file.
+
+</Tab>
+<Tab value="TOML Config">
+
+```toml
+[messaging.twitch]
+trigger_prefix = "!ask"
+```
+
+With this config, the bot ignores all messages except those starting with `!ask`. The prefix is stripped before processing — if someone types `!ask what is rust?`, the bot sees `what is rust?`.
+
+Set to an empty string or omit to respond to all messages.
+
+</Tab>
+</Tabs>
+
+## Filtering
+
+### Restrict to specific channels
+
+By default the bot responds in every channel it joins. To route specific channels to specific agents, add channel names to your bindings.
+
+<Tabs items={["Spacebot UI", "TOML Config"]}>
+<Tab value="Spacebot UI">
+
+Go to **Settings** → **Bindings** tab and add channel names to your Twitch binding.
+
+</Tab>
+<Tab value="TOML Config">
+
+```toml
+[[bindings]]
+agent_id = "main"
+channel = "twitch"
+channel_ids = ["streamer_name"]
+```
+
+If `channel_ids` is empty or omitted, the bot responds in all joined channels.
+
+</Tab>
+</Tabs>
+
+### User filtering
+
+Restrict which Twitch users can interact with the bot by adding login names to the binding's allowed users list.
+
+<Tabs items={["Spacebot UI", "TOML Config"]}>
+<Tab value="Spacebot UI">
+
+Add Twitch usernames to the **DM Allowed Users** list on the binding form.
+
+</Tab>
+<Tab value="TOML Config">
+
+```toml
+[[bindings]]
+agent_id = "main"
+channel = "twitch"
+dm_allowed_users = ["trusted_user", "another_mod"]
+```
+
+When the list is empty (default), all users can interact. Permission changes hot-reload within a couple seconds — no restart needed.
+
+</Tab>
+</Tabs>
+
+### Multiple channels, multiple agents
+
+Route different Twitch channels to different agents.
+
+<Tabs items={["Spacebot UI", "TOML Config"]}>
+<Tab value="Spacebot UI">
+
+Create multiple bindings in the **Bindings** tab, each with different channel names and agents.
+
+</Tab>
+<Tab value="TOML Config">
+
+```toml
+[[bindings]]
+agent_id = "main"
+channel = "twitch"
+channel_ids = ["my_stream"]
+
+[[bindings]]
+agent_id = "support-bot"
+channel = "twitch"
+channel_ids = ["help_channel"]
+```
+
+Each agent has its own memory, identity, and conversation history.
+
+</Tab>
+</Tabs>
+
+## Conversations
+
+Each Twitch channel maps to a single conversation (`twitch:<channel_name>`). Unlike Discord or Slack, Twitch chat has no threads — all messages in a channel share one conversation context.
+
+## Limitations
+
+- **No streaming** — Twitch IRC doesn't support message editing, so responses are sent as complete messages rather than streamed word-by-word.
+- **Text only** — File attachments are sent as `[File: filename]` text notices since Twitch chat doesn't support media.
+- **500 character limit** — Long responses are automatically split into multiple messages.
+- **No history backfill** — Twitch IRC doesn't provide message history, so new conversations start fresh.
+- **Rate limits** — Twitch limits bots to ~20 messages per 30 seconds (100 if the bot account is a verified bot or moderator in the channel).
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Login authentication failed` | Invalid OAuth token | Generate a fresh token at [twitchapps.com/tmi](https://twitchapps.com/tmi/) |
+| Bot connects but doesn't respond | Trigger prefix set | Messages must start with the configured prefix (e.g. `!ask`) |
+| Bot responds to everything | No trigger prefix | Set `trigger_prefix` in the config to limit when the bot responds |
+| Messages getting dropped | Rate limit | Reduce response frequency or get the bot account verified |
+| Bot doesn't join channel | Wrong channel name | Use the login name (lowercase), not the display name |

@@ -149,6 +149,32 @@ fn extra_models() -> Vec<ModelInfo> {
             tool_call: true,
             reasoning: false,
         },
+        // MiniMax
+        ModelInfo {
+            id: "minimax/MiniMax-M1-80k".into(),
+            name: "MiniMax M1 80K".into(),
+            provider: "minimax".into(),
+            context_window: Some(80000),
+            tool_call: true,
+            reasoning: false,
+        },
+        // Moonshot AI (Kimi)
+        ModelInfo {
+            id: "moonshot/kimi-k2.5".into(),
+            name: "Kimi K2.5".into(),
+            provider: "moonshot".into(),
+            context_window: None,
+            tool_call: true,
+            reasoning: true,
+        },
+        ModelInfo {
+            id: "moonshot/moonshot-v1-8k".into(),
+            name: "Moonshot V1 8K".into(),
+            provider: "moonshot".into(),
+            context_window: Some(8000),
+            tool_call: false,
+            reasoning: false,
+        },
     ]
 }
 
@@ -274,6 +300,8 @@ pub(super) async fn configured_providers(config_path: &std::path::Path) -> Vec<&
     if has_key("xai_key", "XAI_API_KEY") { providers.push("xai"); }
     if has_key("mistral_key", "MISTRAL_API_KEY") { providers.push("mistral"); }
     if has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY") { providers.push("opencode-zen"); }
+    if has_key("minimax_key", "MINIMAX_API_KEY") { providers.push("minimax"); }
+    if has_key("moonshot_key", "MOONSHOT_API_KEY") { providers.push("moonshot"); }
 
     providers
 }

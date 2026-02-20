@@ -656,6 +656,8 @@ export interface ProviderStatus {
 	ollama: boolean;
 	opencode_zen: boolean;
 	nvidia: boolean;
+	minimax: boolean;
+	moonshot: boolean;
 }
 
 export interface ProvidersResponse {

@@ -24,6 +24,14 @@ pub async fn init_providers(config: &LlmConfig) -> Result<()> {
     if config.opencode_zen_key.is_some() {
         tracing::info!("OpenCode Zen provider configured");
     }
-    
+
+    if config.minimax_key.is_some() {
+        tracing::info!("MiniMax provider configured");
+    }
+
+    if config.moonshot_key.is_some() {
+        tracing::info!("Moonshot AI provider configured");
+    }
+
     Ok(())
 }
