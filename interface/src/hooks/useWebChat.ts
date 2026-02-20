@@ -48,7 +48,7 @@ async function consumeSSE(
 }
 
 export function useWebChat(agentId: string) {
-	const sessionId = "portal:chat";
+	const sessionId = `portal:chat:${agentId}`;
 	const [messages, setMessages] = useState<WebChatMessage[]>([]);
 	const [isStreaming, setIsStreaming] = useState(false);
 	const [error, setError] = useState<string | null>(null);

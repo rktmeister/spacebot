@@ -217,6 +217,7 @@ fn extract_display_name(
             .get("display_name")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        "portal" => Some("portal:chat".to_string()),
         _ => None,
     }
 }
