@@ -15,10 +15,16 @@ Create a Twitch account for your bot (or use an existing one). The bot will send
 
 ## Step 2: Get an OAuth Token
 
-Go to [twitchapps.com/tmi](https://twitchapps.com/tmi/) and authorize with the bot account. You'll get a token that looks like `oauth:abc123def456...`.
+The TwitchApps TMI token generator has been discontinued.
 
-<Callout type="info">
-For production use, you can create a Twitch application at [dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps) and generate tokens with the `chat:read` and `chat:edit` scopes via the OAuth flow. The TMI token generator is fine for getting started.
+For quick setup, use [Twitch Token Generator by swiftyspiffy](https://twitchtokengenerator.com/) and authorize with the bot account using `chat:read` and `chat:edit` scopes.
+
+The site returns an **ACCESS TOKEN**, **REFRESH TOKEN**, and **CLIENT ID**. For Spacebot, use the **ACCESS TOKEN** and prefix it with `oauth:`.
+
+Example: if the generator shows `abc123def456`, set `oauth_token` to `oauth:abc123def456`.
+
+<Callout type="warning">
+If you're building an app or service for other users, don't rely on third-party token generators. Create your own Twitch OAuth app at [dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps) and run the OAuth flow directly in your product.
 </Callout>
 
 ## Step 3: Add Credentials to Spacebot
@@ -205,7 +211,7 @@ Each Twitch channel maps to a single conversation (`twitch:<channel_name>`). Unl
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `Login authentication failed` | Invalid OAuth token | Generate a fresh token at [twitchapps.com/tmi](https://twitchapps.com/tmi/) |
+| `Login authentication failed` | Invalid OAuth token | Generate a fresh token using [Twitch Token Generator](https://twitchtokengenerator.com/) or your own OAuth app |
 | Bot connects but doesn't respond | Trigger prefix set | Messages must start with the configured prefix (e.g. `!ask`) |
 | Bot responds to everything | No trigger prefix | Set `trigger_prefix` in the config to limit when the bot responds |
 | Messages getting dropped | Rate limit | Reduce response frequency or get the bot account verified |
