@@ -203,7 +203,7 @@ Images are built and pushed to `ghcr.io/spacedriveapp/spacebot` via GitHub Actio
 
 **Triggers:**
 
-- Push a `v*` tag (e.g. `git tag v0.1.0 && git push --tags`)
+- Push a `v*` tag (recommended: `cargo bump patch`)
 - Manual dispatch from the Actions tab
 
 **Tags pushed per release:**

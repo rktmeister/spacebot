@@ -147,6 +147,7 @@ pub struct LlmConfig {
     pub nvidia_key: Option<String>,
     pub minimax_key: Option<String>,
     pub moonshot_key: Option<String>,
+    pub zai_coding_plan_key: Option<String>,
     pub providers: HashMap<String, ProviderConfig>,
 }
 
@@ -169,6 +170,7 @@ impl LlmConfig {
             || self.nvidia_key.is_some()
             || self.minimax_key.is_some()
             || self.moonshot_key.is_some()
+            || self.zai_coding_plan_key.is_some()
             || !self.providers.is_empty()
     }
 }
@@ -178,6 +180,9 @@ const OPENAI_PROVIDER_BASE_URL: &str = "https://api.openai.com";
 const OPENROUTER_PROVIDER_BASE_URL: &str = "https://openrouter.ai/api";
 const MINIMAX_PROVIDER_BASE_URL: &str = "https://api.minimax.io/anthropic";
 const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
+
+const ZHIPU_PROVIDER_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
+const ZAI_CODING_PLAN_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 
 /// Defaults inherited by all agents. Individual agents can override any field.
 #[derive(Debug, Clone)]
@@ -1108,6 +1113,7 @@ struct TomlLlmConfigFields {
     nvidia_key: Option<String>,
     minimax_key: Option<String>,
     moonshot_key: Option<String>,
+    zai_coding_plan_key: Option<String>,
     #[serde(default)]
     providers: HashMap<String, TomlProviderConfig>,
     #[serde(default)]
@@ -1133,6 +1139,7 @@ struct TomlLlmConfig {
     nvidia_key: Option<String>,
     minimax_key: Option<String>,
     moonshot_key: Option<String>,
+    zai_coding_plan_key: Option<String>,
     providers: HashMap<String, TomlProviderConfig>,
 }
 
@@ -1183,6 +1190,7 @@ impl<'de> Deserialize<'de> for TomlLlmConfig {
             nvidia_key: fields.nvidia_key,
             minimax_key: fields.minimax_key,
             moonshot_key: fields.moonshot_key,
+            zai_coding_plan_key: fields.zai_coding_plan_key,
             providers: fields.providers,
         })
     }
@@ -1522,10 +1530,9 @@ impl Config {
             || std::env::var("OLLAMA_API_KEY").is_ok()
             || std::env::var("OLLAMA_BASE_URL").is_ok()
             || std::env::var("OPENCODE_ZEN_API_KEY").is_ok()
-            || std::env::var("MINIMAX_API_KEY").is_ok();
-            || std::env::var("MOONSHOT_API_KEY").is_ok();
             || std::env::var("MINIMAX_API_KEY").is_ok()
-            || std::env::var("MOONSHOT_API_KEY").is_ok();
+            || std::env::var("MOONSHOT_API_KEY").is_ok()
+            || std::env::var("ZAI_CODING_PLAN_API_KEY").is_ok();
 
         // If we have any legacy keys, no onboarding needed
         if has_legacy_keys {
@@ -1589,6 +1596,7 @@ impl Config {
             nvidia_key: std::env::var("NVIDIA_API_KEY").ok(),
             minimax_key: std::env::var("MINIMAX_API_KEY").ok(),
             moonshot_key: std::env::var("MOONSHOT_API_KEY").ok(),
+            zai_coding_plan_key: std::env::var("ZAI_CODING_PLAN_API_KEY").ok(),
             providers: HashMap::new(),
         };
 
@@ -1622,6 +1630,28 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: OPENROUTER_PROVIDER_BASE_URL.to_string(),
                     api_key: openrouter_key,
+                    name: None,
+                });
+        }
+        
+        if let Some(zhipu_key) = llm.zhipu_key.clone() {
+            llm.providers
+                .entry("zhipu".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: ZHIPU_PROVIDER_BASE_URL.to_string(),
+                    api_key: zhipu_key,
+                    name: None,
+                });
+        }
+        
+        if let Some(zai_coding_plan_key) = llm.zai_coding_plan_key.clone() {
+            llm.providers
+                .entry("zai-coding-plan".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: ZAI_CODING_PLAN_BASE_URL.to_string(),
+                    api_key: zai_coding_plan_key,
                     name: None,
                 });
         }
@@ -1836,6 +1866,12 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("MOONSHOT_API_KEY").ok()),
+            zai_coding_plan_key: toml
+                .llm
+                .zai_coding_plan_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("ZAI_CODING_PLAN_API_KEY").ok()),
             providers: toml
                 .llm
                 .providers
@@ -1884,6 +1920,28 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: OPENROUTER_PROVIDER_BASE_URL.to_string(),
                     api_key: openrouter_key,
+                    name: None,
+                });
+        }
+        
+        if let Some(zhipu_key) = llm.zhipu_key.clone() {
+            llm.providers
+                .entry("zhipu".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: ZHIPU_PROVIDER_BASE_URL.to_string(),
+                    api_key: zhipu_key,
+                    name: None,
+                });
+        }
+        
+        if let Some(zai_coding_plan_key) = llm.zai_coding_plan_key.clone() {
+            llm.providers
+                .entry("zai-coding-plan".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: ZAI_CODING_PLAN_BASE_URL.to_string(),
+                    api_key: zai_coding_plan_key,
                     name: None,
                 });
         }
@@ -2958,6 +3016,7 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         "OpenCode Zen",
         "MiniMax",
         "Moonshot AI (Kimi)",
+        "Z.AI Coding Plan",
     ];
     let provider_idx = Select::new()
         .with_prompt("Which LLM provider do you want to use?")
@@ -2975,11 +3034,12 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         6 => ("Fireworks AI API key", "fireworks_key", "fireworks"),
         7 => ("DeepSeek API key", "deepseek_key", "deepseek"),
         8 => ("xAI API key", "xai_key", "xai"),
-        9 => ("Mistral AI API key", "mistral_key", "mistral"),
-        10 => ("Ollama base URL", "ollama_base_url", "ollama"),
+        9 => ("Mistral API key", "mistral_key", "mistral"),
+        10 => ("Ollama base URL (optional)", "ollama_base_url", "ollama"),
         11 => ("OpenCode Zen API key", "opencode_zen_key", "opencode-zen"),
         12 => ("MiniMax API key", "minimax_key", "minimax"),
-        13 => ("Moonshot AI API key", "moonshot_key", "moonshot"),
+        13 => ("Moonshot API key", "moonshot_key", "moonshot"),
+        14 => ("Z.AI Coding Plan API key", "zai_coding_plan_key", "zai-coding-plan"),
         _ => unreachable!(),
     };
     let is_secret = provider_id != "ollama";

@@ -658,6 +658,7 @@ export interface ProviderStatus {
 	nvidia: boolean;
 	minimax: boolean;
 	moonshot: boolean;
+	zai_coding_plan: boolean;
 }
 
 export interface ProvidersResponse {
