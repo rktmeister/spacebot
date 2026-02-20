@@ -25,12 +25,6 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             archive: tar.gz
-          - target: x86_64-apple-darwin
-            runner: macos-14
-            archive: tar.gz
-          - target: aarch64-apple-darwin
-            runner: macos-14
-            archive: tar.gz
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -45,13 +39,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install protoc (Linux)
-        if: runner.os == 'Linux'
+      - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
 
       - name: Determine version tag
         id: version
@@ -68,7 +57,7 @@ jobs:
       - name: Build binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package binary (Linux/macOS)
+      - name: Package binary
         run: |
           cd target/${{ matrix.target }}/release
           mkdir -p spacebot-${{ steps.version.outputs.version }}-${{ matrix.target }}
