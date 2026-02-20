@@ -58,6 +58,7 @@ struct CronJobInfo {
     delivery_target: String,
     enabled: bool,
     active_hours: Option<(u8, u8)>,
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -636,7 +637,7 @@ pub(super) async fn agent_overview(
     let channel_count = channels.len();
 
     let cron_rows = sqlx::query(
-        "SELECT id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled FROM cron_jobs ORDER BY created_at ASC",
+        "SELECT id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled, timeout_secs FROM cron_jobs ORDER BY created_at ASC",
     )
     .fetch_all(pool)
     .await
@@ -657,6 +658,7 @@ pub(super) async fn agent_overview(
                     (Some(s), Some(e)) => Some((s as u8, e as u8)),
                     _ => None,
                 },
+                timeout_secs: row.try_get::<Option<i64>, _>("timeout_secs").ok().flatten().map(|t| t as u64),
             }
         })
         .collect();

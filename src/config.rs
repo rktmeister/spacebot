@@ -444,6 +444,9 @@ pub struct CronDef {
     /// Optional active hours window (start_hour, end_hour) in 24h format.
     pub active_hours: Option<(u8, u8)>,
     pub enabled: bool,
+    /// Maximum wall-clock seconds to wait for the job to complete.
+    /// `None` uses the default of 120 seconds.
+    pub timeout_secs: Option<u64>,
 }
 
 /// Fully resolved agent config (merged with defaults, paths resolved).
@@ -1332,6 +1335,7 @@ struct TomlCronDef {
     active_end_hour: Option<u8>,
     #[serde(default = "default_enabled")]
     enabled: bool,
+    timeout_secs: Option<u64>,
 }
 
 fn default_enabled() -> bool {
@@ -2192,6 +2196,7 @@ impl Config {
                             _ => None,
                         },
                         enabled: h.enabled,
+                        timeout_secs: h.timeout_secs,
                     })
                     .collect();
 

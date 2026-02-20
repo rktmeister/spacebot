@@ -50,6 +50,10 @@ pub struct CronArgs {
     /// Required for "delete": the ID of the cron job to remove.
     #[serde(default)]
     pub delete_id: Option<String>,
+    /// Optional for "create": maximum seconds to wait for the job to complete before timing out.
+    /// Defaults to 120. Use a larger value (e.g. 600) for long-running research or writing tasks.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,6 +120,10 @@ impl Tool for CronTool {
                     "delete_id": {
                         "type": "string",
                         "description": "For 'delete': the ID of the cron job to remove."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "description": "For 'create': max seconds to wait for the job to finish (default 120). Use 600 for long-running tasks like research."
                     }
                 },
                 "required": ["action"]
@@ -164,6 +172,7 @@ impl CronTool {
             delivery_target: delivery_target.clone(),
             active_hours,
             enabled: true,
+            timeout_secs: args.timeout_secs,
         };
 
         // Persist to database

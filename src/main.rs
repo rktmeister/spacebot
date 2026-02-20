@@ -1381,6 +1381,7 @@ async fn initialize_agents(
                 delivery_target: cron_def.delivery_target.clone(),
                 active_hours: cron_def.active_hours,
                 enabled: cron_def.enabled,
+                timeout_secs: cron_def.timeout_secs,
             };
             if let Err(error) = store.save(&cron_config).await {
                 tracing::warn!(
