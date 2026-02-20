@@ -520,7 +520,7 @@ impl Channel {
             .await;
 
         // Run agent turn
-        let (result, skip_flag) = self
+        let (result, skip_flag, replied_flag) = self
             .run_agent_turn(
                 &combined_text,
                 &system_prompt,
@@ -529,8 +529,7 @@ impl Channel {
             )
             .await?;
 
-        self.handle_agent_result(result, &skip_flag).await;
-
+        self.handle_agent_result(result, &skip_flag, &replied_flag).await;
         // Check compaction
         if let Err(error) = self.compactor.check_and_compact().await {
             tracing::warn!(channel_id = %self.id, %error, "compaction check failed");
@@ -680,7 +679,7 @@ impl Channel {
 
         let system_prompt = self.build_system_prompt().await;
 
-        let (result, skip_flag) = self
+        let (result, skip_flag, replied_flag) = self
             .run_agent_turn(
                 &user_text,
                 &system_prompt,
@@ -689,7 +688,7 @@ impl Channel {
             )
             .await?;
 
-        self.handle_agent_result(result, &skip_flag).await;
+        self.handle_agent_result(result, &skip_flag, &replied_flag).await;
 
         // Check context size and trigger compaction if needed
         if let Err(error) = self.compactor.check_and_compact().await {
@@ -795,8 +794,10 @@ impl Channel {
     ) -> Result<(
         std::result::Result<String, rig::completion::PromptError>,
         crate::tools::SkipFlag,
+        crate::tools::RepliedFlag,
     )> {
         let skip_flag = crate::tools::new_skip_flag();
+        let replied_flag = crate::tools::new_replied_flag();
 
         if let Err(error) = crate::tools::add_channel_tools(
             &self.tool_server,
@@ -804,6 +805,7 @@ impl Channel {
             self.response_tx.clone(),
             conversation_id,
             skip_flag.clone(),
+            replied_flag.clone(),
             self.deps.cron_tool.clone(),
         )
         .await
@@ -879,7 +881,7 @@ impl Channel {
             tracing::warn!(%error, "failed to remove channel tools");
         }
 
-        Ok((result, skip_flag))
+        Ok((result, skip_flag, replied_flag))
     }
 
     /// Dispatch the LLM result: send fallback text, log errors, clean up typing.
@@ -887,13 +889,17 @@ impl Channel {
         &self,
         result: std::result::Result<String, rig::completion::PromptError>,
         skip_flag: &crate::tools::SkipFlag,
+        replied_flag: &crate::tools::RepliedFlag,
     ) {
         match result {
             Ok(response) => {
                 let skipped = skip_flag.load(std::sync::atomic::Ordering::Relaxed);
+                let replied = replied_flag.load(std::sync::atomic::Ordering::Relaxed);
 
                 if skipped {
                     tracing::debug!(channel_id = %self.id, "channel turn skipped (no response)");
+                } else if replied {
+                    tracing::debug!(channel_id = %self.id, "channel turn replied via tool (fallback suppressed)");
                 } else {
                     // If the LLM returned text without using the reply tool, send it
                     // directly. Some models respond with text instead of tool calls.

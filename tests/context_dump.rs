@@ -191,12 +191,14 @@ async fn dump_channel_context() {
 
     let tool_server = rig::tool::server::ToolServer::new().run();
     let skip_flag = spacebot::tools::new_skip_flag();
+    let replied_flag = spacebot::tools::new_replied_flag();
     spacebot::tools::add_channel_tools(
         &tool_server,
         state,
         response_tx,
         "test-conversation",
         skip_flag,
+        replied_flag,
         None,
     )
     .await
@@ -395,12 +397,14 @@ async fn dump_all_contexts() {
     };
     let channel_tool_server = rig::tool::server::ToolServer::new().run();
     let skip_flag = spacebot::tools::new_skip_flag();
+    let replied_flag = spacebot::tools::new_replied_flag();
     spacebot::tools::add_channel_tools(
         &channel_tool_server,
         state,
         response_tx,
         "test",
         skip_flag,
+        replied_flag,
         None,
     )
     .await
