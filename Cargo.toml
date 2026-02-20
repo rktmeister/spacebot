@@ -145,3 +145,8 @@ unimplemented = "forbid"
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[profile.release]
+lto = "thin"
+strip = true
+
