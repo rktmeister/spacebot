@@ -26,6 +26,9 @@ pub struct CronJob {
     pub active_hours: Option<(u8, u8)>,
     pub enabled: bool,
     pub consecutive_failures: u32,
+    /// Maximum wall-clock seconds to wait for the job to complete.
+    /// `None` uses the default of 120 seconds.
+    pub timeout_secs: Option<u64>,
 }
 
 /// Where to send cron job results.
@@ -69,6 +72,9 @@ pub struct CronConfig {
     pub active_hours: Option<(u8, u8)>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Maximum wall-clock seconds to wait for the job to complete.
+    /// `None` uses the default of 120 seconds.
+    pub timeout_secs: Option<u64>,
 }
 
 fn default_interval() -> u64 {
@@ -139,6 +145,7 @@ impl Scheduler {
             active_hours: config.active_hours,
             enabled: config.enabled,
             consecutive_failures: 0,
+            timeout_secs: config.timeout_secs,
         };
 
         {
@@ -422,6 +429,7 @@ impl Scheduler {
                     active_hours: config.active_hours,
                     enabled: true,
                     consecutive_failures: 0,
+                    timeout_secs: config.timeout_secs,
                 });
             }
 
@@ -512,7 +520,7 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
     // Collect responses with a timeout. The channel may produce multiple messages
     // (e.g. status updates, then text). We only care about text responses.
     let mut collected_text = Vec::new();
-    let timeout = Duration::from_secs(120);
+    let timeout = Duration::from_secs(job.timeout_secs.unwrap_or(120));
 
     // Drop the sender so the channel knows no more messages are coming.
     // The channel will process the one message and then its event loop will end
