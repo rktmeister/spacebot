@@ -15,7 +15,73 @@ env:
   IMAGE: ghcr.io/spacedriveapp/spacebot
 
 jobs:
-  build:
+  build-binaries:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            runner: macos-14
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            archive: tar.gz
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Determine version tag
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="dev-$(echo $GITHUB_SHA | head -c 7)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary (Linux/macOS)
+        run: |
+          cd target/${{ matrix.target }}/release
+          mkdir -p spacebot-${{ steps.version.outputs.version }}-${{ matrix.target }}
+          cp spacebot spacebot-${{ steps.version.outputs.version }}-${{ matrix.target }}/
+          tar -czvf ../../../spacebot-${{ steps.version.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }} spacebot-${{ steps.version.outputs.version }}-${{ matrix.target }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spacebot-${{ matrix.target }}
+          path: spacebot-${{ steps.version.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}
+          retention-days: 1
+
+  build-docker:
     strategy:
       matrix:
         include:
@@ -81,8 +147,8 @@ jobs:
           cache-from: type=gha,scope=full-${{ steps.platform.outputs.pair }}
           cache-to: type=gha,mode=max,scope=full-${{ steps.platform.outputs.pair }}
 
-  merge:
-    needs: build
+  merge-docker:
+    needs: build-docker
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -102,7 +168,7 @@ jobs:
       - name: Create slim multi-arch manifest
         run: |
           docker buildx imagetools create \
-            --tag ${{ env.IMAGE }}:${{ needs.build.outputs.version }}-slim \
+            --tag ${{ env.IMAGE }}:${{ needs.build-docker.outputs.version }}-slim \
             --tag ${{ env.IMAGE }}:slim \
             ${{ env.IMAGE }}:slim-linux-amd64 \
             ${{ env.IMAGE }}:slim-linux-arm64
@@ -110,7 +176,7 @@ jobs:
       - name: Create full multi-arch manifest
         run: |
           docker buildx imagetools create \
-            --tag ${{ env.IMAGE }}:${{ needs.build.outputs.version }}-full \
+            --tag ${{ env.IMAGE }}:${{ needs.build-docker.outputs.version }}-full \
             --tag ${{ env.IMAGE }}:full \
             --tag ${{ env.IMAGE }}:latest \
             ${{ env.IMAGE }}:full-linux-amd64 \
@@ -126,7 +192,7 @@ jobs:
       - name: Push to Fly registry
         run: |
           docker buildx imagetools create \
-            --tag registry.fly.io/spacebot-image:${{ needs.build.outputs.version }} \
+            --tag registry.fly.io/spacebot-image:${{ needs.build-docker.outputs.version }} \
             --tag registry.fly.io/spacebot-image:latest \
             ${{ env.IMAGE }}:latest
 
@@ -136,11 +202,34 @@ jobs:
           curl -sf -X POST https://api.spacebot.sh/api/admin/rollout \
             -H "Content-Type: application/json" \
             -H "X-Internal-Key: ${{ secrets.PLATFORM_INTERNAL_KEY }}" \
-            -d '{"image_tag": "${{ needs.build.outputs.version }}"}'
+            -d '{"image_tag": "${{ needs.build-docker.outputs.version }}"}'
+
+  create-release:
+    needs: [build-binaries, merge-docker]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+          pattern: spacebot-*
+          merge-multiple: false
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-assets
+          find binaries -name "*.tar.gz" -exec cp {} release-assets/ \;
+          ls -la release-assets/
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.build.outputs.version }}
+          tag_name: ${{ needs.build-binaries.outputs.version }}
           generate_release_notes: true
+          files: release-assets/*
