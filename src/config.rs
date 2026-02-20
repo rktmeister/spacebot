@@ -600,6 +600,13 @@ impl Binding {
             return false;
         }
 
+        // For webchat messages, match based on agent_id in the message
+        if message.source == "webchat" {
+            if let Some(message_agent_id) = &message.agent_id {
+                return message_agent_id.as_ref() == &self.agent_id;
+            }
+        }
+
         // DM messages have no guild_id — match if the sender is in dm_allowed_users
         let is_dm =
             message.metadata.get("discord_guild_id").is_none() && message.source == "discord";
