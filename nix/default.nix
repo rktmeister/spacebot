@@ -6,8 +6,8 @@
   inherit (pkgs) lib onnxruntime;
 
   # Read version from Cargo.toml
-  cargoToml = builtins.fromTOML (builtins.readFile "${src}/Cargo.toml");
-  version = cargoToml.package.version;
+  cargoToml = fromTOML (builtins.readFile "${src}/Cargo.toml");
+  inherit (cargoToml.package) version;
 
   buildInputs = with pkgs; [
     protobuf
@@ -28,7 +28,7 @@
     inherit version;
     src = "${src}/interface";
 
-    npmDepsHash = "sha256-1mvP948HshgUtZ7kQK/LradHwGyXfL8kCn6TIGCGDPY=";
+    npmDepsHash = "sha256-6ILzp/SS0RMouHJXLmJo43qDQVsbmWn4hPo824LQZ8s=";
     npmInstallFlags = ["--legacy-peer-deps"];
     makeCacheWritable = true;
 
