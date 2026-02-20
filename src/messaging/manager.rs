@@ -45,17 +45,31 @@ impl MessagingManager {
         self.adapters.write().await.insert(name, adapter);
     }
 
+    /// Maximum number of retry attempts for failed adapters before giving up.
+    const MAX_RETRY_ATTEMPTS: u32 = 12;
+
     /// Start all registered adapters and return the merged inbound stream.
     ///
     /// Each adapter's stream is forwarded into a shared channel, so adapters
     /// added later via `register_and_start` feed into the same stream.
+    /// Adapters that fail to start (e.g. due to network not being ready) are
+    /// retried in the background with exponential backoff.
     pub async fn start(&self) -> crate::Result<InboundStream> {
         let adapters = self.adapters.read().await;
         for (name, adapter) in adapters.iter() {
             match adapter.start().await {
                 Ok(stream) => Self::spawn_forwarder(name.clone(), stream, self.fan_in_tx.clone()),
                 Err(error) => {
-                    tracing::error!(adapter = %name, %error, "adapter failed to start, skipping")
+                    tracing::warn!(
+                        adapter = %name,
+                        %error,
+                        "adapter failed to start, will retry in background"
+                    );
+                    Self::spawn_retry_task(
+                        name.clone(),
+                        Arc::clone(adapter),
+                        self.fan_in_tx.clone(),
+                    );
                 }
             }
         }
@@ -109,6 +123,55 @@ impl MessagingManager {
     /// Returns true if an adapter with this name is currently registered.
     pub async fn has_adapter(&self, name: &str) -> bool {
         self.adapters.read().await.contains_key(name)
+    }
+
+    /// Spawn a background task that retries starting a failed adapter with exponential backoff.
+    ///
+    /// Once the adapter starts successfully, its stream is forwarded into the
+    /// existing fan-in channel — the same mechanism used by `register_and_start`.
+    fn spawn_retry_task(
+        name: String,
+        adapter: Arc<dyn MessagingDyn>,
+        fan_in_tx: mpsc::Sender<InboundMessage>,
+    ) {
+        tokio::spawn(async move {
+            let mut delay = std::time::Duration::from_secs(5);
+            let max_delay = std::time::Duration::from_secs(60);
+
+            for attempt in 1..=Self::MAX_RETRY_ATTEMPTS {
+                tokio::time::sleep(delay).await;
+
+                match adapter.start().await {
+                    Ok(stream) => {
+                        tracing::info!(
+                            adapter = %name,
+                            attempt,
+                            "adapter started successfully after retry"
+                        );
+                        Self::spawn_forwarder(name, stream, fan_in_tx);
+                        return;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            adapter = %name,
+                            attempt,
+                            max_attempts = Self::MAX_RETRY_ATTEMPTS,
+                            %error,
+                            "adapter retry failed, next attempt in {:?}",
+                            delay.min(max_delay)
+                        );
+                    }
+                }
+
+                delay = (delay * 2).min(max_delay);
+            }
+
+            tracing::error!(
+                adapter = %name,
+                "adapter failed to start after {} attempts, giving up",
+                Self::MAX_RETRY_ATTEMPTS
+            );
+        });
     }
 
     /// Spawn a task that forwards messages from an adapter stream into the fan-in channel.
