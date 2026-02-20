@@ -1133,7 +1133,18 @@ fn parse_anthropic_response(
                     id, name, arguments,
                 )));
             }
-            _ => {}
+            Some("thinking") => {
+                // Thinking blocks contain internal reasoning, not actionable output.
+                // We'll skip them but log for debugging.
+                tracing::debug!("skipping thinking block in Anthropic response");
+            }
+            _ => {
+                // Unknown block type - log but skip
+                tracing::debug!(
+                    "skipping unknown block type in Anthropic response: {:?}",
+                    block["type"].as_str()
+                );
+            }
         }
     }
 
