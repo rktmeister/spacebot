@@ -186,6 +186,7 @@ const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
 
 const ZHIPU_PROVIDER_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 const ZAI_CODING_PLAN_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
+const NVIDIA_PROVIDER_BASE_URL: &str = "https://integrate.api.nvidia.com";
 
 /// Defaults inherited by all agents. Individual agents can override any field.
 #[derive(Debug, Clone)]
@@ -1690,6 +1691,17 @@ impl Config {
                 });
         }
 
+        if let Some(nvidia_key) = llm.nvidia_key.clone() {
+            llm.providers
+                .entry("nvidia".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: NVIDIA_PROVIDER_BASE_URL.to_string(),
+                    api_key: nvidia_key,
+                    name: None,
+                });
+        }
+
         // Note: We allow boot without provider keys now. System starts in setup mode.
         // Agents are initialized later when keys are added via API.
 
@@ -1987,6 +1999,17 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: MOONSHOT_PROVIDER_BASE_URL.to_string(),
                     api_key: moonshot_key,
+                    name: None,
+                });
+        }
+
+        if let Some(nvidia_key) = llm.nvidia_key.clone() {
+            llm.providers
+                .entry("nvidia".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: NVIDIA_PROVIDER_BASE_URL.to_string(),
+                    api_key: nvidia_key,
                     name: None,
                 });
         }
