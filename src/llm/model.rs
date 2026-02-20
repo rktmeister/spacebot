@@ -433,8 +433,8 @@ impl SpacebotModel {
             .header("authorization", format!("Bearer {api_key}"))
             .header("content-type", "application/json");
 
-        // Kimi Coding API requires a specific user-agent header.
-        if chat_completions_url.contains("kimi.com") {
+        // Kimi endpoints require a specific user-agent header.
+        if chat_completions_url.contains("kimi.com") || chat_completions_url.contains("moonshot.ai") {
             request_builder = request_builder.header("user-agent", "KimiCLI/1.3");
         }
 
