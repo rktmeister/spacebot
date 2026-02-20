@@ -6,7 +6,7 @@ const BETA_FINE_GRAINED_STREAMING: &str = "fine-grained-tool-streaming-2025-05-1
 const BETA_INTERLEAVED_THINKING: &str = "interleaved-thinking-2025-05-14";
 const BETA_CLAUDE_CODE: &str = "claude-code-20250219";
 const BETA_OAUTH: &str = "oauth-2025-04-20";
-const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.2 (external, cli)";
+const CLAUDE_CODE_USER_AGENT: &str = "claude-code/2.1.49 (external, cli)";
 
 /// Which authentication path to use for an Anthropic API call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,17 +77,26 @@ mod tests {
 
     #[test]
     fn oauth_token_detected_correctly() {
-        assert_eq!(detect_auth_path("sk-ant-oat01-abc123"), AnthropicAuthPath::OAuthToken);
+        assert_eq!(
+            detect_auth_path("sk-ant-oat01-abc123"),
+            AnthropicAuthPath::OAuthToken
+        );
     }
 
     #[test]
     fn api_key_detected_correctly() {
-        assert_eq!(detect_auth_path("sk-ant-api03-xyz789"), AnthropicAuthPath::ApiKey);
+        assert_eq!(
+            detect_auth_path("sk-ant-api03-xyz789"),
+            AnthropicAuthPath::ApiKey
+        );
     }
 
     #[test]
     fn unknown_prefix_defaults_to_api_key() {
-        assert_eq!(detect_auth_path("some-random-key"), AnthropicAuthPath::ApiKey);
+        assert_eq!(
+            detect_auth_path("some-random-key"),
+            AnthropicAuthPath::ApiKey
+        );
     }
 
     #[test]
@@ -114,7 +123,12 @@ mod tests {
     #[test]
     fn oauth_token_includes_claude_code_beta() {
         let (request, _) = build_request("sk-ant-oat01-abc123", false);
-        let beta = request.headers().get("anthropic-beta").unwrap().to_str().unwrap();
+        let beta = request
+            .headers()
+            .get("anthropic-beta")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(beta.contains(BETA_CLAUDE_CODE));
         assert!(beta.contains(BETA_OAUTH));
         assert!(beta.contains(BETA_FINE_GRAINED_STREAMING));
@@ -140,14 +154,24 @@ mod tests {
     #[test]
     fn interleaved_thinking_appended_to_beta() {
         let (request, _) = build_request("sk-ant-api03-xyz789", true);
-        let beta = request.headers().get("anthropic-beta").unwrap().to_str().unwrap();
+        let beta = request
+            .headers()
+            .get("anthropic-beta")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(beta.contains(BETA_INTERLEAVED_THINKING));
     }
 
     #[test]
     fn no_interleaved_thinking_when_disabled() {
         let (request, _) = build_request("sk-ant-api03-xyz789", false);
-        let beta = request.headers().get("anthropic-beta").unwrap().to_str().unwrap();
+        let beta = request
+            .headers()
+            .get("anthropic-beta")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(!beta.contains(BETA_INTERLEAVED_THINKING));
     }
 }
