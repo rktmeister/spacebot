@@ -45,6 +45,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Determine version tag
         id: version
         run: |
