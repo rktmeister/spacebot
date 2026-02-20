@@ -82,6 +82,10 @@ impl Messaging for WebChatAdapter {
             OutboundResponse::StreamEnd => (WebChatEvent::StreamEnd, true),
             OutboundResponse::File { .. }
             | OutboundResponse::Reaction(_)
+            | OutboundResponse::RemoveReaction(_)
+            | OutboundResponse::Ephemeral { .. }
+            | OutboundResponse::RichMessage { .. }
+            | OutboundResponse::ScheduledMessage { .. }
             | OutboundResponse::Status(_) => return Ok(()),
         };
 

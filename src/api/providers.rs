@@ -21,6 +21,7 @@ pub(super) struct ProviderStatus {
     opencode_zen: bool,
     minimax: bool,
     moonshot: bool,
+    zai_coding_plan: bool,
 }
 
 #[derive(Serialize)]
@@ -46,7 +47,7 @@ pub(super) async fn get_providers(
 ) -> Result<Json<ProvidersResponse>, StatusCode> {
     let config_path = state.config_path.read().await.clone();
 
-    let (anthropic, openai, openrouter, zhipu, groq, together, fireworks, deepseek, xai, mistral, opencode_zen, minimax, moonshot) = if config_path.exists() {
+    let (anthropic, openai, openrouter, zhipu, groq, together, fireworks, deepseek, xai, mistral, opencode_zen, minimax, moonshot, zai_coding_plan) = if config_path.exists() {
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -82,6 +83,7 @@ pub(super) async fn get_providers(
             has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
             has_key("minimax_key", "MINIMAX_API_KEY"),
             has_key("moonshot_key", "MOONSHOT_API_KEY"),
+            has_key("zai_coding_plan_key", "ZAI_CODING_PLAN_API_KEY"),
         )
     } else {
         (
@@ -98,6 +100,7 @@ pub(super) async fn get_providers(
             std::env::var("OPENCODE_ZEN_API_KEY").is_ok(),
             std::env::var("MINIMAX_API_KEY").is_ok(),
             std::env::var("MOONSHOT_API_KEY").is_ok(),
+            std::env::var("ZAI_CODING_PLAN_API_KEY").is_ok(),
         )
     };
 
@@ -115,6 +118,7 @@ pub(super) async fn get_providers(
         opencode_zen,
         minimax,
         moonshot,
+        zai_coding_plan,
     };
     let has_any = providers.anthropic
         || providers.openai
@@ -128,7 +132,8 @@ pub(super) async fn get_providers(
         || providers.mistral
         || providers.opencode_zen
         || providers.minimax
-        || providers.moonshot;
+        || providers.moonshot
+        || providers.zai_coding_plan;
 
     Ok(Json(ProvidersResponse { providers, has_any }))
 }
@@ -151,6 +156,7 @@ pub(super) async fn update_provider(
         "opencode-zen" => "opencode_zen_key",
         "minimax" => "minimax_key",
         "moonshot" => "moonshot_key",
+        "zai-coding-plan" => "zai_coding_plan_key",
         _ => {
             return Ok(Json(ProviderUpdateResponse {
                 success: false,
@@ -222,6 +228,7 @@ pub(super) async fn update_provider(
             "opencode-zen" => has_provider_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
             "minimax" => has_provider_key("minimax_key", "MINIMAX_API_KEY"),
             "moonshot" => has_provider_key("moonshot_key", "MOONSHOT_API_KEY"),
+            "zai-coding-plan" => has_provider_key("zai_coding_plan_key", "ZAI_CODING_PLAN_API_KEY"),
             _ => false,
         };
 
@@ -289,6 +296,7 @@ pub(super) async fn delete_provider(
         "opencode-zen" => "opencode_zen_key",
         "minimax" => "minimax_key",
         "moonshot" => "moonshot_key",
+        "zai-coding-plan" => "zai_coding_plan_key",
         _ => {
             return Ok(Json(ProviderUpdateResponse {
                 success: false,
