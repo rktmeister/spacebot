@@ -77,11 +77,12 @@ impl SpacebotModel {
             .get_provider(provider_id)
             .map_err(|e| CompletionError::ProviderError(e.to_string()))?;
 
-        if provider_id == "zai-coding-plan" {
+        if provider_id == "zai-coding-plan" || provider_id == "zhipu" {
+            let display_name = if provider_id == "zhipu" { "Z.AI (GLM)" } else { "Z.AI Coding Plan" };
             let endpoint = format!("{}/chat/completions", provider_config.base_url.trim_end_matches('/'));
             return self.call_openai_compatible_with_optional_auth(
                 request,
-                "Z.AI Coding Plan",
+                display_name,
                 &endpoint,
                 Some(provider_config.api_key.clone()),
             ).await;
