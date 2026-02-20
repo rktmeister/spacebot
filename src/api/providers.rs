@@ -19,7 +19,6 @@ pub(super) struct ProviderStatus {
     xai: bool,
     mistral: bool,
     opencode_zen: bool,
-    moonshot: bool,
     minimax: bool,
     moonshot: bool,
 }
@@ -81,7 +80,6 @@ pub(super) async fn get_providers(
             has_key("xai_key", "XAI_API_KEY"),
             has_key("mistral_key", "MISTRAL_API_KEY"),
             has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
-            has_key("moonshot_key", "MOONSHOT_API_KEY"),
             has_key("minimax_key", "MINIMAX_API_KEY"),
             has_key("moonshot_key", "MOONSHOT_API_KEY"),
         )
@@ -98,7 +96,6 @@ pub(super) async fn get_providers(
             std::env::var("XAI_API_KEY").is_ok(),
             std::env::var("MISTRAL_API_KEY").is_ok(),
             std::env::var("OPENCODE_ZEN_API_KEY").is_ok(),
-            std::env::var("MOONSHOT_API_KEY").is_ok(),
             std::env::var("MINIMAX_API_KEY").is_ok(),
             std::env::var("MOONSHOT_API_KEY").is_ok(),
         )
@@ -116,7 +113,6 @@ pub(super) async fn get_providers(
         xai,
         mistral,
         opencode_zen,
-        moonshot,
         minimax,
         moonshot,
     };
@@ -153,7 +149,6 @@ pub(super) async fn update_provider(
         "xai" => "xai_key",
         "mistral" => "mistral_key",
         "opencode-zen" => "opencode_zen_key",
-        "moonshot" => "moonshot_key",
         "minimax" => "minimax_key",
         "moonshot" => "moonshot_key",
         _ => {
@@ -225,7 +220,6 @@ pub(super) async fn update_provider(
             "xai" => has_provider_key("xai_key", "XAI_API_KEY"),
             "mistral" => has_provider_key("mistral_key", "MISTRAL_API_KEY"),
             "opencode-zen" => has_provider_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
-            "moonshot" => has_provider_key("moonshot_key", "MOONSHOT_API_KEY"),
             "minimax" => has_provider_key("minimax_key", "MINIMAX_API_KEY"),
             "moonshot" => has_provider_key("moonshot_key", "MOONSHOT_API_KEY"),
             _ => false,
@@ -293,7 +287,6 @@ pub(super) async fn delete_provider(
         "xai" => "xai_key",
         "mistral" => "mistral_key",
         "opencode-zen" => "opencode_zen_key",
-        "moonshot" => "moonshot_key",
         "minimax" => "minimax_key",
         "moonshot" => "moonshot_key",
         _ => {

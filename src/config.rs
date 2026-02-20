@@ -147,8 +147,6 @@ pub struct LlmConfig {
     pub nvidia_key: Option<String>,
     pub minimax_key: Option<String>,
     pub moonshot_key: Option<String>,
-    pub minimax_key: Option<String>,
-    pub moonshot_key: Option<String>,
     pub providers: HashMap<String, ProviderConfig>,
 }
 
@@ -171,8 +169,6 @@ impl LlmConfig {
             || self.nvidia_key.is_some()
             || self.minimax_key.is_some()
             || self.moonshot_key.is_some()
-            || self.minimax_key.is_some()
-            || self.moonshot_key.is_some()
             || !self.providers.is_empty()
     }
 }
@@ -180,8 +176,6 @@ impl LlmConfig {
 const ANTHROPIC_PROVIDER_BASE_URL: &str = "https://api.anthropic.com";
 const OPENAI_PROVIDER_BASE_URL: &str = "https://api.openai.com";
 const OPENROUTER_PROVIDER_BASE_URL: &str = "https://openrouter.ai/api";
-const MINIMAX_PROVIDER_BASE_URL: &str = "https://api.minimax.io/anthropic";
-const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
 const MINIMAX_PROVIDER_BASE_URL: &str = "https://api.minimax.io/anthropic";
 const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
 
@@ -1114,8 +1108,6 @@ struct TomlLlmConfigFields {
     nvidia_key: Option<String>,
     minimax_key: Option<String>,
     moonshot_key: Option<String>,
-    minimax_key: Option<String>,
-    moonshot_key: Option<String>,
     #[serde(default)]
     providers: HashMap<String, TomlProviderConfig>,
     #[serde(default)]
@@ -1139,8 +1131,6 @@ struct TomlLlmConfig {
     ollama_base_url: Option<String>,
     opencode_zen_key: Option<String>,
     nvidia_key: Option<String>,
-    minimax_key: Option<String>,
-    moonshot_key: Option<String>,
     minimax_key: Option<String>,
     moonshot_key: Option<String>,
     providers: HashMap<String, TomlProviderConfig>,
@@ -1599,8 +1589,6 @@ impl Config {
             nvidia_key: std::env::var("NVIDIA_API_KEY").ok(),
             minimax_key: std::env::var("MINIMAX_API_KEY").ok(),
             moonshot_key: std::env::var("MOONSHOT_API_KEY").ok(),
-            minimax_key: std::env::var("MINIMAX_API_KEY").ok(),
-            moonshot_key: std::env::var("MOONSHOT_API_KEY").ok(),
             providers: HashMap::new(),
         };
 
@@ -1836,18 +1824,6 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("NVIDIA_API_KEY").ok()),
-            minimax_key: toml
-                .llm
-                .minimax_key
-                .as_deref()
-                .and_then(resolve_env_value)
-                .or_else(|| std::env::var("MINIMAX_API_KEY").ok()),
-            moonshot_key: toml
-                .llm
-                .moonshot_key
-                .as_deref()
-                .and_then(resolve_env_value)
-                .or_else(|| std::env::var("MOONSHOT_API_KEY").ok()),
             minimax_key: toml
                 .llm
                 .minimax_key
@@ -2982,8 +2958,6 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         "OpenCode Zen",
         "MiniMax",
         "Moonshot AI (Kimi)",
-        "MiniMax",
-        "Moonshot AI (Kimi)",
     ];
     let provider_idx = Select::new()
         .with_prompt("Which LLM provider do you want to use?")
@@ -3004,7 +2978,6 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         9 => ("Mistral AI API key", "mistral_key", "mistral"),
         10 => ("Ollama base URL", "ollama_base_url", "ollama"),
         11 => ("OpenCode Zen API key", "opencode_zen_key", "opencode-zen"),
-        12 => ("MiniMax API key", "minimax_key", "minimax"),
         12 => ("MiniMax API key", "minimax_key", "minimax"),
         13 => ("Moonshot AI API key", "moonshot_key", "moonshot"),
         _ => unreachable!(),
