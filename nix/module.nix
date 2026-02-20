@@ -11,6 +11,25 @@ self: {
     if cfg.variant == "full"
     then self.packages.${pkgs.system}.spacebot-full
     else cfg.package;
+
+  profilePathEntries =
+    lib.optionals (cfg.pathUser != null) [
+      "/home/${cfg.pathUser}/.nix-profile/bin"
+      "/home/${cfg.pathUser}/.local/state/nix/profile/bin"
+      "/etc/profiles/per-user/${cfg.pathUser}/bin"
+    ];
+
+  servicePathEntries =
+    cfg.pathPrepend
+    ++ [
+      "/run/wrappers/bin"
+      "/nix/profile/bin"
+      "/nix/var/nix/profiles/default/bin"
+      "/run/current-system/sw/bin"
+    ]
+    ++ profilePathEntries
+    ++ lib.optionals (cfg.variant == "full") ["${pkgs.chromium}/bin"]
+    ++ cfg.pathAppend;
 in {
   options.services.spacebot = {
     enable = mkEnableOption "Spacebot AI Agent";
@@ -51,6 +70,35 @@ in {
       type = types.str;
       default = "spacebot";
       description = "Group under which Spacebot runs.";
+    };
+
+    pathUser = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "alice";
+      description = ''
+        User whose Nix profile paths should be added to PATH for worker tools.
+        When set, Spacebot includes:
+          - /home/<user>/.nix-profile/bin
+          - /home/<user>/.local/state/nix/profile/bin
+          - /etc/profiles/per-user/<user>/bin
+
+        Keep this null to only use system-wide Nix profile paths.
+      '';
+    };
+
+    pathPrepend = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      example = ["/opt/tools/bin"];
+      description = "Directories to prepend to the service PATH before built-in defaults.";
+    };
+
+    pathAppend = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      example = ["/srv/spacebot/bin"];
+      description = "Directories to append to the service PATH after built-in defaults.";
     };
 
     environmentFile = mkOption {
@@ -120,6 +168,7 @@ in {
         {
           SPACEBOT_DIR = cfg.dataDir;
           SPACEBOT_DEPLOYMENT = "nixos";
+          PATH = lib.mkForce (lib.concatStringsSep ":" servicePathEntries);
         }
         // cfg.environment;
 
