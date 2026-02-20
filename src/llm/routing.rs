@@ -146,6 +146,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
         "opencode-zen" => RoutingConfig::for_model("opencode-zen/kimi-k2.5".into()),
         "minimax" => RoutingConfig::for_model("minimax/MiniMax-M1-80k".into()),
         "moonshot" => RoutingConfig::for_model("moonshot/kimi-k2.5".into()),
+        "zai-coding-plan" => RoutingConfig::for_model("zai-coding-plan/glm-5".into()),
         _ => RoutingConfig::default(),
     }
 }
@@ -167,6 +168,7 @@ pub fn provider_to_prefix(provider: &str) -> &str {
         "opencode-zen" => "opencode-zen/",
         "minimax" => "minimax/",
         "moonshot" => "moonshot/",
+        "zai-coding-plan" => "zai-coding-plan/",
         _ => "",
     }
 }

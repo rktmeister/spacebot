@@ -96,6 +96,14 @@ const PROVIDERS = [
 		defaultModel: "gpt-4.1",
 	},
 	{
+		id: "zai-coding-plan",
+		name: "Z.AI Coding Plan",
+		description: "GLM coding models (glm-4.7, glm-5, glm-4.5-air)",
+		placeholder: "...",
+		envVar: "ZAI_CODING_PLAN_API_KEY",
+		defaultModel: "glm-5",
+	},
+	{
 		id: "zhipu",
 		name: "Z.ai (GLM)",
 		description: "GLM models (GLM-4, GLM-4-Flash)",

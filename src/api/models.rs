@@ -149,8 +149,34 @@ fn extra_models() -> Vec<ModelInfo> {
             tool_call: true,
             reasoning: false,
         },
+                // Z.AI Coding Plan
+        ModelInfo {
+            id: "zai-coding-plan/glm-4.7".into(),
+            name: "GLM 4.7 (Coding)".into(),
+            provider: "zai-coding-plan".into(),
+            context_window: None,
+            tool_call: true,
+            reasoning: false,
+        },
+        ModelInfo {
+            id: "zai-coding-plan/glm-5".into(),
+            name: "GLM 5 (Coding)".into(),
+            provider: "zai-coding-plan".into(),
+            context_window: None,
+            tool_call: true,
+            reasoning: false,
+        },
+        ModelInfo {
+            id: "zai-coding-plan/glm-4.5-air".into(),
+            name: "GLM 4.5 Air (Coding)".into(),
+            provider: "zai-coding-plan".into(),
+            context_window: None,
+            tool_call: true,
+            reasoning: false,
+        },
         // MiniMax
         ModelInfo {
+
             id: "minimax/MiniMax-M1-80k".into(),
             name: "MiniMax M1 80K".into(),
             provider: "minimax".into(),
@@ -302,6 +328,7 @@ pub(super) async fn configured_providers(config_path: &std::path::Path) -> Vec<&
     if has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY") { providers.push("opencode-zen"); }
     if has_key("minimax_key", "MINIMAX_API_KEY") { providers.push("minimax"); }
     if has_key("moonshot_key", "MOONSHOT_API_KEY") { providers.push("moonshot"); }
+    if has_key("zai_coding_plan_key", "ZAI_CODING_PLAN_API_KEY") { providers.push("zai-coding-plan"); }
 
     providers
 }

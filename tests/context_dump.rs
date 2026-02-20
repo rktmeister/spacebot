@@ -175,6 +175,8 @@ async fn dump_channel_context() {
         channel_id,
         history: Arc::new(tokio::sync::RwLock::new(Vec::new())),
         active_branches: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        worker_handles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        process_run_logger: spacebot::conversation::ProcessRunLogger::new(deps.sqlite_pool.clone()),
         active_workers: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         worker_inputs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         status_block,
@@ -299,7 +301,7 @@ async fn dump_worker_context() {
         deps.event_tx.clone(),
         browser_config,
         std::path::PathBuf::from("/tmp/screenshots"),
-        brave_search_key,
+        brave_search_key, std::path::PathBuf::from("/tmp"), std::path::PathBuf::from("/tmp"),
     );
 
     let tool_defs = worker_tool_server
@@ -341,7 +343,8 @@ async fn dump_all_contexts() {
     let workspace_dir = rc.workspace_dir.to_string_lossy();
 
     // Generate bulletin so channel context is complete
-    let bulletin_success = spacebot::agent::cortex::generate_bulletin(&deps).await;
+    let logger = spacebot::agent::cortex::CortexLogger::new(deps.sqlite_pool.clone());
+    let bulletin_success = spacebot::agent::cortex::generate_bulletin(&deps, &logger).await;
     if bulletin_success {
         let bulletin = rc.memory_bulletin.load();
         println!("Bulletin generated: {} words", bulletin.split_whitespace().count());
@@ -361,6 +364,8 @@ async fn dump_all_contexts() {
         channel_id,
         history: Arc::new(tokio::sync::RwLock::new(Vec::new())),
         active_branches: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        worker_handles: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        process_run_logger: spacebot::conversation::ProcessRunLogger::new(deps.sqlite_pool.clone()),
         active_workers: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         worker_inputs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         status_block: Arc::new(tokio::sync::RwLock::new(spacebot::agent::status::StatusBlock::new())),
@@ -417,7 +422,7 @@ async fn dump_all_contexts() {
         deps.event_tx.clone(),
         browser_config,
         std::path::PathBuf::from("/tmp/screenshots"),
-        brave_search_key,
+        brave_search_key, std::path::PathBuf::from("/tmp"), std::path::PathBuf::from("/tmp"),
     );
     let worker_tool_defs = worker_tool_server.get_tool_defs(None).await.unwrap();
     let worker_tools_text = format_tool_defs(&worker_tool_defs);
