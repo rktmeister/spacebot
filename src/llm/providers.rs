@@ -33,5 +33,9 @@ pub async fn init_providers(config: &LlmConfig) -> Result<()> {
         tracing::info!("Moonshot AI provider configured");
     }
 
+    if config.nvidia_key.is_some() {
+        tracing::info!("NVIDIA provider configured");
+    }
+
     Ok(())
 }
