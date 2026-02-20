@@ -14,7 +14,7 @@ use chrono::Timelike;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::time::{Duration, interval};
+use tokio::time::Duration;
 
 /// A cron job definition loaded from the database.
 #[derive(Debug, Clone)]
@@ -155,22 +155,60 @@ impl Scheduler {
     }
 
     /// Start a timer loop for a cron job.
+    ///
+    /// Idempotent: if a timer is already running for this job, it is aborted before
+    /// starting a new one. This prevents timer leaks when a job is re-registered via API.
     async fn start_timer(&self, job_id: &str) {
         let job_id_for_map = job_id.to_string();
         let job_id = job_id.to_string();
         let jobs = self.jobs.clone();
         let context = self.context.clone();
 
+        // Abort any existing timer for this job before starting a new one.
+        // Dropping a JoinHandle only detaches it — we must abort explicitly.
+        {
+            let mut timers = self.timers.write().await;
+            if let Some(old_handle) = timers.remove(&job_id) {
+                old_handle.abort();
+                tracing::debug!(cron_id = %job_id, "aborted existing timer before re-registering");
+            }
+        }
+
         let handle = tokio::spawn(async move {
             // Look up interval before entering the loop
             let interval_secs = {
                 let j = jobs.read().await;
-                j.get(&job_id).map(|j| j.interval_secs).unwrap_or(3600)
+                j.get(&job_id)
+                    .map(|j| j.interval_secs)
+                    .unwrap_or(3600)
             };
 
-            let mut ticker = interval(Duration::from_secs(interval_secs));
-            // Skip the immediate first tick — jobs should wait for the first interval
-            ticker.tick().await;
+            // For sub-daily intervals that divide evenly into 86400 (e.g. 1800s, 3600s, 21600s),
+            // align the first tick to the next UTC clock boundary so the job fires on clean marks
+            // like :00 and :30 rather than at an arbitrary offset from service start.
+            // Daily/weekly jobs are left on relative timing (interval_at with one interval offset)
+            // to avoid overcomplicating scheduling for jobs with active_hours constraints.
+            let first_tick = if interval_secs < 86400 && 86400 % interval_secs == 0 {
+                let now_unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let remainder = now_unix % interval_secs;
+                let secs_until = if remainder == 0 { interval_secs } else { interval_secs - remainder };
+                tracing::info!(
+                    cron_id = %job_id,
+                    interval_secs,
+                    secs_until_first_tick = secs_until,
+                    "clock-aligned timer: first tick in {secs_until}s"
+                );
+                tokio::time::Instant::now() + Duration::from_secs(secs_until)
+            } else {
+                tokio::time::Instant::now() + Duration::from_secs(interval_secs)
+            };
+
+            let mut ticker = tokio::time::interval_at(first_tick, Duration::from_secs(interval_secs));
+            // Skip catch-up ticks if processing falls behind — maintain original cadence.
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             loop {
                 ticker.tick().await;
@@ -263,6 +301,7 @@ impl Scheduler {
             }
         });
 
+        // Insert the new handle. Any previously existing handle was already aborted above.
         let mut timers = self.timers.write().await;
         timers.insert(job_id_for_map, handle);
     }
@@ -336,7 +375,62 @@ impl Scheduler {
     }
 
     /// Update a job's enabled state and manage its timer accordingly.
+    ///
+    /// Handles three cases:
+    /// - Enabling a job that is in the HashMap (normal re-enable): update flag, start timer.
+    /// - Enabling a job NOT in the HashMap (cold re-enable after restart with job disabled):
+    ///   reload config from the CronStore, insert into HashMap, start timer.
+    /// - Disabling: update flag and abort the timer immediately rather than waiting up to
+    ///   one full interval for the loop to notice.
     pub async fn set_enabled(&self, job_id: &str, enabled: bool) -> Result<()> {
+        // Try to find the job in the in-memory HashMap.
+        let in_memory = {
+            let jobs = self.jobs.read().await;
+            jobs.contains_key(job_id)
+        };
+
+        if !in_memory {
+            if !enabled {
+                // Disabling something that isn't running — nothing to do.
+                tracing::debug!(cron_id = %job_id, "set_enabled(false): job not in scheduler, nothing to do");
+                return Ok(());
+            }
+
+            // Cold re-enable: job was disabled at startup so was never loaded into the scheduler.
+            // Reload from the store, insert, then start the timer.
+            tracing::info!(cron_id = %job_id, "cold re-enable: reloading config from store");
+            let configs = self.context.store.load_all_unfiltered().await?;
+            let config = configs
+                .into_iter()
+                .find(|c| c.id == job_id)
+                .ok_or_else(|| crate::error::Error::Other(anyhow::anyhow!("cron job not found in store")))?;
+
+            let delivery_target = DeliveryTarget::parse(&config.delivery_target).unwrap_or_else(|| {
+                DeliveryTarget {
+                    adapter: "unknown".into(),
+                    target: config.delivery_target.clone(),
+                }
+            });
+
+            {
+                let mut jobs = self.jobs.write().await;
+                jobs.insert(job_id.to_string(), CronJob {
+                    id: config.id.clone(),
+                    prompt: config.prompt,
+                    interval_secs: config.interval_secs,
+                    delivery_target,
+                    active_hours: config.active_hours,
+                    enabled: true,
+                    consecutive_failures: 0,
+                });
+            }
+
+            self.start_timer(job_id).await;
+            tracing::info!(cron_id = %job_id, "cron job cold-re-enabled and timer started");
+            return Ok(());
+        }
+
+        // Job is in the HashMap — normal path.
         let was_enabled = {
             let mut jobs = self.jobs.write().await;
             if let Some(job) = jobs.get_mut(job_id) {
@@ -344,22 +438,26 @@ impl Scheduler {
                 job.enabled = enabled;
                 old
             } else {
-                return Err(crate::error::Error::Other(anyhow::anyhow!(
-                    "cron job not found"
-                )));
+                // Should not happen (we checked above), but be defensive.
+                return Err(crate::error::Error::Other(anyhow::anyhow!("cron job not found")));
             }
         };
 
-        // If enabling and wasn't enabled before, start the timer
         if enabled && !was_enabled {
             self.start_timer(job_id).await;
             tracing::info!(cron_id = %job_id, "cron job enabled and timer started");
         }
 
-        // If disabling, the timer loop will detect this and stop naturally
-        // (see the check at line 183 in start_timer)
         if !enabled && was_enabled {
-            tracing::info!(cron_id = %job_id, "cron job disabled, timer will stop on next tick");
+            // Abort the timer immediately rather than waiting up to one full interval.
+            let handle = {
+                let mut timers = self.timers.write().await;
+                timers.remove(job_id)
+            };
+            if let Some(handle) = handle {
+                handle.abort();
+                tracing::info!(cron_id = %job_id, "cron job disabled, timer aborted immediately");
+            }
         }
 
         Ok(())
