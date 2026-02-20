@@ -145,6 +145,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
         "nvidia" => RoutingConfig::for_model("nvidia/meta/llama-3.1-405b-instruct".into()),
         "opencode-zen" => RoutingConfig::for_model("opencode-zen/kimi-k2.5".into()),
         "minimax" => RoutingConfig::for_model("minimax/MiniMax-M1-80k".into()),
+        "moonshot" => RoutingConfig::for_model("moonshot/kimi-k2.5".into()),
         _ => RoutingConfig::default(),
     }
 }
@@ -165,6 +166,7 @@ pub fn provider_to_prefix(provider: &str) -> &str {
         "nvidia" => "nvidia/",
         "opencode-zen" => "opencode-zen/",
         "minimax" => "minimax/",
+        "moonshot" => "moonshot/",
         _ => "",
     }
 }

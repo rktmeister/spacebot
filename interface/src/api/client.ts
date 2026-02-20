@@ -657,6 +657,7 @@ export interface ProviderStatus {
 	opencode_zen: boolean;
 	nvidia: boolean;
 	minimax: boolean;
+	moonshot: boolean;
 }
 
 export interface ProvidersResponse {
