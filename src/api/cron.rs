@@ -1,8 +1,8 @@
 use super::state::ApiState;
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -104,13 +104,10 @@ pub(super) async fn list_cron_jobs(
     let stores = state.cron_stores.load();
     let store = stores.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
-    let configs = store
-        .load_all_unfiltered()
-        .await
-        .map_err(|error| {
-            tracing::warn!(%error, agent_id = %query.agent_id, "failed to load cron jobs");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let configs = store.load_all_unfiltered().await.map_err(|error| {
+        tracing::warn!(%error, agent_id = %query.agent_id, "failed to load cron jobs");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let mut jobs = Vec::new();
     for config in configs {
@@ -173,7 +170,9 @@ pub(super) async fn create_or_update_cron(
     let schedulers = state.cron_schedulers.load();
 
     let store = stores.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
-    let scheduler = schedulers.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let scheduler = schedulers
+        .get(&request.agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     let active_hours = match (request.active_start_hour, request.active_end_hour) {
         (Some(start), Some(end)) => Some((start, end)),
@@ -214,7 +213,9 @@ pub(super) async fn delete_cron(
     let store = stores.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
     let schedulers = state.cron_schedulers.load();
-    let scheduler = schedulers.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let scheduler = schedulers
+        .get(&query.agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     scheduler.unregister(&query.cron_id).await;
 
@@ -235,7 +236,9 @@ pub(super) async fn trigger_cron(
     Json(request): Json<TriggerCronRequest>,
 ) -> Result<Json<CronActionResponse>, StatusCode> {
     let schedulers = state.cron_schedulers.load();
-    let scheduler = schedulers.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let scheduler = schedulers
+        .get(&request.agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     scheduler.trigger_now(&request.cron_id).await.map_err(|error| {
         tracing::warn!(%error, agent_id = %request.agent_id, cron_id = %request.cron_id, "failed to trigger cron job");
@@ -257,7 +260,9 @@ pub(super) async fn toggle_cron(
     let store = stores.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
     let schedulers = state.cron_schedulers.load();
-    let scheduler = schedulers.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let scheduler = schedulers
+        .get(&request.agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     store.update_enabled(&request.cron_id, request.enabled).await.map_err(|error| {
         tracing::warn!(%error, agent_id = %request.agent_id, cron_id = %request.cron_id, "failed to update cron job enabled state");
@@ -269,7 +274,11 @@ pub(super) async fn toggle_cron(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let status = if request.enabled { "enabled" } else { "disabled" };
+    let status = if request.enabled {
+        "enabled"
+    } else {
+        "disabled"
+    };
     Ok(Json(CronActionResponse {
         success: true,
         message: format!("Cron job '{}' {}", request.cron_id, status),

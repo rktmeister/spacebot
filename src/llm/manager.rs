@@ -90,7 +90,9 @@ impl LlmManager {
 
     /// Record that a model hit a rate limit.
     pub async fn record_rate_limit(&self, model_name: &str) {
-        self.rate_limited.write().await
+        self.rate_limited
+            .write()
+            .await
             .insert(model_name.to_string(), Instant::now());
         tracing::warn!(model = %model_name, "model rate limited, entering cooldown");
     }
@@ -107,7 +109,9 @@ impl LlmManager {
 
     /// Clean up expired rate limit entries.
     pub async fn cleanup_rate_limits(&self, cooldown_secs: u64) {
-        self.rate_limited.write().await
+        self.rate_limited
+            .write()
+            .await
             .retain(|_, limited_at| limited_at.elapsed().as_secs() < cooldown_secs);
     }
 }

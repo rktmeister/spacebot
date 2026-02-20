@@ -1,8 +1,8 @@
 use super::state::{ApiEvent, ApiState};
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -103,7 +103,9 @@ pub(super) async fn list_skills(
     Query(query): Query<SkillsQuery>,
 ) -> Result<Json<SkillsListResponse>, StatusCode> {
     let configs = state.agent_configs.load();
-    let agent = configs.iter().find(|a| a.id == query.agent_id)
+    let agent = configs
+        .iter()
+        .find(|a| a.id == query.agent_id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let instance_dir = state.instance_dir.load();
@@ -127,7 +129,9 @@ pub(super) async fn list_skills(
         })
         .collect();
 
-    Ok(Json(SkillsListResponse { skills: skill_infos }))
+    Ok(Json(SkillsListResponse {
+        skills: skill_infos,
+    }))
 }
 
 /// Install a skill from GitHub.
@@ -136,7 +140,9 @@ pub(super) async fn install_skill(
     axum::extract::Json(req): axum::extract::Json<InstallSkillRequest>,
 ) -> Result<Json<InstallSkillResponse>, StatusCode> {
     let configs = state.agent_configs.load();
-    let agent = configs.iter().find(|a| a.id == req.agent_id)
+    let agent = configs
+        .iter()
+        .find(|a| a.id == req.agent_id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let target_dir = if req.instance {
@@ -163,14 +169,17 @@ pub(super) async fn remove_skill(
     axum::extract::Json(req): axum::extract::Json<RemoveSkillRequest>,
 ) -> Result<Json<RemoveSkillResponse>, StatusCode> {
     let configs = state.agent_configs.load();
-    let agent = configs.iter().find(|a| a.id == req.agent_id)
+    let agent = configs
+        .iter()
+        .find(|a| a.id == req.agent_id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let instance_dir = state.instance_dir.load();
     let instance_skills_dir = instance_dir.join("skills");
     let workspace_skills_dir = agent.workspace.join("skills");
 
-    let mut skills = crate::skills::SkillSet::load(&instance_skills_dir, &workspace_skills_dir).await;
+    let mut skills =
+        crate::skills::SkillSet::load(&instance_skills_dir, &workspace_skills_dir).await;
 
     let removed_path = skills.remove(&req.name).await.map_err(|error| {
         tracing::warn!(%error, skill = %req.name, "failed to remove skill");
@@ -200,10 +209,7 @@ pub(super) async fn registry_browse(
         _ => "all-time",
     };
 
-    let url = format!(
-        "https://skills.sh/api/skills/{}/{}",
-        view, query.page
-    );
+    let url = format!("https://skills.sh/api/skills/{}/{}", view, query.page);
 
     let client = reqwest::Client::new();
     let response = client
@@ -251,7 +257,10 @@ pub(super) async fn registry_search(
     let client = reqwest::Client::new();
     let response = client
         .get("https://skills.sh/api/search")
-        .query(&[("q", &query.q), ("limit", &query.limit.min(100).to_string())])
+        .query(&[
+            ("q", &query.q),
+            ("limit", &query.limit.min(100).to_string()),
+        ])
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await

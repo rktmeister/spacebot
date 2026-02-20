@@ -105,7 +105,9 @@ pub enum ApiType {
 }
 
 impl<'de> serde::Deserialize<'de> for ApiType {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         match s.as_str() {
             "openai_completions" => Ok(Self::OpenAiCompletions),
@@ -178,6 +180,7 @@ impl LlmConfig {
 const ANTHROPIC_PROVIDER_BASE_URL: &str = "https://api.anthropic.com";
 const OPENAI_PROVIDER_BASE_URL: &str = "https://api.openai.com";
 const OPENROUTER_PROVIDER_BASE_URL: &str = "https://openrouter.ai/api";
+const OPENCODE_ZEN_PROVIDER_BASE_URL: &str = "https://opencode.ai/zen";
 const MINIMAX_PROVIDER_BASE_URL: &str = "https://api.minimax.io/anthropic";
 const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
 
@@ -960,10 +963,8 @@ pub struct TwitchPermissions {
 impl TwitchPermissions {
     /// Build from the current config's twitch settings and bindings.
     pub fn from_config(_twitch: &TwitchConfig, bindings: &[Binding]) -> Self {
-        let twitch_bindings: Vec<&Binding> = bindings
-            .iter()
-            .filter(|b| b.channel == "twitch")
-            .collect();
+        let twitch_bindings: Vec<&Binding> =
+            bindings.iter().filter(|b| b.channel == "twitch").collect();
 
         let channel_filter = {
             let channel_ids: Vec<String> = twitch_bindings
@@ -1538,14 +1539,14 @@ impl Config {
         if has_legacy_keys {
             return false;
         }
-        
+
         // Check if we have any provider-specific env variables (provider.<name>.*)
         let has_provider_env_vars = std::env::vars().any(|(key, _)| {
-            key.starts_with("SPACEBOT_PROVIDER_") 
-            || key.starts_with("PROVIDER_")
-            || key.contains("PROVIDER") && key.contains("API_KEY")
+            key.starts_with("SPACEBOT_PROVIDER_")
+                || key.starts_with("PROVIDER_")
+                || key.contains("PROVIDER") && key.contains("API_KEY")
         });
-        
+
         !has_provider_env_vars
     }
 
@@ -1652,6 +1653,17 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: ZAI_CODING_PLAN_BASE_URL.to_string(),
                     api_key: zai_coding_plan_key,
+                    name: None,
+                });
+        }
+
+        if let Some(opencode_zen_key) = llm.opencode_zen_key.clone() {
+            llm.providers
+                .entry("opencode-zen".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: OPENCODE_ZEN_PROVIDER_BASE_URL.to_string(),
+                    api_key: opencode_zen_key,
                     name: None,
                 });
         }
@@ -1942,6 +1954,17 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: ZAI_CODING_PLAN_BASE_URL.to_string(),
                     api_key: zai_coding_plan_key,
+                    name: None,
+                });
+        }
+
+        if let Some(opencode_zen_key) = llm.opencode_zen_key.clone() {
+            llm.providers
+                .entry("opencode-zen".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: OPENCODE_ZEN_PROVIDER_BASE_URL.to_string(),
+                    api_key: opencode_zen_key,
                     name: None,
                 });
         }
@@ -3480,7 +3503,9 @@ name = "Custom OpenAI"
 
     #[test]
     fn test_needs_onboarding_without_config_or_env() {
-        let _lock = env_test_lock().lock().expect("failed to lock env test mutex");
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
         let _env = EnvGuard::new();
 
         assert!(Config::needs_onboarding());
@@ -3488,7 +3513,9 @@ name = "Custom OpenAI"
 
     #[test]
     fn test_needs_onboarding_with_anthropic_env_key() {
-        let _lock = env_test_lock().lock().expect("failed to lock env test mutex");
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
         let _env = EnvGuard::new();
 
         unsafe {
@@ -3500,7 +3527,9 @@ name = "Custom OpenAI"
 
     #[test]
     fn test_load_from_env_populates_legacy_key_and_provider() {
-        let _lock = env_test_lock().lock().expect("failed to lock env test mutex");
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
         let _env = EnvGuard::new();
 
         unsafe {

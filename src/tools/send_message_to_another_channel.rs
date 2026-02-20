@@ -68,7 +68,8 @@ impl Tool for SendMessageTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: crate::prompts::text::get("tools/send_message_to_another_channel").to_string(),
+            description: crate::prompts::text::get("tools/send_message_to_another_channel")
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -105,8 +106,8 @@ impl Tool for SendMessageTool {
                 ))
             })?;
 
-        let (adapter_name, broadcast_target) = resolve_broadcast_target(&channel)
-            .ok_or_else(|| {
+        let (adapter_name, broadcast_target) =
+            resolve_broadcast_target(&channel).ok_or_else(|| {
                 SendMessageError(format!(
                     "could not resolve platform target for channel '{}' (platform: {})",
                     channel.display_name.as_deref().unwrap_or(&channel.id),
@@ -132,9 +133,7 @@ impl Tool for SendMessageTool {
 
         Ok(SendMessageOutput {
             success: true,
-            target: channel
-                .display_name
-                .unwrap_or_else(|| channel.id.clone()),
+            target: channel.display_name.unwrap_or_else(|| channel.id.clone()),
             platform: adapter_name,
         })
     }
@@ -173,9 +172,7 @@ fn resolve_broadcast_target(
 
             // Fallback: parse from channel ID format "discord:{guild_id}:{channel_id}"
             match parts.as_slice() {
-                ["discord", _, channel_id] => {
-                    Some(("discord".to_string(), channel_id.to_string()))
-                }
+                ["discord", _, channel_id] => Some(("discord".to_string(), channel_id.to_string())),
                 _ => None,
             }
         }

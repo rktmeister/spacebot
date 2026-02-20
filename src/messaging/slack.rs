@@ -75,11 +75,9 @@ impl SlackAdapter {
         commands: Vec<SlackCommandConfig>,
     ) -> anyhow::Result<Self> {
         let bot_token = bot_token.into();
-        let client = Arc::new(
-            SlackClient::new(
-                SlackClientHyperConnector::new().context("failed to create slack HTTP connector")?,
-            ),
-        );
+        let client = Arc::new(SlackClient::new(
+            SlackClientHyperConnector::new().context("failed to create slack HTTP connector")?,
+        ));
         let token = SlackApiToken::new(SlackApiTokenValue(bot_token.clone()));
         let commands_map: HashMap<String, String> = commands
             .into_iter()
@@ -382,8 +380,10 @@ async fn handle_command_event(
             "slash command not configured — ignoring"
         );
         return Ok(SlackCommandEventResponse {
-            content: SlackMessageContent::new()
-                .with_text(format!("`{}` is not configured on this Spacebot instance.", command_str)),
+            content: SlackMessageContent::new().with_text(format!(
+                "`{}` is not configured on this Spacebot instance.",
+                command_str
+            )),
             response_type: Some(SlackMessageResponseType::Ephemeral),
         });
     }
@@ -393,18 +393,36 @@ async fn handle_command_event(
     let conversation_id = format!("slack:{}:{}", team_id, channel_id);
 
     let mut metadata = HashMap::new();
-    metadata.insert("slack_workspace_id".into(), serde_json::Value::String(team_id.clone()));
-    metadata.insert("slack_channel_id".into(), serde_json::Value::String(channel_id.clone()));
-    metadata.insert("slack_user_id".into(), serde_json::Value::String(user_id.clone()));
-    metadata.insert("sender_id".into(), serde_json::Value::String(user_id.clone()));
-    metadata.insert("slack_command".into(), serde_json::Value::String(command_str.clone()));
+    metadata.insert(
+        "slack_workspace_id".into(),
+        serde_json::Value::String(team_id.clone()),
+    );
+    metadata.insert(
+        "slack_channel_id".into(),
+        serde_json::Value::String(channel_id.clone()),
+    );
+    metadata.insert(
+        "slack_user_id".into(),
+        serde_json::Value::String(user_id.clone()),
+    );
+    metadata.insert(
+        "sender_id".into(),
+        serde_json::Value::String(user_id.clone()),
+    );
+    metadata.insert(
+        "slack_command".into(),
+        serde_json::Value::String(command_str.clone()),
+    );
     metadata.insert(
         "slack_user_mention".into(),
         serde_json::Value::String(format!("<@{}>", user_id)),
     );
     // Embed the agent_id hint so the router can honour command-specific routing
     // without requiring a separate binding entry per command.
-    metadata.insert("slack_command_agent_id".into(), serde_json::Value::String(agent_id));
+    metadata.insert(
+        "slack_command_agent_id".into(),
+        serde_json::Value::String(agent_id),
+    );
 
     let content = MessageContent::Text(format!("{} {}", command_str, text).trim().to_string());
 
@@ -522,13 +540,10 @@ async fn handle_interaction_event(
         let action_id = action.action_id.0.clone();
         let block_id = action.block_id.as_ref().map(|b| b.0.clone());
         let value = action.value.clone();
-        let label = action
-            .selected_option
-            .as_ref()
-            .and_then(|o| match &o.text {
-                SlackBlockText::Plain(pt) => Some(pt.text.clone()),
-                SlackBlockText::MarkDown(md) => Some(md.text.clone()),
-            });
+        let label = action.selected_option.as_ref().and_then(|o| match &o.text {
+            SlackBlockText::Plain(pt) => Some(pt.text.clone()),
+            SlackBlockText::MarkDown(md) => Some(md.text.clone()),
+        });
 
         let content = MessageContent::Interaction {
             action_id: action_id.clone(),
@@ -546,21 +561,45 @@ async fn handle_interaction_event(
         };
 
         let mut metadata = HashMap::new();
-        metadata.insert("slack_workspace_id".into(), serde_json::Value::String(team_id.clone()));
-        metadata.insert("slack_channel_id".into(), serde_json::Value::String(channel_id.clone()));
-        metadata.insert("slack_user_id".into(), serde_json::Value::String(user_id.clone()));
-        metadata.insert("sender_id".into(), serde_json::Value::String(user_id.clone()));
+        metadata.insert(
+            "slack_workspace_id".into(),
+            serde_json::Value::String(team_id.clone()),
+        );
+        metadata.insert(
+            "slack_channel_id".into(),
+            serde_json::Value::String(channel_id.clone()),
+        );
+        metadata.insert(
+            "slack_user_id".into(),
+            serde_json::Value::String(user_id.clone()),
+        );
+        metadata.insert(
+            "sender_id".into(),
+            serde_json::Value::String(user_id.clone()),
+        );
         metadata.insert(
             "slack_user_mention".into(),
             serde_json::Value::String(format!("<@{}>", user_id)),
         );
         if let Some(ref ts) = message_ts {
-            metadata.insert("slack_thread_ts".into(), serde_json::Value::String(ts.clone()));
-            metadata.insert("slack_message_ts".into(), serde_json::Value::String(ts.clone()));
+            metadata.insert(
+                "slack_thread_ts".into(),
+                serde_json::Value::String(ts.clone()),
+            );
+            metadata.insert(
+                "slack_message_ts".into(),
+                serde_json::Value::String(ts.clone()),
+            );
         }
-        metadata.insert("slack_action_id".into(), serde_json::Value::String(action_id));
+        metadata.insert(
+            "slack_action_id".into(),
+            serde_json::Value::String(action_id),
+        );
         if let Some(ref bid) = block_id {
-            metadata.insert("slack_block_id".into(), serde_json::Value::String(bid.clone()));
+            metadata.insert(
+                "slack_block_id".into(),
+                serde_json::Value::String(bid.clone()),
+            );
         }
 
         let inbound = InboundMessage {
@@ -623,17 +662,16 @@ impl Messaging for SlackAdapter {
         // The socket mode listener needs its own client instance — it manages
         // a persistent WebSocket connection internally and owns that client for
         // the lifetime of the connection. The shared `self.client` is for REST calls.
-        let listener_client = Arc::new(
-            SlackClient::new(
-                SlackClientHyperConnector::new()
-                    .context("failed to create slack socket mode connector")?,
-            ),
-        );
+        let listener_client = Arc::new(SlackClient::new(
+            SlackClientHyperConnector::new()
+                .context("failed to create slack socket mode connector")?,
+        ));
 
         // The socket mode listener needs its own client — it owns a persistent
         // WebSocket connection. The shared self.client is for REST calls only.
         let listener_client = Arc::new(SlackClient::new(
-            SlackClientHyperConnector::new().context("failed to create slack socket mode connector")?,
+            SlackClientHyperConnector::new()
+                .context("failed to create slack socket mode connector")?,
         ));
 
         let listener_environment = Arc::new(
@@ -1313,7 +1351,9 @@ fn deserialize_blocks(values: &[serde_json::Value]) -> Vec<SlackBlock> {
 /// simple prefix strip is sufficient — no case-folding is needed.
 fn strip_bot_mention(text: &str, bot_user_id: &str) -> String {
     let mention = format!("<@{}>", bot_user_id);
-    text.trim_start_matches(mention.as_str()).trim_start().to_string()
+    text.trim_start_matches(mention.as_str())
+        .trim_start()
+        .to_string()
 }
 
 /// Return a short human-readable name for an `OutboundResponse` variant for log messages.

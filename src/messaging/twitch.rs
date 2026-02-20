@@ -68,8 +68,7 @@ impl Messaging for TwitchAdapter {
             .unwrap_or(&self.oauth_token)
             .to_string();
 
-        let credentials =
-            StaticLoginCredentials::new(self.username.clone(), Some(token));
+        let credentials = StaticLoginCredentials::new(self.username.clone(), Some(token));
         let config = ClientConfig::new_simple(credentials);
 
         let (mut incoming, client) =
@@ -259,7 +258,9 @@ impl Messaging for TwitchAdapter {
                     }
                 }
             }
-            OutboundResponse::File { filename, caption, .. } => {
+            OutboundResponse::File {
+                filename, caption, ..
+            } => {
                 // Twitch is text-only — send a note about the file
                 let text = match caption {
                     Some(caption) => format!("[File: {filename}] {caption}"),
@@ -301,11 +302,7 @@ impl Messaging for TwitchAdapter {
         Ok(())
     }
 
-    async fn broadcast(
-        &self,
-        target: &str,
-        response: OutboundResponse,
-    ) -> crate::Result<()> {
+    async fn broadcast(&self, target: &str, response: OutboundResponse) -> crate::Result<()> {
         let client_guard = self.client.read().await;
         let client = client_guard
             .as_ref()

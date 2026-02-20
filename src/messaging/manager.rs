@@ -54,15 +54,23 @@ impl MessagingManager {
         for (name, adapter) in adapters.iter() {
             match adapter.start().await {
                 Ok(stream) => Self::spawn_forwarder(name.clone(), stream, self.fan_in_tx.clone()),
-                Err(error) => tracing::error!(adapter = %name, %error, "adapter failed to start, skipping"),
+                Err(error) => {
+                    tracing::error!(adapter = %name, %error, "adapter failed to start, skipping")
+                }
             }
         }
         drop(adapters);
 
-        let receiver = self.fan_in_rx.write().await.take()
+        let receiver = self
+            .fan_in_rx
+            .write()
+            .await
+            .take()
             .context("start() already called")?;
 
-        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(receiver)))
+        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
+            receiver,
+        )))
     }
 
     /// Register and start a new adapter at runtime.
@@ -86,7 +94,9 @@ impl MessagingManager {
 
         let adapter: Arc<dyn MessagingDyn> = Arc::new(adapter);
 
-        let stream = adapter.start().await
+        let stream = adapter
+            .start()
+            .await
             .with_context(|| format!("failed to start adapter '{name}'"))?;
         Self::spawn_forwarder(name.clone(), stream, self.fan_in_tx.clone());
 

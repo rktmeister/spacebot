@@ -1,8 +1,8 @@
 //! Reply tool for sending messages to users (channel only).
 
 use crate::conversation::ConversationLogger;
-use crate::{ChannelId, OutboundResponse};
 use crate::tools::SkipFlag;
+use crate::{ChannelId, OutboundResponse};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
@@ -105,18 +105,16 @@ async fn convert_mentions(
     // Build display_name → user_id mapping from metadata
     let mut name_to_id: HashMap<String, String> = HashMap::new();
     for msg in messages {
-        if let (Some(name), Some(id), Some(meta_str)) = 
-            (&msg.sender_name, &msg.sender_id, &msg.metadata) 
+        if let (Some(name), Some(id), Some(meta_str)) =
+            (&msg.sender_name, &msg.sender_id, &msg.metadata)
         {
             // Parse metadata JSON to get clean display name (without mention syntax)
             if let Ok(meta) = serde_json::from_str::<HashMap<String, serde_json::Value>>(meta_str) {
-                if let Some(display_name) = meta.get("sender_display_name").and_then(|v| v.as_str()) {
+                if let Some(display_name) = meta.get("sender_display_name").and_then(|v| v.as_str())
+                {
                     // For Slack (from PR #43), sender_display_name includes mention: "Name (<@ID>)"
                     // Extract just the name part
-                    let clean_name = display_name
-                        .split(" (<@")
-                        .next()
-                        .unwrap_or(display_name);
+                    let clean_name = display_name.split(" (<@").next().unwrap_or(display_name);
                     name_to_id.insert(clean_name.to_string(), id.clone());
                 }
             }
@@ -131,7 +129,7 @@ async fn convert_mentions(
 
     // Convert @Name patterns to platform-specific mentions
     let mut result = content.to_string();
-    
+
     // Sort by name length (longest first) to avoid partial replacements
     // e.g., "Alice Smith" before "Alice"
     let mut names: Vec<_> = name_to_id.keys().cloned().collect();
@@ -143,7 +141,7 @@ async fn convert_mentions(
             let replacement = match source {
                 "discord" | "slack" => format!("<@{}>", user_id),
                 "telegram" => format!("@{}", name), // Telegram uses @username (already correct)
-                _ => mention_pattern.clone(), // Unknown platform, leave as-is
+                _ => mention_pattern.clone(),       // Unknown platform, leave as-is
             };
 
             // Only replace if not already in correct format
@@ -280,10 +278,7 @@ impl Tool for ReplyTool {
         );
 
         // Extract source from conversation_id (format: "platform:id")
-        let source = self.conversation_id
-            .split(':')
-            .next()
-            .unwrap_or("unknown");
+        let source = self.conversation_id.split(':').next().unwrap_or("unknown");
 
         // Auto-convert @mentions to platform-specific syntax
         let converted_content = convert_mentions(
@@ -291,9 +286,11 @@ impl Tool for ReplyTool {
             &self.channel_id,
             &self.conversation_logger,
             source,
-        ).await;
+        )
+        .await;
 
-        self.conversation_logger.log_bot_message(&self.channel_id, &converted_content);
+        self.conversation_logger
+            .log_bot_message(&self.channel_id, &converted_content);
 
         let response = if let Some(ref name) = args.thread_name {
             // Cap thread names at 100 characters (Discord limit)
@@ -306,7 +303,8 @@ impl Tool for ReplyTool {
                 thread_name,
                 text: converted_content.clone(),
             }
-        } else if args.cards.is_some() || args.interactive_elements.is_some() || args.poll.is_some() {
+        } else if args.cards.is_some() || args.interactive_elements.is_some() || args.poll.is_some()
+        {
             OutboundResponse::RichMessage {
                 text: converted_content.clone(),
                 blocks: vec![], // No block generation for now; Slack adapters will fall back to text

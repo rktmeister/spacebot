@@ -671,6 +671,14 @@ export interface ProviderActionResponse {
 	message: string;
 }
 
+export interface ProviderModelTestResponse {
+	success: boolean;
+	message: string;
+	provider: string;
+	model: string;
+	sample: string | null;
+}
+
 // -- Model Types --
 
 export interface ModelInfo {
@@ -1100,16 +1108,27 @@ export const api = {
 
 	// Provider management
 	providers: () => fetchJson<ProvidersResponse>("/providers"),
-	updateProvider: async (provider: string, apiKey: string) => {
+	updateProvider: async (provider: string, apiKey: string, model: string) => {
 		const response = await fetch(`${API_BASE}/providers`, {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ provider, api_key: apiKey }),
+			body: JSON.stringify({ provider, api_key: apiKey, model }),
 		});
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<ProviderActionResponse>;
+	},
+	testProviderModel: async (provider: string, apiKey: string, model: string) => {
+		const response = await fetch(`${API_BASE}/providers/test`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ provider, api_key: apiKey, model }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<ProviderModelTestResponse>;
 	},
 	removeProvider: async (provider: string) => {
 		const response = await fetch(`${API_BASE}/providers/${encodeURIComponent(provider)}`, {
@@ -1122,7 +1141,10 @@ export const api = {
 	},
 
 	// Model listing
-	models: () => fetchJson<ModelsResponse>("/models"),
+	models: (provider?: string) => {
+		const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+		return fetchJson<ModelsResponse>(`/models${query}`);
+	},
 	refreshModels: async () => {
 		const response = await fetch(`${API_BASE}/models/refresh`, {
 			method: "POST",

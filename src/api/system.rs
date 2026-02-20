@@ -1,8 +1,8 @@
 use super::state::{ApiEvent, ApiState};
 
+use axum::Json;
 use axum::extract::State;
 use axum::response::Sse;
-use axum::Json;
 use futures::stream::Stream;
 use serde::Serialize;
 use std::convert::Infallible;

@@ -265,8 +265,9 @@ pub async fn start_ipc_server(
 ) -> anyhow::Result<(watch::Receiver<bool>, tokio::task::JoinHandle<()>)> {
     // Ensure the instance directory exists (e.g. on first run)
     if let Some(parent) = paths.socket.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create instance directory: {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create instance directory: {}", parent.display())
+        })?;
     }
 
     // Clean up any stale socket file

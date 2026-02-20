@@ -1,15 +1,15 @@
 use super::state::ApiState;
 
-use axum::extract::State;
-use axum::http::StatusCode;
 use axum::Json;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Serialize, Clone)]
 pub(super) struct ModelInfo {
-    /// Full routing string (e.g. "openrouter/anthropic/claude-sonnet-4-20250514")
+    /// Full routing string (e.g. "openrouter/anthropic/claude-sonnet-4")
     id: String,
     /// Human-readable name
     name: String,
@@ -26,6 +26,11 @@ pub(super) struct ModelInfo {
 #[derive(Serialize)]
 pub(super) struct ModelsResponse {
     models: Vec<ModelInfo>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ModelsQuery {
+    provider: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -67,9 +72,7 @@ struct ModelsDevModalities {
 /// Cached model catalog fetched from models.dev.
 static MODELS_CACHE: std::sync::LazyLock<
     tokio::sync::RwLock<(Vec<ModelInfo>, std::time::Instant)>,
-> = std::sync::LazyLock::new(|| {
-    tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now()))
-});
+> = std::sync::LazyLock::new(|| tokio::sync::RwLock::new((Vec::new(), std::time::Instant::now())));
 
 const MODELS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
@@ -315,39 +318,83 @@ pub(super) async fn configured_providers(config_path: &std::path::Path) -> Vec<&
         std::env::var(env_var).is_ok()
     };
 
-    if has_key("anthropic_key", "ANTHROPIC_API_KEY") { providers.push("anthropic"); }
-    if has_key("openai_key", "OPENAI_API_KEY") { providers.push("openai"); }
-    if has_key("openrouter_key", "OPENROUTER_API_KEY") { providers.push("openrouter"); }
-    if has_key("zhipu_key", "ZHIPU_API_KEY") { providers.push("zhipu"); }
-    if has_key("groq_key", "GROQ_API_KEY") { providers.push("groq"); }
-    if has_key("together_key", "TOGETHER_API_KEY") { providers.push("together"); }
-    if has_key("fireworks_key", "FIREWORKS_API_KEY") { providers.push("fireworks"); }
-    if has_key("deepseek_key", "DEEPSEEK_API_KEY") { providers.push("deepseek"); }
-    if has_key("xai_key", "XAI_API_KEY") { providers.push("xai"); }
-    if has_key("mistral_key", "MISTRAL_API_KEY") { providers.push("mistral"); }
-    if has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY") { providers.push("opencode-zen"); }
-    if has_key("minimax_key", "MINIMAX_API_KEY") { providers.push("minimax"); }
-    if has_key("moonshot_key", "MOONSHOT_API_KEY") { providers.push("moonshot"); }
-    if has_key("zai_coding_plan_key", "ZAI_CODING_PLAN_API_KEY") { providers.push("zai-coding-plan"); }
+    if has_key("anthropic_key", "ANTHROPIC_API_KEY") {
+        providers.push("anthropic");
+    }
+    if has_key("openai_key", "OPENAI_API_KEY") {
+        providers.push("openai");
+    }
+    if has_key("openrouter_key", "OPENROUTER_API_KEY") {
+        providers.push("openrouter");
+    }
+    if has_key("zhipu_key", "ZHIPU_API_KEY") {
+        providers.push("zhipu");
+    }
+    if has_key("groq_key", "GROQ_API_KEY") {
+        providers.push("groq");
+    }
+    if has_key("together_key", "TOGETHER_API_KEY") {
+        providers.push("together");
+    }
+    if has_key("fireworks_key", "FIREWORKS_API_KEY") {
+        providers.push("fireworks");
+    }
+    if has_key("deepseek_key", "DEEPSEEK_API_KEY") {
+        providers.push("deepseek");
+    }
+    if has_key("xai_key", "XAI_API_KEY") {
+        providers.push("xai");
+    }
+    if has_key("mistral_key", "MISTRAL_API_KEY") {
+        providers.push("mistral");
+    }
+    if has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY") {
+        providers.push("opencode-zen");
+    }
+    if has_key("minimax_key", "MINIMAX_API_KEY") {
+        providers.push("minimax");
+    }
+    if has_key("moonshot_key", "MOONSHOT_API_KEY") {
+        providers.push("moonshot");
+    }
+    if has_key("zai_coding_plan_key", "ZAI_CODING_PLAN_API_KEY") {
+        providers.push("zai-coding-plan");
+    }
 
     providers
 }
 
 pub(super) async fn get_models(
     State(state): State<Arc<ApiState>>,
+    Query(query): Query<ModelsQuery>,
 ) -> Result<Json<ModelsResponse>, StatusCode> {
     let config_path = state.config_path.read().await.clone();
     let configured = configured_providers(&config_path).await;
+    let requested_provider = query
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty());
 
     let catalog = ensure_models_cache().await;
 
     let mut models: Vec<ModelInfo> = catalog
         .into_iter()
-        .filter(|m| configured.contains(&m.provider.as_str()))
+        .filter(|model| {
+            if let Some(provider) = requested_provider {
+                model.provider == provider
+            } else {
+                configured.contains(&model.provider.as_str())
+            }
+        })
         .collect();
 
     for model in extra_models() {
-        if configured.contains(&model.provider.as_str()) {
+        if let Some(provider) = requested_provider {
+            if model.provider == provider {
+                models.push(model);
+            }
+        } else if configured.contains(&model.provider.as_str()) {
             models.push(model);
         }
     }
@@ -363,5 +410,5 @@ pub(super) async fn refresh_models(
         *cache = (Vec::new(), std::time::Instant::now() - MODELS_CACHE_TTL);
     }
 
-    get_models(State(state)).await
+    get_models(State(state), Query(ModelsQuery { provider: None })).await
 }

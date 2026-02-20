@@ -3,9 +3,9 @@ use super::state::ApiState;
 use crate::conversation::channels::ChannelStore;
 use crate::conversation::history::ProcessRunLogger;
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -84,7 +84,9 @@ pub(super) async fn list_channels(State(state): State<Arc<ApiState>>) -> Json<Ch
         }
     }
 
-    Json(ChannelsResponse { channels: all_channels })
+    Json(ChannelsResponse {
+        channels: all_channels,
+    })
 }
 
 /// Get the unified timeline for a channel: messages, branch runs, and worker runs
@@ -99,10 +101,17 @@ pub(super) async fn channel_messages(
 
     for (_agent_id, pool) in pools.iter() {
         let logger = ProcessRunLogger::new(pool.clone());
-        match logger.load_channel_timeline(&query.channel_id, fetch_limit, query.before.as_deref()).await {
+        match logger
+            .load_channel_timeline(&query.channel_id, fetch_limit, query.before.as_deref())
+            .await
+        {
             Ok(items) if !items.is_empty() => {
                 let has_more = items.len() as i64 > limit;
-                let items = if has_more { items[items.len() - limit as usize..].to_vec() } else { items };
+                let items = if has_more {
+                    items[items.len() - limit as usize..].to_vec()
+                } else {
+                    items
+                };
                 return Json(MessagesResponse { items, has_more });
             }
             Ok(_) => continue,
@@ -113,7 +122,10 @@ pub(super) async fn channel_messages(
         }
     }
 
-    Json(MessagesResponse { items: vec![], has_more: false })
+    Json(MessagesResponse {
+        items: vec![],
+        has_more: false,
+    })
 }
 
 /// Get live status (active workers, branches, completed items) for all channels.
@@ -142,13 +154,19 @@ pub(super) async fn cancel_process(
     Json(request): Json<CancelProcessRequest>,
 ) -> Result<Json<CancelProcessResponse>, StatusCode> {
     let states = state.channel_states.read().await;
-    let channel_state = states.get(&request.channel_id).ok_or(StatusCode::NOT_FOUND)?;
+    let channel_state = states
+        .get(&request.channel_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     match request.process_type.as_str() {
         "worker" => {
-            let worker_id: crate::WorkerId = request.process_id.parse()
+            let worker_id: crate::WorkerId = request
+                .process_id
+                .parse()
                 .map_err(|_| StatusCode::BAD_REQUEST)?;
-            channel_state.cancel_worker(worker_id).await
+            channel_state
+                .cancel_worker(worker_id)
+                .await
                 .map_err(|_| StatusCode::NOT_FOUND)?;
             Ok(Json(CancelProcessResponse {
                 success: true,
@@ -156,9 +174,13 @@ pub(super) async fn cancel_process(
             }))
         }
         "branch" => {
-            let branch_id: crate::BranchId = request.process_id.parse()
+            let branch_id: crate::BranchId = request
+                .process_id
+                .parse()
                 .map_err(|_| StatusCode::BAD_REQUEST)?;
-            channel_state.cancel_branch(branch_id).await
+            channel_state
+                .cancel_branch(branch_id)
+                .await
                 .map_err(|_| StatusCode::NOT_FOUND)?;
             Ok(Json(CancelProcessResponse {
                 success: true,

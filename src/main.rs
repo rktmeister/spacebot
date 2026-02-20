@@ -1276,8 +1276,12 @@ async fn initialize_agents(
                     .expect("slack permissions initialized when slack is enabled"),
                 slack_config.commands.clone(),
             ) {
-                Ok(adapter) => { new_messaging_manager.register(adapter).await; }
-                Err(error) => { tracing::error!(%error, "failed to build slack adapter"); }
+                Ok(adapter) => {
+                    new_messaging_manager.register(adapter).await;
+                }
+                Err(error) => {
+                    tracing::error!(%error, "failed to build slack adapter");
+                }
             }
         }
     }
@@ -1334,7 +1338,9 @@ async fn initialize_agents(
     }
 
     let webchat_adapter = Arc::new(spacebot::messaging::webchat::WebChatAdapter::new());
-    new_messaging_manager.register_shared(webchat_adapter.clone()).await;
+    new_messaging_manager
+        .register_shared(webchat_adapter.clone())
+        .await;
     api_state.set_webchat_adapter(webchat_adapter);
 
     *messaging_manager = Arc::new(new_messaging_manager);
