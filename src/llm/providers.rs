@@ -10,7 +10,7 @@ pub async fn init_providers(config: &LlmConfig) -> Result<()> {
     // during system startup
 
     if config.anthropic_key.is_some() {
-        tracing::info!("Anthropic provider configured");
+        tracing::info!("Anthropic provider configured (API key)");
     }
 
     if config.openai_key.is_some() {
@@ -31,6 +31,10 @@ pub async fn init_providers(config: &LlmConfig) -> Result<()> {
 
     if config.moonshot_key.is_some() {
         tracing::info!("Moonshot AI provider configured");
+    }
+
+    if config.nvidia_key.is_some() {
+        tracing::info!("NVIDIA provider configured");
     }
 
     Ok(())
