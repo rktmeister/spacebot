@@ -14,7 +14,7 @@ use chrono::Timelike;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::time::{interval, Duration};
+use tokio::time::Duration;
 
 /// A cron job definition loaded from the database.
 #[derive(Debug, Clone)]
@@ -183,11 +183,32 @@ impl Scheduler {
                     .unwrap_or(3600)
             };
 
-            let mut ticker = interval(Duration::from_secs(interval_secs));
+            // For sub-daily intervals that divide evenly into 86400 (e.g. 1800s, 3600s, 21600s),
+            // align the first tick to the next UTC clock boundary so the job fires on clean marks
+            // like :00 and :30 rather than at an arbitrary offset from service start.
+            // Daily/weekly jobs are left on relative timing (interval_at with one interval offset)
+            // to avoid overcomplicating scheduling for jobs with active_hours constraints.
+            let first_tick = if interval_secs < 86400 && 86400 % interval_secs == 0 {
+                let now_unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let remainder = now_unix % interval_secs;
+                let secs_until = if remainder == 0 { interval_secs } else { interval_secs - remainder };
+                tracing::info!(
+                    cron_id = %job_id,
+                    interval_secs,
+                    secs_until_first_tick = secs_until,
+                    "clock-aligned timer: first tick in {secs_until}s"
+                );
+                tokio::time::Instant::now() + Duration::from_secs(secs_until)
+            } else {
+                tokio::time::Instant::now() + Duration::from_secs(interval_secs)
+            };
+
+            let mut ticker = tokio::time::interval_at(first_tick, Duration::from_secs(interval_secs));
             // Skip catch-up ticks if processing falls behind — maintain original cadence.
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            // Skip the immediate first tick — jobs should wait for the first interval.
-            ticker.tick().await;
 
             loop {
                 ticker.tick().await;
