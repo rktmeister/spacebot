@@ -229,6 +229,14 @@ impl Messaging for TwitchAdapter {
                         .context("failed to send twitch message")?;
                 }
             }
+            OutboundResponse::RichMessage { text, .. } => {
+                for chunk in split_message(&text, MAX_MESSAGE_LENGTH) {
+                    client
+                        .say(channel.to_owned(), chunk)
+                        .await
+                        .context("failed to send twitch message")?;
+                }
+            }
             OutboundResponse::ThreadReply { text, .. } => {
                 // Twitch has no threads — reply to the source message instead
                 let reply_to_id = message
@@ -281,13 +289,6 @@ impl Messaging for TwitchAdapter {
                     .await
                     .context("failed to send ephemeral fallback on twitch")?;
             }
-            OutboundResponse::RichMessage { text, .. } => {
-                // No Block Kit on Twitch — plain text fallback
-                client
-                    .say(channel.to_owned(), text)
-                    .await
-                    .context("failed to send rich message fallback on twitch")?;
-            }
             OutboundResponse::ScheduledMessage { text, .. } => {
                 // No scheduled messages on Twitch — send immediately
                 client
@@ -311,6 +312,14 @@ impl Messaging for TwitchAdapter {
             .context("twitch client not connected")?;
 
         if let OutboundResponse::Text(text) = response {
+            let channel = target.strip_prefix('#').unwrap_or(target);
+            for chunk in split_message(&text, MAX_MESSAGE_LENGTH) {
+                client
+                    .say(channel.to_owned(), chunk)
+                    .await
+                    .context("failed to broadcast twitch message")?;
+            }
+        } else if let OutboundResponse::RichMessage { text, .. } = response {
             let channel = target.strip_prefix('#').unwrap_or(target);
             for chunk in split_message(&text, MAX_MESSAGE_LENGTH) {
                 client
