@@ -533,7 +533,7 @@ async fn handle_interaction_event(
         let content = MessageContent::Interaction {
             action_id: action_id.clone(),
             block_id: block_id.clone(),
-            value: value.clone(),
+            values: value.map(|v| vec![v]).unwrap_or_default(),
             label: label.clone(),
             message_ts: message_ts.clone(),
         };
@@ -1004,18 +1004,6 @@ impl Messaging for SlackAdapter {
                     target = %target,
                     "broadcast() received a variant that is not supported for broadcast — ignoring"
                 );
-            }
-        } else if let OutboundResponse::RichMessage { text, .. } = response {
-            for chunk in split_message(&text, 12_000) {
-                let req = SlackApiChatPostMessageRequest::new(
-                    channel_id.clone(),
-                    markdown_content(chunk),
-                );
-
-                session
-                    .chat_post_message(&req)
-                    .await
-                    .context("failed to broadcast slack message")?;
             }
         }
 

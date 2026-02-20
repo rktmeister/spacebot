@@ -309,6 +309,7 @@ impl Tool for ReplyTool {
         } else if args.cards.is_some() || args.interactive_elements.is_some() || args.poll.is_some() {
             OutboundResponse::RichMessage {
                 text: converted_content.clone(),
+                blocks: vec![], // No block generation for now; Slack adapters will fall back to text
                 cards: args.cards.unwrap_or_default(),
                 interactive_elements: args.interactive_elements.unwrap_or_default(),
                 poll: args.poll,

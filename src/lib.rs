@@ -269,7 +269,6 @@ impl std::fmt::Display for MessageContent {
                     write!(f, "[interaction: {}]", action_id)
                 }
             }
-            }
         }
     }
 }
@@ -288,20 +287,6 @@ pub struct Attachment {
 #[serde(rename_all = "snake_case")]
 pub enum OutboundResponse {
     Text(String),
-    /// A rich message with optional cards, interactive elements, and a poll.
-    RichMessage {
-        /// Fallback text for adapters that don't support rich elements.
-        text: String,
-        /// Structured cards (like embeds).
-        #[serde(default)]
-        cards: Vec<Card>,
-        /// Interactive elements (like buttons, select menus).
-        #[serde(default)]
-        interactive_elements: Vec<InteractiveElements>,
-        /// An optional poll.
-        #[serde(default)]
-        poll: Option<Poll>,
-    },
     /// Create a new thread and send a reply in it. On platforms that don't
     /// support threads this falls back to a regular text message.
     ThreadReply {

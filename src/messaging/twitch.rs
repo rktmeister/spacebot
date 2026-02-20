@@ -289,13 +289,6 @@ impl Messaging for TwitchAdapter {
                     .await
                     .context("failed to send ephemeral fallback on twitch")?;
             }
-            OutboundResponse::RichMessage { text, .. } => {
-                // No Block Kit on Twitch — plain text fallback
-                client
-                    .say(channel.to_owned(), text)
-                    .await
-                    .context("failed to send rich message fallback on twitch")?;
-            }
             OutboundResponse::ScheduledMessage { text, .. } => {
                 // No scheduled messages on Twitch — send immediately
                 client

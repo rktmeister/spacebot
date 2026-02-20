@@ -140,7 +140,7 @@ impl Messaging for DiscordAdapter {
                         .context("failed to send discord message")?;
                 }
             }
-            OutboundResponse::RichMessage { text, cards, interactive_elements, poll } => {
+            OutboundResponse::RichMessage { text, cards, interactive_elements, poll, .. } => {
                 self.stop_typing(message).await;
 
                 let chunks = split_message(&text, 2000);
@@ -299,18 +299,6 @@ impl Messaging for DiscordAdapter {
                         .context("failed to send ephemeral fallback on discord")?;
                 }
             }
-            OutboundResponse::RichMessage { text, .. } => {
-                // No Block Kit on Discord — plain text fallback
-                if let Ok(channel_id) = self.extract_channel_id(message) {
-                    let http = self.get_http().await?;
-                    for chunk in split_message(&text, 2000) {
-                        channel_id
-                            .say(&*http, &chunk)
-                            .await
-                            .context("failed to send rich message fallback on discord")?;
-                    }
-                }
-            }
             OutboundResponse::ScheduledMessage { text, .. } => {
                 // Discord has no native scheduled messages — send immediately
                 if let Ok(channel_id) = self.extract_channel_id(message) {
@@ -384,7 +372,7 @@ impl Messaging for DiscordAdapter {
                     .await
                     .context("failed to broadcast discord message")?;
             }
-        } else if let OutboundResponse::RichMessage { text, cards, interactive_elements, poll } = response {
+        } else if let OutboundResponse::RichMessage { text, cards, interactive_elements, poll, .. } = response {
             let chunks = split_message(&text, 2000);
             for (i, chunk) in chunks.iter().enumerate() {
                 let is_last = i == chunks.len() - 1;
@@ -649,10 +637,12 @@ impl EventHandler for Handler {
             _ => Vec::new(),
         };
 
-        let content = MessageContent::InteractionEvent {
-            custom_id: component.data.custom_id.clone(),
+        let content = MessageContent::Interaction {
+            action_id: component.data.custom_id.clone(),
+            block_id: None,
             values,
             label: None,
+            message_ts: Some(component.message.id.get().to_string()),
         };
 
         let mut metadata = HashMap::new();
