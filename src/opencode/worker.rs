@@ -278,6 +278,7 @@ impl OpenCodeWorker {
     }
 
     /// Handle a single SSE event. Returns whether to continue, complete, or error.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_sse_event(
         &self,
         event: &SseEvent,

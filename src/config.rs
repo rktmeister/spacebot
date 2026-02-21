@@ -2776,6 +2776,7 @@ impl std::fmt::Debug for RuntimeConfig {
 /// Returns a JoinHandle that runs until dropped. File events are debounced
 /// to 2 seconds so rapid edits (e.g. :w in vim hitting multiple writes) are
 /// collapsed into a single reload.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_file_watcher(
     config_path: PathBuf,
     instance_dir: PathBuf,

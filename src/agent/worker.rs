@@ -61,6 +61,7 @@ pub struct Worker {
 
 impl Worker {
     /// Create a new fire-and-forget worker.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         channel_id: Option<ChannelId>,
         task: impl Into<String>,
@@ -101,6 +102,7 @@ impl Worker {
     }
 
     /// Create a new interactive worker.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_interactive(
         channel_id: Option<ChannelId>,
         task: impl Into<String>,
