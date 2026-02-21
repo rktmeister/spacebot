@@ -627,7 +627,6 @@ impl EventHandler for Handler {
                     }
                 }
             }
-
         }
 
         let inbound = InboundMessage {
@@ -1143,5 +1142,4 @@ mod tests {
         let _ = build_poll(&poll);
         // Again, can't easily inspect CreatePoll fields, but we verify it runs.
     }
-
 }

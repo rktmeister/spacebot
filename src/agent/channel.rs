@@ -528,10 +528,7 @@ impl Channel {
 
         {
             let mut reply_target = self.state.reply_target_message_id.write().await;
-            *reply_target = messages
-                .iter()
-                .rev()
-                .find_map(extract_discord_message_id);
+            *reply_target = messages.iter().rev().find_map(extract_discord_message_id);
         }
 
         // Run agent turn with any image/audio attachments preserved
