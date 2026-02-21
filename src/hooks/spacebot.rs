@@ -113,7 +113,7 @@ where
     async fn on_completion_response(
         &self,
         _prompt: &Message,
-        response: &CompletionResponse<M::Response>,
+        _response: &CompletionResponse<M::Response>,
     ) -> HookAction {
         // Tool nudging: check if response has tool calls
         // Note: Rig's CompletionResponse structure varies by model implementation
@@ -231,6 +231,15 @@ where
                     .tool_call_duration_seconds
                     .observe(start.elapsed().as_secs_f64());
             }
+        }
+
+        // Channel turns should end immediately after a successful reply tool call.
+        // This avoids extra post-reply LLM iterations that add latency, cost, and
+        // noisy logs when providers return empty trailing responses.
+        if self.process_type == ProcessType::Channel && tool_name == "reply" {
+            return HookAction::Terminate {
+                reason: "reply delivered".into(),
+            };
         }
 
         HookAction::Continue

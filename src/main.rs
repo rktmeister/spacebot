@@ -1015,7 +1015,8 @@ async fn run(
             }
             Some(agent_id) = agent_remove_rx.recv() => {
                 let key: spacebot::AgentId = Arc::from(agent_id.as_str());
-                if agents.remove(&key).is_some() {
+                if let Some(agent) = agents.remove(&key) {
+                    agent.deps.mcp_manager.disconnect_all().await;
                     tracing::info!(agent_id = %agent_id, "removed agent from main loop");
                 } else {
                     tracing::warn!(agent_id = %agent_id, "agent not found in main loop for removal");
@@ -1121,6 +1122,7 @@ async fn run(
 
     for (agent_id, agent) in agents {
         tracing::info!(%agent_id, "shutting down agent");
+        agent.deps.mcp_manager.disconnect_all().await;
         agent.db.close().await;
     }
 
@@ -1128,10 +1130,10 @@ async fn run(
 
     // Flush buffered OTLP spans before the process exits. Without this the
     // batch exporter drops any spans recorded in the last export interval.
-    if let Some(provider) = otel_provider {
-        if let Err(error) = provider.shutdown() {
-            tracing::warn!(%error, "failed to flush OTel spans on shutdown");
-        }
+    if let Some(provider) = otel_provider
+        && let Err(error) = provider.shutdown()
+    {
+        tracing::warn!(%error, "failed to flush OTel spans on shutdown");
     }
 
     spacebot::daemon::cleanup(&paths);
@@ -1162,6 +1164,7 @@ async fn initialize_agents(
         String,
         std::path::PathBuf,
         Arc<spacebot::config::RuntimeConfig>,
+        Arc<spacebot::mcp::McpManager>,
     )>,
     discord_permissions: &mut Option<Arc<ArcSwap<spacebot::config::DiscordPermissions>>>,
     slack_permissions: &mut Option<Arc<ArcSwap<spacebot::config::SlackPermissions>>>,
@@ -1192,13 +1195,13 @@ async fn initialize_agents(
                 agent_config.archives_dir.display()
             )
         })?;
-        std::fs::create_dir_all(&agent_config.ingest_dir()).with_context(|| {
+        std::fs::create_dir_all(agent_config.ingest_dir()).with_context(|| {
             format!(
                 "failed to create ingest dir: {}",
                 agent_config.ingest_dir().display()
             )
         })?;
-        std::fs::create_dir_all(&agent_config.logs_dir()).with_context(|| {
+        std::fs::create_dir_all(agent_config.logs_dir()).with_context(|| {
             format!(
                 "failed to create logs dir: {}",
                 agent_config.logs_dir().display()
@@ -1249,6 +1252,8 @@ async fn initialize_agents(
         let (event_tx, _event_rx) = tokio::sync::broadcast::channel(256);
 
         let agent_id: spacebot::AgentId = Arc::from(agent_config.id.as_str());
+        let mcp_manager = Arc::new(spacebot::mcp::McpManager::new(agent_config.mcp.clone()));
+        mcp_manager.connect_all().await;
 
         // Scaffold identity templates if missing, then load
         spacebot::identity::scaffold_identity_files(&agent_config.workspace)
@@ -1286,12 +1291,14 @@ async fn initialize_agents(
             agent_config.id.clone(),
             agent_config.workspace.clone(),
             runtime_config.clone(),
+            mcp_manager.clone(),
         ));
 
         let deps = spacebot::AgentDeps {
             agent_id: agent_id.clone(),
             memory_search,
             llm_manager: llm_manager.clone(),
+            mcp_manager,
             cron_tool: None,
             runtime_config,
             event_tx,
@@ -1317,6 +1324,7 @@ async fn initialize_agents(
         let mut agent_pools = std::collections::HashMap::new();
         let mut agent_configs = Vec::new();
         let mut memory_searches = std::collections::HashMap::new();
+        let mut mcp_managers = std::collections::HashMap::new();
         let mut agent_workspaces = std::collections::HashMap::new();
         let mut runtime_configs = std::collections::HashMap::new();
         for (agent_id, agent) in agents.iter() {
@@ -1324,6 +1332,7 @@ async fn initialize_agents(
             api_state.register_agent_events(agent_id.to_string(), event_rx);
             agent_pools.insert(agent_id.to_string(), agent.db.sqlite.clone());
             memory_searches.insert(agent_id.to_string(), agent.deps.memory_search.clone());
+            mcp_managers.insert(agent_id.to_string(), agent.deps.mcp_manager.clone());
             agent_workspaces.insert(agent_id.to_string(), agent.config.workspace.clone());
             runtime_configs.insert(agent_id.to_string(), agent.deps.runtime_config.clone());
             agent_configs.push(spacebot::api::AgentInfo {
@@ -1338,6 +1347,7 @@ async fn initialize_agents(
         api_state.set_agent_pools(agent_pools);
         api_state.set_agent_configs(agent_configs);
         api_state.set_memory_searches(memory_searches);
+        api_state.set_mcp_managers(mcp_managers);
         api_state.set_runtime_configs(runtime_configs);
         api_state.set_agent_workspaces(agent_workspaces);
         api_state.set_instance_dir(config.instance_dir.clone());
@@ -1356,16 +1366,16 @@ async fn initialize_agents(
         api_state.set_discord_permissions(perms.clone()).await;
     }
 
-    if let Some(discord_config) = &config.messaging.discord {
-        if discord_config.enabled {
-            let adapter = spacebot::messaging::discord::DiscordAdapter::new(
-                &discord_config.token,
-                discord_permissions
-                    .clone()
-                    .expect("discord permissions initialized when discord is enabled"),
-            );
-            new_messaging_manager.register(adapter).await;
-        }
+    if let Some(discord_config) = &config.messaging.discord
+        && discord_config.enabled
+    {
+        let adapter = spacebot::messaging::discord::DiscordAdapter::new(
+            &discord_config.token,
+            discord_permissions
+                .clone()
+                .expect("discord permissions initialized when discord is enabled"),
+        );
+        new_messaging_manager.register(adapter).await;
     }
 
     // Shared Slack permissions (hot-reloadable via file watcher)
@@ -1377,22 +1387,22 @@ async fn initialize_agents(
         api_state.set_slack_permissions(perms.clone()).await;
     }
 
-    if let Some(slack_config) = &config.messaging.slack {
-        if slack_config.enabled {
-            match spacebot::messaging::slack::SlackAdapter::new(
-                &slack_config.bot_token,
-                &slack_config.app_token,
-                slack_permissions
-                    .clone()
-                    .expect("slack permissions initialized when slack is enabled"),
-                slack_config.commands.clone(),
-            ) {
-                Ok(adapter) => {
-                    new_messaging_manager.register(adapter).await;
-                }
-                Err(error) => {
-                    tracing::error!(%error, "failed to build slack adapter");
-                }
+    if let Some(slack_config) = &config.messaging.slack
+        && slack_config.enabled
+    {
+        match spacebot::messaging::slack::SlackAdapter::new(
+            &slack_config.bot_token,
+            &slack_config.app_token,
+            slack_permissions
+                .clone()
+                .expect("slack permissions initialized when slack is enabled"),
+            slack_config.commands.clone(),
+        ) {
+            Ok(adapter) => {
+                new_messaging_manager.register(adapter).await;
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to build slack adapter");
             }
         }
     }
@@ -1404,26 +1414,26 @@ async fn initialize_agents(
         Arc::new(ArcSwap::from_pointee(perms))
     });
 
-    if let Some(telegram_config) = &config.messaging.telegram {
-        if telegram_config.enabled {
-            let adapter = spacebot::messaging::telegram::TelegramAdapter::new(
-                &telegram_config.token,
-                telegram_permissions
-                    .clone()
-                    .expect("telegram permissions initialized when telegram is enabled"),
-            );
-            new_messaging_manager.register(adapter).await;
-        }
+    if let Some(telegram_config) = &config.messaging.telegram
+        && telegram_config.enabled
+    {
+        let adapter = spacebot::messaging::telegram::TelegramAdapter::new(
+            &telegram_config.token,
+            telegram_permissions
+                .clone()
+                .expect("telegram permissions initialized when telegram is enabled"),
+        );
+        new_messaging_manager.register(adapter).await;
     }
 
-    if let Some(webhook_config) = &config.messaging.webhook {
-        if webhook_config.enabled {
-            let adapter = spacebot::messaging::webhook::WebhookAdapter::new(
-                webhook_config.port,
-                &webhook_config.bind,
-            );
-            new_messaging_manager.register(adapter).await;
-        }
+    if let Some(webhook_config) = &config.messaging.webhook
+        && webhook_config.enabled
+    {
+        let adapter = spacebot::messaging::webhook::WebhookAdapter::new(
+            webhook_config.port,
+            &webhook_config.bind,
+        );
+        new_messaging_manager.register(adapter).await;
     }
 
     // Shared Twitch permissions (hot-reloadable via file watcher)
@@ -1433,19 +1443,19 @@ async fn initialize_agents(
         Arc::new(ArcSwap::from_pointee(perms))
     });
 
-    if let Some(twitch_config) = &config.messaging.twitch {
-        if twitch_config.enabled {
-            let adapter = spacebot::messaging::twitch::TwitchAdapter::new(
-                &twitch_config.username,
-                &twitch_config.oauth_token,
-                twitch_config.channels.clone(),
-                twitch_config.trigger_prefix.clone(),
-                twitch_permissions
-                    .clone()
-                    .expect("twitch permissions initialized when twitch is enabled"),
-            );
-            new_messaging_manager.register(adapter).await;
-        }
+    if let Some(twitch_config) = &config.messaging.twitch
+        && twitch_config.enabled
+    {
+        let adapter = spacebot::messaging::twitch::TwitchAdapter::new(
+            &twitch_config.username,
+            &twitch_config.oauth_token,
+            twitch_config.channels.clone(),
+            twitch_config.trigger_prefix.clone(),
+            twitch_permissions
+                .clone()
+                .expect("twitch permissions initialized when twitch is enabled"),
+        );
+        new_messaging_manager.register(adapter).await;
     }
 
     let webchat_adapter = Arc::new(spacebot::messaging::webchat::WebChatAdapter::new());

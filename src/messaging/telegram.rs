@@ -10,8 +10,8 @@ use teloxide::Bot;
 use teloxide::payloads::setters::*;
 use teloxide::requests::{Request, Requester};
 use teloxide::types::{
-    ChatAction, ChatId, FileId, InputFile, MediaKind, MessageId, MessageKind, ReactionType,
-    ReplyParameters, UpdateKind, UserId,
+    ChatAction, ChatId, FileId, InputFile, InputPollOption, MediaKind, MessageId, MessageKind,
+    ReactionType, ReplyParameters, UpdateKind, UserId,
 };
 
 use std::collections::{HashMap, VecDeque};
@@ -177,7 +177,7 @@ impl Messaging for TelegramAdapter {
                         }
 
                         for update in updates {
-                            offset = update.id.as_offset() as i32;
+                            offset = update.id.as_offset();
 
                             let message = match &update.kind {
                                 UpdateKind::Message(message) => message,
@@ -187,11 +187,10 @@ impl Messaging for TelegramAdapter {
                             let bot_id = *bot_user_id.read().await;
 
                             // Skip our own messages
-                            if let Some(from) = &message.from {
-                                if bot_id.is_some_and(|id| from.id == id) {
+                            if let Some(from) = &message.from
+                                && bot_id.is_some_and(|id| from.id == id) {
                                     continue;
                                 }
-                            }
 
                             let permissions = permissions.load();
 
@@ -200,8 +199,8 @@ impl Messaging for TelegramAdapter {
 
                             // DM filter: in private chats, check dm_allowed_users
                             if is_private {
-                                if let Some(from) = &message.from {
-                                    if !permissions.dm_allowed_users.is_empty()
+                                if let Some(from) = &message.from
+                                    && !permissions.dm_allowed_users.is_empty()
                                         && !permissions
                                             .dm_allowed_users
                                             .contains(&(from.id.0 as i64))
@@ -216,21 +215,25 @@ impl Messaging for TelegramAdapter {
                                         }
                                         continue;
                                     }
-                                }
                             } else if let Some(filter) = &permissions.chat_filter {
                                 // Chat filter: if configured, only allow listed group/channel chats
                                 if !filter.contains(&chat_id) {
+                                    tracing::debug!(
+                                        chat_id,
+                                        ?filter,
+                                        "telegram message rejected by chat filter"
+                                    );
                                     continue;
                                 }
                             }
 
                             // Extract text content
-                            let text = extract_text(&message);
-                            if text.is_none() && !has_attachments(&message) {
+                            let text = extract_text(message);
+                            if text.is_none() && !has_attachments(message) {
                                 continue;
                             }
 
-                            let content = build_content(&bot, &message, &text).await;
+                            let content = build_content(&bot, message, &text).await;
                             let conversation_id = format!("telegram:{chat_id}");
                             let sender_id = message
                                 .from
@@ -239,7 +242,7 @@ impl Messaging for TelegramAdapter {
                                 .unwrap_or_default();
 
                             let (metadata, formatted_author) = build_metadata(
-                                &message,
+                                message,
                                 &*bot_username.read().await,
                             );
 
@@ -291,7 +294,7 @@ impl Messaging for TelegramAdapter {
                         .context("failed to send telegram message")?;
                 }
             }
-            OutboundResponse::RichMessage { text, .. } => {
+            OutboundResponse::RichMessage { text, poll, .. } => {
                 self.stop_typing(&message.conversation_id).await;
 
                 for chunk in split_message(&text, MAX_MESSAGE_LENGTH) {
@@ -300,6 +303,10 @@ impl Messaging for TelegramAdapter {
                         .send()
                         .await
                         .context("failed to send telegram message")?;
+                }
+
+                if let Some(poll_data) = poll {
+                    send_poll(&self.bot, chat_id, &poll_data).await?;
                 }
             }
             OutboundResponse::ThreadReply {
@@ -494,13 +501,17 @@ impl Messaging for TelegramAdapter {
                     .await
                     .context("failed to broadcast telegram message")?;
             }
-        } else if let OutboundResponse::RichMessage { text, .. } = response {
+        } else if let OutboundResponse::RichMessage { text, poll, .. } = response {
             for chunk in split_message(&text, MAX_MESSAGE_LENGTH) {
                 self.bot
                     .send_message(chat_id, &chunk)
                     .send()
                     .await
                     .context("failed to broadcast telegram message")?;
+            }
+
+            if let Some(poll_data) = poll {
+                send_poll(&self.bot, chat_id, &poll_data).await?;
             }
         }
 
@@ -811,6 +822,61 @@ fn build_display_name(user: &teloxide::types::User) -> String {
         Some(last) => format!("{first} {last}"),
         None => first.clone(),
     }
+}
+
+/// Send a native Telegram poll.
+///
+/// Telegram limits: max 12 answer options, question max 300 chars, each option
+/// max 100 chars. `open_period` only supports 5–600 seconds so we only set it
+/// when `duration_hours` converts to ≤600s; otherwise the poll stays open
+/// indefinitely (until manually stopped via the Telegram client).
+async fn send_poll(bot: &Bot, chat_id: ChatId, poll: &crate::Poll) -> anyhow::Result<()> {
+    let question = if poll.question.len() > 300 {
+        format!("{}…", &poll.question[..poll.question.floor_char_boundary(299)])
+    } else {
+        poll.question.clone()
+    };
+
+    let options: Vec<InputPollOption> = poll
+        .answers
+        .iter()
+        .take(12)
+        .map(|answer| {
+            let text = if answer.len() > 100 {
+                format!("{}…", &answer[..answer.floor_char_boundary(99)])
+            } else {
+                answer.clone()
+            };
+            InputPollOption::new(text)
+        })
+        .collect();
+
+    if options.len() < 2 {
+        anyhow::bail!("telegram polls require at least 2 answer options");
+    }
+
+    let mut request = bot
+        .send_poll(chat_id, question, options)
+        .is_anonymous(false);
+
+    // Telegram's open_period only supports 5–600 seconds. Apply it when the
+    // requested duration fits; otherwise leave unset so the poll stays open
+    // indefinitely.
+    let duration_secs = poll.duration_hours.saturating_mul(3600);
+    if (5..=600).contains(&duration_secs) {
+        request = request.open_period(duration_secs as u16);
+    }
+
+    if poll.allow_multiselect {
+        request = request.allows_multiple_answers(true);
+    }
+
+    request
+        .send()
+        .await
+        .context("failed to send telegram poll")?;
+
+    Ok(())
 }
 
 /// Split a message into chunks that fit within Telegram's character limit.

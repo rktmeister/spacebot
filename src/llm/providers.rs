@@ -37,5 +37,9 @@ pub async fn init_providers(config: &LlmConfig) -> Result<()> {
         tracing::info!("NVIDIA provider configured");
     }
 
+    if config.gemini_key.is_some() {
+        tracing::info!("Google Gemini provider configured");
+    }
+
     Ok(())
 }
