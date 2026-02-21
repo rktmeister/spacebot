@@ -82,6 +82,7 @@ dialoguer = { version = "0.11", features = ["password"] }
 # Daemonization
 daemonize = "0.5"
 libc = "0.2"
+ignore = "0.4"
 
 # Discord
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "chrono", "rustls_backend"] }
@@ -151,4 +152,3 @@ tokio-test = "0.4"
 [profile.release]
 lto = "thin"
 strip = true
-
