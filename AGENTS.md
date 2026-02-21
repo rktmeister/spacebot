@@ -10,6 +10,12 @@ Single binary. No server dependencies. Runs on tokio. All data lives in embedded
 
 **Stack:** Rust (edition 2024), tokio, Rig (v0.30.0, agentic loop framework), SQLite (sqlx), LanceDB (embedded vector + FTS), redb (embedded key-value).
 
+## Migration Safety
+
+- **NEVER edit an existing migration file in place** once it has been committed or applied in any environment.
+- Treat migration files as immutable; modifying historical migrations causes checksum mismatches and can block startup.
+- For schema changes, always create a new migration with a new timestamp/version.
+
 ## Architecture Overview
 
 Five process types. Every LLM process is a Rig `Agent<SpacebotModel, SpacebotHook>`. They differ in system prompt, tools, history, and hooks.

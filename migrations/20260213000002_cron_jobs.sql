@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
     active_start_hour INTEGER,
     active_end_hour INTEGER,
     enabled INTEGER NOT NULL DEFAULT 1,
-    run_once INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

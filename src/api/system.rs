@@ -10,6 +10,7 @@ use futures::stream::Stream;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::io::Write as _;
+use std::path::Component;
 use std::path::Path;
 use std::sync::Arc;
 use zip::CompressionMethod;
@@ -114,6 +115,101 @@ pub(super) async fn events_sse(
             .interval(std::time::Duration::from_secs(15))
             .text("ping"),
     )
+}
+
+#[derive(Serialize)]
+pub struct StorageStatus {
+    used_bytes: u64,
+    total_bytes: u64,
+    available_bytes: u64,
+}
+
+pub(super) async fn storage_status(
+    State(state): State<Arc<ApiState>>,
+) -> Result<Json<StorageStatus>, (axum::http::StatusCode, String)> {
+    let runtime_configs = state.runtime_configs.load();
+    let Some(runtime_config) = runtime_configs.values().next() else {
+        return Err((
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "no runtime config available".to_string(),
+        ));
+    };
+
+    let instance_dir = runtime_config.instance_dir.clone();
+    let status = tokio::task::spawn_blocking(move || read_filesystem_usage(&instance_dir))
+        .await
+        .map_err(|error| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("storage task failed: {error}"),
+            )
+        })
+        .and_then(|result| {
+            result.map_err(|error| {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("storage inspection failed: {error}"),
+                )
+            })
+        })?;
+
+    Ok(Json(status))
+}
+
+fn read_filesystem_usage(path: &Path) -> anyhow::Result<StorageStatus> {
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    let path_cstring = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?;
+
+    let result = unsafe { libc::statvfs(path_cstring.as_ptr(), stats.as_mut_ptr()) };
+    if result != 0 {
+        return Err(anyhow::anyhow!("statvfs call failed"));
+    }
+
+    let stats = unsafe { stats.assume_init() };
+    let block_size = stats.f_frsize as u128;
+    let total_blocks = stats.f_blocks as u128;
+    let avail_blocks = stats.f_bavail as u128;
+
+    let total_bytes = (block_size * total_blocks) as u64;
+    let used_bytes = directory_size_bytes(path)?;
+    let available_bytes = (block_size * avail_blocks) as u64;
+
+    Ok(StorageStatus {
+        used_bytes,
+        total_bytes,
+        available_bytes,
+    })
+}
+
+fn directory_size_bytes(root: &Path) -> anyhow::Result<u64> {
+    if !root.exists() {
+        return Ok(0);
+    }
+
+    let mut total = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(path) = stack.pop() {
+        let metadata = std::fs::symlink_metadata(&path)?;
+
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+
+        if metadata.is_file() {
+            total = total.saturating_add(metadata.len());
+            continue;
+        }
+
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(&path)? {
+                let entry = entry?;
+                stack.push(entry.path());
+            }
+        }
+    }
+
+    Ok(total)
 }
 
 pub(super) async fn backup_export(
@@ -320,7 +416,13 @@ fn add_directory_to_zip(
         let path = entry.path();
         let file_name = entry.file_name().to_string_lossy().to_string();
 
-        if path.is_dir() && matches!(file_name.as_str(), "workspace" | "logs") {
+        if path.is_dir() && file_name == "logs" {
+            continue;
+        }
+
+        if path.is_dir() && file_name == "workspace" {
+            let name = format!("{archive_prefix}/{file_name}");
+            add_workspace_directory_to_zip(writer, &path, &name, options)?;
             continue;
         }
 
@@ -331,6 +433,61 @@ fn add_directory_to_zip(
         } else if path.is_file() {
             add_file_to_zip(writer, &path, &name, options)?;
         }
+    }
+
+    Ok(())
+}
+
+fn add_workspace_directory_to_zip(
+    writer: &mut zip::ZipWriter<&mut std::io::Cursor<Vec<u8>>>,
+    workspace_path: &Path,
+    archive_prefix: &str,
+    options: SimpleFileOptions,
+) -> anyhow::Result<()> {
+    let walk = ignore::WalkBuilder::new(workspace_path)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .parents(true)
+        .build();
+
+    for result in walk {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+
+        let path = entry.path();
+        if path == workspace_path {
+            continue;
+        }
+
+        if path
+            .components()
+            .any(|component| matches!(component, Component::Normal(name) if name == ".git"))
+        {
+            continue;
+        }
+
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let Ok(relative) = path.strip_prefix(workspace_path) else {
+            continue;
+        };
+
+        let relative_name = relative
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        let archive_name = format!("{archive_prefix}/{relative_name}");
+        add_file_to_zip(writer, path, &archive_name, options)?;
     }
 
     Ok(())

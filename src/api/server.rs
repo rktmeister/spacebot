@@ -40,6 +40,7 @@ pub async fn start_http_server(
         .route("/health", get(system::health))
         .route("/idle", get(system::idle))
         .route("/status", get(system::status))
+        .route("/system/storage", get(system::storage_status))
         .route("/system/backup/export", get(system::backup_export))
         .route("/system/backup/restore", post(system::backup_restore))
         .route("/overview", get(agents::instance_overview))
