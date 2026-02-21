@@ -25,6 +25,8 @@
             ./Cargo.lock
             ./build.rs
             ./src
+            ./migrations
+            ./prompts
           ];
         };
 
