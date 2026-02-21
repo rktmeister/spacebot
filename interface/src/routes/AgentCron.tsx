@@ -50,6 +50,7 @@ interface CronFormData {
 	active_start_hour: string;
 	active_end_hour: string;
 	enabled: boolean;
+	run_once: boolean;
 }
 
 function defaultFormData(): CronFormData {
@@ -62,6 +63,7 @@ function defaultFormData(): CronFormData {
 		active_start_hour: "",
 		active_end_hour: "",
 		enabled: true,
+		run_once: false,
 	};
 }
 
@@ -76,6 +78,7 @@ function jobToFormData(job: CronJobWithStats): CronFormData {
 		active_start_hour: job.active_hours?.[0]?.toString() ?? "",
 		active_end_hour: job.active_hours?.[1]?.toString() ?? "",
 		enabled: job.enabled,
+		run_once: job.run_once,
 	};
 }
 
@@ -90,6 +93,7 @@ function formDataToRequest(data: CronFormData): CreateCronRequest {
 		active_start_hour: active_start,
 		active_end_hour: active_end,
 		enabled: data.enabled,
+		run_once: data.run_once,
 	};
 }
 
@@ -346,6 +350,11 @@ export function AgentCron({ agentId }: AgentCronProps) {
 							<Toggle checked={formData.enabled} onCheckedChange={(checked) => setFormData((d) => ({ ...d, enabled: checked }))} size="lg" />
 						</div>
 
+						<div className="flex items-center justify-between">
+							<Label>Run Once</Label>
+							<Toggle checked={formData.run_once} onCheckedChange={(checked) => setFormData((d) => ({ ...d, run_once: checked }))} size="lg" />
+						</div>
+
 					<div className="mt-2 flex justify-end gap-2">
 						<Button variant="ghost" size="sm" onClick={closeModal}>
 							Cancel
@@ -456,6 +465,9 @@ function CronJobCard({
 						)}
 						{!job.enabled && (
 							<span className="rounded bg-gray-500/20 px-1.5 py-0.5 text-tiny text-gray-400">disabled</span>
+						)}
+						{job.run_once && (
+							<span className="rounded bg-accent/20 px-1.5 py-0.5 text-tiny text-accent">one-time</span>
 						)}
 					</div>
 

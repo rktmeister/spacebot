@@ -63,6 +63,7 @@ export function ChannelSettingCard({
 		workspace_id: "",
 		chat_id: "",
 		channel_ids: [] as string[],
+		require_mention: false,
 		dm_allowed_users: [] as string[],
 	});
 
@@ -176,6 +177,7 @@ export function ChannelSettingCard({
 			workspace_id: "",
 			chat_id: "",
 			channel_ids: [],
+			require_mention: false,
 			dm_allowed_users: [],
 		});
 	}
@@ -222,6 +224,8 @@ export function ChannelSettingCard({
 			request.chat_id = bindingForm.chat_id.trim();
 		if (bindingForm.channel_ids.length > 0)
 			request.channel_ids = bindingForm.channel_ids;
+		if (platform === "discord" && bindingForm.require_mention)
+			request.require_mention = true;
 		if (bindingForm.dm_allowed_users.length > 0)
 			request.dm_allowed_users = bindingForm.dm_allowed_users;
 		addBindingMutation.mutate(request);
@@ -245,6 +249,8 @@ export function ChannelSettingCard({
 		if (platform === "telegram" && bindingForm.chat_id.trim())
 			request.chat_id = bindingForm.chat_id.trim();
 		request.channel_ids = bindingForm.channel_ids;
+		request.require_mention =
+			platform === "discord" ? bindingForm.require_mention : false;
 		request.dm_allowed_users = bindingForm.dm_allowed_users;
 		updateBindingMutation.mutate(request);
 	}
@@ -266,6 +272,7 @@ export function ChannelSettingCard({
 			workspace_id: binding.workspace_id || "",
 			chat_id: binding.chat_id || "",
 			channel_ids: binding.channel_ids,
+			require_mention: binding.require_mention,
 			dm_allowed_users: binding.dm_allowed_users,
 		});
 	}
@@ -680,6 +687,7 @@ function BindingsSection({
 		workspace_id: string;
 		chat_id: string;
 		channel_ids: string[];
+		require_mention: boolean;
 		dm_allowed_users: string[];
 	};
 	setBindingForm: (form: any) => void;
@@ -729,6 +737,9 @@ function BindingsSection({
 											{binding.dm_allowed_users.length} DM user
 											{binding.dm_allowed_users.length > 1 ? "s" : ""}
 										</span>
+									)}
+									{binding.require_mention && (
+										<span>Mention only</span>
 									)}
 									{!binding.guild_id &&
 										!binding.workspace_id &&
@@ -900,6 +911,22 @@ function BindingForm({
 						}
 						placeholder="Add channel ID..."
 					/>
+				</div>
+			)}
+
+			{platform === "discord" && (
+				<div className="flex items-center gap-2">
+					<input
+						type="checkbox"
+						checked={bindingForm.require_mention}
+						onChange={(e) =>
+							setBindingForm({...bindingForm, require_mention: e.target.checked})
+						}
+						className="h-4 w-4 rounded border-app-line bg-app-box"
+					/>
+					<label className="text-sm text-ink-dull">
+						Require @mention or reply to bot
+					</label>
 				</div>
 			)}
 

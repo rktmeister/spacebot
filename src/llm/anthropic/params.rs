@@ -68,7 +68,13 @@ pub fn build_anthropic_request(
         body["thinking"] = serde_json::json!({ "type": "adaptive" });
         let effort = match thinking_effort {
             "max" | "high" | "medium" | "low" => thinking_effort,
-            _ => if is_opus(model_name) { "max" } else { "high" },
+            _ => {
+                if is_opus(model_name) {
+                    "max"
+                } else {
+                    "high"
+                }
+            }
         };
         body["output_config"] = serde_json::json!({ "effort": effort });
     }

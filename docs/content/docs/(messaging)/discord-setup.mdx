@@ -118,6 +118,24 @@ If `channel_ids` is empty or omitted, the bot responds in all channels.
 </Tab>
 </Tabs>
 
+### Require mentions per channel
+
+Set `require_mention = true` on a Discord binding to only process messages that either:
+
+- explicitly @mention the bot, or
+- reply to a bot message
+
+```toml
+[[bindings]]
+agent_id = "main"
+channel = "discord"
+guild_id = "123456789"
+channel_ids = ["111111", "222222"]
+require_mention = true
+```
+
+This works nicely for busy channels where you only want direct interactions.
+
 ### DM filtering
 
 By default, all DMs are ignored. To allow specific users, add their Discord user IDs.

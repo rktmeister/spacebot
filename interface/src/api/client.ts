@@ -212,6 +212,7 @@ export interface CronJobInfo {
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
+	run_once: boolean;
 	active_hours: [number, number] | null;
 }
 
@@ -612,6 +613,7 @@ export interface CronJobWithStats {
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
+	run_once: boolean;
 	active_hours: [number, number] | null;
 	success_count: number;
 	failure_count: number;
@@ -646,6 +648,7 @@ export interface CreateCronRequest {
 	active_start_hour?: number;
 	active_end_hour?: number;
 	enabled: boolean;
+	run_once: boolean;
 }
 
 export interface CronExecutionsParams {
@@ -809,6 +812,7 @@ export interface BindingInfo {
 	workspace_id: string | null;
 	chat_id: string | null;
 	channel_ids: string[];
+	require_mention: boolean;
 	dm_allowed_users: string[];
 }
 
@@ -823,6 +827,7 @@ export interface CreateBindingRequest {
 	workspace_id?: string;
 	chat_id?: string;
 	channel_ids?: string[];
+	require_mention?: boolean;
 	dm_allowed_users?: string[];
 	platform_credentials?: {
 		discord_token?: string;
@@ -851,6 +856,7 @@ export interface UpdateBindingRequest {
 	workspace_id?: string;
 	chat_id?: string;
 	channel_ids?: string[];
+	require_mention?: boolean;
 	dm_allowed_users?: string[];
 }
 

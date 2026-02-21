@@ -445,6 +445,7 @@ pub struct CronDef {
     /// Optional active hours window (start_hour, end_hour) in 24h format.
     pub active_hours: Option<(u8, u8)>,
     pub enabled: bool,
+    pub run_once: bool,
     /// Maximum wall-clock seconds to wait for the job to complete.
     /// `None` uses the default of 120 seconds.
     pub timeout_secs: Option<u64>,
@@ -593,6 +594,8 @@ pub struct Binding {
     pub chat_id: Option<String>,
     /// Channel IDs this binding applies to. If empty, all channels in the guild/workspace are allowed.
     pub channel_ids: Vec<String>,
+    /// Require explicit @mention (or reply-to-bot) for inbound messages.
+    pub require_mention: bool,
     /// User IDs allowed to DM the bot through this binding.
     pub dm_allowed_users: Vec<String>,
 }
@@ -763,6 +766,8 @@ pub struct SlackConfig {
 pub struct DiscordPermissions {
     pub guild_filter: Option<Vec<u64>>,
     pub channel_filter: std::collections::HashMap<u64, Vec<u64>>,
+    pub mention_required_guilds: Vec<u64>,
+    pub mention_required_channels: std::collections::HashMap<u64, Vec<u64>>,
     pub dm_allowed_users: Vec<u64>,
     pub allow_bot_messages: bool,
 }
@@ -861,6 +866,42 @@ impl DiscordPermissions {
             filter
         };
 
+        let mut mention_required_guilds: Vec<u64> = Vec::new();
+        let mention_required_channels = {
+            let mut filter: std::collections::HashMap<u64, Vec<u64>> =
+                std::collections::HashMap::new();
+
+            for binding in &discord_bindings {
+                if !binding.require_mention {
+                    continue;
+                }
+
+                if let Some(guild_id) = binding
+                    .guild_id
+                    .as_ref()
+                    .and_then(|g| g.parse::<u64>().ok())
+                {
+                    if binding.channel_ids.is_empty() {
+                        if !mention_required_guilds.contains(&guild_id) {
+                            mention_required_guilds.push(guild_id);
+                        }
+                        continue;
+                    }
+
+                    let channel_ids: Vec<u64> = binding
+                        .channel_ids
+                        .iter()
+                        .filter_map(|id| id.parse::<u64>().ok())
+                        .collect();
+                    if !channel_ids.is_empty() {
+                        filter.entry(guild_id).or_default().extend(channel_ids);
+                    }
+                }
+            }
+
+            filter
+        };
+
         let mut dm_allowed_users: Vec<u64> = discord
             .dm_allowed_users
             .iter()
@@ -881,6 +922,8 @@ impl DiscordPermissions {
         Self {
             guild_filter,
             channel_filter,
+            mention_required_guilds,
+            mention_required_channels,
             dm_allowed_users,
             allow_bot_messages: discord.allow_bot_messages,
         }
@@ -1070,6 +1113,13 @@ fn default_api_port() -> u16 {
 }
 fn default_api_bind() -> String {
     "127.0.0.1".into()
+}
+
+fn hosted_api_bind(bind: String) -> String {
+    match std::env::var("SPACEBOT_DEPLOYMENT") {
+        Ok(deployment) if deployment.eq_ignore_ascii_case("hosted") => "[::]".into(),
+        _ => bind,
+    }
 }
 
 #[derive(Deserialize)]
@@ -1348,6 +1398,8 @@ struct TomlCronDef {
     active_end_hour: Option<u8>,
     #[serde(default = "default_enabled")]
     enabled: bool,
+    #[serde(default)]
+    run_once: bool,
     timeout_secs: Option<u64>,
 }
 
@@ -1440,6 +1492,8 @@ struct TomlBinding {
     chat_id: Option<String>,
     #[serde(default)]
     channel_ids: Vec<String>,
+    #[serde(default)]
+    require_mention: bool,
     #[serde(default)]
     dm_allowed_users: Vec<String>,
 }
@@ -1678,7 +1732,7 @@ impl Config {
                     name: None,
                 });
         }
-        
+
         if let Some(zhipu_key) = llm.zhipu_key.clone() {
             llm.providers
                 .entry("zhipu".to_string())
@@ -1689,7 +1743,7 @@ impl Config {
                     name: None,
                 });
         }
-        
+
         if let Some(zai_coding_plan_key) = llm.zai_coding_plan_key.clone() {
             llm.providers
                 .entry("zai-coding-plan".to_string())
@@ -1777,6 +1831,9 @@ impl Config {
             cron: Vec::new(),
         }];
 
+        let mut api = ApiConfig::default();
+        api.bind = hosted_api_bind(api.bind);
+
         Ok(Self {
             instance_dir: instance_dir.to_path_buf(),
             llm,
@@ -1784,7 +1841,7 @@ impl Config {
             agents,
             messaging: MessagingConfig::default(),
             bindings: Vec::new(),
-            api: ApiConfig::default(),
+            api,
             metrics: MetricsConfig::default(),
             telemetry: TelemetryConfig {
                 otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
@@ -1990,7 +2047,7 @@ impl Config {
                     name: None,
                 });
         }
-        
+
         if let Some(zhipu_key) = llm.zhipu_key.clone() {
             llm.providers
                 .entry("zhipu".to_string())
@@ -2001,7 +2058,7 @@ impl Config {
                     name: None,
                 });
         }
-        
+
         if let Some(zai_coding_plan_key) = llm.zai_coding_plan_key.clone() {
             llm.providers
                 .entry("zai-coding-plan".to_string())
@@ -2258,6 +2315,7 @@ impl Config {
                             _ => None,
                         },
                         enabled: h.enabled,
+                        run_once: h.run_once,
                         timeout_secs: h.timeout_secs,
                     })
                     .collect();
@@ -2477,6 +2535,7 @@ impl Config {
                 workspace_id: b.workspace_id,
                 chat_id: b.chat_id,
                 channel_ids: b.channel_ids,
+                require_mention: b.require_mention,
                 dm_allowed_users: b.dm_allowed_users,
             })
             .collect();
@@ -2484,7 +2543,7 @@ impl Config {
         let api = ApiConfig {
             enabled: toml.api.enabled,
             port: toml.api.port,
-            bind: toml.api.bind,
+            bind: hosted_api_bind(toml.api.bind),
         };
 
         let metrics = MetricsConfig {
@@ -3164,7 +3223,11 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         11 => ("OpenCode Zen API key", "opencode_zen_key", "opencode-zen"),
         12 => ("MiniMax API key", "minimax_key", "minimax"),
         13 => ("Moonshot API key", "moonshot_key", "moonshot"),
-        14 => ("Z.AI Coding Plan API key", "zai_coding_plan_key", "zai-coding-plan"),
+        14 => (
+            "Z.AI Coding Plan API key",
+            "zai_coding_plan_key",
+            "zai-coding-plan",
+        ),
         _ => unreachable!(),
     };
     let is_secret = provider_id != "ollama";
@@ -3289,7 +3352,8 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
     let mut config_content = String::new();
     config_content.push_str("[llm]\n");
     if anthropic_oauth.is_some() {
-        config_content.push_str("# Anthropic authentication via OAuth (see anthropic_oauth.json)\n");
+        config_content
+            .push_str("# Anthropic authentication via OAuth (see anthropic_oauth.json)\n");
     } else {
         config_content.push_str(&format!("{toml_key} = \"{provider_value}\"\n"));
     }
@@ -3376,8 +3440,9 @@ mod tests {
 
     impl EnvGuard {
         fn new() -> Self {
-            const KEYS: [&str; 19] = [
+            const KEYS: [&str; 20] = [
                 "SPACEBOT_DIR",
+                "SPACEBOT_DEPLOYMENT",
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_OAUTH_TOKEN",
                 "OPENAI_API_KEY",
@@ -3691,5 +3756,44 @@ name = "Custom OpenAI"
             .expect("missing anthropic provider from env");
         assert_eq!(provider.api_key, "test-key");
         assert_eq!(provider.base_url, ANTHROPIC_PROVIDER_BASE_URL);
+    }
+
+    #[test]
+    fn test_hosted_deployment_forces_api_bind_from_toml() {
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        unsafe {
+            std::env::set_var("SPACEBOT_DEPLOYMENT", "hosted");
+        }
+
+        let toml = r#"
+[api]
+bind = "127.0.0.1"
+"#;
+
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+
+        assert_eq!(config.api.bind, "[::]");
+    }
+
+    #[test]
+    fn test_hosted_deployment_forces_api_bind_from_env_defaults() {
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        unsafe {
+            std::env::set_var("SPACEBOT_DEPLOYMENT", "hosted");
+        }
+
+        let config = Config::load_from_env(&Config::default_instance_dir())
+            .expect("failed to load config from env");
+
+        assert_eq!(config.api.bind, "[::]");
     }
 }

@@ -530,7 +530,8 @@ impl Channel {
             )
             .await?;
 
-        self.handle_agent_result(result, &skip_flag, &replied_flag).await;
+        self.handle_agent_result(result, &skip_flag, &replied_flag)
+            .await;
         // Check compaction
         if let Err(error) = self.compactor.check_and_compact().await {
             tracing::warn!(channel_id = %self.id, %error, "compaction check failed");
@@ -689,7 +690,8 @@ impl Channel {
             )
             .await?;
 
-        self.handle_agent_result(result, &skip_flag, &replied_flag).await;
+        self.handle_agent_result(result, &skip_flag, &replied_flag)
+            .await;
 
         // Check context size and trigger compaction if needed
         if let Err(error) = self.compactor.check_and_compact().await {
@@ -908,17 +910,25 @@ impl Channel {
                     // attempt to extract the reply content and send that instead.
                     let text = response.trim();
                     let extracted = extract_reply_from_tool_syntax(text);
-                    let final_text = extracted.as_deref().unwrap_or(text);
+                    let source = self
+                        .conversation_id
+                        .as_deref()
+                        .and_then(|conversation_id| conversation_id.split(':').next())
+                        .unwrap_or("unknown");
+                    let final_text = crate::tools::reply::normalize_discord_mention_tokens(
+                        extracted.as_deref().unwrap_or(text),
+                        source,
+                    );
                     if !final_text.is_empty() {
                         if extracted.is_some() {
                             tracing::warn!(channel_id = %self.id, "extracted reply from malformed tool syntax in LLM text output");
                         }
                         self.state
                             .conversation_logger
-                            .log_bot_message(&self.state.channel_id, final_text);
+                            .log_bot_message(&self.state.channel_id, &final_text);
                         if let Err(error) = self
                             .response_tx
-                            .send(OutboundResponse::Text(final_text.to_string()))
+                            .send(OutboundResponse::Text(final_text))
                             .await
                         {
                             tracing::error!(%error, channel_id = %self.id, "failed to send fallback reply");

@@ -14,6 +14,7 @@ pub(super) struct BindingResponse {
     workspace_id: Option<String>,
     chat_id: Option<String>,
     channel_ids: Vec<String>,
+    require_mention: bool,
     dm_allowed_users: Vec<String>,
 }
 
@@ -40,6 +41,8 @@ pub(super) struct CreateBindingRequest {
     chat_id: Option<String>,
     #[serde(default)]
     channel_ids: Vec<String>,
+    #[serde(default)]
+    require_mention: bool,
     #[serde(default)]
     dm_allowed_users: Vec<String>,
     /// Optional: set platform credentials if not yet configured.
@@ -111,6 +114,8 @@ pub(super) struct UpdateBindingRequest {
     #[serde(default)]
     channel_ids: Vec<String>,
     #[serde(default)]
+    require_mention: bool,
+    #[serde(default)]
     dm_allowed_users: Vec<String>,
 }
 
@@ -145,6 +150,7 @@ pub(super) async fn list_bindings(
             workspace_id: b.workspace_id,
             chat_id: b.chat_id,
             channel_ids: b.channel_ids,
+            require_mention: b.require_mention,
             dm_allowed_users: b.dm_allowed_users,
         })
         .collect();
@@ -291,6 +297,9 @@ pub(super) async fn create_binding(
             arr.push(id.as_str());
         }
         binding_table["channel_ids"] = toml_edit::value(arr);
+    }
+    if request.require_mention {
+        binding_table["require_mention"] = toml_edit::value(true);
     }
     if !request.dm_allowed_users.is_empty() {
         let mut arr = toml_edit::Array::new();
@@ -574,6 +583,12 @@ pub(super) async fn update_binding(
         binding["channel_ids"] = toml_edit::value(arr);
     } else {
         binding.remove("channel_ids");
+    }
+
+    if request.require_mention {
+        binding["require_mention"] = toml_edit::value(true);
+    } else {
+        binding.remove("require_mention");
     }
 
     if !request.dm_allowed_users.is_empty() {

@@ -82,11 +82,21 @@ impl RoutingConfig {
     }
 
     pub fn thinking_effort_for_model(&self, model_name: &str) -> &str {
-        if self.channel == model_name { return &self.channel_thinking_effort; }
-        if self.branch == model_name { return &self.branch_thinking_effort; }
-        if self.worker == model_name { return &self.worker_thinking_effort; }
-        if self.compactor == model_name { return &self.compactor_thinking_effort; }
-        if self.cortex == model_name { return &self.cortex_thinking_effort; }
+        if self.channel == model_name {
+            return &self.channel_thinking_effort;
+        }
+        if self.branch == model_name {
+            return &self.branch_thinking_effort;
+        }
+        if self.worker == model_name {
+            return &self.worker_thinking_effort;
+        }
+        if self.compactor == model_name {
+            return &self.compactor_thinking_effort;
+        }
+        if self.cortex == model_name {
+            return &self.cortex_thinking_effort;
+        }
         "auto"
     }
 

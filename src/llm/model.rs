@@ -89,14 +89,23 @@ impl SpacebotModel {
         }
 
         if provider_id == "zai-coding-plan" || provider_id == "zhipu" {
-            let display_name = if provider_id == "zhipu" { "Z.AI (GLM)" } else { "Z.AI Coding Plan" };
-            let endpoint = format!("{}/chat/completions", provider_config.base_url.trim_end_matches('/'));
-            return self.call_openai_compatible_with_optional_auth(
-                request,
-                display_name,
-                &endpoint,
-                Some(provider_config.api_key.clone()),
-            ).await;
+            let display_name = if provider_id == "zhipu" {
+                "Z.AI (GLM)"
+            } else {
+                "Z.AI Coding Plan"
+            };
+            let endpoint = format!(
+                "{}/chat/completions",
+                provider_config.base_url.trim_end_matches('/')
+            );
+            return self
+                .call_openai_compatible_with_optional_auth(
+                    request,
+                    display_name,
+                    &endpoint,
+                    Some(provider_config.api_key.clone()),
+                )
+                .await;
         }
 
         match provider_config.api_type {
@@ -752,7 +761,6 @@ impl SpacebotModel {
 
         parse_openai_response(response_body, provider_display_name)
     }
-
 }
 // --- Helpers ---
 
@@ -1155,16 +1163,15 @@ fn parse_anthropic_response(
         }
     }
 
-    let choice = OneOrMany::many(assistant_content)
-        .map_err(|_| {
-            tracing::debug!(
-                stop_reason = body["stop_reason"].as_str().unwrap_or("unknown"),
-                content_blocks = content_blocks.len(),
-                raw_content = %body["content"],
-                "empty assistant_content after parsing Anthropic response"
-            );
-            CompletionError::ResponseError("empty response from Anthropic".into())
-        })?;
+    let choice = OneOrMany::many(assistant_content).map_err(|_| {
+        tracing::debug!(
+            stop_reason = body["stop_reason"].as_str().unwrap_or("unknown"),
+            content_blocks = content_blocks.len(),
+            raw_content = %body["content"],
+            "empty assistant_content after parsing Anthropic response"
+        );
+        CompletionError::ResponseError("empty response from Anthropic".into())
+    })?;
 
     let input_tokens = body["usage"]["input_tokens"].as_u64().unwrap_or(0);
     let output_tokens = body["usage"]["output_tokens"].as_u64().unwrap_or(0);

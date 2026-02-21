@@ -1,8 +1,8 @@
 //! Anthropic OAuth authentication: PKCE flow, token exchange, refresh, and storage.
 
 use anyhow::{Context, Result};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -196,8 +196,7 @@ pub fn save_credentials(instance_dir: &Path, creds: &OAuthCredentials) -> Result
     let path = credentials_path(instance_dir);
     let data = serde_json::to_string_pretty(creds).context("failed to serialize credentials")?;
 
-    std::fs::write(&path, &data)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    std::fs::write(&path, &data).with_context(|| format!("failed to write {}", path.display()))?;
 
     #[cfg(unix)]
     {
@@ -240,7 +239,10 @@ pub async fn login_interactive(instance_dir: &Path, mode: AuthMode) -> Result<OA
 
     save_credentials(instance_dir, &creds).context("failed to save credentials")?;
 
-    eprintln!("Login successful. Credentials saved to {}", credentials_path(instance_dir).display());
+    eprintln!(
+        "Login successful. Credentials saved to {}",
+        credentials_path(instance_dir).display()
+    );
 
     Ok(creds)
 }
