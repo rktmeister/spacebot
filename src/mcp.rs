@@ -177,14 +177,14 @@ impl McpConnection {
         let mut session = client_guard.take();
         drop(client_guard);
 
-        if let Some(client) = session.as_mut() {
-            if let Err(error) = client.close().await {
-                tracing::warn!(
-                    server = %self.name,
-                    %error,
-                    "failed to close mcp session"
-                );
-            }
+        if let Some(client) = session.as_mut()
+            && let Err(error) = client.close().await
+        {
+            tracing::warn!(
+                server = %self.name,
+                %error,
+                "failed to close mcp session"
+            );
         }
 
         {
@@ -198,10 +198,10 @@ impl McpConnection {
     }
 
     pub async fn list_tools(&self) -> Vec<rmcp::model::Tool> {
-        if self.tool_list_changed.swap(false, Ordering::SeqCst) {
-            if let Err(error) = self.refresh_tools().await {
-                tracing::warn!(server = %self.name, %error, "failed to refresh mcp tools");
-            }
+        if self.tool_list_changed.swap(false, Ordering::SeqCst)
+            && let Err(error) = self.refresh_tools().await
+        {
+            tracing::warn!(server = %self.name, %error, "failed to refresh mcp tools");
         }
 
         self.tools.read().await.clone()
@@ -490,14 +490,14 @@ impl McpManager {
 
             let connection = self.connections.read().await.get(&new_config.name).cloned();
             if let Some(connection) = connection {
-                if !connection.is_connected().await {
-                    if let Err(error) = connection.connect().await {
-                        tracing::warn!(
-                            server = %new_config.name,
-                            %error,
-                            "failed to connect unchanged mcp server"
-                        );
-                    }
+                if !connection.is_connected().await
+                    && let Err(error) = connection.connect().await
+                {
+                    tracing::warn!(
+                        server = %new_config.name,
+                        %error,
+                        "failed to connect unchanged mcp server"
+                    );
                 }
             } else {
                 let connection = self.upsert_connection(new_config.clone()).await;

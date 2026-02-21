@@ -832,7 +832,10 @@ fn build_display_name(user: &teloxide::types::User) -> String {
 /// indefinitely (until manually stopped via the Telegram client).
 async fn send_poll(bot: &Bot, chat_id: ChatId, poll: &crate::Poll) -> anyhow::Result<()> {
     let question = if poll.question.len() > 300 {
-        format!("{}…", &poll.question[..poll.question.floor_char_boundary(299)])
+        format!(
+            "{}…",
+            &poll.question[..poll.question.floor_char_boundary(299)]
+        )
     } else {
         poll.question.clone()
     };

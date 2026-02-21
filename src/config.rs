@@ -192,7 +192,8 @@ const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
 const ZHIPU_PROVIDER_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 const ZAI_CODING_PLAN_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 const NVIDIA_PROVIDER_BASE_URL: &str = "https://integrate.api.nvidia.com";
-pub(crate) const GEMINI_PROVIDER_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
+pub(crate) const GEMINI_PROVIDER_BASE_URL: &str =
+    "https://generativelanguage.googleapis.com/v1beta/openai";
 
 /// Defaults inherited by all agents. Individual agents can override any field.
 #[derive(Debug, Clone)]
@@ -3022,8 +3023,8 @@ pub fn spawn_file_watcher(
 
         // Watch per-agent workspace directories (skills, identity)
         for (_, workspace, _, _) in &agents {
-            for subdir in &["skills"] {
-                let path = workspace.join(subdir);
+            {
+                let path = workspace.join("skills");
                 if path.is_dir()
                     && let Err(error) = watcher.watch(&path, RecursiveMode::Recursive)
                 {
