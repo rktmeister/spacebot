@@ -232,7 +232,7 @@ impl Worker {
                     self.maybe_compact_history(&mut history).await;
                     prompt = "Continue where you left off. Do not repeat completed work.".into();
                     self.hook
-                        .send_status(&format!("working (segment {segments_run})"));
+                        .send_status(format!("working (segment {segments_run})"));
 
                     tracing::debug!(
                         worker_id = %self.id,
@@ -631,10 +631,10 @@ fn build_worker_recap(messages: &[rig::message::Message]) -> String {
                         let args = tc.function.arguments.to_string();
                         recap.push_str(&format!("- Called `{}` ({args})\n", tc.function.name));
                     }
-                    if let rig::message::AssistantContent::Text(t) = item {
-                        if !t.text.is_empty() {
-                            recap.push_str(&format!("- Noted: {}\n", t.text));
-                        }
+                    if let rig::message::AssistantContent::Text(t) = item
+                        && !t.text.is_empty()
+                    {
+                        recap.push_str(&format!("- Noted: {}\n", t.text));
                     }
                 }
             }
@@ -660,6 +660,7 @@ fn build_worker_recap(messages: &[rig::message::Message]) -> String {
 }
 
 /// Extract the last assistant text message from a history.
+#[allow(dead_code)]
 fn extract_last_assistant_text(history: &[rig::message::Message]) -> Option<String> {
     for message in history.iter().rev() {
         if let rig::message::Message::Assistant { content, .. } = message {
