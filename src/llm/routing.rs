@@ -294,6 +294,21 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 ..RoutingConfig::default()
             }
         }
+        "gemini" => {
+            let channel: String = "gemini/gemini-2.5-flash".into();
+            let worker: String = "gemini/gemini-2.5-flash".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::new(),
+                rate_limit_cooldown_secs: 60,
+                ..RoutingConfig::default()
+            }
+        }
         "opencode-zen" => {
             let channel: String = "opencode-zen/kimi-k2.5".into();
             let worker: String = "opencode-zen/kimi-k2.5".into();
@@ -331,6 +346,7 @@ pub fn provider_to_prefix(provider: &str) -> &str {
         "deepseek" => "deepseek/",
         "xai" => "xai/",
         "mistral" => "mistral/",
+        "gemini" => "gemini/",
         "nvidia" => "nvidia/",
         "opencode-zen" => "opencode-zen/",
         "minimax" => "minimax/",

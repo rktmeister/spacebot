@@ -102,6 +102,8 @@ pub enum ApiType {
     OpenAiResponses,
     /// Anthropic Messages API (https://api.anthropic.com/v1/messages)
     Anthropic,
+    /// Google Gemini API (https://generativelanguage.googleapis.com/v1beta/openai/chat/completions)
+    Gemini,
 }
 
 impl<'de> serde::Deserialize<'de> for ApiType {
@@ -113,9 +115,10 @@ impl<'de> serde::Deserialize<'de> for ApiType {
             "openai_completions" => Ok(Self::OpenAiCompletions),
             "openai_responses" => Ok(Self::OpenAiResponses),
             "anthropic" => Ok(Self::Anthropic),
+            "gemini" => Ok(Self::Gemini),
             other => Err(serde::de::Error::invalid_value(
                 serde::de::Unexpected::Str(other),
-                &"one of \"openai_completions\", \"openai_responses\", or \"anthropic\"",
+                &"one of \"openai_completions\", \"openai_responses\", \"anthropic\", or \"gemini\"",
             )),
         }
     }
@@ -143,6 +146,7 @@ pub struct LlmConfig {
     pub deepseek_key: Option<String>,
     pub xai_key: Option<String>,
     pub mistral_key: Option<String>,
+    pub gemini_key: Option<String>,
     pub ollama_key: Option<String>,
     pub ollama_base_url: Option<String>,
     pub opencode_zen_key: Option<String>,
@@ -166,6 +170,7 @@ impl LlmConfig {
             || self.deepseek_key.is_some()
             || self.xai_key.is_some()
             || self.mistral_key.is_some()
+            || self.gemini_key.is_some()
             || self.ollama_key.is_some()
             || self.ollama_base_url.is_some()
             || self.opencode_zen_key.is_some()
@@ -187,6 +192,7 @@ const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
 const ZHIPU_PROVIDER_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 const ZAI_CODING_PLAN_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 const NVIDIA_PROVIDER_BASE_URL: &str = "https://integrate.api.nvidia.com";
+pub(crate) const GEMINI_PROVIDER_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
 
 /// Defaults inherited by all agents. Individual agents can override any field.
 #[derive(Debug, Clone)]
@@ -1169,6 +1175,7 @@ struct TomlLlmConfigFields {
     deepseek_key: Option<String>,
     xai_key: Option<String>,
     mistral_key: Option<String>,
+    gemini_key: Option<String>,
     ollama_key: Option<String>,
     ollama_base_url: Option<String>,
     opencode_zen_key: Option<String>,
@@ -1195,6 +1202,7 @@ struct TomlLlmConfig {
     deepseek_key: Option<String>,
     xai_key: Option<String>,
     mistral_key: Option<String>,
+    gemini_key: Option<String>,
     ollama_key: Option<String>,
     ollama_base_url: Option<String>,
     opencode_zen_key: Option<String>,
@@ -1246,6 +1254,7 @@ impl<'de> Deserialize<'de> for TomlLlmConfig {
             deepseek_key: fields.deepseek_key,
             xai_key: fields.xai_key,
             mistral_key: fields.mistral_key,
+            gemini_key: fields.gemini_key,
             ollama_key: fields.ollama_key,
             ollama_base_url: fields.ollama_base_url,
             opencode_zen_key: fields.opencode_zen_key,
@@ -1689,6 +1698,7 @@ impl Config {
             deepseek_key: std::env::var("DEEPSEEK_API_KEY").ok(),
             xai_key: std::env::var("XAI_API_KEY").ok(),
             mistral_key: std::env::var("MISTRAL_API_KEY").ok(),
+            gemini_key: std::env::var("GEMINI_API_KEY").ok(),
             ollama_key: std::env::var("OLLAMA_API_KEY").ok(),
             ollama_base_url: std::env::var("OLLAMA_BASE_URL").ok(),
             opencode_zen_key: std::env::var("OPENCODE_ZEN_API_KEY").ok(),
@@ -1795,6 +1805,17 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: NVIDIA_PROVIDER_BASE_URL.to_string(),
                     api_key: nvidia_key,
+                    name: None,
+                });
+        }
+
+        if let Some(gemini_key) = llm.gemini_key.clone() {
+            llm.providers
+                .entry("gemini".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::Gemini,
+                    base_url: GEMINI_PROVIDER_BASE_URL.to_string(),
+                    api_key: gemini_key,
                     name: None,
                 });
         }
@@ -1954,6 +1975,12 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("MISTRAL_API_KEY").ok()),
+            gemini_key: toml
+                .llm
+                .gemini_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("GEMINI_API_KEY").ok()),
             ollama_key: toml
                 .llm
                 .ollama_key
@@ -2110,6 +2137,17 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: NVIDIA_PROVIDER_BASE_URL.to_string(),
                     api_key: nvidia_key,
+                    name: None,
+                });
+        }
+
+        if let Some(gemini_key) = llm.gemini_key.clone() {
+            llm.providers
+                .entry("gemini".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::Gemini,
+                    base_url: GEMINI_PROVIDER_BASE_URL.to_string(),
+                    api_key: gemini_key,
                     name: None,
                 });
         }
@@ -3219,11 +3257,12 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
         7 => ("DeepSeek API key", "deepseek_key", "deepseek"),
         8 => ("xAI API key", "xai_key", "xai"),
         9 => ("Mistral API key", "mistral_key", "mistral"),
-        10 => ("Ollama base URL (optional)", "ollama_base_url", "ollama"),
-        11 => ("OpenCode Zen API key", "opencode_zen_key", "opencode-zen"),
-        12 => ("MiniMax API key", "minimax_key", "minimax"),
-        13 => ("Moonshot API key", "moonshot_key", "moonshot"),
-        14 => (
+        10 => ("Google Gemini API key", "gemini_key", "gemini"),
+        11 => ("Ollama base URL (optional)", "ollama_base_url", "ollama"),
+        12 => ("OpenCode Zen API key", "opencode_zen_key", "opencode-zen"),
+        13 => ("MiniMax API key", "minimax_key", "minimax"),
+        14 => ("Moonshot API key", "moonshot_key", "moonshot"),
+        15 => (
             "Z.AI Coding Plan API key",
             "zai_coding_plan_key",
             "zai-coding-plan",

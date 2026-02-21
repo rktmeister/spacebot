@@ -85,6 +85,7 @@ fn direct_provider_mapping(models_dev_id: &str) -> Option<&'static str> {
         "deepseek" => Some("deepseek"),
         "xai" => Some("xai"),
         "mistral" => Some("mistral"),
+        "gemini" | "google" => Some("gemini"),
         "groq" => Some("groq"),
         "togetherai" => Some("together"),
         "fireworks-ai" => Some("fireworks"),
@@ -346,6 +347,9 @@ pub(super) async fn configured_providers(config_path: &std::path::Path) -> Vec<&
     }
     if has_key("mistral_key", "MISTRAL_API_KEY") {
         providers.push("mistral");
+    }
+    if has_key("gemini_key", "GEMINI_API_KEY") {
+        providers.push("gemini");
     }
     if has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY") {
         providers.push("opencode-zen");

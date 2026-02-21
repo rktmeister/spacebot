@@ -21,6 +21,7 @@ pub(super) struct ProviderStatus {
     deepseek: bool,
     xai: bool,
     mistral: bool,
+    gemini: bool,
     ollama: bool,
     opencode_zen: bool,
     nvidia: bool,
@@ -76,6 +77,7 @@ fn provider_toml_key(provider: &str) -> Option<&'static str> {
         "deepseek" => Some("deepseek_key"),
         "xai" => Some("xai_key"),
         "mistral" => Some("mistral_key"),
+        "gemini" => Some("gemini_key"),
         "ollama" => Some("ollama_base_url"),
         "opencode-zen" => Some("opencode_zen_key"),
         "nvidia" => Some("nvidia_key"),
@@ -155,6 +157,12 @@ fn build_test_llm_config(provider: &str, credential: &str) -> crate::config::Llm
             api_key: credential.to_string(),
             name: None,
         }),
+        "gemini" => Some(ProviderConfig {
+            api_type: ApiType::Gemini,
+            base_url: crate::config::GEMINI_PROVIDER_BASE_URL.to_string(),
+            api_key: credential.to_string(),
+            name: None,
+        }),
         "opencode-zen" => Some(ProviderConfig {
             api_type: ApiType::OpenAiCompletions,
             base_url: "https://opencode.ai/zen".to_string(),
@@ -203,6 +211,7 @@ fn build_test_llm_config(provider: &str, credential: &str) -> crate::config::Llm
         deepseek_key: (provider == "deepseek").then(|| credential.to_string()),
         xai_key: (provider == "xai").then(|| credential.to_string()),
         mistral_key: (provider == "mistral").then(|| credential.to_string()),
+        gemini_key: (provider == "gemini").then(|| credential.to_string()),
         ollama_key: None,
         ollama_base_url: (provider == "ollama").then(|| credential.to_string()),
         opencode_zen_key: (provider == "opencode-zen").then(|| credential.to_string()),
@@ -230,6 +239,7 @@ pub(super) async fn get_providers(
         deepseek,
         xai,
         mistral,
+        gemini,
         ollama,
         opencode_zen,
         nvidia,
@@ -269,6 +279,7 @@ pub(super) async fn get_providers(
             has_value("deepseek_key", "DEEPSEEK_API_KEY"),
             has_value("xai_key", "XAI_API_KEY"),
             has_value("mistral_key", "MISTRAL_API_KEY"),
+            has_value("gemini_key", "GEMINI_API_KEY"),
             has_value("ollama_base_url", "OLLAMA_BASE_URL")
                 || has_value("ollama_key", "OLLAMA_API_KEY"),
             has_value("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
@@ -289,6 +300,7 @@ pub(super) async fn get_providers(
             std::env::var("DEEPSEEK_API_KEY").is_ok(),
             std::env::var("XAI_API_KEY").is_ok(),
             std::env::var("MISTRAL_API_KEY").is_ok(),
+            std::env::var("GEMINI_API_KEY").is_ok(),
             std::env::var("OLLAMA_BASE_URL").is_ok() || std::env::var("OLLAMA_API_KEY").is_ok(),
             std::env::var("OPENCODE_ZEN_API_KEY").is_ok(),
             std::env::var("NVIDIA_API_KEY").is_ok(),
@@ -309,6 +321,7 @@ pub(super) async fn get_providers(
         deepseek,
         xai,
         mistral,
+        gemini,
         ollama,
         opencode_zen,
         nvidia,
@@ -326,6 +339,7 @@ pub(super) async fn get_providers(
         || providers.deepseek
         || providers.xai
         || providers.mistral
+        || providers.gemini
         || providers.ollama
         || providers.opencode_zen
         || providers.nvidia
