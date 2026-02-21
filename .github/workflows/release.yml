@@ -12,7 +12,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: spacebot
+  IMAGE: ghcr.io/${{ github.repository_owner }}/spacebot
 
 jobs:
   build-binaries:
@@ -122,7 +122,7 @@ jobs:
           target: slim
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:slim-${{ steps.platform.outputs.pair }}
+          tags: ${{ env.IMAGE }}:slim-${{ steps.platform.outputs.pair }}
           cache-from: type=gha,scope=slim-${{ steps.platform.outputs.pair }}
           cache-to: type=gha,mode=max,scope=slim-${{ steps.platform.outputs.pair }}
 
@@ -133,7 +133,7 @@ jobs:
           target: full
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:full-${{ steps.platform.outputs.pair }}
+          tags: ${{ env.IMAGE }}:full-${{ steps.platform.outputs.pair }}
           cache-from: type=gha,scope=full-${{ steps.platform.outputs.pair }}
           cache-to: type=gha,mode=max,scope=full-${{ steps.platform.outputs.pair }}
 
@@ -158,19 +158,19 @@ jobs:
       - name: Create slim multi-arch manifest
         run: |
           docker buildx imagetools create \
-            --tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.build-docker.outputs.version }}-slim \
-            --tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:slim \
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:slim-linux-amd64 \
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:slim-linux-arm64
+            --tag ${{ env.IMAGE }}:${{ needs.build-docker.outputs.version }}-slim \
+            --tag ${{ env.IMAGE }}:slim \
+            ${{ env.IMAGE }}:slim-linux-amd64 \
+            ${{ env.IMAGE }}:slim-linux-arm64
 
       - name: Create full multi-arch manifest
         run: |
           docker buildx imagetools create \
-            --tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.build-docker.outputs.version }}-full \
-            --tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:full \
-            --tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest \
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:full-linux-amd64 \
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:full-linux-arm64
+            --tag ${{ env.IMAGE }}:${{ needs.build-docker.outputs.version }}-full \
+            --tag ${{ env.IMAGE }}:full \
+            --tag ${{ env.IMAGE }}:latest \
+            ${{ env.IMAGE }}:full-linux-amd64 \
+            ${{ env.IMAGE }}:full-linux-arm64
 
       - name: Log in to Fly registry
         if: github.repository_owner == 'spacedriveapp'
@@ -186,7 +186,7 @@ jobs:
           docker buildx imagetools create \
             --tag registry.fly.io/spacebot-image:${{ needs.build-docker.outputs.version }} \
             --tag registry.fly.io/spacebot-image:latest \
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE }}:latest
 
       - name: Roll out to hosted instances
         if: github.repository_owner == 'spacedriveapp'
