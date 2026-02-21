@@ -1,12 +1,14 @@
 {
   pkgs,
   craneLib,
-  src,
+  cargoSrc,
+  runtimeAssetsSrc,
+  frontendSrc,
 }: let
   inherit (pkgs) lib onnxruntime;
 
   # Read version from Cargo.toml
-  cargoToml = fromTOML (builtins.readFile "${src}/Cargo.toml");
+  cargoToml = fromTOML (builtins.readFile "${cargoSrc}/Cargo.toml");
   inherit (cargoToml.package) version;
 
   buildInputs = with pkgs; [
@@ -23,12 +25,76 @@
     cmake
   ];
 
+  frontendPackageLock = lib.importJSON "${frontendSrc}/interface/package-lock.json";
+  frontendPackage =
+    let
+      originalPackage = lib.importJSON "${frontendSrc}/interface/package.json";
+      rootDependencies = originalPackage.dependencies or {};
+      lockPackages = frontendPackageLock.packages;
+      rootDependencyNames = builtins.attrNames rootDependencies;
+
+      collectPeerClosure = dependencyNames:
+        let
+          peerNames =
+            lib.unique
+            (builtins.concatLists (
+              map (
+                dependencyName:
+                  let
+                    packagePath = "node_modules/${dependencyName}";
+                    packageEntry =
+                      if builtins.hasAttr packagePath lockPackages
+                      then lockPackages.${packagePath}
+                      else {};
+                  in builtins.attrNames (packageEntry.peerDependencies or {})
+              )
+              dependencyNames
+            ));
+
+          expandedNames = lib.unique (dependencyNames ++ peerNames);
+        in
+          if builtins.length expandedNames == builtins.length dependencyNames
+          then dependencyNames
+          else collectPeerClosure expandedNames;
+
+      peerDependencyNames =
+        lib.filter (dependencyName: !(lib.elem dependencyName rootDependencyNames))
+        (collectPeerClosure rootDependencyNames);
+
+      peerDependencyVersions = builtins.listToAttrs (
+        lib.filter (entry: entry != null) (
+          map (
+            dependencyName:
+              let
+                packagePath = "node_modules/${dependencyName}";
+              in
+                if builtins.hasAttr packagePath lockPackages
+                then {
+                  name = dependencyName;
+                  value = lockPackages.${packagePath}.version;
+                }
+                else null
+          )
+          peerDependencyNames
+        )
+      );
+    in
+      originalPackage
+      // {
+        dependencies = rootDependencies // peerDependencyVersions;
+      };
+
   frontend = pkgs.buildNpmPackage {
     pname = "spacebot-frontend";
     inherit version;
-    src = "${src}/interface";
+    src = "${frontendSrc}/interface";
 
-    npmDepsHash = "sha256-J11BrUDbZLKQDnS/+ux7QzK2vfLhtxUSZye0hIWnLPk=";
+    npmDeps = pkgs.importNpmLock {
+      npmRoot = "${frontendSrc}/interface";
+      package = frontendPackage;
+      packageLock = frontendPackageLock;
+    };
+    npmConfigHook = pkgs.importNpmLock.npmConfigHook;
     npmInstallFlags = ["--legacy-peer-deps"];
     makeCacheWritable = true;
 
@@ -39,13 +105,26 @@
   };
 
   commonArgs = {
-    inherit src nativeBuildInputs buildInputs;
+    src = cargoSrc;
+    inherit nativeBuildInputs buildInputs;
     strictDeps = true;
     cargoExtraArgs = "";
   };
 
+  dummyRustSource = pkgs.writeText "dummy.rs" ''
+    fn main() {}
+  '';
+
   cargoArtifacts = craneLib.buildDepsOnly (commonArgs
     // {
+      src = craneLib.mkDummySrc {
+        src = cargoSrc;
+        dummyrs = dummyRustSource;
+        dummyBuildrs = "build.rs";
+        extraDummyScript = ''
+          cp ${dummyRustSource} $out/build.rs
+        '';
+      };
       preBuild = ''
         export ORT_LIB_LOCATION=${onnxruntime}/lib
       '';
@@ -67,8 +146,8 @@
 
       postInstall = ''
         mkdir -p $out/share/spacebot
-        cp -r ${src}/prompts $out/share/spacebot/
-        cp -r ${src}/migrations $out/share/spacebot/
+        cp -r ${runtimeAssetsSrc}/prompts $out/share/spacebot/
+        cp -r ${runtimeAssetsSrc}/migrations $out/share/spacebot/
         chmod -R u+w $out/share/spacebot
       '';
 

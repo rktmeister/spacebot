@@ -18,14 +18,27 @@
         craneLib = crane.mkLib pkgs;
         bun = pkgs.bun;
 
-        src = pkgs.lib.fileset.toSource {
+        cargoSrc = pkgs.lib.fileset.toSource {
           root = ./.;
           fileset = pkgs.lib.fileset.unions [
             ./Cargo.toml
             ./Cargo.lock
+            ./build.rs
             ./src
+          ];
+        };
+
+        runtimeAssetsSrc = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.unions [
             ./migrations
             ./prompts
+          ];
+        };
+
+        frontendSrc = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.unions [
             ./interface/package.json
             ./interface/package-lock.json
             ./interface/index.html
@@ -40,7 +53,7 @@
         };
 
         spacebotPackages = import ./nix {
-          inherit pkgs craneLib src;
+          inherit pkgs craneLib cargoSrc runtimeAssetsSrc frontendSrc;
         };
 
         inherit (spacebotPackages) spacebot spacebot-full;
