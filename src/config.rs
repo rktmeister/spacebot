@@ -187,7 +187,7 @@ const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
 const ZHIPU_PROVIDER_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 const ZAI_CODING_PLAN_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 const NVIDIA_PROVIDER_BASE_URL: &str = "https://integrate.api.nvidia.com";
-const FIREWORKS_PROVIDER_BASE_URL: &str = "https://api.fireworks.ai/v1";
+const FIREWORKS_PROVIDER_BASE_URL: &str = "https://api.fireworks.ai/inference";
 
 /// Defaults inherited by all agents. Individual agents can override any field.
 #[derive(Debug, Clone)]
