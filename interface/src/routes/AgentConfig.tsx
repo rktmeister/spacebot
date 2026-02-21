@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AgentConfigResponse, type AgentConfigUpdateRequest } from "@/api/client";
-import { Button, SettingSidebarButton, Input, TextArea, Toggle, NumberStepper, cx } from "@/ui";
+import { Button, SettingSidebarButton, Input, TextArea, Toggle, NumberStepper, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, cx } from "@/ui";
 import { ModelSelect } from "@/components/ModelSelect";
 import { Markdown } from "@/components/Markdown";
 import { motion, AnimatePresence } from "framer-motion";
@@ -26,7 +26,7 @@ const SECTIONS: {
 	{ id: "soul", label: "Soul", group: "identity", description: "SOUL.md", detail: "Defines the agent's personality, values, communication style, and behavioral boundaries. This is the core of who the agent is." },
 	{ id: "identity", label: "Identity", group: "identity", description: "IDENTITY.md", detail: "The agent's name, nature, and purpose. How it introduces itself and what it understands its role to be." },
 	{ id: "user", label: "User", group: "identity", description: "USER.md", detail: "Information about the human this agent interacts with. Name, preferences, context, and anything that helps the agent personalize responses." },
-	{ id: "routing", label: "Model Routing", group: "config", description: "Which models each process uses", detail: "Controls which LLM model is used for each process type. Channels handle user-facing conversation, branches do thinking, workers execute tasks, the compactor summarizes context, and the cortex observes system state." },
+	{ id: "routing", label: "Model Routing", group: "config", description: "Which models each process uses", detail: "Controls which LLM model is used for each process type. Channels handle user-facing conversation, branches do thinking, workers execute tasks, the compactor summarizes context, cortex observes system state, and voice transcribes audio attachments before the channel turn." },
 	{ id: "tuning", label: "Tuning", group: "config", description: "Turn limits, context window, branches", detail: "Core limits that control how much work the agent does per message. Max turns caps LLM iterations per channel message. Context window sets the token budget. Branch limits control parallel thinking." },
 	{ id: "compaction", label: "Compaction", group: "config", description: "Context compaction thresholds", detail: "Thresholds that trigger context summarization as the conversation grows. Background kicks in early, aggressive compresses harder, and emergency truncates without LLM involvement. All values are fractions of the context window." },
 	{ id: "cortex", label: "Cortex", group: "config", description: "System observer settings", detail: "The cortex monitors active processes and generates memory bulletins. Tick interval controls observation frequency. Timeouts determine when stuck workers or branches get cancelled. The circuit breaker auto-disables after consecutive failures." },
@@ -498,6 +498,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 					{ key: "worker", label: "Worker Model", description: "Model for task workers" },
 					{ key: "compactor", label: "Compactor Model", description: "Model for summarization" },
 					{ key: "cortex", label: "Cortex Model", description: "Model for system observation" },
+					{ key: "voice", label: "Voice Model", description: "Model for transcribing audio attachments" },
 				];
 				return (
 					<div className="grid gap-4">
@@ -508,21 +509,26 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 									description={description}
 									value={localValues[key] as string}
 									onChange={(v) => handleChange(key, v)}
+									capability={key === "voice" ? "voice_transcription" : undefined}
 								/>
 								{supportsAdaptiveThinking(localValues[key] as string) && (
 									<div className="ml-4 flex flex-col gap-1">
 										<label className="text-xs font-medium text-ink-dull">Thinking Effort</label>
-										<select
+										<Select
 											value={(localValues[`${key}_thinking_effort`] as string) || "auto"}
-											onChange={(e) => handleChange(`${key}_thinking_effort`, e.target.value)}
-											className="w-full rounded-md border border-app-line/50 bg-app-darkBox/30 px-3 py-1.5 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+											onValueChange={(value) => handleChange(`${key}_thinking_effort`, value)}
 										>
-											<option value="auto">Auto</option>
-											<option value="max">Max</option>
-											<option value="high">High</option>
-											<option value="medium">Medium</option>
-											<option value="low">Low</option>
-										</select>
+											<SelectTrigger className="border-app-line/50 bg-app-darkBox/30">
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectItem value="auto">Auto</SelectItem>
+												<SelectItem value="max">Max</SelectItem>
+												<SelectItem value="high">High</SelectItem>
+												<SelectItem value="medium">Medium</SelectItem>
+												<SelectItem value="low">Low</SelectItem>
+											</SelectContent>
+										</Select>
 									</div>
 								)}
 							</div>

@@ -76,7 +76,7 @@ impl SpacebotModel {
             .map(|(provider, _)| provider)
             .unwrap_or("anthropic");
 
-        let mut provider_config = if provider_id == "anthropic" {
+        let provider_config = if provider_id == "anthropic" {
             self.llm_manager
                 .get_anthropic_provider()
                 .await
@@ -111,6 +111,7 @@ impl SpacebotModel {
             ApiType::Anthropic => self.call_anthropic(request, &provider_config).await,
             ApiType::OpenAiCompletions => self.call_openai(request, &provider_config).await,
             ApiType::OpenAiResponses => self.call_openai_responses(request, &provider_config).await,
+            ApiType::Gemini => self.call_openai_compatible(request, "Google Gemini", &provider_config).await,
         }
     }
 
@@ -347,7 +348,7 @@ impl SpacebotModel {
             .unwrap_or("auto");
         let anthropic_request = crate::llm::anthropic::build_anthropic_request(
             self.llm_manager.http_client(),
-            &api_key,
+            api_key,
             &self.model_name,
             &request,
             effort,
@@ -575,6 +576,7 @@ impl SpacebotModel {
 
     /// Generic OpenAI-compatible API call.
     /// Used by providers that implement the OpenAI chat completions format.
+    #[allow(dead_code)]
     async fn call_openai_compatible(
         &self,
         request: CompletionRequest,
@@ -584,6 +586,7 @@ impl SpacebotModel {
         let base_url = provider_config.base_url.trim_end_matches('/');
         let endpoint_path = match provider_config.api_type {
             ApiType::OpenAiCompletions | ApiType::OpenAiResponses => "/v1/chat/completions",
+            ApiType::Gemini => "/chat/completions",
             ApiType::Anthropic => {
                 return Err(CompletionError::ProviderError(format!(
                     "{provider_display_name} is configured with anthropic API type, but this call expects an OpenAI-compatible API"
@@ -763,6 +766,7 @@ impl SpacebotModel {
 }
 // --- Helpers ---
 
+#[allow(dead_code)]
 fn normalize_ollama_base_url(configured: Option<String>) -> String {
     let mut base_url = configured
         .unwrap_or_else(|| "http://localhost:11434".to_string())
@@ -1198,27 +1202,26 @@ fn parse_openai_response(
 
     let mut assistant_content = Vec::new();
 
-    if let Some(text) = choice["content"].as_str() {
-        if !text.is_empty() {
-            assistant_content.push(AssistantContent::Text(Text {
-                text: text.to_string(),
-            }));
-        }
+    if let Some(text) = choice["content"].as_str()
+        && !text.is_empty()
+    {
+        assistant_content.push(AssistantContent::Text(Text {
+            text: text.to_string(),
+        }));
     }
 
     // Some reasoning models (e.g., NVIDIA kimi-k2.5) return reasoning in a separate field
-    if assistant_content.is_empty() {
-        if let Some(reasoning) = choice["reasoning_content"].as_str() {
-            if !reasoning.is_empty() {
-                tracing::debug!(
-                    provider = %provider_label,
-                    "extracted reasoning_content as main content"
-                );
-                assistant_content.push(AssistantContent::Text(Text {
-                    text: reasoning.to_string(),
-                }));
-            }
-        }
+    if assistant_content.is_empty()
+        && let Some(reasoning) = choice["reasoning_content"].as_str()
+        && !reasoning.is_empty()
+    {
+        tracing::debug!(
+            provider = %provider_label,
+            "extracted reasoning_content as main content"
+        );
+        assistant_content.push(AssistantContent::Text(Text {
+            text: reasoning.to_string(),
+        }));
     }
 
     if let Some(tool_calls) = choice["tool_calls"].as_array() {
@@ -1280,14 +1283,13 @@ fn parse_openai_responses_response(
             Some("message") => {
                 if let Some(content_items) = output_item["content"].as_array() {
                     for content_item in content_items {
-                        if content_item["type"].as_str() == Some("output_text") {
-                            if let Some(text) = content_item["text"].as_str() {
-                                if !text.is_empty() {
-                                    assistant_content.push(AssistantContent::Text(Text {
-                                        text: text.to_string(),
-                                    }));
-                                }
-                            }
+                        if content_item["type"].as_str() == Some("output_text")
+                            && let Some(text) = content_item["text"].as_str()
+                            && !text.is_empty()
+                        {
+                            assistant_content.push(AssistantContent::Text(Text {
+                                text: text.to_string(),
+                            }));
                         }
                     }
                 }

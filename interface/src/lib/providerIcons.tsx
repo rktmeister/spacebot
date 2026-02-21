@@ -11,6 +11,7 @@ import XAI from "@lobehub/icons/es/XAI";
 import ZAI from "@lobehub/icons/es/ZAI";
 import Minimax from "@lobehub/icons/es/Minimax";
 import Kimi from "@lobehub/icons/es/Kimi";
+import Google from "@lobehub/icons/es/Google";
 
 interface IconProps {
 	size?: number;
@@ -101,6 +102,7 @@ export function ProviderIcon({ provider, className = "text-ink-faint", size = 24
 		openrouter: OpenRouter,
 		groq: Groq,
 		mistral: Mistral,
+		gemini: Google,
 		deepseek: DeepSeek,
 		fireworks: Fireworks,
 		together: Together,
