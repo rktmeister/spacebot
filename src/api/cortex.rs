@@ -3,10 +3,10 @@ use super::state::ApiState;
 use crate::agent::cortex::{CortexEvent, CortexLogger};
 use crate::agent::cortex_chat::{CortexChatEvent, CortexChatMessage, CortexChatStore};
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Sse;
-use axum::Json;
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -89,7 +89,10 @@ pub(super) async fn cortex_chat_messages(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    Ok(Json(CortexChatMessagesResponse { messages, thread_id }))
+    Ok(Json(CortexChatMessagesResponse {
+        messages,
+        thread_id,
+    }))
 }
 
 /// Send a message to cortex chat. Returns an SSE stream with activity events.
@@ -167,13 +170,10 @@ pub(super) async fn cortex_events(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let total = logger
-        .count_events(event_type_ref)
-        .await
-        .map_err(|error| {
-            tracing::warn!(%error, agent_id = %query.agent_id, "failed to count cortex events");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let total = logger.count_events(event_type_ref).await.map_err(|error| {
+        tracing::warn!(%error, agent_id = %query.agent_id, "failed to count cortex events");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok(Json(CortexEventsResponse { events, total }))
 }

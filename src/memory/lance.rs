@@ -1,9 +1,9 @@
 //! LanceDB table management and embedding storage with HNSW vector index and FTS.
 
 use crate::error::{DbError, Result};
-use arrow_array::{Array, RecordBatchIterator};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Float32Type;
+use arrow_array::{Array, RecordBatchIterator};
 use futures::TryStreamExt;
 use std::sync::Arc;
 
@@ -64,10 +64,7 @@ impl EmbeddingTable {
     /// Create an empty embeddings table.
     async fn create_empty_table(connection: &lancedb::Connection) -> Result<lancedb::Table> {
         let schema = Self::schema();
-        let batches = RecordBatchIterator::new(
-            vec![].into_iter().map(Ok),
-            Arc::new(schema),
-        );
+        let batches = RecordBatchIterator::new(vec![].into_iter().map(Ok), Arc::new(schema));
 
         connection
             .create_table(TABLE_NAME, Box::new(batches))
@@ -75,37 +72,34 @@ impl EmbeddingTable {
             .await
             .map_err(|e| DbError::LanceDb(e.to_string()).into())
     }
-    
+
     /// Store an embedding with content for a memory.
     /// The content is stored for FTS search capability.
-    pub async fn store(
-        &self,
-        memory_id: &str,
-        content: &str,
-        embedding: &[f32],
-    ) -> Result<()> {
+    pub async fn store(&self, memory_id: &str, content: &str, embedding: &[f32]) -> Result<()> {
         if embedding.len() != EMBEDDING_DIM as usize {
             return Err(DbError::LanceDb(format!(
                 "Embedding dimension mismatch: expected {}, got {}",
                 EMBEDDING_DIM,
                 embedding.len()
-            )).into());
+            ))
+            .into());
         }
-        
+
         use arrow_array::{FixedSizeListArray, RecordBatch, StringArray};
-        
+
         let schema = Self::schema();
-        
+
         // Build arrays for the record batch
         let id_array = StringArray::from(vec![memory_id]);
         let content_array = StringArray::from(vec![content]);
-        
+
         // Convert embedding to FixedSizeListArray
-        let embedding_array = arrow_array::FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
-            vec![Some(embedding.iter().map(|v| Some(*v)).collect::<Vec<_>>())],
-            EMBEDDING_DIM,
-        );
-        
+        let embedding_array =
+            arrow_array::FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                vec![Some(embedding.iter().map(|v| Some(*v)).collect::<Vec<_>>())],
+                EMBEDDING_DIM,
+            );
+
         let batch = RecordBatch::try_new(
             Arc::new(schema),
             vec![
@@ -115,22 +109,19 @@ impl EmbeddingTable {
             ],
         )
         .map_err(|e| DbError::LanceDb(e.to_string()))?;
-        
+
         // Create iterator for IntoArrow trait
-        let batches = RecordBatchIterator::new(
-            vec![Ok(batch)],
-            Arc::new(Self::schema()),
-        );
-        
+        let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(Self::schema()));
+
         self.table
             .add(Box::new(batches))
             .execute()
             .await
             .map_err(|e| DbError::LanceDb(e.to_string()))?;
-        
+
         Ok(())
     }
-    
+
     /// Delete an embedding by memory ID.
     pub async fn delete(&self, memory_id: &str) -> Result<()> {
         let predicate = format!("id = '{}'", memory_id);
@@ -138,10 +129,10 @@ impl EmbeddingTable {
             .delete(&predicate)
             .await
             .map_err(|e| DbError::LanceDb(e.to_string()))?;
-        
+
         Ok(())
     }
-    
+
     /// Vector similarity search using cosine distance.
     /// Returns (memory_id, distance) pairs sorted by distance (ascending).
     pub async fn vector_search(
@@ -154,11 +145,12 @@ impl EmbeddingTable {
                 "Query embedding dimension mismatch: expected {}, got {}",
                 EMBEDDING_DIM,
                 query_embedding.len()
-            )).into());
+            ))
+            .into());
         }
-        
+
         use lancedb::query::{ExecutableQuery, QueryBase};
-        
+
         // Use query() API with nearest_to for vector search
         let results: Vec<arrow_array::RecordBatch> = self
             .table
@@ -172,13 +164,16 @@ impl EmbeddingTable {
             .try_collect()
             .await
             .map_err(|e| DbError::LanceDb(e.to_string()))?;
-        
+
         let mut matches = Vec::new();
         for batch in results {
-            if let (Some(id_col), Some(dist_col)) = (batch.column_by_name("id"), batch.column_by_name("_distance")) {
+            if let (Some(id_col), Some(dist_col)) = (
+                batch.column_by_name("id"),
+                batch.column_by_name("_distance"),
+            ) {
                 let ids: &arrow_array::StringArray = id_col.as_string::<i32>();
                 let dists: &arrow_array::PrimitiveArray<Float32Type> = dist_col.as_primitive();
-                
+
                 for i in 0..ids.len() {
                     if ids.is_valid(i) && dists.is_valid(i) {
                         let id = ids.value(i).to_string();
@@ -188,10 +183,10 @@ impl EmbeddingTable {
                 }
             }
         }
-        
+
         Ok(matches)
     }
-    
+
     /// Find memories similar to a given memory by its embedding.
     /// Returns (memory_id, similarity) pairs where similarity = 1.0 - cosine_distance.
     /// Results exclude the source memory itself.
@@ -260,12 +255,14 @@ impl EmbeddingTable {
     /// Returns (memory_id, score) pairs sorted by score (descending).
     pub async fn text_search(&self, query: &str, limit: usize) -> Result<Vec<(String, f32)>> {
         use lancedb::query::{ExecutableQuery, QueryBase};
-        
+
         // Use full_text_search on the content column
         let results: Vec<arrow_array::RecordBatch> = self
             .table
             .query()
-            .full_text_search(lance_index::scalar::FullTextSearchQuery::new(query.to_string()))
+            .full_text_search(lance_index::scalar::FullTextSearchQuery::new(
+                query.to_string(),
+            ))
             .select(lancedb::query::Select::columns(&["id", "_score"]))
             .limit(limit)
             .execute()
@@ -274,13 +271,15 @@ impl EmbeddingTable {
             .try_collect()
             .await
             .map_err(|e| DbError::LanceDb(e.to_string()))?;
-        
+
         let mut matches = Vec::new();
         for batch in results {
-            if let (Some(id_col), Some(score_col)) = (batch.column_by_name("id"), batch.column_by_name("_score")) {
+            if let (Some(id_col), Some(score_col)) =
+                (batch.column_by_name("id"), batch.column_by_name("_score"))
+            {
                 let ids: &arrow_array::StringArray = id_col.as_string::<i32>();
                 let scores: &arrow_array::PrimitiveArray<Float32Type> = score_col.as_primitive();
-                
+
                 for i in 0..ids.len() {
                     if ids.is_valid(i) && scores.is_valid(i) {
                         let id = ids.value(i).to_string();
@@ -290,10 +289,10 @@ impl EmbeddingTable {
                 }
             }
         }
-        
+
         Ok(matches)
     }
-    
+
     /// Create HNSW vector index and FTS index for better performance.
     /// Should be called after enough data accumulates.
     pub async fn create_indexes(&self) -> Result<()> {
@@ -303,19 +302,20 @@ impl EmbeddingTable {
             .execute()
             .await
             .map_err(|e| DbError::LanceDb(format!("Failed to create vector index: {}", e)))?;
-        
+
         self.ensure_fts_index().await?;
-        
+
         Ok(())
     }
-    
+
     /// Ensure the FTS index exists on the content column.
     ///
     /// LanceDB requires an inverted index for `full_text_search()` queries.
     /// This is safe to call multiple times — if the index already exists, the
     /// error is silently ignored.
     pub async fn ensure_fts_index(&self) -> Result<()> {
-        match self.table
+        match self
+            .table
             .create_index(&["content"], lancedb::index::Index::FTS(Default::default()))
             .execute()
             .await
@@ -336,7 +336,7 @@ impl EmbeddingTable {
             }
         }
     }
-    
+
     /// Get the Arrow schema for the embeddings table.
     fn schema() -> arrow_schema::Schema {
         arrow_schema::Schema::new(vec![
@@ -345,7 +345,11 @@ impl EmbeddingTable {
             arrow_schema::Field::new(
                 "embedding",
                 arrow_schema::DataType::FixedSizeList(
-                    Arc::new(arrow_schema::Field::new("item", arrow_schema::DataType::Float32, true)),
+                    Arc::new(arrow_schema::Field::new(
+                        "item",
+                        arrow_schema::DataType::Float32,
+                        true,
+                    )),
                     EMBEDDING_DIM,
                 ),
                 false,

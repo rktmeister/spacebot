@@ -17,7 +17,6 @@ pub struct Metrics {
     pub(crate) registry: Registry,
 
     // -- Counters --
-
     /// Total LLM completion requests.
     /// Labels: agent_id, model, tier (e.g. "channel", "branch", "worker").
     pub llm_requests_total: IntCounterVec,
@@ -33,7 +32,6 @@ pub struct Metrics {
     pub memory_writes_total: IntCounter,
 
     // -- Histograms --
-
     /// LLM request duration in seconds.
     pub llm_request_duration_seconds: HistogramVec,
 
@@ -41,7 +39,6 @@ pub struct Metrics {
     pub tool_call_duration_seconds: Histogram,
 
     // -- Gauges --
-
     /// Currently active workers per agent.
     /// Label: agent_id.
     pub active_workers: IntGaugeVec,
@@ -58,7 +55,10 @@ impl Metrics {
         let registry = Registry::new();
 
         let llm_requests_total = IntCounterVec::new(
-            Opts::new("spacebot_llm_requests_total", "Total LLM completion requests"),
+            Opts::new(
+                "spacebot_llm_requests_total",
+                "Total LLM completion requests",
+            ),
             &["agent_id", "model", "tier"],
         )
         .expect("hardcoded metric descriptor");
@@ -110,19 +110,38 @@ impl Metrics {
         .expect("hardcoded metric descriptor");
 
         let memory_entry_count = IntGaugeVec::new(
-            Opts::new("spacebot_memory_entry_count", "Total memory entries per agent"),
+            Opts::new(
+                "spacebot_memory_entry_count",
+                "Total memory entries per agent",
+            ),
             &["agent_id"],
         )
         .expect("hardcoded metric descriptor");
 
-        registry.register(Box::new(llm_requests_total.clone())).expect("hardcoded metric");
-        registry.register(Box::new(tool_calls_total.clone())).expect("hardcoded metric");
-        registry.register(Box::new(memory_reads_total.clone())).expect("hardcoded metric");
-        registry.register(Box::new(memory_writes_total.clone())).expect("hardcoded metric");
-        registry.register(Box::new(llm_request_duration_seconds.clone())).expect("hardcoded metric");
-        registry.register(Box::new(tool_call_duration_seconds.clone())).expect("hardcoded metric");
-        registry.register(Box::new(active_workers.clone())).expect("hardcoded metric");
-        registry.register(Box::new(memory_entry_count.clone())).expect("hardcoded metric");
+        registry
+            .register(Box::new(llm_requests_total.clone()))
+            .expect("hardcoded metric");
+        registry
+            .register(Box::new(tool_calls_total.clone()))
+            .expect("hardcoded metric");
+        registry
+            .register(Box::new(memory_reads_total.clone()))
+            .expect("hardcoded metric");
+        registry
+            .register(Box::new(memory_writes_total.clone()))
+            .expect("hardcoded metric");
+        registry
+            .register(Box::new(llm_request_duration_seconds.clone()))
+            .expect("hardcoded metric");
+        registry
+            .register(Box::new(tool_call_duration_seconds.clone()))
+            .expect("hardcoded metric");
+        registry
+            .register(Box::new(active_workers.clone()))
+            .expect("hardcoded metric");
+        registry
+            .register(Box::new(memory_entry_count.clone()))
+            .expect("hardcoded metric");
 
         Self {
             registry,

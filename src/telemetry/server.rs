@@ -3,10 +3,10 @@
 use super::Metrics;
 use crate::config::MetricsConfig;
 
+use axum::Router;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::Router;
 use prometheus::Encoder as _;
 use tokio::sync::watch;
 
@@ -26,9 +26,9 @@ pub async fn start_metrics_server(
     } else {
         format!("{}:{}", raw_bind, config.port)
     };
-    let bind: SocketAddr = bind_str
-        .parse()
-        .map_err(|error| anyhow::anyhow!("invalid metrics bind address '{}': {}", bind_str, error))?;
+    let bind: SocketAddr = bind_str.parse().map_err(|error| {
+        anyhow::anyhow!("invalid metrics bind address '{}': {}", bind_str, error)
+    })?;
 
     let app = Router::new()
         .route("/metrics", get(metrics_handler))

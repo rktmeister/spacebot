@@ -4,9 +4,41 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CARGO_TOML="$REPO_ROOT/Cargo.toml"
+CARGO_TOML_RELATIVE="Cargo.toml"
 
 if [ ! -f "$CARGO_TOML" ]; then
   echo "Cargo.toml not found at $CARGO_TOML" >&2
+  exit 1
+fi
+
+if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Not inside a git repository: $REPO_ROOT" >&2
+  exit 1
+fi
+
+disallowed_changes=()
+while IFS= read -r file; do
+  if [ -z "$file" ]; then
+    continue
+  fi
+
+  if [ "$file" != "$CARGO_TOML_RELATIVE" ]; then
+    disallowed_changes+=("$file")
+  fi
+done < <(
+  {
+    git -C "$REPO_ROOT" diff --name-only
+    git -C "$REPO_ROOT" diff --cached --name-only
+    git -C "$REPO_ROOT" ls-files --others --exclude-standard
+  } | sort -u
+)
+
+if [ "${#disallowed_changes[@]}" -gt 0 ]; then
+  echo "Refusing to run release bump with unrelated working tree changes:" >&2
+  for file in "${disallowed_changes[@]}"; do
+    echo "  - $file" >&2
+  done
+  echo "Commit or stash these changes, then run cargo bump again." >&2
   exit 1
 fi
 
@@ -109,8 +141,11 @@ with open(path, "w", encoding="utf-8") as file:
     file.writelines(lines)
 PY
 
-git tag "$tag_name"
+git -C "$REPO_ROOT" add "$CARGO_TOML_RELATIVE"
+git -C "$REPO_ROOT" commit -m "release: $tag_name"
+git -C "$REPO_ROOT" tag "$tag_name"
 
 echo "Bumped Cargo.toml version: $current_version -> $next_version"
+echo "Created commit: release: $tag_name"
 echo "Created tag: $tag_name"
-echo "Next: git add Cargo.toml && git commit -m \"release: $tag_name\" && git push && git push origin $tag_name"
+echo "Next: git push && git push origin $tag_name"

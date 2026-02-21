@@ -1,8 +1,8 @@
 use super::state::ApiState;
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -101,13 +101,17 @@ pub(super) async fn upload_ingest_file(
     mut multipart: axum::extract::Multipart,
 ) -> Result<Json<IngestUploadResponse>, StatusCode> {
     let workspaces = state.agent_workspaces.load();
-    let workspace = workspaces.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let workspace = workspaces
+        .get(&query.agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
     let ingest_dir = workspace.join("ingest");
 
-    tokio::fs::create_dir_all(&ingest_dir).await.map_err(|error| {
-        tracing::warn!(%error, "failed to create ingest directory");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    tokio::fs::create_dir_all(&ingest_dir)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to create ingest directory");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     let mut uploaded = Vec::new();
 
@@ -142,7 +146,12 @@ pub(super) async fn upload_ingest_file(
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("txt");
-            let unique = format!("{}-{}.{}", stem, &uuid::Uuid::new_v4().to_string()[..8], ext);
+            let unique = format!(
+                "{}-{}.{}",
+                stem,
+                &uuid::Uuid::new_v4().to_string()[..8],
+                ext
+            );
             ingest_dir.join(unique)
         } else {
             target

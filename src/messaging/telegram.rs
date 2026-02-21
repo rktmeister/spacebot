@@ -6,19 +6,22 @@ use crate::{Attachment, InboundMessage, MessageContent, OutboundResponse, Status
 
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
+use teloxide::Bot;
 use teloxide::payloads::setters::*;
 use teloxide::requests::{Request, Requester};
 use teloxide::types::{
     ChatAction, ChatId, FileId, InputFile, MediaKind, MessageId, MessageKind, ReactionType,
     ReplyParameters, UpdateKind, UserId,
 };
-use teloxide::Bot;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
+
+/// Maximum number of rejected DM users to remember.
+const REJECTED_USERS_CAPACITY: usize = 50;
 
 /// Telegram adapter state.
 pub struct TelegramAdapter {
@@ -48,10 +51,7 @@ const MAX_MESSAGE_LENGTH: usize = 4096;
 const STREAM_EDIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
 
 impl TelegramAdapter {
-    pub fn new(
-        token: impl Into<String>,
-        permissions: Arc<ArcSwap<TelegramPermissions>>,
-    ) -> Self {
+    pub fn new(token: impl Into<String>, permissions: Arc<ArcSwap<TelegramPermissions>>) -> Self {
         let token = token.into();
         let bot = Bot::new(&token);
         Self {
@@ -124,6 +124,10 @@ impl Messaging for TelegramAdapter {
 
         tokio::spawn(async move {
             let mut offset = 0i32;
+            // Track users whose DMs were rejected so we can nudge them when they're allowed.
+            let mut rejected_users: VecDeque<(ChatId, i64)> = VecDeque::new();
+            // Snapshot the current allow list so we can detect changes.
+            let mut last_allowed: Vec<i64> = permissions.load().dm_allowed_users.clone();
 
             loop {
                 tokio::select! {
@@ -140,6 +144,37 @@ impl Messaging for TelegramAdapter {
                                 continue;
                             }
                         };
+
+                        // Check if the allow list changed and nudge newly-allowed users.
+                        let current_permissions = permissions.load();
+                        if current_permissions.dm_allowed_users != last_allowed {
+                            let newly_allowed: Vec<i64> = current_permissions.dm_allowed_users.iter()
+                                .filter(|id| !last_allowed.contains(id))
+                                .copied()
+                                .collect();
+
+                            if !newly_allowed.is_empty() {
+                                // Notify rejected users who are now allowed.
+                                let mut remaining = VecDeque::new();
+                                for (chat_id, user_id) in rejected_users.drain(..) {
+                                    if newly_allowed.contains(&user_id) {
+                                        tracing::info!(
+                                            user_id,
+                                            "notifying previously rejected user they are now allowed"
+                                        );
+                                        let _ = bot.send_message(
+                                            chat_id,
+                                            "You've been added to the allow list — send me a message!",
+                                        ).send().await;
+                                    } else {
+                                        remaining.push_back((chat_id, user_id));
+                                    }
+                                }
+                                rejected_users = remaining;
+                            }
+
+                            last_allowed = current_permissions.dm_allowed_users.clone();
+                        }
 
                         for update in updates {
                             offset = update.id.as_offset() as i32;
@@ -171,6 +206,14 @@ impl Messaging for TelegramAdapter {
                                             .dm_allowed_users
                                             .contains(&(from.id.0 as i64))
                                     {
+                                        // Remember this user so we can nudge them if they're added later.
+                                        let entry = (message.chat.id, from.id.0 as i64);
+                                        if !rejected_users.iter().any(|(_, uid)| *uid == entry.1) {
+                                            if rejected_users.len() >= REJECTED_USERS_CAPACITY {
+                                                rejected_users.pop_front();
+                                            }
+                                            rejected_users.push_back(entry);
+                                        }
                                         continue;
                                     }
                                 }
@@ -259,7 +302,10 @@ impl Messaging for TelegramAdapter {
                         .context("failed to send telegram message")?;
                 }
             }
-            OutboundResponse::ThreadReply { thread_name: _, text } => {
+            OutboundResponse::ThreadReply {
+                thread_name: _,
+                text,
+            } => {
                 self.stop_typing(&message.conversation_id).await;
 
                 // Telegram doesn't have named threads. Reply to the source message instead.
@@ -375,13 +421,17 @@ impl Messaging for TelegramAdapter {
             OutboundResponse::Ephemeral { text, .. } => {
                 // Telegram has no ephemeral messages — send as regular text
                 let chat_id = self.extract_chat_id(message)?;
-                self.bot.send_message(chat_id, text).await
+                self.bot
+                    .send_message(chat_id, text)
+                    .await
                     .context("failed to send ephemeral fallback on telegram")?;
             }
             OutboundResponse::ScheduledMessage { text, .. } => {
                 // Telegram has no scheduled messages — send immediately
                 let chat_id = self.extract_chat_id(message)?;
-                self.bot.send_message(chat_id, text).await
+                self.bot
+                    .send_message(chat_id, text)
+                    .await
                     .context("failed to send scheduled message fallback on telegram")?;
             }
         }
@@ -404,8 +454,10 @@ impl Messaging for TelegramAdapter {
                 // Send one immediately, then repeat every 4 seconds.
                 let handle = tokio::spawn(async move {
                     loop {
-                        if let Err(error) =
-                            bot.send_chat_action(chat_id, ChatAction::Typing).send().await
+                        if let Err(error) = bot
+                            .send_chat_action(chat_id, ChatAction::Typing)
+                            .send()
+                            .await
                         {
                             tracing::debug!(%error, "failed to send typing indicator");
                             break;
@@ -427,11 +479,7 @@ impl Messaging for TelegramAdapter {
         Ok(())
     }
 
-    async fn broadcast(
-        &self,
-        target: &str,
-        response: OutboundResponse,
-    ) -> crate::Result<()> {
+    async fn broadcast(&self, target: &str, response: OutboundResponse) -> crate::Result<()> {
         let chat_id = ChatId(
             target
                 .parse::<i64>()
@@ -749,10 +797,7 @@ fn build_metadata(
             metadata.insert("reply_to_text".into(), truncated.into());
         }
         if let Some(from) = &reply.from {
-            metadata.insert(
-                "reply_to_author".into(),
-                build_display_name(from).into(),
-            );
+            metadata.insert("reply_to_author".into(), build_display_name(from).into());
         }
     }
 

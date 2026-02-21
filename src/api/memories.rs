@@ -3,9 +3,9 @@ use super::state::ApiState;
 use crate::memory::search::{SearchConfig, SearchMode};
 use crate::memory::types::{Association, Memory, MemorySearchResult, MemoryType};
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -136,7 +136,8 @@ pub(super) async fn list_memories(
     let memory_type = query.memory_type.as_deref().and_then(parse_memory_type);
 
     let fetch_limit = limit + query.offset as i64;
-    let all = store.get_sorted(sort, fetch_limit, memory_type)
+    let all = store
+        .get_sorted(sort, fetch_limit, memory_type)
         .await
         .map_err(|error| {
             tracing::warn!(%error, agent_id = %query.agent_id, "failed to list memories");
@@ -188,7 +189,8 @@ pub(super) async fn memory_graph(
     let memory_type = query.memory_type.as_deref().and_then(parse_memory_type);
 
     let fetch_limit = limit + query.offset as i64;
-    let all = store.get_sorted(sort, fetch_limit, memory_type)
+    let all = store
+        .get_sorted(sort, fetch_limit, memory_type)
         .await
         .map_err(|error| {
             tracing::warn!(%error, agent_id = %query.agent_id, "failed to load graph nodes");
@@ -199,14 +201,19 @@ pub(super) async fn memory_graph(
     let nodes: Vec<Memory> = all.into_iter().skip(query.offset).collect();
     let node_ids: Vec<String> = nodes.iter().map(|m| m.id.clone()).collect();
 
-    let edges = store.get_associations_between(&node_ids)
+    let edges = store
+        .get_associations_between(&node_ids)
         .await
         .map_err(|error| {
             tracing::warn!(%error, agent_id = %query.agent_id, "failed to load graph edges");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    Ok(Json(MemoryGraphResponse { nodes, edges, total }))
+    Ok(Json(MemoryGraphResponse {
+        nodes,
+        edges,
+        total,
+    }))
 }
 
 /// Get the neighbors of a specific memory node. Returns new nodes
@@ -220,7 +227,8 @@ pub(super) async fn memory_graph_neighbors(
     let store = memory_search.store();
 
     let depth = query.depth.min(3);
-    let exclude_ids: Vec<String> = query.exclude
+    let exclude_ids: Vec<String> = query
+        .exclude
         .as_deref()
         .unwrap_or("")
         .split(',')

@@ -3,10 +3,10 @@ use crate::conversation::ConversationLogger;
 use crate::messaging::webchat::WebChatEvent;
 use crate::{InboundMessage, MessageContent};
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Sse;
-use axum::Json;
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

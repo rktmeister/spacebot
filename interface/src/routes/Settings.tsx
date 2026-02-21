@@ -4,6 +4,7 @@ import {api, type GlobalSettingsResponse} from "@/api/client";
 import {Button, Input, SettingSidebarButton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Toggle} from "@/ui";
 import {useSearch, useNavigate} from "@tanstack/react-router";
 import {ChannelSettingCard, DisabledChannelCard} from "@/components/ChannelSettingCard";
+import {ModelSelect} from "@/components/ModelSelect";
 import {ProviderIcon} from "@/lib/providerIcons";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faSearch} from "@fortawesome/free-solid-svg-icons";
@@ -69,7 +70,7 @@ const PROVIDERS = [
 		description: "Multi-provider gateway with unified API",
 		placeholder: "sk-or-...",
 		envVar: "OPENROUTER_API_KEY",
-		defaultModel: "anthropic/claude-sonnet-4",
+		defaultModel: "openrouter/anthropic/claude-sonnet-4",
 	},
 	{
 		id: "opencode-zen",
@@ -77,7 +78,7 @@ const PROVIDERS = [
 		description: "Multi-format gateway (Kimi, GLM, MiniMax, Qwen)",
 		placeholder: "...",
 		envVar: "OPENCODE_ZEN_API_KEY",
-		defaultModel: "kimi-k2.5",
+		defaultModel: "opencode-zen/kimi-k2.5",
 	},
 	{
 		id: "anthropic",
@@ -85,7 +86,7 @@ const PROVIDERS = [
 		description: "Claude models (Sonnet, Opus, Haiku)",
 		placeholder: "sk-ant-...",
 		envVar: "ANTHROPIC_API_KEY",
-		defaultModel: "claude-sonnet-4",
+		defaultModel: "anthropic/claude-sonnet-4",
 	},
 	{
 		id: "openai",
@@ -93,7 +94,7 @@ const PROVIDERS = [
 		description: "GPT models",
 		placeholder: "sk-...",
 		envVar: "OPENAI_API_KEY",
-		defaultModel: "gpt-4.1",
+		defaultModel: "openai/gpt-4.1",
 	},
 	{
 		id: "zai-coding-plan",
@@ -109,7 +110,7 @@ const PROVIDERS = [
 		description: "GLM models (GLM-4, GLM-4-Flash)",
 		placeholder: "...",
 		envVar: "ZHIPU_API_KEY",
-		defaultModel: "glm-4-plus",
+		defaultModel: "zhipu/glm-4-plus",
 	},
 	{
 		id: "groq",
@@ -117,7 +118,7 @@ const PROVIDERS = [
 		description: "Fast inference for Llama, Mixtral models",
 		placeholder: "gsk_...",
 		envVar: "GROQ_API_KEY",
-		defaultModel: "llama-3.3-70b-versatile",
+		defaultModel: "groq/llama-3.3-70b-versatile",
 	},
 	{
 		id: "together",
@@ -125,7 +126,7 @@ const PROVIDERS = [
 		description: "Wide model selection with competitive pricing",
 		placeholder: "...",
 		envVar: "TOGETHER_API_KEY",
-		defaultModel: "Meta-Llama-3.1-405B-Instruct-Turbo",
+		defaultModel: "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
 	},
 	{
 		id: "fireworks",
@@ -133,7 +134,7 @@ const PROVIDERS = [
 		description: "Fast inference for popular OSS models",
 		placeholder: "...",
 		envVar: "FIREWORKS_API_KEY",
-		defaultModel: "llama-v3p3-70b-instruct",
+		defaultModel: "fireworks/accounts/fireworks/models/llama-v3p3-70b-instruct",
 	},
 	{
 		id: "deepseek",
@@ -141,7 +142,7 @@ const PROVIDERS = [
 		description: "DeepSeek Chat and Reasoner models",
 		placeholder: "sk-...",
 		envVar: "DEEPSEEK_API_KEY",
-		defaultModel: "deepseek-chat",
+		defaultModel: "deepseek/deepseek-chat",
 	},
 	{
 		id: "xai",
@@ -149,7 +150,7 @@ const PROVIDERS = [
 		description: "Grok models",
 		placeholder: "xai-...",
 		envVar: "XAI_API_KEY",
-		defaultModel: "grok-2-latest",
+		defaultModel: "xai/grok-2-latest",
 	},
 	{
 		id: "mistral",
@@ -157,7 +158,7 @@ const PROVIDERS = [
 		description: "Mistral Large, Small, Codestral models",
 		placeholder: "...",
 		envVar: "MISTRAL_API_KEY",
-		defaultModel: "mistral-large-latest",
+		defaultModel: "mistral/mistral-large-latest",
 	},
 	{
 		id: "nvidia",
@@ -173,7 +174,7 @@ const PROVIDERS = [
 		description: "MiniMax M1 (Anthropic message format)",
 		placeholder: "eyJ...",
 		envVar: "MINIMAX_API_KEY",
-		defaultModel: "MiniMax-M1-80k",
+		defaultModel: "minimax/MiniMax-M1-80k",
 	},
 	{
 		id: "moonshot",
@@ -181,7 +182,7 @@ const PROVIDERS = [
 		description: "Kimi models (Kimi K2, Kimi K2.5)",
 		placeholder: "sk-...",
 		envVar: "MOONSHOT_API_KEY",
-		defaultModel: "kimi-k2.5",
+		defaultModel: "moonshot/kimi-k2.5",
 	},
 	{
 		id: "ollama",
@@ -189,6 +190,7 @@ const PROVIDERS = [
 		description: "Local or remote Ollama API endpoint",
 		placeholder: "http://localhost:11434",
 		envVar: "OLLAMA_BASE_URL",
+		defaultModel: "ollama/llama3.2",
 	},
 ] as const;
 
@@ -211,6 +213,13 @@ export function Settings() {
 	};
 	const [editingProvider, setEditingProvider] = useState<string | null>(null);
 	const [keyInput, setKeyInput] = useState("");
+	const [modelInput, setModelInput] = useState("");
+	const [testedSignature, setTestedSignature] = useState<string | null>(null);
+	const [testResult, setTestResult] = useState<{
+		success: boolean;
+		message: string;
+		sample?: string | null;
+	} | null>(null);
 	const [message, setMessage] = useState<{
 		text: string;
 		type: "success" | "error";
@@ -233,12 +242,15 @@ export function Settings() {
 	});
 
 	const updateMutation = useMutation({
-		mutationFn: ({provider, apiKey}: {provider: string; apiKey: string}) =>
-			api.updateProvider(provider, apiKey),
+		mutationFn: ({provider, apiKey, model}: {provider: string; apiKey: string; model: string}) =>
+			api.updateProvider(provider, apiKey, model),
 		onSuccess: (result) => {
 			if (result.success) {
 				setEditingProvider(null);
 				setKeyInput("");
+				setModelInput("");
+				setTestedSignature(null);
+				setTestResult(null);
 				setMessage({text: result.message, type: "success"});
 				queryClient.invalidateQueries({queryKey: ["providers"]});
 				// Agents will auto-start on the backend, refetch agent list after a short delay
@@ -253,6 +265,11 @@ export function Settings() {
 		onError: (error) => {
 			setMessage({text: `Failed: ${error.message}`, type: "error"});
 		},
+	});
+
+	const testModelMutation = useMutation({
+		mutationFn: ({provider, apiKey, model}: {provider: string; apiKey: string; model: string}) =>
+			api.testProviderModel(provider, apiKey, model),
 	});
 
 	const removeMutation = useMutation({
@@ -272,19 +289,60 @@ export function Settings() {
 
 	const editingProviderData = PROVIDERS.find((p) => p.id === editingProvider);
 
-	const handleSave = () => {
-		if (!keyInput.trim() || !editingProvider) return;
-		updateMutation.mutate({provider: editingProvider, apiKey: keyInput.trim()});
+	const currentSignature = `${editingProvider ?? ""}|${keyInput.trim()}|${modelInput.trim()}`;
+
+	const handleTestModel = async (): Promise<boolean> => {
+		if (!editingProvider || !keyInput.trim() || !modelInput.trim()) return false;
+		setMessage(null);
+		setTestResult(null);
+		try {
+			const result = await testModelMutation.mutateAsync({
+				provider: editingProvider,
+				apiKey: keyInput.trim(),
+				model: modelInput.trim(),
+			});
+			setTestResult({success: result.success, message: result.message, sample: result.sample});
+			if (result.success) {
+				setTestedSignature(currentSignature);
+				return true;
+			} else {
+				setTestedSignature(null);
+				return false;
+			}
+		} catch (error: any) {
+			setTestResult({success: false, message: `Failed: ${error.message}`});
+			setTestedSignature(null);
+			return false;
+		}
+	};
+
+	const handleSave = async () => {
+		if (!keyInput.trim() || !editingProvider || !modelInput.trim()) return;
+
+		if (testedSignature !== currentSignature) {
+			const testPassed = await handleTestModel();
+			if (!testPassed) return;
+		}
+
+		updateMutation.mutate({
+			provider: editingProvider,
+			apiKey: keyInput.trim(),
+			model: modelInput.trim(),
+		});
 	};
 
 	const handleClose = () => {
 		setEditingProvider(null);
 		setKeyInput("");
+		setModelInput("");
+		setTestedSignature(null);
+		setTestResult(null);
 	};
 
 	const isConfigured = (providerId: string): boolean => {
 		if (!data) return false;
-		return data.providers[providerId as keyof typeof data.providers] ?? false;
+		const statusKey = providerId.replace(/-/g, "_") as keyof typeof data.providers;
+		return data.providers[statusKey] ?? false;
 	};
 
 	return (
@@ -332,9 +390,8 @@ export function Settings() {
 
 						<div className="mb-4 rounded-md border border-app-line bg-app-darkBox/20 px-4 py-3">
 							<p className="text-sm text-ink-faint">
-								To customise which model is used, go to{" "}
-								<span className="text-ink-dull">Agent &gt; Config &gt; Model Routing</span>.
-								{" "}Model routing is configured per agent.
+								When you add a provider, choose a model and run a completion test before saving.
+								 Saving applies that model to all five default routing roles and to your default agent.
 							</p>
 						</div>
 
@@ -354,10 +411,13 @@ export function Settings() {
 										configured={isConfigured(provider.id)}
 										defaultModel={provider.defaultModel}
 										onEdit={() => {
-											setEditingProvider(provider.id);
-											setKeyInput("");
-											setMessage(null);
-										}}
+									setEditingProvider(provider.id);
+									setKeyInput("");
+									setModelInput(provider.defaultModel ?? "");
+									setTestedSignature(null);
+									setTestResult(null);
+									setMessage(null);
+								}}
 										onRemove={() => removeMutation.mutate(provider.id)}
 										removing={removeMutation.isPending}
 									/>
@@ -413,13 +473,54 @@ export function Settings() {
 					<Input
 						type={editingProvider === "ollama" ? "text" : "password"}
 						value={keyInput}
-						onChange={(e) => setKeyInput(e.target.value)}
+						onChange={(e) => {
+							setKeyInput(e.target.value);
+							setTestedSignature(null);
+						}}
 						placeholder={editingProviderData?.placeholder}
 						autoFocus
 						onKeyDown={(e) => {
 							if (e.key === "Enter") handleSave();
 						}}
 					/>
+					<ModelSelect
+						label="Model"
+						description="Pick the exact model ID to verify and apply to routing"
+						value={modelInput}
+						onChange={(value) => {
+							setModelInput(value);
+							setTestedSignature(null);
+						}}
+						provider={editingProvider ?? undefined}
+					/>
+					<div className="flex items-center gap-2">
+						<Button
+							onClick={handleTestModel}
+							disabled={!editingProvider || !keyInput.trim() || !modelInput.trim()}
+							loading={testModelMutation.isPending}
+							variant="outline"
+							size="sm"
+						>
+							Test model
+						</Button>
+						{testedSignature === currentSignature && testResult?.success && (
+							<span className="text-xs text-green-400">Verified</span>
+						)}
+					</div>
+					{testResult && (
+						<div
+							className={`rounded-md border px-3 py-2 text-sm ${
+								testResult.success
+									? "border-green-500/20 bg-green-500/10 text-green-400"
+									: "border-red-500/20 bg-red-500/10 text-red-400"
+							}`}
+						>
+							<div>{testResult.message}</div>
+							{testResult.success && testResult.sample ? (
+								<div className="mt-1 text-xs text-ink-dull">Sample: {testResult.sample}</div>
+							) : null}
+						</div>
+					)}
 					{message && (
 						<div
 							className={`rounded-md border px-3 py-2 text-sm ${
@@ -437,7 +538,7 @@ export function Settings() {
 						</Button>
 						<Button
 							onClick={handleSave}
-							disabled={!keyInput.trim()}
+							disabled={!keyInput.trim() || !modelInput.trim()}
 							loading={updateMutation.isPending}
 							size="sm"
 						>

@@ -24,15 +24,17 @@ impl CronStore {
 
         sqlx::query(
             r#"
-            INSERT INTO cron_jobs (id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO cron_jobs (id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled, run_once, timeout_secs)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 prompt = excluded.prompt,
                 interval_secs = excluded.interval_secs,
                 delivery_target = excluded.delivery_target,
                 active_start_hour = excluded.active_start_hour,
                 active_end_hour = excluded.active_end_hour,
-                enabled = excluded.enabled
+                enabled = excluded.enabled,
+                run_once = excluded.run_once,
+                timeout_secs = excluded.timeout_secs
             "#
         )
         .bind(&config.id)
@@ -42,6 +44,8 @@ impl CronStore {
         .bind(active_start)
         .bind(active_end)
         .bind(config.enabled as i64)
+        .bind(config.run_once as i64)
+        .bind(config.timeout_secs.map(|t| t as i64))
         .execute(&self.pool)
         .await
         .context("failed to save cron job")?;
@@ -53,7 +57,7 @@ impl CronStore {
     pub async fn load_all(&self) -> Result<Vec<CronConfig>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled
+            SELECT id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled, run_once, timeout_secs
             FROM cron_jobs
             WHERE enabled = 1
             ORDER BY created_at ASC
@@ -79,6 +83,12 @@ impl CronStore {
                     }
                 },
                 enabled: row.try_get::<i64, _>("enabled").unwrap_or(1) != 0,
+                run_once: row.try_get::<i64, _>("run_once").unwrap_or(0) != 0,
+                timeout_secs: row
+                    .try_get::<Option<i64>, _>("timeout_secs")
+                    .ok()
+                    .flatten()
+                    .map(|t| t as u64),
             })
             .collect();
 
@@ -138,7 +148,7 @@ impl CronStore {
     pub async fn load_all_unfiltered(&self) -> Result<Vec<CronConfig>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled
+            SELECT id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled, run_once, timeout_secs
             FROM cron_jobs
             ORDER BY created_at ASC
             "#,
@@ -163,6 +173,12 @@ impl CronStore {
                     }
                 },
                 enabled: row.try_get::<i64, _>("enabled").unwrap_or(1) != 0,
+                run_once: row.try_get::<i64, _>("run_once").unwrap_or(0) != 0,
+                timeout_secs: row
+                    .try_get::<Option<i64>, _>("timeout_secs")
+                    .ok()
+                    .flatten()
+                    .map(|t| t as u64),
             })
             .collect();
 
@@ -170,7 +186,11 @@ impl CronStore {
     }
 
     /// Load execution history for a specific cron job.
-    pub async fn load_executions(&self, cron_id: &str, limit: i64) -> Result<Vec<CronExecutionEntry>> {
+    pub async fn load_executions(
+        &self,
+        cron_id: &str,
+        limit: i64,
+    ) -> Result<Vec<CronExecutionEntry>> {
         let rows = sqlx::query(
             r#"
             SELECT id, executed_at, success, result_summary

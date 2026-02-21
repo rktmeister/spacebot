@@ -1,8 +1,8 @@
 use super::state::ApiState;
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -58,16 +58,16 @@ pub(super) async fn messaging_status(
                     .get("token")
                     .and_then(|v| v.as_str())
                     .is_some_and(|s| !s.is_empty());
-                let enabled = d
-                    .get("enabled")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let enabled = d.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
                 PlatformStatus {
                     configured: has_token,
                     enabled: has_token && enabled,
                 }
             })
-            .unwrap_or(PlatformStatus { configured: false, enabled: false });
+            .unwrap_or(PlatformStatus {
+                configured: false,
+                enabled: false,
+            });
 
         let slack_status = doc
             .get("messaging")
@@ -81,28 +81,31 @@ pub(super) async fn messaging_status(
                     .get("app_token")
                     .and_then(|v| v.as_str())
                     .is_some_and(|t| !t.is_empty());
-                let enabled = s
-                    .get("enabled")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let enabled = s.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
                 PlatformStatus {
                     configured: has_bot_token && has_app_token,
                     enabled: has_bot_token && has_app_token && enabled,
                 }
             })
-            .unwrap_or(PlatformStatus { configured: false, enabled: false });
+            .unwrap_or(PlatformStatus {
+                configured: false,
+                enabled: false,
+            });
 
         let webhook_status = doc
             .get("messaging")
             .and_then(|m| m.get("webhook"))
             .map(|w| {
-                let enabled = w
-                    .get("enabled")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                PlatformStatus { configured: true, enabled }
+                let enabled = w.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                PlatformStatus {
+                    configured: true,
+                    enabled,
+                }
             })
-            .unwrap_or(PlatformStatus { configured: false, enabled: false });
+            .unwrap_or(PlatformStatus {
+                configured: false,
+                enabled: false,
+            });
 
         let telegram_status = doc
             .get("messaging")
@@ -112,16 +115,16 @@ pub(super) async fn messaging_status(
                     .get("token")
                     .and_then(|v| v.as_str())
                     .is_some_and(|s| !s.is_empty());
-                let enabled = t
-                    .get("enabled")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let enabled = t.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
                 PlatformStatus {
                     configured: has_token,
                     enabled: has_token && enabled,
                 }
             })
-            .unwrap_or(PlatformStatus { configured: false, enabled: false });
+            .unwrap_or(PlatformStatus {
+                configured: false,
+                enabled: false,
+            });
 
         let twitch_status = doc
             .get("messaging")
@@ -135,24 +138,45 @@ pub(super) async fn messaging_status(
                     .get("oauth_token")
                     .and_then(|v| v.as_str())
                     .is_some_and(|s| !s.is_empty());
-                let enabled = t
-                    .get("enabled")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let enabled = t.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
                 PlatformStatus {
                     configured: has_username && has_token,
                     enabled: has_username && has_token && enabled,
                 }
             })
-            .unwrap_or(PlatformStatus { configured: false, enabled: false });
+            .unwrap_or(PlatformStatus {
+                configured: false,
+                enabled: false,
+            });
 
-        (discord_status, slack_status, telegram_status, webhook_status, twitch_status)
+        (
+            discord_status,
+            slack_status,
+            telegram_status,
+            webhook_status,
+            twitch_status,
+        )
     } else {
-        let default = PlatformStatus { configured: false, enabled: false };
-        (default.clone(), default.clone(), default.clone(), default.clone(), default)
+        let default = PlatformStatus {
+            configured: false,
+            enabled: false,
+        };
+        (
+            default.clone(),
+            default.clone(),
+            default.clone(),
+            default.clone(),
+            default,
+        )
     };
 
-    Ok(Json(MessagingStatusResponse { discord, slack, telegram, webhook, twitch }))
+    Ok(Json(MessagingStatusResponse {
+        discord,
+        slack,
+        telegram,
+        webhook,
+        twitch,
+    }))
 }
 
 /// Disconnect a messaging platform: remove credentials from config, remove all
@@ -164,10 +188,12 @@ pub(super) async fn disconnect_platform(
     let platform = &request.platform;
     let config_path = state.config_path.read().await.clone();
 
-    let content = tokio::fs::read_to_string(&config_path).await.map_err(|error| {
-        tracing::warn!(%error, "failed to read config.toml");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let content = tokio::fs::read_to_string(&config_path)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to read config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
         tracing::warn!(%error, "failed to parse config.toml");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -177,7 +203,10 @@ pub(super) async fn disconnect_platform(
         messaging.remove(platform);
     }
 
-    if let Some(bindings) = doc.get_mut("bindings").and_then(|b| b.as_array_of_tables_mut()) {
+    if let Some(bindings) = doc
+        .get_mut("bindings")
+        .and_then(|b| b.as_array_of_tables_mut())
+    {
         let mut i = 0;
         while i < bindings.len() {
             let matches = bindings
@@ -193,10 +222,12 @@ pub(super) async fn disconnect_platform(
         }
     }
 
-    tokio::fs::write(&config_path, doc.to_string()).await.map_err(|error| {
-        tracing::warn!(%error, "failed to write config.toml");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to write config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     if let Ok(new_config) = crate::config::Config::load_from_path(&config_path) {
         let bindings_guard = state.bindings.read().await;
@@ -229,10 +260,12 @@ pub(super) async fn toggle_platform(
     let platform = &request.platform;
     let config_path = state.config_path.read().await.clone();
 
-    let content = tokio::fs::read_to_string(&config_path).await.map_err(|error| {
-        tracing::warn!(%error, "failed to read config.toml");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let content = tokio::fs::read_to_string(&config_path)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to read config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
         tracing::warn!(%error, "failed to parse config.toml");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -253,10 +286,12 @@ pub(super) async fn toggle_platform(
 
     table["enabled"] = toml_edit::value(request.enabled);
 
-    tokio::fs::write(&config_path, doc.to_string()).await.map_err(|error| {
-        tracing::warn!(%error, "failed to write config.toml");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to write config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     let manager_guard = state.messaging_manager.read().await;
     let manager = manager_guard.as_ref();
@@ -277,13 +312,18 @@ pub(super) async fn toggle_platform(
                                             discord_config,
                                             &new_config.bindings,
                                         );
-                                        let arc_swap = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
+                                        let arc_swap = std::sync::Arc::new(
+                                            arc_swap::ArcSwap::from_pointee(perms),
+                                        );
                                         state.set_discord_permissions(arc_swap.clone()).await;
                                         arc_swap
                                     }
                                 }
                             };
-                            let adapter = crate::messaging::discord::DiscordAdapter::new(&discord_config.token, perms);
+                            let adapter = crate::messaging::discord::DiscordAdapter::new(
+                                &discord_config.token,
+                                perms,
+                            );
                             if let Err(error) = manager.register_and_start(adapter).await {
                                 tracing::error!(%error, "failed to start discord adapter on toggle");
                             }
@@ -301,7 +341,9 @@ pub(super) async fn toggle_platform(
                                             slack_config,
                                             &new_config.bindings,
                                         );
-                                        let arc_swap = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
+                                        let arc_swap = std::sync::Arc::new(
+                                            arc_swap::ArcSwap::from_pointee(perms),
+                                        );
                                         state.set_slack_permissions(arc_swap.clone()).await;
                                         arc_swap
                                     }
@@ -330,7 +372,8 @@ pub(super) async fn toggle_platform(
                                 telegram_config,
                                 &new_config.bindings,
                             );
-                            let arc_swap = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
+                            let arc_swap =
+                                std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
                             let adapter = crate::messaging::telegram::TelegramAdapter::new(
                                 &telegram_config.token,
                                 arc_swap,
@@ -357,7 +400,8 @@ pub(super) async fn toggle_platform(
                                 twitch_config,
                                 &new_config.bindings,
                             );
-                            let arc_swap = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
+                            let arc_swap =
+                                std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms));
                             let adapter = crate::messaging::twitch::TwitchAdapter::new(
                                 &twitch_config.username,
                                 &twitch_config.oauth_token,
@@ -382,7 +426,11 @@ pub(super) async fn toggle_platform(
         }
     }
 
-    let action = if request.enabled { "enabled" } else { "disabled" };
+    let action = if request.enabled {
+        "enabled"
+    } else {
+        "disabled"
+    };
     tracing::info!(platform = %platform, action, "platform toggled via API");
 
     Ok(Json(serde_json::json!({

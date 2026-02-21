@@ -50,6 +50,13 @@ pub struct CronArgs {
     /// Required for "delete": the ID of the cron job to remove.
     #[serde(default)]
     pub delete_id: Option<String>,
+    /// Optional for "create": maximum seconds to wait for the job to complete before timing out.
+    /// Defaults to 120. Use a larger value (e.g. 600) for long-running research or writing tasks.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    /// Optional for "create": if true, run only once and disable after first execution attempt.
+    #[serde(default)]
+    pub run_once: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,6 +74,7 @@ pub struct CronEntry {
     pub prompt: String,
     pub interval_secs: u64,
     pub delivery_target: String,
+    pub run_once: bool,
     pub active_hours: Option<String>,
 }
 
@@ -116,6 +124,14 @@ impl Tool for CronTool {
                     "delete_id": {
                         "type": "string",
                         "description": "For 'delete': the ID of the cron job to remove."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "description": "For 'create': max seconds to wait for the job to finish (default 120). Use 600 for long-running tasks like research."
+                    },
+                    "run_once": {
+                        "type": "boolean",
+                        "description": "For 'create': if true, run this job once and auto-disable after the first execution attempt."
                     }
                 },
                 "required": ["action"]
@@ -139,7 +155,9 @@ impl Tool for CronTool {
 
 impl CronTool {
     async fn create(&self, args: CronArgs) -> Result<CronOutput, CronError> {
-        let id = args.id.ok_or_else(|| CronError("'id' is required for create".into()))?;
+        let id = args
+            .id
+            .ok_or_else(|| CronError("'id' is required for create".into()))?;
         let prompt = args
             .prompt
             .ok_or_else(|| CronError("'prompt' is required for create".into()))?;
@@ -154,6 +172,7 @@ impl CronTool {
             (Some(start), Some(end)) => Some((start, end)),
             _ => None,
         };
+        let run_once = args.run_once.unwrap_or(false);
 
         let config = CronConfig {
             id: id.clone(),
@@ -162,6 +181,8 @@ impl CronTool {
             delivery_target: delivery_target.clone(),
             active_hours,
             enabled: true,
+            run_once,
+            timeout_secs: args.timeout_secs,
         };
 
         // Persist to database
@@ -177,7 +198,11 @@ impl CronTool {
             .map_err(|error| CronError(format!("failed to register: {error}")))?;
 
         let interval_desc = format_interval(interval_secs);
-        let mut message = format!("Cron job '{id}' created. Runs {interval_desc}.");
+        let mut message = if run_once {
+            format!("Cron job '{id}' created. First run {interval_desc}; it then disables itself.")
+        } else {
+            format!("Cron job '{id}' created. Runs {interval_desc}.")
+        };
         if let Some((start, end)) = active_hours {
             message.push_str(&format!(" Active {start:02}:00-{end:02}:00."));
         }
@@ -205,7 +230,10 @@ impl CronTool {
                 prompt: config.prompt,
                 interval_secs: config.interval_secs,
                 delivery_target: config.delivery_target,
-                active_hours: config.active_hours.map(|(s, e)| format!("{s:02}:00-{e:02}:00")),
+                run_once: config.run_once,
+                active_hours: config
+                    .active_hours
+                    .map(|(s, e)| format!("{s:02}:00-{e:02}:00")),
             })
             .collect();
 

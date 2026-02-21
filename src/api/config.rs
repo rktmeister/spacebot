@@ -1,8 +1,8 @@
 use super::state::ApiState;
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -280,7 +280,8 @@ pub(super) async fn update_agent_config(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let mut doc = config_content.parse::<toml_edit::DocumentMut>()
+    let mut doc = config_content
+        .parse::<toml_edit::DocumentMut>()
         .map_err(|error| {
             tracing::warn!(%error, "failed to parse config.toml");
             StatusCode::INTERNAL_SERVER_ERROR
@@ -346,18 +347,28 @@ pub(super) async fn update_agent_config(
         }
     }
 
-    get_agent_config(State(state), Query(AgentConfigQuery { agent_id: request.agent_id })).await
+    get_agent_config(
+        State(state),
+        Query(AgentConfigQuery {
+            agent_id: request.agent_id,
+        }),
+    )
+    .await
 }
 
 // -- TOML edit helpers --
 
 /// Find the index of an agent table in the [[agents]] array, or create a new one.
-pub(super) fn find_or_create_agent_table(doc: &mut toml_edit::DocumentMut, agent_id: &str) -> Result<usize, StatusCode> {
+pub(super) fn find_or_create_agent_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_id: &str,
+) -> Result<usize, StatusCode> {
     if doc.get("agents").is_none() {
         doc["agents"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
     }
 
-    let agents = doc.get_mut("agents")
+    let agents = doc
+        .get_mut("agents")
         .and_then(|a| a.as_array_of_tables_mut())
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -376,100 +387,203 @@ pub(super) fn find_or_create_agent_table(doc: &mut toml_edit::DocumentMut, agent
     Ok(agents.len() - 1)
 }
 
-fn get_agent_table_mut(doc: &mut toml_edit::DocumentMut, agent_idx: usize) -> Result<&mut toml_edit::Table, StatusCode> {
+fn get_agent_table_mut(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+) -> Result<&mut toml_edit::Table, StatusCode> {
     doc.get_mut("agents")
         .and_then(|a| a.as_array_of_tables_mut())
         .and_then(|arr| arr.get_mut(agent_idx))
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-fn get_or_create_subtable<'a>(agent: &'a mut toml_edit::Table, key: &str) -> &'a mut toml_edit::Table {
+fn get_or_create_subtable<'a>(
+    agent: &'a mut toml_edit::Table,
+    key: &str,
+) -> &'a mut toml_edit::Table {
     if !agent.contains_key(key) {
         agent[key] = toml_edit::Item::Table(toml_edit::Table::new());
     }
     agent[key].as_table_mut().expect("just created as table")
 }
 
-fn update_routing_table(doc: &mut toml_edit::DocumentMut, agent_idx: usize, routing: &RoutingUpdate) -> Result<(), StatusCode> {
+fn update_routing_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+    routing: &RoutingUpdate,
+) -> Result<(), StatusCode> {
     let agent = get_agent_table_mut(doc, agent_idx)?;
     let table = get_or_create_subtable(agent, "routing");
-    if let Some(ref v) = routing.channel { table["channel"] = toml_edit::value(v.as_str()); }
-    if let Some(ref v) = routing.branch { table["branch"] = toml_edit::value(v.as_str()); }
-    if let Some(ref v) = routing.worker { table["worker"] = toml_edit::value(v.as_str()); }
-    if let Some(ref v) = routing.compactor { table["compactor"] = toml_edit::value(v.as_str()); }
-    if let Some(ref v) = routing.cortex { table["cortex"] = toml_edit::value(v.as_str()); }
-    if let Some(v) = routing.rate_limit_cooldown_secs { table["rate_limit_cooldown_secs"] = toml_edit::value(v as i64); }
+    if let Some(ref v) = routing.channel {
+        table["channel"] = toml_edit::value(v.as_str());
+    }
+    if let Some(ref v) = routing.branch {
+        table["branch"] = toml_edit::value(v.as_str());
+    }
+    if let Some(ref v) = routing.worker {
+        table["worker"] = toml_edit::value(v.as_str());
+    }
+    if let Some(ref v) = routing.compactor {
+        table["compactor"] = toml_edit::value(v.as_str());
+    }
+    if let Some(ref v) = routing.cortex {
+        table["cortex"] = toml_edit::value(v.as_str());
+    }
+    if let Some(v) = routing.rate_limit_cooldown_secs {
+        table["rate_limit_cooldown_secs"] = toml_edit::value(v as i64);
+    }
     Ok(())
 }
 
-fn update_tuning_table(doc: &mut toml_edit::DocumentMut, agent_idx: usize, tuning: &TuningUpdate) -> Result<(), StatusCode> {
+fn update_tuning_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+    tuning: &TuningUpdate,
+) -> Result<(), StatusCode> {
     let agent = get_agent_table_mut(doc, agent_idx)?;
-    if let Some(v) = tuning.max_concurrent_branches { agent["max_concurrent_branches"] = toml_edit::value(v as i64); }
-    if let Some(v) = tuning.max_concurrent_workers { agent["max_concurrent_workers"] = toml_edit::value(v as i64); }
-    if let Some(v) = tuning.max_turns { agent["max_turns"] = toml_edit::value(v as i64); }
-    if let Some(v) = tuning.branch_max_turns { agent["branch_max_turns"] = toml_edit::value(v as i64); }
-    if let Some(v) = tuning.context_window { agent["context_window"] = toml_edit::value(v as i64); }
-    if let Some(v) = tuning.history_backfill_count { agent["history_backfill_count"] = toml_edit::value(v as i64); }
+    if let Some(v) = tuning.max_concurrent_branches {
+        agent["max_concurrent_branches"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = tuning.max_concurrent_workers {
+        agent["max_concurrent_workers"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = tuning.max_turns {
+        agent["max_turns"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = tuning.branch_max_turns {
+        agent["branch_max_turns"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = tuning.context_window {
+        agent["context_window"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = tuning.history_backfill_count {
+        agent["history_backfill_count"] = toml_edit::value(v as i64);
+    }
     Ok(())
 }
 
-fn update_compaction_table(doc: &mut toml_edit::DocumentMut, agent_idx: usize, compaction: &CompactionUpdate) -> Result<(), StatusCode> {
+fn update_compaction_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+    compaction: &CompactionUpdate,
+) -> Result<(), StatusCode> {
     let agent = get_agent_table_mut(doc, agent_idx)?;
     let table = get_or_create_subtable(agent, "compaction");
-    if let Some(v) = compaction.background_threshold { table["background_threshold"] = toml_edit::value(v as f64); }
-    if let Some(v) = compaction.aggressive_threshold { table["aggressive_threshold"] = toml_edit::value(v as f64); }
-    if let Some(v) = compaction.emergency_threshold { table["emergency_threshold"] = toml_edit::value(v as f64); }
+    if let Some(v) = compaction.background_threshold {
+        table["background_threshold"] = toml_edit::value(v as f64);
+    }
+    if let Some(v) = compaction.aggressive_threshold {
+        table["aggressive_threshold"] = toml_edit::value(v as f64);
+    }
+    if let Some(v) = compaction.emergency_threshold {
+        table["emergency_threshold"] = toml_edit::value(v as f64);
+    }
     Ok(())
 }
 
-fn update_cortex_table(doc: &mut toml_edit::DocumentMut, agent_idx: usize, cortex: &CortexUpdate) -> Result<(), StatusCode> {
+fn update_cortex_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+    cortex: &CortexUpdate,
+) -> Result<(), StatusCode> {
     let agent = get_agent_table_mut(doc, agent_idx)?;
     let table = get_or_create_subtable(agent, "cortex");
-    if let Some(v) = cortex.tick_interval_secs { table["tick_interval_secs"] = toml_edit::value(v as i64); }
-    if let Some(v) = cortex.worker_timeout_secs { table["worker_timeout_secs"] = toml_edit::value(v as i64); }
-    if let Some(v) = cortex.branch_timeout_secs { table["branch_timeout_secs"] = toml_edit::value(v as i64); }
-    if let Some(v) = cortex.circuit_breaker_threshold { table["circuit_breaker_threshold"] = toml_edit::value(v as i64); }
-    if let Some(v) = cortex.bulletin_interval_secs { table["bulletin_interval_secs"] = toml_edit::value(v as i64); }
-    if let Some(v) = cortex.bulletin_max_words { table["bulletin_max_words"] = toml_edit::value(v as i64); }
-    if let Some(v) = cortex.bulletin_max_turns { table["bulletin_max_turns"] = toml_edit::value(v as i64); }
+    if let Some(v) = cortex.tick_interval_secs {
+        table["tick_interval_secs"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = cortex.worker_timeout_secs {
+        table["worker_timeout_secs"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = cortex.branch_timeout_secs {
+        table["branch_timeout_secs"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = cortex.circuit_breaker_threshold {
+        table["circuit_breaker_threshold"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = cortex.bulletin_interval_secs {
+        table["bulletin_interval_secs"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = cortex.bulletin_max_words {
+        table["bulletin_max_words"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = cortex.bulletin_max_turns {
+        table["bulletin_max_turns"] = toml_edit::value(v as i64);
+    }
     Ok(())
 }
 
-fn update_coalesce_table(doc: &mut toml_edit::DocumentMut, agent_idx: usize, coalesce: &CoalesceUpdate) -> Result<(), StatusCode> {
+fn update_coalesce_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+    coalesce: &CoalesceUpdate,
+) -> Result<(), StatusCode> {
     let agent = get_agent_table_mut(doc, agent_idx)?;
     let table = get_or_create_subtable(agent, "coalesce");
-    if let Some(v) = coalesce.enabled { table["enabled"] = toml_edit::value(v); }
-    if let Some(v) = coalesce.debounce_ms { table["debounce_ms"] = toml_edit::value(v as i64); }
-    if let Some(v) = coalesce.max_wait_ms { table["max_wait_ms"] = toml_edit::value(v as i64); }
-    if let Some(v) = coalesce.min_messages { table["min_messages"] = toml_edit::value(v as i64); }
-    if let Some(v) = coalesce.multi_user_only { table["multi_user_only"] = toml_edit::value(v); }
+    if let Some(v) = coalesce.enabled {
+        table["enabled"] = toml_edit::value(v);
+    }
+    if let Some(v) = coalesce.debounce_ms {
+        table["debounce_ms"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = coalesce.max_wait_ms {
+        table["max_wait_ms"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = coalesce.min_messages {
+        table["min_messages"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = coalesce.multi_user_only {
+        table["multi_user_only"] = toml_edit::value(v);
+    }
     Ok(())
 }
 
-fn update_memory_persistence_table(doc: &mut toml_edit::DocumentMut, agent_idx: usize, memory_persistence: &MemoryPersistenceUpdate) -> Result<(), StatusCode> {
+fn update_memory_persistence_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+    memory_persistence: &MemoryPersistenceUpdate,
+) -> Result<(), StatusCode> {
     let agent = get_agent_table_mut(doc, agent_idx)?;
     let table = get_or_create_subtable(agent, "memory_persistence");
-    if let Some(v) = memory_persistence.enabled { table["enabled"] = toml_edit::value(v); }
-    if let Some(v) = memory_persistence.message_interval { table["message_interval"] = toml_edit::value(v as i64); }
+    if let Some(v) = memory_persistence.enabled {
+        table["enabled"] = toml_edit::value(v);
+    }
+    if let Some(v) = memory_persistence.message_interval {
+        table["message_interval"] = toml_edit::value(v as i64);
+    }
     Ok(())
 }
 
-fn update_browser_table(doc: &mut toml_edit::DocumentMut, agent_idx: usize, browser: &BrowserUpdate) -> Result<(), StatusCode> {
+fn update_browser_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+    browser: &BrowserUpdate,
+) -> Result<(), StatusCode> {
     let agent = get_agent_table_mut(doc, agent_idx)?;
     let table = get_or_create_subtable(agent, "browser");
-    if let Some(v) = browser.enabled { table["enabled"] = toml_edit::value(v); }
-    if let Some(v) = browser.headless { table["headless"] = toml_edit::value(v); }
-    if let Some(v) = browser.evaluate_enabled { table["evaluate_enabled"] = toml_edit::value(v); }
+    if let Some(v) = browser.enabled {
+        table["enabled"] = toml_edit::value(v);
+    }
+    if let Some(v) = browser.headless {
+        table["headless"] = toml_edit::value(v);
+    }
+    if let Some(v) = browser.evaluate_enabled {
+        table["evaluate_enabled"] = toml_edit::value(v);
+    }
     Ok(())
 }
 
 /// Update instance-level Discord config at [messaging.discord].
-fn update_discord_table(doc: &mut toml_edit::DocumentMut, discord: &DiscordUpdate) -> Result<(), StatusCode> {
-    let messaging = doc.get_mut("messaging")
+fn update_discord_table(
+    doc: &mut toml_edit::DocumentMut,
+    discord: &DiscordUpdate,
+) -> Result<(), StatusCode> {
+    let messaging = doc
+        .get_mut("messaging")
         .and_then(|m| m.as_table_mut())
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let discord_table = messaging.get_mut("discord")
+    let discord_table = messaging
+        .get_mut("discord")
         .and_then(|d| d.as_table_mut())
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 

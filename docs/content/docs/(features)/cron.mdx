@@ -62,6 +62,7 @@ CREATE TABLE cron_jobs (
 | `active_start_hour` | Optional start of active window (0-23, 24h local time) |
 | `active_end_hour` | Optional end of active window (0-23, 24h local time) |
 | `enabled` | Flipped to 0 by the circuit breaker after consecutive failures |
+| `run_once` | If 1, the job auto-disables after its first execution attempt |
 
 ### cron_executions
 
@@ -139,6 +140,8 @@ A user says "check my email every day at 9am" and the channel LLM calls the `cro
 The tool persists to the database and registers with the running scheduler immediately — no restart needed.
 
 The tool also supports `list` (show all active cron jobs) and `delete` (remove by ID).
+
+For one-time reminders, set `run_once: true` on create. The scheduler disables the job after the first execution attempt.
 
 ### 3. Programmatic
 

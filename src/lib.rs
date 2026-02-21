@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod api;
+pub mod auth;
 pub mod config;
 pub mod conversation;
 pub mod cron;
@@ -260,7 +261,12 @@ impl std::fmt::Display for MessageContent {
                     write!(f, "[media]")
                 }
             }
-            MessageContent::Interaction { action_id, values, label, .. } => {
+            MessageContent::Interaction {
+                action_id,
+                values,
+                label,
+                ..
+            } => {
                 if let Some(l) = label {
                     write!(f, "[interaction: {} → {}]", action_id, l)
                 } else if !values.is_empty() {

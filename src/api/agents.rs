@@ -3,13 +3,25 @@ use super::state::{AgentInfo, ApiState};
 use crate::agent::cortex::CortexLogger;
 use crate::conversation::channels::ChannelStore;
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row as _;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+fn hosted_agent_limit() -> Option<usize> {
+    let deployment = std::env::var("SPACEBOT_DEPLOYMENT").ok()?;
+    if !deployment.eq_ignore_ascii_case("hosted") {
+        return None;
+    }
+
+    std::env::var("SPACEBOT_MAX_AGENTS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+}
 
 #[derive(Serialize)]
 pub(super) struct AgentsResponse {
@@ -57,7 +69,9 @@ struct CronJobInfo {
     interval_secs: u64,
     delivery_target: String,
     enabled: bool,
+    run_once: bool,
     active_hours: Option<(u8, u8)>,
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -123,7 +137,9 @@ pub(super) struct DeleteAgentQuery {
 /// List all configured agents with their config summaries.
 pub(super) async fn list_agents(State(state): State<Arc<ApiState>>) -> Json<AgentsResponse> {
     let agents = state.agent_configs.load();
-    Json(AgentsResponse { agents: agents.as_ref().clone() })
+    Json(AgentsResponse {
+        agents: agents.as_ref().clone(),
+    })
 }
 
 /// Create a new agent and initialize it live (directories, databases, memory, identity, cron, cortex).
@@ -131,6 +147,16 @@ pub(super) async fn create_agent(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<CreateAgentRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if let Some(limit) = hosted_agent_limit() {
+        let existing = state.agent_configs.load();
+        if existing.len() >= limit {
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": format!("agent limit reached for this instance: up to {limit} agent{}", if limit == 1 { "" } else { "s" })
+            })));
+        }
+    }
+
     let agent_id = request.agent_id.trim().to_string();
     if agent_id.is_empty() {
         return Ok(Json(serde_json::json!({
@@ -153,10 +179,12 @@ pub(super) async fn create_agent(
     let instance_dir = (**state.instance_dir.load()).clone();
 
     let content = if config_path.exists() {
-        tokio::fs::read_to_string(&config_path).await.map_err(|error| {
-            tracing::warn!(%error, "failed to read config.toml");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
+        tokio::fs::read_to_string(&config_path)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to read config.toml");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
     } else {
         String::new()
     };
@@ -176,10 +204,12 @@ pub(super) async fn create_agent(
     new_table["id"] = toml_edit::value(&agent_id);
     agents_array.push(new_table);
 
-    tokio::fs::write(&config_path, doc.to_string()).await.map_err(|error| {
-        tracing::warn!(%error, "failed to write config.toml");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to write config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     let defaults = state.defaults_config.read().await;
     let defaults = defaults.as_ref().ok_or_else(|| {
@@ -222,25 +252,30 @@ pub(super) async fn create_agent(
         })?;
     }
 
-    let db = crate::db::Db::connect(&agent_config.data_dir).await.map_err(|error| {
-        tracing::error!(%error, agent_id = %agent_id, "failed to connect agent databases");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let db = crate::db::Db::connect(&agent_config.data_dir)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, agent_id = %agent_id, "failed to connect agent databases");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     let settings_path = agent_config.data_dir.join("settings.redb");
     let settings_store = std::sync::Arc::new(
         crate::settings::SettingsStore::new(&settings_path).map_err(|error| {
             tracing::error!(%error, agent_id = %agent_id, "failed to init settings store");
             StatusCode::INTERNAL_SERVER_ERROR
-        })?
+        })?,
     );
 
     let embedding_model = {
         let guard = state.embedding_model.read().await;
-        guard.as_ref().ok_or_else(|| {
-            tracing::error!("embedding model not available");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?.clone()
+        guard
+            .as_ref()
+            .ok_or_else(|| {
+                tracing::error!("embedding model not available");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .clone()
     };
 
     let memory_store = crate::memory::MemoryStore::new(db.sqlite.clone());
@@ -272,25 +307,30 @@ pub(super) async fn create_agent(
         })?;
     let identity = crate::identity::Identity::load(&agent_config.workspace).await;
 
-    let skills = crate::skills::SkillSet::load(
-        &instance_dir.join("skills"),
-        &agent_config.skills_dir(),
-    ).await;
+    let skills =
+        crate::skills::SkillSet::load(&instance_dir.join("skills"), &agent_config.skills_dir())
+            .await;
 
     let prompt_engine = {
         let guard = state.prompt_engine.read().await;
-        guard.as_ref().ok_or_else(|| {
-            tracing::error!("prompt engine not available");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?.clone()
+        guard
+            .as_ref()
+            .ok_or_else(|| {
+                tracing::error!("prompt engine not available");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .clone()
     };
 
     let defaults_for_runtime = {
         let guard = state.defaults_config.read().await;
-        guard.as_ref().ok_or_else(|| {
-            tracing::error!("defaults config not available");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?.clone()
+        guard
+            .as_ref()
+            .ok_or_else(|| {
+                tracing::error!("defaults config not available");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .clone()
     };
 
     let runtime_config = std::sync::Arc::new(crate::config::RuntimeConfig::new(
@@ -305,10 +345,13 @@ pub(super) async fn create_agent(
 
     let llm_manager = {
         let guard = state.llm_manager.read().await;
-        guard.as_ref().ok_or_else(|| {
-            tracing::error!("LLM manager not available");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?.clone()
+        guard
+            .as_ref()
+            .ok_or_else(|| {
+                tracing::error!("LLM manager not available");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .clone()
     };
 
     let deps = crate::AgentDeps {
@@ -335,7 +378,10 @@ pub(super) async fn create_agent(
         logs_dir: agent_config.logs_dir(),
         messaging_manager: {
             let guard = state.messaging_manager.read().await;
-            guard.as_ref().cloned().unwrap_or_else(|| std::sync::Arc::new(crate::messaging::MessagingManager::new()))
+            guard
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| std::sync::Arc::new(crate::messaging::MessagingManager::new()))
         },
         store: cron_store.clone(),
     };
@@ -346,7 +392,8 @@ pub(super) async fn create_agent(
 
     let browser_config = (**runtime_config.browser_config.load()).clone();
     let brave_search_key = (**runtime_config.brave_search_key.load()).clone();
-    let conversation_logger = crate::conversation::history::ConversationLogger::new(db.sqlite.clone());
+    let conversation_logger =
+        crate::conversation::history::ConversationLogger::new(db.sqlite.clone());
     let channel_store = crate::conversation::ChannelStore::new(db.sqlite.clone());
     let cortex_tool_server = crate::tools::create_cortex_chat_tool_server(
         memory_search.clone(),
@@ -366,26 +413,14 @@ pub(super) async fn create_agent(
     );
 
     let cortex_logger = crate::agent::cortex::CortexLogger::new(db.sqlite.clone());
-    tokio::spawn({
-        let deps = deps.clone();
-        let logger = cortex_logger.clone();
-        async move {
-            crate::agent::cortex::spawn_bulletin_loop(deps, logger).await;
-        }
-    });
-    tokio::spawn({
-        let deps = deps.clone();
-        async move {
-            crate::agent::cortex::spawn_association_loop(deps, cortex_logger).await;
-        }
-    });
+    let _bulletin_loop =
+        crate::agent::cortex::spawn_bulletin_loop(deps.clone(), cortex_logger.clone());
+    let _association_loop =
+        crate::agent::cortex::spawn_association_loop(deps.clone(), cortex_logger);
 
     let ingestion_config = **runtime_config.ingestion.load();
     if ingestion_config.enabled {
-        crate::agent::ingestion::spawn_ingestion_loop(
-            agent_config.ingest_dir(),
-            deps.clone(),
-        );
+        crate::agent::ingestion::spawn_ingestion_loop(agent_config.ingest_dir(), deps.clone());
     }
 
     let sqlite_pool = db.sqlite.clone();
@@ -412,7 +447,9 @@ pub(super) async fn create_agent(
 
         let mut workspaces = (**state.agent_workspaces.load()).clone();
         workspaces.insert(agent_id.clone(), agent_config.workspace.clone());
-        state.agent_workspaces.store(std::sync::Arc::new(workspaces));
+        state
+            .agent_workspaces
+            .store(std::sync::Arc::new(workspaces));
 
         let mut configs = (**state.runtime_configs.load()).clone();
         configs.insert(agent_id.clone(), runtime_config);
@@ -435,11 +472,15 @@ pub(super) async fn create_agent(
 
         let mut cron_schedulers = (**state.cron_schedulers.load()).clone();
         cron_schedulers.insert(agent_id.clone(), scheduler);
-        state.cron_schedulers.store(std::sync::Arc::new(cron_schedulers));
+        state
+            .cron_schedulers
+            .store(std::sync::Arc::new(cron_schedulers));
 
         let mut sessions = (**state.cortex_chat_sessions.load()).clone();
         sessions.insert(agent_id.clone(), std::sync::Arc::new(cortex_session));
-        state.cortex_chat_sessions.store(std::sync::Arc::new(sessions));
+        state
+            .cortex_chat_sessions
+            .store(std::sync::Arc::new(sessions));
     }
 
     tracing::info!(agent_id = %agent_id, "agent created and initialized via API");
@@ -478,17 +519,22 @@ pub(super) async fn delete_agent(
     // Remove the [[agents]] entry from config.toml
     let config_path = state.config_path.read().await.clone();
     if config_path.exists() {
-        let content = tokio::fs::read_to_string(&config_path).await.map_err(|error| {
-            tracing::warn!(%error, "failed to read config.toml");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        let content = tokio::fs::read_to_string(&config_path)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to read config.toml");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
         let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
             tracing::warn!(%error, "failed to parse config.toml");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-        if let Some(agents_array) = doc.get_mut("agents").and_then(|v| v.as_array_of_tables_mut()) {
+        if let Some(agents_array) = doc
+            .get_mut("agents")
+            .and_then(|v| v.as_array_of_tables_mut())
+        {
             let mut index_to_remove = None;
             for (i, table) in agents_array.iter().enumerate() {
                 if let Some(id) = table.get("id").and_then(|v| v.as_str()) {
@@ -503,10 +549,12 @@ pub(super) async fn delete_agent(
             }
         }
 
-        tokio::fs::write(&config_path, doc.to_string()).await.map_err(|error| {
-            tracing::warn!(%error, "failed to write config.toml");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        tokio::fs::write(&config_path, doc.to_string())
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to write config.toml");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
     }
 
     // Close the SQLite pool before removing state
@@ -529,7 +577,9 @@ pub(super) async fn delete_agent(
 
         let mut workspaces = (**state.agent_workspaces.load()).clone();
         workspaces.remove(&agent_id);
-        state.agent_workspaces.store(std::sync::Arc::new(workspaces));
+        state
+            .agent_workspaces
+            .store(std::sync::Arc::new(workspaces));
 
         let mut configs = (**state.runtime_configs.load()).clone();
         configs.remove(&agent_id);
@@ -545,11 +595,15 @@ pub(super) async fn delete_agent(
 
         let mut cron_schedulers = (**state.cron_schedulers.load()).clone();
         cron_schedulers.remove(&agent_id);
-        state.cron_schedulers.store(std::sync::Arc::new(cron_schedulers));
+        state
+            .cron_schedulers
+            .store(std::sync::Arc::new(cron_schedulers));
 
         let mut sessions = (**state.cortex_chat_sessions.load()).clone();
         sessions.remove(&agent_id);
-        state.cortex_chat_sessions.store(std::sync::Arc::new(sessions));
+        state
+            .cortex_chat_sessions
+            .store(std::sync::Arc::new(sessions));
     }
 
     // Signal the main event loop to remove the agent
@@ -597,7 +651,7 @@ pub(super) async fn agent_overview(
     let channel_count = channels.len();
 
     let cron_rows = sqlx::query(
-        "SELECT id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled FROM cron_jobs ORDER BY created_at ASC",
+        "SELECT id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled, run_once, timeout_secs FROM cron_jobs ORDER BY created_at ASC",
     )
     .fetch_all(pool)
     .await
@@ -614,10 +668,16 @@ pub(super) async fn agent_overview(
                 interval_secs: row.get::<i64, _>("interval_secs") as u64,
                 delivery_target: row.get("delivery_target"),
                 enabled: row.get::<i64, _>("enabled") != 0,
+                run_once: row.get::<i64, _>("run_once") != 0,
                 active_hours: match (active_start, active_end) {
                     (Some(s), Some(e)) => Some((s as u8, e as u8)),
                     _ => None,
                 },
+                timeout_secs: row
+                    .try_get::<Option<i64>, _>("timeout_secs")
+                    .ok()
+                    .flatten()
+                    .map(|t| t as u64),
             }
         })
         .collect();
@@ -636,7 +696,8 @@ pub(super) async fn agent_overview(
 
     let latest_bulletin = bulletin_events.first().and_then(|e| {
         e.details.as_ref().and_then(|d| {
-            d.get("bulletin_text").and_then(|v| v.as_str().map(|s| s.to_string()))
+            d.get("bulletin_text")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
         })
     });
 
@@ -678,12 +739,24 @@ pub(super) async fn agent_overview(
         for row in branch_activity {
             let date: String = row.get("date");
             let count: i64 = row.get("count");
-            map.entry(date.clone()).or_insert_with(|| ActivityDayCount { date, branches: 0, workers: 0 }).branches = count;
+            map.entry(date.clone())
+                .or_insert_with(|| ActivityDayCount {
+                    date,
+                    branches: 0,
+                    workers: 0,
+                })
+                .branches = count;
         }
         for row in worker_activity {
             let date: String = row.get("date");
             let count: i64 = row.get("count");
-            map.entry(date.clone()).or_insert_with(|| ActivityDayCount { date, branches: 0, workers: 0 }).workers = count;
+            map.entry(date.clone())
+                .or_insert_with(|| ActivityDayCount {
+                    date,
+                    branches: 0,
+                    workers: 0,
+                })
+                .workers = count;
         }
         let mut days: Vec<_> = map.into_values().collect();
         days.sort_by(|a, b| a.date.cmp(&b.date));
@@ -721,7 +794,9 @@ pub(super) async fn agent_overview(
 }
 
 /// Get instance-wide overview for the main dashboard.
-pub(super) async fn instance_overview(State(state): State<Arc<ApiState>>) -> Result<Json<InstanceOverviewResponse>, StatusCode> {
+pub(super) async fn instance_overview(
+    State(state): State<Arc<ApiState>>,
+) -> Result<Json<InstanceOverviewResponse>, StatusCode> {
     let uptime = state.started_at.elapsed();
     let pools = state.agent_pools.load();
     let configs = state.agent_configs.load();
@@ -739,24 +814,22 @@ pub(super) async fn instance_overview(State(state): State<Arc<ApiState>>) -> Res
         let channels = channel_store.list_active().await.unwrap_or_default();
         let channel_count = channels.len();
 
-        let last_activity_at = channels.iter()
+        let last_activity_at = channels
+            .iter()
             .map(|c| &c.last_activity_at)
             .max()
             .map(|dt| dt.to_rfc3339());
 
-        let memory_total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM memories WHERE forgotten = 0",
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0);
+        let memory_total: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE forgotten = 0")
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
 
-        let cron_job_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM cron_jobs",
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0);
+        let cron_job_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cron_jobs")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
 
         let activity_window = chrono::Utc::now() - chrono::Duration::days(14);
         let activity_rows = sqlx::query(
@@ -776,7 +849,9 @@ pub(super) async fn instance_overview(State(state): State<Arc<ApiState>>) -> Res
 
         let mut activity_sparkline: Vec<i64> = Vec::with_capacity(14);
         for i in 0..14 {
-            let date = (chrono::Utc::now() - chrono::Duration::days(13 - i as i64)).format("%Y-%m-%d").to_string();
+            let date = (chrono::Utc::now() - chrono::Duration::days(13 - i as i64))
+                .format("%Y-%m-%d")
+                .to_string();
             activity_sparkline.push(*activity_map.get(&date).unwrap_or(&0));
         }
 
@@ -828,7 +903,9 @@ pub(super) async fn get_identity(
     Query(query): Query<IdentityQuery>,
 ) -> Result<Json<IdentityResponse>, StatusCode> {
     let workspaces = state.agent_workspaces.load();
-    let workspace = workspaces.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let workspace = workspaces
+        .get(&query.agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     let identity = crate::identity::Identity::load(workspace).await;
 
@@ -846,7 +923,9 @@ pub(super) async fn update_identity(
     axum::Json(request): axum::Json<IdentityUpdateRequest>,
 ) -> Result<Json<IdentityResponse>, StatusCode> {
     let workspaces = state.agent_workspaces.load();
-    let workspace = workspaces.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let workspace = workspaces
+        .get(&request.agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     if let Some(soul) = &request.soul {
         tokio::fs::write(workspace.join("SOUL.md"), soul)

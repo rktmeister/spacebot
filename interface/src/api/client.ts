@@ -28,6 +28,7 @@ export interface InboundMessageEvent {
 	type: "inbound_message";
 	agent_id: string;
 	channel_id: string;
+	sender_name?: string | null;
 	sender_id: string;
 	text: string;
 }
@@ -211,6 +212,7 @@ export interface CronJobInfo {
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
+	run_once: boolean;
 	active_hours: [number, number] | null;
 }
 
@@ -461,6 +463,11 @@ export interface RoutingSection {
 	compactor: string;
 	cortex: string;
 	rate_limit_cooldown_secs: number;
+	channel_thinking_effort: string;
+	branch_thinking_effort: string;
+	worker_thinking_effort: string;
+	compactor_thinking_effort: string;
+	cortex_thinking_effort: string;
 }
 
 export interface TuningSection {
@@ -531,6 +538,11 @@ export interface RoutingUpdate {
 	compactor?: string;
 	cortex?: string;
 	rate_limit_cooldown_secs?: number;
+	channel_thinking_effort?: string;
+	branch_thinking_effort?: string;
+	worker_thinking_effort?: string;
+	compactor_thinking_effort?: string;
+	cortex_thinking_effort?: string;
 }
 
 export interface TuningUpdate {
@@ -601,6 +613,7 @@ export interface CronJobWithStats {
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
+	run_once: boolean;
 	active_hours: [number, number] | null;
 	success_count: number;
 	failure_count: number;
@@ -635,6 +648,7 @@ export interface CreateCronRequest {
 	active_start_hour?: number;
 	active_end_hour?: number;
 	enabled: boolean;
+	run_once: boolean;
 }
 
 export interface CronExecutionsParams {
@@ -669,6 +683,14 @@ export interface ProvidersResponse {
 export interface ProviderActionResponse {
 	success: boolean;
 	message: string;
+}
+
+export interface ProviderModelTestResponse {
+	success: boolean;
+	message: string;
+	provider: string;
+	model: string;
+	sample: string | null;
 }
 
 // -- Model Types --
@@ -790,6 +812,7 @@ export interface BindingInfo {
 	workspace_id: string | null;
 	chat_id: string | null;
 	channel_ids: string[];
+	require_mention: boolean;
 	dm_allowed_users: string[];
 }
 
@@ -804,6 +827,7 @@ export interface CreateBindingRequest {
 	workspace_id?: string;
 	chat_id?: string;
 	channel_ids?: string[];
+	require_mention?: boolean;
 	dm_allowed_users?: string[];
 	platform_credentials?: {
 		discord_token?: string;
@@ -832,6 +856,7 @@ export interface UpdateBindingRequest {
 	workspace_id?: string;
 	chat_id?: string;
 	channel_ids?: string[];
+	require_mention?: boolean;
 	dm_allowed_users?: string[];
 }
 
@@ -1100,16 +1125,27 @@ export const api = {
 
 	// Provider management
 	providers: () => fetchJson<ProvidersResponse>("/providers"),
-	updateProvider: async (provider: string, apiKey: string) => {
+	updateProvider: async (provider: string, apiKey: string, model: string) => {
 		const response = await fetch(`${API_BASE}/providers`, {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ provider, api_key: apiKey }),
+			body: JSON.stringify({ provider, api_key: apiKey, model }),
 		});
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<ProviderActionResponse>;
+	},
+	testProviderModel: async (provider: string, apiKey: string, model: string) => {
+		const response = await fetch(`${API_BASE}/providers/test`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ provider, api_key: apiKey, model }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<ProviderModelTestResponse>;
 	},
 	removeProvider: async (provider: string) => {
 		const response = await fetch(`${API_BASE}/providers/${encodeURIComponent(provider)}`, {
@@ -1122,7 +1158,10 @@ export const api = {
 	},
 
 	// Model listing
-	models: () => fetchJson<ModelsResponse>("/models"),
+	models: (provider?: string) => {
+		const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+		return fetchJson<ModelsResponse>(`/models${query}`);
+	},
 	refreshModels: async () => {
 		const response = await fetch(`${API_BASE}/models/refresh`, {
 			method: "POST",
