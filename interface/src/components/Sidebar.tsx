@@ -19,11 +19,11 @@ import {
 	verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { api, BASE_PATH, type ChannelInfo } from "@/api/client";
+import { api, BASE_PATH } from "@/api/client";
 import type { ChannelLiveState } from "@/hooks/useChannelLiveState";
 import { useAgentOrder } from "@/hooks/useAgentOrder";
 import { Button } from "@/ui";
-import { ArrowLeft01Icon, DashboardSquare01Icon, LeftToRightListBulletIcon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { ArrowLeft01Icon, DashboardSquare01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CreateAgentDialog } from "@/components/CreateAgentDialog";
 
@@ -54,7 +54,7 @@ function SortableAgentItem({ agentId, activity, isActive, collapsed }: SortableA
 		transform: CSS.Transform.toString(transform),
 		transition,
 		opacity: isDragging ? 0.5 : 1,
-		cursor: isDragging ? "grabbing" : "grab",
+		cursor: isDragging ? 'grabbing' : 'grab',
 	};
 
 	if (collapsed) {
@@ -66,6 +66,7 @@ function SortableAgentItem({ agentId, activity, isActive, collapsed }: SortableA
 					className={`flex h-8 w-8 items-center justify-center rounded-md text-xs font-medium ${
 						isActive ? "bg-sidebar-selected text-sidebar-ink" : "text-sidebar-inkDull hover:bg-sidebar-selected/50"
 					}`}
+					style={{ pointerEvents: isDragging ? 'none' : 'auto' }}
 					title={agentId}
 				>
 					{agentId.charAt(0).toUpperCase()}
@@ -75,22 +76,16 @@ function SortableAgentItem({ agentId, activity, isActive, collapsed }: SortableA
 	}
 
 	return (
-		<div ref={setNodeRef} style={style} className="group relative">
-			<div
-				className="absolute left-0 top-0 flex h-full items-center pl-0.5 opacity-0 transition-opacity group-hover:opacity-30"
-				{...attributes}
-				{...listeners}
-			>
-				<HugeiconsIcon icon={LeftToRightListBulletIcon} className="h-3 w-3 text-sidebar-inkDull" />
-			</div>
+		<div ref={setNodeRef} style={style} className="mx-2" {...attributes} {...listeners}>
 			<Link
 				to="/agents/$agentId"
 				params={{ agentId }}
-				className={`mx-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
+				className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
 					isActive
 						? "bg-sidebar-selected text-sidebar-ink"
 						: "text-sidebar-inkDull hover:bg-sidebar-selected/50"
 				}`}
+				style={{ pointerEvents: isDragging ? 'none' : 'auto' }}
 			>
 				<span className="flex-1 truncate">{agentId}</span>
 				{activity && (activity.workers > 0 || activity.branches > 0) && (
@@ -152,7 +147,8 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 	const sensors = useSensors(
 		useSensor(PointerSensor, {
 			activationConstraint: {
-				distance: 8,
+				delay: 150,
+				tolerance: 5,
 			},
 		}),
 		useSensor(KeyboardSensor, {
@@ -230,7 +226,7 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 				>
 					<SortableContext items={agentOrder} strategy={verticalListSortingStrategy}>
 						{agentOrder.map((agentId) => {
-							const isActive = matchRoute({ to: "/agents/$agentId", params: { agentId }, fuzzy: true });
+							const isActive = !!matchRoute({ to: "/agents/$agentId", params: { agentId }, fuzzy: true });
 							return (
 								<SortableAgentItem
 									key={agentId}
@@ -295,7 +291,7 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 									<div className="flex flex-col gap-0.5">
 										{agentOrder.map((agentId) => {
 											const activity = agentActivity[agentId];
-											const isActive = matchRoute({ to: "/agents/$agentId", params: { agentId }, fuzzy: true });
+											const isActive = !!matchRoute({ to: "/agents/$agentId", params: { agentId }, fuzzy: true });
 
 											return (
 												<SortableAgentItem
