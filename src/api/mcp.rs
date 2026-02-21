@@ -352,9 +352,7 @@ pub(super) async fn delete_mcp_server(
 }
 
 /// GET /api/mcp/status — per-agent MCP connection status.
-pub(super) async fn mcp_status(
-    State(state): State<Arc<ApiState>>,
-) -> Json<Vec<McpAgentStatus>> {
+pub(super) async fn mcp_status(State(state): State<Arc<ApiState>>) -> Json<Vec<McpAgentStatus>> {
     let managers = state.mcp_managers.load();
     let mut result = Vec::with_capacity(managers.len());
 
