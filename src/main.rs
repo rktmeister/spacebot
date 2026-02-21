@@ -1130,10 +1130,10 @@ async fn run(
 
     // Flush buffered OTLP spans before the process exits. Without this the
     // batch exporter drops any spans recorded in the last export interval.
-    if let Some(provider) = otel_provider {
-        if let Err(error) = provider.shutdown() {
-            tracing::warn!(%error, "failed to flush OTel spans on shutdown");
-        }
+    if let Some(provider) = otel_provider
+        && let Err(error) = provider.shutdown()
+    {
+        tracing::warn!(%error, "failed to flush OTel spans on shutdown");
     }
 
     spacebot::daemon::cleanup(&paths);
@@ -1195,13 +1195,13 @@ async fn initialize_agents(
                 agent_config.archives_dir.display()
             )
         })?;
-        std::fs::create_dir_all(&agent_config.ingest_dir()).with_context(|| {
+        std::fs::create_dir_all(agent_config.ingest_dir()).with_context(|| {
             format!(
                 "failed to create ingest dir: {}",
                 agent_config.ingest_dir().display()
             )
         })?;
-        std::fs::create_dir_all(&agent_config.logs_dir()).with_context(|| {
+        std::fs::create_dir_all(agent_config.logs_dir()).with_context(|| {
             format!(
                 "failed to create logs dir: {}",
                 agent_config.logs_dir().display()
@@ -1366,16 +1366,16 @@ async fn initialize_agents(
         api_state.set_discord_permissions(perms.clone()).await;
     }
 
-    if let Some(discord_config) = &config.messaging.discord {
-        if discord_config.enabled {
-            let adapter = spacebot::messaging::discord::DiscordAdapter::new(
-                &discord_config.token,
-                discord_permissions
-                    .clone()
-                    .expect("discord permissions initialized when discord is enabled"),
-            );
-            new_messaging_manager.register(adapter).await;
-        }
+    if let Some(discord_config) = &config.messaging.discord
+        && discord_config.enabled
+    {
+        let adapter = spacebot::messaging::discord::DiscordAdapter::new(
+            &discord_config.token,
+            discord_permissions
+                .clone()
+                .expect("discord permissions initialized when discord is enabled"),
+        );
+        new_messaging_manager.register(adapter).await;
     }
 
     // Shared Slack permissions (hot-reloadable via file watcher)
@@ -1387,22 +1387,22 @@ async fn initialize_agents(
         api_state.set_slack_permissions(perms.clone()).await;
     }
 
-    if let Some(slack_config) = &config.messaging.slack {
-        if slack_config.enabled {
-            match spacebot::messaging::slack::SlackAdapter::new(
-                &slack_config.bot_token,
-                &slack_config.app_token,
-                slack_permissions
-                    .clone()
-                    .expect("slack permissions initialized when slack is enabled"),
-                slack_config.commands.clone(),
-            ) {
-                Ok(adapter) => {
-                    new_messaging_manager.register(adapter).await;
-                }
-                Err(error) => {
-                    tracing::error!(%error, "failed to build slack adapter");
-                }
+    if let Some(slack_config) = &config.messaging.slack
+        && slack_config.enabled
+    {
+        match spacebot::messaging::slack::SlackAdapter::new(
+            &slack_config.bot_token,
+            &slack_config.app_token,
+            slack_permissions
+                .clone()
+                .expect("slack permissions initialized when slack is enabled"),
+            slack_config.commands.clone(),
+        ) {
+            Ok(adapter) => {
+                new_messaging_manager.register(adapter).await;
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to build slack adapter");
             }
         }
     }
@@ -1414,26 +1414,26 @@ async fn initialize_agents(
         Arc::new(ArcSwap::from_pointee(perms))
     });
 
-    if let Some(telegram_config) = &config.messaging.telegram {
-        if telegram_config.enabled {
-            let adapter = spacebot::messaging::telegram::TelegramAdapter::new(
-                &telegram_config.token,
-                telegram_permissions
-                    .clone()
-                    .expect("telegram permissions initialized when telegram is enabled"),
-            );
-            new_messaging_manager.register(adapter).await;
-        }
+    if let Some(telegram_config) = &config.messaging.telegram
+        && telegram_config.enabled
+    {
+        let adapter = spacebot::messaging::telegram::TelegramAdapter::new(
+            &telegram_config.token,
+            telegram_permissions
+                .clone()
+                .expect("telegram permissions initialized when telegram is enabled"),
+        );
+        new_messaging_manager.register(adapter).await;
     }
 
-    if let Some(webhook_config) = &config.messaging.webhook {
-        if webhook_config.enabled {
-            let adapter = spacebot::messaging::webhook::WebhookAdapter::new(
-                webhook_config.port,
-                &webhook_config.bind,
-            );
-            new_messaging_manager.register(adapter).await;
-        }
+    if let Some(webhook_config) = &config.messaging.webhook
+        && webhook_config.enabled
+    {
+        let adapter = spacebot::messaging::webhook::WebhookAdapter::new(
+            webhook_config.port,
+            &webhook_config.bind,
+        );
+        new_messaging_manager.register(adapter).await;
     }
 
     // Shared Twitch permissions (hot-reloadable via file watcher)
@@ -1443,19 +1443,19 @@ async fn initialize_agents(
         Arc::new(ArcSwap::from_pointee(perms))
     });
 
-    if let Some(twitch_config) = &config.messaging.twitch {
-        if twitch_config.enabled {
-            let adapter = spacebot::messaging::twitch::TwitchAdapter::new(
-                &twitch_config.username,
-                &twitch_config.oauth_token,
-                twitch_config.channels.clone(),
-                twitch_config.trigger_prefix.clone(),
-                twitch_permissions
-                    .clone()
-                    .expect("twitch permissions initialized when twitch is enabled"),
-            );
-            new_messaging_manager.register(adapter).await;
-        }
+    if let Some(twitch_config) = &config.messaging.twitch
+        && twitch_config.enabled
+    {
+        let adapter = spacebot::messaging::twitch::TwitchAdapter::new(
+            &twitch_config.username,
+            &twitch_config.oauth_token,
+            twitch_config.channels.clone(),
+            twitch_config.trigger_prefix.clone(),
+            twitch_permissions
+                .clone()
+                .expect("twitch permissions initialized when twitch is enabled"),
+        );
+        new_messaging_manager.register(adapter).await;
     }
 
     let webchat_adapter = Arc::new(spacebot::messaging::webchat::WebChatAdapter::new());

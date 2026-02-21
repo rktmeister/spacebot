@@ -21,6 +21,8 @@ pub(super) struct ModelInfo {
     tool_call: bool,
     /// Whether this model has reasoning/thinking capability
     reasoning: bool,
+    /// Whether this model accepts audio input.
+    input_audio: bool,
 }
 
 #[derive(Serialize)]
@@ -31,6 +33,7 @@ pub(super) struct ModelsResponse {
 #[derive(Deserialize)]
 pub(super) struct ModelsQuery {
     provider: Option<String>,
+    capability: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -64,7 +67,6 @@ struct ModelsDevLimit {
 
 #[derive(Deserialize)]
 struct ModelsDevModalities {
-    #[allow(dead_code)]
     input: Option<Vec<String>>,
     output: Option<Vec<String>>,
 }
@@ -76,6 +78,18 @@ static MODELS_CACHE: std::sync::LazyLock<
 
 const MODELS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
+/// Models known to work with Spacebot's current voice transcription path
+/// (OpenAI-compatible `/v1/chat/completions` with `input_audio`).
+const KNOWN_VOICE_TRANSCRIPTION_MODELS: &[&str] = &[
+    "openrouter/google/gemini-2.0-flash-001",
+    "openrouter/google/gemini-2.5-flash",
+    "openrouter/google/gemini-2.5-flash-lite",
+    "openrouter/google/gemini-2.5-pro",
+    "openrouter/google/gemini-3-flash-preview",
+    "openrouter/google/gemini-3-pro-preview",
+    "openrouter/google/gemini-3.1-pro-preview",
+];
+
 /// Maps models.dev provider IDs to spacebot's internal provider IDs for
 /// providers with direct integrations.
 fn direct_provider_mapping(models_dev_id: &str) -> Option<&'static str> {
@@ -85,12 +99,17 @@ fn direct_provider_mapping(models_dev_id: &str) -> Option<&'static str> {
         "deepseek" => Some("deepseek"),
         "xai" => Some("xai"),
         "mistral" => Some("mistral"),
+        "gemini" | "google" => Some("gemini"),
         "groq" => Some("groq"),
         "togetherai" => Some("together"),
         "fireworks-ai" => Some("fireworks"),
         "zhipuai" => Some("zhipu"),
         _ => None,
     }
+}
+
+fn is_known_voice_transcription_model(model_id: &str) -> bool {
+    KNOWN_VOICE_TRANSCRIPTION_MODELS.contains(&model_id)
 }
 
 /// Models from providers not in models.dev (private/custom endpoints).
@@ -103,6 +122,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: true,
+            input_audio: false,
         },
         ModelInfo {
             id: "opencode-zen/kimi-k2".into(),
@@ -111,6 +131,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: false,
+            input_audio: false,
         },
         ModelInfo {
             id: "opencode-zen/kimi-k2-thinking".into(),
@@ -119,6 +140,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: true,
+            input_audio: false,
         },
         ModelInfo {
             id: "opencode-zen/glm-5".into(),
@@ -127,6 +149,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: false,
+            input_audio: false,
         },
         ModelInfo {
             id: "opencode-zen/minimax-m2.5".into(),
@@ -135,6 +158,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: false,
+            input_audio: false,
         },
         ModelInfo {
             id: "opencode-zen/qwen3-coder".into(),
@@ -143,6 +167,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: false,
+            input_audio: false,
         },
         ModelInfo {
             id: "opencode-zen/big-pickle".into(),
@@ -151,6 +176,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: false,
+            input_audio: false,
         },
         // Z.AI Coding Plan
         ModelInfo {
@@ -160,6 +186,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: false,
+            input_audio: false,
         },
         ModelInfo {
             id: "zai-coding-plan/glm-5".into(),
@@ -168,6 +195,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: false,
+            input_audio: false,
         },
         ModelInfo {
             id: "zai-coding-plan/glm-4.5-air".into(),
@@ -176,6 +204,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: false,
+            input_audio: false,
         },
         // MiniMax
         ModelInfo {
@@ -185,6 +214,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: Some(80000),
             tool_call: true,
             reasoning: false,
+            input_audio: false,
         },
         // Moonshot AI (Kimi)
         ModelInfo {
@@ -194,6 +224,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: None,
             tool_call: true,
             reasoning: true,
+            input_audio: false,
         },
         ModelInfo {
             id: "moonshot/moonshot-v1-8k".into(),
@@ -202,6 +233,7 @@ fn extra_models() -> Vec<ModelInfo> {
             context_window: Some(8000),
             tool_call: false,
             reasoning: false,
+            input_audio: false,
         },
     ]
 }
@@ -250,6 +282,11 @@ async fn fetch_models_dev() -> anyhow::Result<Vec<ModelInfo>> {
                 };
 
             let context_window = model.limit.as_ref().map(|l| l.context);
+            let input_audio = model
+                .modalities
+                .as_ref()
+                .and_then(|m| m.input.as_ref())
+                .is_some_and(|inputs| inputs.iter().any(|input| input.to_lowercase().contains("audio")));
 
             models.push(ModelInfo {
                 id: routing_id,
@@ -258,6 +295,7 @@ async fn fetch_models_dev() -> anyhow::Result<Vec<ModelInfo>> {
                 context_window,
                 tool_call: model.tool_call,
                 reasoning: model.reasoning,
+                input_audio,
             });
         }
     }
@@ -304,15 +342,14 @@ pub(super) async fn configured_providers(config_path: &std::path::Path) -> Vec<&
     };
 
     let has_key = |key: &str, env_var: &str| -> bool {
-        if let Some(llm) = doc.get("llm") {
-            if let Some(val) = llm.get(key) {
-                if let Some(s) = val.as_str() {
-                    if let Some(var_name) = s.strip_prefix("env:") {
-                        return std::env::var(var_name).is_ok();
-                    }
-                    return !s.is_empty();
-                }
+        if let Some(llm) = doc.get("llm")
+            && let Some(val) = llm.get(key)
+            && let Some(s) = val.as_str()
+        {
+            if let Some(var_name) = s.strip_prefix("env:") {
+                return std::env::var(var_name).is_ok();
             }
+            return !s.is_empty();
         }
         std::env::var(env_var).is_ok()
     };
@@ -347,6 +384,9 @@ pub(super) async fn configured_providers(config_path: &std::path::Path) -> Vec<&
     if has_key("mistral_key", "MISTRAL_API_KEY") {
         providers.push("mistral");
     }
+    if has_key("gemini_key", "GEMINI_API_KEY") {
+        providers.push("gemini");
+    }
     if has_key("opencode_zen_key", "OPENCODE_ZEN_API_KEY") {
         providers.push("opencode-zen");
     }
@@ -374,21 +414,51 @@ pub(super) async fn get_models(
         .as_deref()
         .map(str::trim)
         .filter(|provider| !provider.is_empty());
+    let requested_capability = query
+        .capability
+        .as_deref()
+        .map(str::trim)
+        .filter(|capability| !capability.is_empty());
 
     let catalog = ensure_models_cache().await;
 
     let mut models: Vec<ModelInfo> = catalog
         .into_iter()
         .filter(|model| {
-            if let Some(provider) = requested_provider {
+            let provider_match = if let Some(provider) = requested_provider {
                 model.provider == provider
             } else {
                 configured.contains(&model.provider.as_str())
+            };
+            if !provider_match {
+                return false;
             }
+
+            if let Some(capability) = requested_capability {
+                return match capability {
+                    "input_audio" => model.input_audio,
+                    "voice_transcription" => {
+                        model.input_audio && is_known_voice_transcription_model(&model.id)
+                    }
+                    _ => true,
+                };
+            }
+
+            true
         })
         .collect();
 
     for model in extra_models() {
+        if let Some(capability) = requested_capability {
+            if capability == "input_audio" && !model.input_audio {
+                continue;
+            }
+            if capability == "voice_transcription"
+                && (!model.input_audio || !is_known_voice_transcription_model(&model.id))
+            {
+                continue;
+            }
+        }
         if let Some(provider) = requested_provider {
             if model.provider == provider {
                 models.push(model);
@@ -409,5 +479,12 @@ pub(super) async fn refresh_models(
         *cache = (Vec::new(), std::time::Instant::now() - MODELS_CACHE_TTL);
     }
 
-    get_models(State(state), Query(ModelsQuery { provider: None })).await
+    get_models(
+        State(state),
+        Query(ModelsQuery {
+            provider: None,
+            capability: None,
+        }),
+    )
+    .await
 }

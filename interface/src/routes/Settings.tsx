@@ -161,6 +161,14 @@ const PROVIDERS = [
 		defaultModel: "mistral/mistral-large-latest",
 	},
 	{
+		id: "gemini",
+		name: "Google Gemini",
+		description: "Google Gemini experimental and production models",
+		placeholder: "AIza...",
+		envVar: "GEMINI_API_KEY",
+		defaultModel: "gemini/gemini-2.5-flash",
+	},
+	{
 		id: "nvidia",
 		name: "NVIDIA NIM",
 		description: "NVIDIA-hosted models via NIM API",

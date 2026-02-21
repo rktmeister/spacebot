@@ -14,6 +14,7 @@ pub struct RoutingConfig {
     pub worker: String,
     pub compactor: String,
     pub cortex: String,
+    pub voice: String,
 
     /// Task-type overrides (e.g. "coding" → "anthropic/claude-sonnet-4").
     /// Applied to workers and branches when a task_type is specified at spawn.
@@ -48,6 +49,7 @@ impl RoutingConfig {
             worker: model.clone(),
             compactor: model.clone(),
             cortex: model,
+            voice: String::new(),
             task_overrides: HashMap::new(),
             fallbacks: HashMap::new(),
             rate_limit_cooldown_secs: 60,
@@ -64,12 +66,11 @@ impl RoutingConfig {
     /// Resolve the model name for a process type and optional task type.
     pub fn resolve(&self, process_type: ProcessType, task_type: Option<&str>) -> &str {
         // Check task-type override first (only for workers and branches)
-        if let Some(task) = task_type {
-            if matches!(process_type, ProcessType::Worker | ProcessType::Branch) {
-                if let Some(override_model) = self.task_overrides.get(task) {
-                    return override_model;
-                }
-            }
+        if let Some(task) = task_type
+            && matches!(process_type, ProcessType::Worker | ProcessType::Branch)
+            && let Some(override_model) = self.task_overrides.get(task)
+        {
+            return override_model;
         }
 
         match process_type {
@@ -166,6 +167,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 worker: "openrouter/anthropic/claude-haiku-4.5-20250514".into(),
                 compactor: "openrouter/anthropic/claude-haiku-4.5-20250514".into(),
                 cortex: "openrouter/anthropic/claude-haiku-4.5-20250514".into(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
                 fallbacks: HashMap::from([(channel, vec![worker])]),
                 rate_limit_cooldown_secs: 60,
@@ -181,6 +183,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 worker: worker.clone(),
                 compactor: worker.clone(),
                 cortex: worker.clone(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
                 fallbacks: HashMap::from([(channel, vec![worker])]),
                 rate_limit_cooldown_secs: 60,
@@ -196,6 +199,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 worker: worker.clone(),
                 compactor: worker.clone(),
                 cortex: worker.clone(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
                 fallbacks: HashMap::from([(channel, vec![worker])]),
                 rate_limit_cooldown_secs: 60,
@@ -211,6 +215,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 worker: worker.clone(),
                 compactor: worker.clone(),
                 cortex: worker.clone(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
                 fallbacks: HashMap::from([(channel, vec![worker])]),
                 rate_limit_cooldown_secs: 60,
@@ -226,6 +231,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 worker: worker.clone(),
                 compactor: worker.clone(),
                 cortex: worker.clone(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
                 fallbacks: HashMap::from([(channel, vec![worker])]),
                 rate_limit_cooldown_secs: 60,
@@ -243,6 +249,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 worker: worker.clone(),
                 compactor: worker.clone(),
                 cortex: worker.clone(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
                 fallbacks: HashMap::from([(channel, vec![worker])]),
                 rate_limit_cooldown_secs: 60,
@@ -258,6 +265,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 worker: worker.clone(),
                 compactor: worker.clone(),
                 cortex: worker.clone(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
                 fallbacks: HashMap::new(),
                 rate_limit_cooldown_secs: 60,
@@ -273,6 +281,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 worker: worker.clone(),
                 compactor: worker.clone(),
                 cortex: worker.clone(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
                 fallbacks: HashMap::new(),
                 rate_limit_cooldown_secs: 60,
@@ -288,8 +297,24 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 worker: worker.clone(),
                 compactor: worker.clone(),
                 cortex: worker.clone(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
                 fallbacks: HashMap::from([(channel, vec![worker])]),
+                rate_limit_cooldown_secs: 60,
+                ..RoutingConfig::default()
+            }
+        }
+        "gemini" => {
+            let channel: String = "gemini/gemini-2.5-flash".into();
+            let worker: String = "gemini/gemini-2.5-flash".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::new(),
                 rate_limit_cooldown_secs: 60,
                 ..RoutingConfig::default()
             }
@@ -303,6 +328,7 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 worker: worker.clone(),
                 compactor: worker.clone(),
                 cortex: worker.clone(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
                 fallbacks: HashMap::new(),
                 rate_limit_cooldown_secs: 60,
@@ -331,6 +357,7 @@ pub fn provider_to_prefix(provider: &str) -> &str {
         "deepseek" => "deepseek/",
         "xai" => "xai/",
         "mistral" => "mistral/",
+        "gemini" => "gemini/",
         "nvidia" => "nvidia/",
         "opencode-zen" => "opencode-zen/",
         "minimax" => "minimax/",

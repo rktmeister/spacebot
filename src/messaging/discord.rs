@@ -8,12 +8,11 @@ use anyhow::Context as _;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use serenity::all::{
-    ButtonStyle, ChannelId, ChannelType, ComponentInteraction, Context, CreateActionRow,
-    CreateAttachment, CreateButton, CreateEmbed, CreateEmbedFooter, CreateInteractionResponse,
-    CreateInteractionResponseMessage, CreateMessage, CreatePoll, CreatePollAnswer,
-    CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption, CreateThread, EditMessage,
-    EventHandler, GatewayIntents, GetMessages, Http, Interaction, Message, MessageId, ReactionType,
-    Ready, ShardManager, User, UserId,
+    ButtonStyle, ChannelId, ChannelType, Context, CreateActionRow, CreateAttachment, CreateButton,
+    CreateEmbed, CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage,
+    CreateMessage, CreatePoll, CreatePollAnswer, CreateSelectMenu, CreateSelectMenuKind,
+    CreateSelectMenuOption, CreateThread, EditMessage, EventHandler, GatewayIntents, GetMessages,
+    Http, Interaction, Message, MessageId, ReactionType, Ready, ShardManager, User, UserId,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -78,6 +77,14 @@ impl DiscordAdapter {
             .await
             .remove(&Self::channel_key(message));
     }
+
+    fn extract_reply_message_id(message: &InboundMessage) -> Option<MessageId> {
+        message
+            .metadata
+            .get("discord_reply_to_message_id")
+            .and_then(|value| value.as_u64())
+            .map(MessageId::new)
+    }
 }
 
 impl Messaging for DiscordAdapter {
@@ -129,10 +136,17 @@ impl Messaging for DiscordAdapter {
         match response {
             OutboundResponse::Text(text) => {
                 self.stop_typing(message).await;
+                let reply_to = Self::extract_reply_message_id(message);
 
-                for chunk in split_message(&text, 2000) {
+                for (index, chunk) in split_message(&text, 2000).into_iter().enumerate() {
+                    let mut builder = CreateMessage::new().content(chunk);
+                    if index == 0 {
+                        if let Some(reply_message_id) = reply_to {
+                            builder = builder.reference_message((channel_id, reply_message_id));
+                        }
+                    }
                     channel_id
-                        .say(&*http, &chunk)
+                        .send_message(&*http, builder)
                         .await
                         .context("failed to send discord message")?;
                 }
@@ -145,6 +159,7 @@ impl Messaging for DiscordAdapter {
                 ..
             } => {
                 self.stop_typing(message).await;
+                let reply_to = Self::extract_reply_message_id(message);
 
                 let chunks = split_message(&text, 2000);
                 for (i, chunk) in chunks.iter().enumerate() {
@@ -172,6 +187,12 @@ impl Messaging for DiscordAdapter {
 
                         if let Some(poll_data) = &poll {
                             msg = msg.poll(build_poll(poll_data));
+                        }
+                    }
+
+                    if i == 0 {
+                        if let Some(reply_message_id) = reply_to {
+                            msg = msg.reference_message((channel_id, reply_message_id));
                         }
                     }
 
@@ -241,11 +262,15 @@ impl Messaging for DiscordAdapter {
                 caption,
             } => {
                 self.stop_typing(message).await;
+                let reply_to = Self::extract_reply_message_id(message);
 
                 let attachment = CreateAttachment::bytes(data, &filename);
                 let mut builder = CreateMessage::new().add_file(attachment);
                 if let Some(caption_text) = caption {
                     builder = builder.content(caption_text);
+                }
+                if let Some(reply_message_id) = reply_to {
+                    builder = builder.reference_message((channel_id, reply_message_id));
                 }
 
                 channel_id
@@ -562,57 +587,42 @@ impl EventHandler for Handler {
         }
 
         // DM filter: if no guild_id, it's a DM — only allow listed users
-        if message.guild_id.is_none() {
-            if permissions.dm_allowed_users.is_empty()
+        if message.guild_id.is_none()
+            && (permissions.dm_allowed_users.is_empty()
                 || !permissions
                     .dm_allowed_users
-                    .contains(&message.author.id.get())
-            {
-                return;
-            }
+                    .contains(&message.author.id.get()))
+        {
+            return;
         }
 
-        if let Some(filter) = &permissions.guild_filter {
-            if let Some(guild_id) = message.guild_id {
-                if !filter.contains(&guild_id.get()) {
-                    return;
-                }
-            }
+        if let Some(filter) = &permissions.guild_filter
+            && let Some(guild_id) = message.guild_id
+            && !filter.contains(&guild_id.get())
+        {
+            return;
         }
 
         let conversation_id = build_conversation_id(&message);
         let content = extract_content(&message);
-        let (metadata, formatted_author) = build_metadata(&ctx, &message).await;
+        let (metadata, formatted_author) = build_metadata(&ctx, &message, bot_user_id).await;
 
         // Channel filter: allow if the channel ID or its parent (for threads) is in the allowlist
         if let Some(guild_id) = message.guild_id {
-            if let Some(allowed_channels) = permissions.channel_filter.get(&guild_id.get()) {
-                if !allowed_channels.is_empty() {
-                    let parent_channel_id = metadata
-                        .get("discord_parent_channel_id")
-                        .and_then(|v| v.as_u64());
+            if let Some(allowed_channels) = permissions.channel_filter.get(&guild_id.get())
+                && !allowed_channels.is_empty()
+            {
+                let parent_channel_id = metadata
+                    .get("discord_parent_channel_id")
+                    .and_then(|v| v.as_u64());
 
-                    let direct_match = allowed_channels.contains(&message.channel_id.get());
-                    let parent_match =
-                        parent_channel_id.is_some_and(|pid| allowed_channels.contains(&pid));
+                let direct_match = allowed_channels.contains(&message.channel_id.get());
+                let parent_match =
+                    parent_channel_id.is_some_and(|pid| allowed_channels.contains(&pid));
 
-                    if !direct_match && !parent_match {
-                        return;
-                    }
+                if !direct_match && !parent_match {
+                    return;
                 }
-            }
-
-            let parent_channel_id = metadata
-                .get("discord_parent_channel_id")
-                .and_then(|value| value.as_u64());
-            let requires_mention = requires_mention(
-                &permissions,
-                guild_id.get(),
-                message.channel_id.get(),
-                parent_channel_id,
-            );
-            if requires_mention && !is_mention_or_reply_to_bot(&message, bot_user_id) {
-                return;
             }
         }
 
@@ -657,20 +667,18 @@ impl EventHandler for Handler {
         let user = &component.user;
         let permissions = self.permissions.load();
 
-        if component.guild_id.is_none() {
-            if permissions.dm_allowed_users.is_empty()
-                || !permissions.dm_allowed_users.contains(&user.id.get())
-            {
-                return;
-            }
+        if component.guild_id.is_none()
+            && (permissions.dm_allowed_users.is_empty()
+                || !permissions.dm_allowed_users.contains(&user.id.get()))
+        {
+            return;
         }
 
-        if let Some(filter) = &permissions.guild_filter {
-            if let Some(guild_id) = component.guild_id {
-                if !filter.contains(&guild_id.get()) {
-                    return;
-                }
-            }
+        if let Some(filter) = &permissions.guild_filter
+            && let Some(guild_id) = component.guild_id
+            && !filter.contains(&guild_id.get())
+        {
+            return;
         }
 
         let conversation_id = match component.guild_id {
@@ -699,6 +707,10 @@ impl EventHandler for Handler {
         metadata.insert(
             "discord_message_id".into(),
             serde_json::Value::Number(component.message.id.get().into()),
+        );
+        metadata.insert(
+            "discord_mentions_or_replies_to_bot".into(),
+            serde_json::Value::Bool(true),
         );
         if let Some(guild_id) = component.guild_id {
             metadata.insert(
@@ -736,25 +748,6 @@ impl EventHandler for Handler {
             );
         }
     }
-}
-
-fn requires_mention(
-    permissions: &DiscordPermissions,
-    guild_id: u64,
-    channel_id: u64,
-    parent_channel_id: Option<u64>,
-) -> bool {
-    if permissions.mention_required_guilds.contains(&guild_id) {
-        return true;
-    }
-
-    permissions
-        .mention_required_channels
-        .get(&guild_id)
-        .is_some_and(|channels| {
-            channels.contains(&channel_id)
-                || parent_channel_id.is_some_and(|parent| channels.contains(&parent))
-        })
 }
 
 fn is_mention_or_reply_to_bot(message: &Message, bot_user_id: Option<UserId>) -> bool {
@@ -830,6 +823,7 @@ fn resolve_mentions(content: &str, mentions: &[User]) -> String {
 async fn build_metadata(
     ctx: &Context,
     message: &Message,
+    bot_user_id: Option<UserId>,
 ) -> (HashMap<String, serde_json::Value>, String) {
     let mut metadata = HashMap::new();
     metadata.insert("discord_channel_id".into(), message.channel_id.get().into());
@@ -879,19 +873,19 @@ async fn build_metadata(
     }
 
     // Try to get channel name and detect threads
-    if let Ok(channel) = message.channel_id.to_channel(&ctx.http).await {
-        if let Some(guild_channel) = channel.guild() {
-            metadata.insert(
-                "discord_channel_name".into(),
-                guild_channel.name.clone().into(),
-            );
+    if let Ok(channel) = message.channel_id.to_channel(&ctx.http).await
+        && let Some(guild_channel) = channel.guild()
+    {
+        metadata.insert(
+            "discord_channel_name".into(),
+            guild_channel.name.clone().into(),
+        );
 
-            // Threads have a parent_id pointing to the text channel they were created in
-            if guild_channel.thread_metadata.is_some() {
-                metadata.insert("discord_is_thread".into(), true.into());
-                if let Some(parent_id) = guild_channel.parent_id {
-                    metadata.insert("discord_parent_channel_id".into(), parent_id.get().into());
-                }
+        // Threads have a parent_id pointing to the text channel they were created in
+        if guild_channel.thread_metadata.is_some() {
+            metadata.insert("discord_is_thread".into(), true.into());
+            if let Some(parent_id) = guild_channel.parent_id {
+                metadata.insert("discord_parent_channel_id".into(), parent_id.get().into());
             }
         }
     }
@@ -915,6 +909,11 @@ async fn build_metadata(
         };
         metadata.insert("reply_to_content".into(), truncated.into());
     }
+
+    metadata.insert(
+        "discord_mentions_or_replies_to_bot".into(),
+        is_mention_or_reply_to_bot(message, bot_user_id).into(),
+    );
 
     (metadata, formatted_author)
 }
@@ -1061,7 +1060,7 @@ fn build_poll(
 
     // Duration must be at least 1 hour, usually up to 720 hours (30 days).
     // The builder just takes std::time::Duration but it has specific allowed values.
-    let hours = poll.duration_hours.max(1).min(720);
+    let hours = poll.duration_hours.clamp(1, 720);
 
     let mut p = CreatePoll::new()
         .question(&poll.question)
@@ -1078,9 +1077,7 @@ fn build_poll(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        Button, ButtonStyle, Card, CardField, InteractiveElements, Poll, SelectMenu, SelectOption,
-    };
+    use crate::{Button, ButtonStyle, Card, CardField, InteractiveElements, Poll};
 
     #[test]
     fn test_build_embed_limits() {
@@ -1094,10 +1091,10 @@ mod tests {
         }
 
         // build_embed should limit fields to 25
-        let embed = build_embed(&card);
+        let _embed = build_embed(&card);
         // Serenity 0.12 CreateEmbed fields are stored internally, but we can't inspect them directly easily
         // We just ensure it doesn't panic.
-        assert!(true); // we'd need to inspect the JSON payload to really test, but it compiles and runs safely.
+        // we'd need to inspect the JSON payload to really test, but it compiles and runs safely.
     }
 
     #[test]
@@ -1137,31 +1134,5 @@ mod tests {
         // build_poll should limit answers to 10 and duration to 720
         let _ = build_poll(&poll);
         // Again, can't easily inspect CreatePoll fields, but we verify it runs.
-    }
-
-    #[test]
-    fn test_requires_mention_for_specific_channel_and_thread_parent() {
-        let mut mention_required_channels = HashMap::new();
-        mention_required_channels.insert(42, vec![111]);
-
-        let permissions = DiscordPermissions {
-            mention_required_channels,
-            ..DiscordPermissions::default()
-        };
-
-        assert!(requires_mention(&permissions, 42, 111, None));
-        assert!(requires_mention(&permissions, 42, 222, Some(111)));
-        assert!(!requires_mention(&permissions, 42, 222, None));
-    }
-
-    #[test]
-    fn test_requires_mention_for_entire_guild() {
-        let permissions = DiscordPermissions {
-            mention_required_guilds: vec![7],
-            ..DiscordPermissions::default()
-        };
-
-        assert!(requires_mention(&permissions, 7, 123, None));
-        assert!(!requires_mention(&permissions, 8, 123, None));
     }
 }
