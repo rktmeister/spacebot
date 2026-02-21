@@ -78,6 +78,18 @@ static MODELS_CACHE: std::sync::LazyLock<
 
 const MODELS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
+/// Models known to work with Spacebot's current voice transcription path
+/// (OpenAI-compatible `/v1/chat/completions` with `input_audio`).
+const KNOWN_VOICE_TRANSCRIPTION_MODELS: &[&str] = &[
+    "openrouter/google/gemini-2.0-flash-001",
+    "openrouter/google/gemini-2.5-flash",
+    "openrouter/google/gemini-2.5-flash-lite",
+    "openrouter/google/gemini-2.5-pro",
+    "openrouter/google/gemini-3-flash-preview",
+    "openrouter/google/gemini-3-pro-preview",
+    "openrouter/google/gemini-3.1-pro-preview",
+];
+
 /// Maps models.dev provider IDs to spacebot's internal provider IDs for
 /// providers with direct integrations.
 fn direct_provider_mapping(models_dev_id: &str) -> Option<&'static str> {
@@ -93,6 +105,10 @@ fn direct_provider_mapping(models_dev_id: &str) -> Option<&'static str> {
         "zhipuai" => Some("zhipu"),
         _ => None,
     }
+}
+
+fn is_known_voice_transcription_model(model_id: &str) -> bool {
+    KNOWN_VOICE_TRANSCRIPTION_MODELS.contains(&model_id)
 }
 
 /// Models from providers not in models.dev (private/custom endpoints).
@@ -418,6 +434,9 @@ pub(super) async fn get_models(
             if let Some(capability) = requested_capability {
                 return match capability {
                     "input_audio" => model.input_audio,
+                    "voice_transcription" => {
+                        model.input_audio && is_known_voice_transcription_model(&model.id)
+                    }
                     _ => true,
                 };
             }
@@ -429,6 +448,11 @@ pub(super) async fn get_models(
     for model in extra_models() {
         if let Some(capability) = requested_capability {
             if capability == "input_audio" && !model.input_audio {
+                continue;
+            }
+            if capability == "voice_transcription"
+                && (!model.input_audio || !is_known_voice_transcription_model(&model.id))
+            {
                 continue;
             }
         }

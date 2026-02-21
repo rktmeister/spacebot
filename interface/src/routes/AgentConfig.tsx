@@ -509,7 +509,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 									description={description}
 									value={localValues[key] as string}
 									onChange={(v) => handleChange(key, v)}
-									capability={key === "voice" ? "input_audio" : undefined}
+									capability={key === "voice" ? "voice_transcription" : undefined}
 								/>
 								{supportsAdaptiveThinking(localValues[key] as string) && (
 									<div className="ml-4 flex flex-col gap-1">

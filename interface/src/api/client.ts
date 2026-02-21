@@ -1161,7 +1161,7 @@ export const api = {
 	},
 
 	// Model listing
-	models: (provider?: string, capability?: string) => {
+	models: (provider?: string, capability?: "input_audio" | "voice_transcription") => {
 		const params = new URLSearchParams();
 		if (provider) params.set("provider", provider);
 		if (capability) params.set("capability", capability);

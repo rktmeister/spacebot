@@ -9,7 +9,7 @@ interface ModelSelectProps {
   value: string;
   onChange: (value: string) => void;
   provider?: string;
-  capability?: "input_audio";
+  capability?: "input_audio" | "voice_transcription";
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
