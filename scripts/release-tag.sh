@@ -16,20 +16,22 @@ if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
-mapfile -t dirty_files < <(
+disallowed_changes=()
+while IFS= read -r file; do
+  if [ -z "$file" ]; then
+    continue
+  fi
+
+  if [ "$file" != "$CARGO_TOML_RELATIVE" ]; then
+    disallowed_changes+=("$file")
+  fi
+done < <(
   {
     git -C "$REPO_ROOT" diff --name-only
     git -C "$REPO_ROOT" diff --cached --name-only
     git -C "$REPO_ROOT" ls-files --others --exclude-standard
   } | sort -u
 )
-
-disallowed_changes=()
-for file in "${dirty_files[@]}"; do
-  if [ "$file" != "$CARGO_TOML_RELATIVE" ]; then
-    disallowed_changes+=("$file")
-  fi
-done
 
 if [ "${#disallowed_changes[@]}" -gt 0 ]; then
   echo "Refusing to run release bump with unrelated working tree changes:" >&2

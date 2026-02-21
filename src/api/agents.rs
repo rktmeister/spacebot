@@ -413,19 +413,10 @@ pub(super) async fn create_agent(
     );
 
     let cortex_logger = crate::agent::cortex::CortexLogger::new(db.sqlite.clone());
-    tokio::spawn({
-        let deps = deps.clone();
-        let logger = cortex_logger.clone();
-        async move {
-            crate::agent::cortex::spawn_bulletin_loop(deps, logger).await;
-        }
-    });
-    tokio::spawn({
-        let deps = deps.clone();
-        async move {
-            crate::agent::cortex::spawn_association_loop(deps, cortex_logger).await;
-        }
-    });
+    let _bulletin_loop =
+        crate::agent::cortex::spawn_bulletin_loop(deps.clone(), cortex_logger.clone());
+    let _association_loop =
+        crate::agent::cortex::spawn_association_loop(deps.clone(), cortex_logger);
 
     let ingestion_config = **runtime_config.ingestion.load();
     if ingestion_config.enabled {
