@@ -942,7 +942,11 @@ impl Channel {
                 tracing::warn!(channel_id = %self.id, "channel hit max turns");
             }
             Err(rig::completion::PromptError::PromptCancelled { reason, .. }) => {
-                tracing::info!(channel_id = %self.id, %reason, "channel turn cancelled");
+                if reason == "reply delivered" {
+                    tracing::debug!(channel_id = %self.id, "channel turn completed via reply tool");
+                } else {
+                    tracing::info!(channel_id = %self.id, %reason, "channel turn cancelled");
+                }
             }
             Err(error) => {
                 tracing::error!(channel_id = %self.id, %error, "channel LLM call failed");
