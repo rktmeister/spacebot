@@ -172,19 +172,55 @@ impl McpConnection {
         }
     }
 
+    /// Attempt connection with exponential backoff.
+    ///
+    /// 5s initial delay, doubling up to 60s cap, max 12 attempts. Follows the
+    /// same retry pattern as `MessagingManager::spawn_retry_task`.
+    pub async fn connect_with_retry(self: &Arc<Self>) -> bool {
+        const MAX_ATTEMPTS: usize = 12;
+        const INITIAL_DELAY_SECS: u64 = 5;
+        const MAX_DELAY_SECS: u64 = 60;
+
+        let mut delay_secs = INITIAL_DELAY_SECS;
+
+        for attempt in 1..=MAX_ATTEMPTS {
+            match self.connect().await {
+                Ok(()) => return true,
+                Err(error) => {
+                    tracing::warn!(
+                        server = %self.name,
+                        attempt,
+                        max_attempts = MAX_ATTEMPTS,
+                        %error,
+                        retry_in_secs = delay_secs,
+                        "mcp connection failed, retrying"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                    delay_secs = (delay_secs * 2).min(MAX_DELAY_SECS);
+                }
+            }
+        }
+
+        tracing::error!(
+            server = %self.name,
+            "mcp connection failed after {MAX_ATTEMPTS} attempts, giving up"
+        );
+        false
+    }
+
     pub async fn disconnect(&self) {
         let mut client_guard = self.client.lock().await;
         let mut session = client_guard.take();
         drop(client_guard);
 
-        if let Some(client) = session.as_mut() {
-            if let Err(error) = client.close().await {
-                tracing::warn!(
-                    server = %self.name,
-                    %error,
-                    "failed to close mcp session"
-                );
-            }
+        if let Some(client) = session.as_mut()
+            && let Err(error) = client.close().await
+        {
+            tracing::warn!(
+                server = %self.name,
+                %error,
+                "failed to close mcp session"
+            );
         }
 
         {
@@ -198,10 +234,10 @@ impl McpConnection {
     }
 
     pub async fn list_tools(&self) -> Vec<rmcp::model::Tool> {
-        if self.tool_list_changed.swap(false, Ordering::SeqCst) {
-            if let Err(error) = self.refresh_tools().await {
-                tracing::warn!(server = %self.name, %error, "failed to refresh mcp tools");
-            }
+        if self.tool_list_changed.swap(false, Ordering::SeqCst)
+            && let Err(error) = self.refresh_tools().await
+        {
+            tracing::warn!(server = %self.name, %error, "failed to refresh mcp tools");
         }
 
         self.tools.read().await.clone()
@@ -351,8 +387,12 @@ impl McpManager {
                 tracing::warn!(
                     server = %connection.name(),
                     %error,
-                    "failed to connect mcp server"
+                    "mcp server initial connection failed, starting background retry"
                 );
+                let conn = connection.clone();
+                tokio::spawn(async move {
+                    conn.connect_with_retry().await;
+                });
             }
         }
     }
@@ -484,20 +524,28 @@ impl McpManager {
                         %error,
                         "failed to reconnect mcp server after config reload"
                     );
+                    let conn = connection.clone();
+                    tokio::spawn(async move {
+                        conn.connect_with_retry().await;
+                    });
                 }
                 continue;
             }
 
             let connection = self.connections.read().await.get(&new_config.name).cloned();
             if let Some(connection) = connection {
-                if !connection.is_connected().await {
-                    if let Err(error) = connection.connect().await {
-                        tracing::warn!(
-                            server = %new_config.name,
-                            %error,
-                            "failed to connect unchanged mcp server"
-                        );
-                    }
+                if !connection.is_connected().await
+                    && let Err(error) = connection.connect().await
+                {
+                    tracing::warn!(
+                        server = %new_config.name,
+                        %error,
+                        "failed to connect unchanged mcp server"
+                    );
+                    let conn = connection.clone();
+                    tokio::spawn(async move {
+                        conn.connect_with_retry().await;
+                    });
                 }
             } else {
                 let connection = self.upsert_connection(new_config.clone()).await;
@@ -507,6 +555,10 @@ impl McpManager {
                         %error,
                         "failed to connect missing mcp server"
                     );
+                    let conn = connection.clone();
+                    tokio::spawn(async move {
+                        conn.connect_with_retry().await;
+                    });
                 }
             }
         }

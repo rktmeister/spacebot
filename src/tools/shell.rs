@@ -128,10 +128,49 @@ impl ShellTool {
             }
         }
 
-        // Block /proc/self/environ which exposes all env vars on Linux
-        if command.contains("/proc/self/environ") || command.contains("/proc/*/environ") {
+        // Block subshell/command substitution that could bypass string-level checks.
+        // Backtick and $() let an attacker compose a blocked command dynamically.
+        if command.contains('`')
+            || command.contains("$(")
+            || command.contains("<(")
+            || command.contains(">(")
+        {
+            return Err(ShellError {
+                message: "Subshell and command substitution (`...`, $(...), <(...), >(...)) \
+                          are not allowed."
+                    .to_string(),
+                exit_code: -1,
+            });
+        }
+
+        // Block eval/exec which can dynamically construct any command
+        if contains_shell_builtin(command, "eval") || contains_shell_builtin(command, "exec") {
+            return Err(ShellError {
+                message: "eval and exec are not allowed.".to_string(),
+                exit_code: -1,
+            });
+        }
+
+        // Block /proc entries and /dev paths that expose environment or fd contents
+        if command.contains("/proc/self/environ")
+            || command.contains("/proc/*/environ")
+            || command.contains("/dev/fd/")
+            || command.contains("/dev/stdin")
+        {
             return Err(ShellError {
                 message: "Cannot access process environment — it may contain secrets.".to_string(),
+                exit_code: -1,
+            });
+        }
+
+        // Block additional commands that dump environment state
+        if contains_shell_builtin(command, "set")
+            || command.contains("declare -p")
+            || contains_shell_builtin(command, "compgen")
+            || contains_shell_builtin(command, "export")
+        {
+            return Err(ShellError {
+                message: "Cannot dump shell state — it may contain secrets.".to_string(),
                 exit_code: -1,
             });
         }
@@ -321,6 +360,21 @@ fn format_shell_output(exit_code: i32, stdout: &str, stderr: &str) -> String {
     }
 
     output
+}
+
+/// Check if a shell builtin appears as a standalone command
+/// (not as a substring of another word).
+fn contains_shell_builtin(command: &str, builtin: &str) -> bool {
+    for segment in command.split(['|', ';', '&']) {
+        let trimmed = segment.trim();
+        if trimmed == builtin
+            || trimmed.starts_with(&format!("{builtin} "))
+            || trimmed.starts_with(&format!("{builtin}\t"))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// System-internal shell execution that bypasses path restrictions.
