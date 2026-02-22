@@ -1449,9 +1449,14 @@ async fn initialize_agents(
     if let Some(twitch_config) = &config.messaging.twitch
         && twitch_config.enabled
     {
+        let twitch_token_path = config.instance_dir.join("twitch_token.json");
         let adapter = spacebot::messaging::twitch::TwitchAdapter::new(
             &twitch_config.username,
             &twitch_config.oauth_token,
+            twitch_config.client_id.clone(),
+            twitch_config.client_secret.clone(),
+            twitch_config.refresh_token.clone(),
+            Some(twitch_token_path),
             twitch_config.channels.clone(),
             twitch_config.trigger_prefix.clone(),
             twitch_permissions

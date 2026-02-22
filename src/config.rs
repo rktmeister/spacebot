@@ -1019,6 +1019,9 @@ pub struct TwitchConfig {
     pub enabled: bool,
     pub username: String,
     pub oauth_token: String,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub refresh_token: Option<String>,
     /// Channels to join (without the # prefix).
     pub channels: Vec<String>,
     /// Optional prefix that triggers the bot (e.g. "!ask"). If empty, all messages are processed.
@@ -1525,6 +1528,9 @@ struct TomlTwitchConfig {
     enabled: bool,
     username: Option<String>,
     oauth_token: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    refresh_token: Option<String>,
     #[serde(default)]
     channels: Vec<String>,
     trigger_prefix: Option<String>,
@@ -2691,10 +2697,28 @@ impl Config {
                     .as_deref()
                     .and_then(resolve_env_value)
                     .or_else(|| std::env::var("TWITCH_OAUTH_TOKEN").ok())?;
+                let client_id = t
+                    .client_id
+                    .as_deref()
+                    .and_then(resolve_env_value)
+                    .or_else(|| std::env::var("TWITCH_CLIENT_ID").ok());
+                let client_secret = t
+                    .client_secret
+                    .as_deref()
+                    .and_then(resolve_env_value)
+                    .or_else(|| std::env::var("TWITCH_CLIENT_SECRET").ok());
+                let refresh_token = t
+                    .refresh_token
+                    .as_deref()
+                    .and_then(resolve_env_value)
+                    .or_else(|| std::env::var("TWITCH_REFRESH_TOKEN").ok());
                 Some(TwitchConfig {
                     enabled: t.enabled,
                     username,
                     oauth_token,
+                    client_id,
+                    client_secret,
+                    refresh_token,
                     channels: t.channels,
                     trigger_prefix: t.trigger_prefix,
                 })
@@ -3181,6 +3205,7 @@ pub fn spawn_file_watcher(
                     let slack_permissions = slack_permissions.clone();
                     let telegram_permissions = telegram_permissions.clone();
                     let twitch_permissions = twitch_permissions.clone();
+                    let instance_dir = instance_dir.clone();
 
                     rt.spawn(async move {
                         // Discord: start if enabled and not already running
@@ -3258,9 +3283,14 @@ pub fn spawn_file_watcher(
                                         Arc::new(arc_swap::ArcSwap::from_pointee(perms))
                                     }
                                 };
+                                let token_path = instance_dir.join("twitch_token.json");
                                 let adapter = crate::messaging::twitch::TwitchAdapter::new(
                                     &twitch_config.username,
                                     &twitch_config.oauth_token,
+                                    twitch_config.client_id.clone(),
+                                    twitch_config.client_secret.clone(),
+                                    twitch_config.refresh_token.clone(),
+                                    Some(token_path),
                                     twitch_config.channels.clone(),
                                     twitch_config.trigger_prefix.clone(),
                                     perms,
