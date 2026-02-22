@@ -217,6 +217,7 @@ fn build_test_llm_config(provider: &str, credential: &str) -> crate::config::Llm
         opencode_zen_key: (provider == "opencode-zen").then(|| credential.to_string()),
         nvidia_key: (provider == "nvidia").then(|| credential.to_string()),
         minimax_key: (provider == "minimax").then(|| credential.to_string()),
+        minimax_cn_key: (provider == "minimax-cn").then(|| credential.to_string()),
         moonshot_key: (provider == "moonshot").then(|| credential.to_string()),
         zai_coding_plan_key: (provider == "zai-coding-plan").then(|| credential.to_string()),
         providers,
