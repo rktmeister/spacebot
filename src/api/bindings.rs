@@ -383,7 +383,7 @@ pub(super) async fn create_binding(
                                 .as_ref()
                             else {
                                 tracing::error!("discord config missing despite token being provided");
-                                return;
+                                return Err(StatusCode::INTERNAL_SERVER_ERROR);
                             };
                             let perms = crate::config::DiscordPermissions::from_config(
                                 discord_config,
@@ -415,7 +415,7 @@ pub(super) async fn create_binding(
                                 .as_ref()
                             else {
                                 tracing::error!("slack config missing despite tokens being provided");
-                                return;
+                                return Err(StatusCode::INTERNAL_SERVER_ERROR);
                             };
                             let perms = crate::config::SlackPermissions::from_config(
                                 slack_config,
@@ -459,7 +459,7 @@ pub(super) async fn create_binding(
                         .as_ref()
                     else {
                         tracing::error!("telegram config missing despite token being provided");
-                        return;
+                        return Err(StatusCode::INTERNAL_SERVER_ERROR);
                     };
                     let perms = crate::config::TelegramPermissions::from_config(
                         telegram_config,
@@ -481,7 +481,7 @@ pub(super) async fn create_binding(
                     .as_ref()
                 else {
                     tracing::error!("twitch config missing despite credentials being provided");
-                    return;
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
                 };
                 let twitch_perms = {
                     let perms = crate::config::TwitchPermissions::from_config(
