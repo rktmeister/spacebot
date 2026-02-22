@@ -2246,18 +2246,23 @@ impl Config {
                 .providers
                 .into_iter()
                 .map(|(provider_id, config)| {
-                    (
+                    let api_key = resolve_env_value(&config.api_key).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "failed to resolve API key for provider '{}'",
+                            provider_id
+                        )
+                    })?;
+                    Ok((
                         provider_id.to_lowercase(),
                         ProviderConfig {
                             api_type: config.api_type,
                             base_url: config.base_url,
-                            api_key: resolve_env_value(&config.api_key)
-                                .expect("Failed to resolve API key for provider"),
+                            api_key,
                             name: config.name,
                         },
-                    )
+                    ))
                 })
-                .collect(),
+                .collect::<anyhow::Result<_>>()?,
         };
 
         if let Some(anthropic_key) = llm.anthropic_key.clone() {
