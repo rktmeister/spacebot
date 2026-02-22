@@ -5,6 +5,7 @@
 //! ref system for LLM-friendly element addressing.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
 use crate::config::BrowserConfig;
 
 use chromiumoxide::browser::{Browser, BrowserConfig as ChromeConfig};
@@ -31,7 +32,7 @@ use tokio::task::JoinHandle;
 /// Blocks private/loopback IPs, link-local addresses, and cloud metadata endpoints
 /// to prevent server-side request forgery.
 fn validate_url(url: &str) -> Result<(), BrowserError> {
-    let parsed = url::Url::parse(url).map_err(|error| {
+    let parsed = reqwest::Url::parse(url).map_err(|error| {
         BrowserError::new(format!("invalid URL '{url}': {error}"))
     })?;
 
