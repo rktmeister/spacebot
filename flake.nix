@@ -9,14 +9,22 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, crane, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
+  outputs = {
+    self,
+    nixpkgs,
+    flake-utils,
+    crane,
+    ...
+  }:
+    flake-utils.lib.eachDefaultSystem (
+      system: let
         pkgs = import nixpkgs {
           inherit system;
         };
+
+        inherit (pkgs) bun;
+
         craneLib = crane.mkLib pkgs;
-        bun = pkgs.bun;
 
         cargoSrc = pkgs.lib.fileset.toSource {
           root = ./.;
@@ -59,34 +67,60 @@
         };
 
         inherit (spacebotPackages) spacebot spacebot-full;
-      in
-      {
+      in {
         packages = {
           default = spacebot;
           inherit spacebot spacebot-full;
         };
 
-        devShells.default = pkgs.mkShell {
-          inputsFrom = [ spacebot ];
-          buildInputs = with pkgs; [
-            rustc
-            cargo
-            rust-analyzer
-            clippy
-            bun
-            protobuf
-            cmake
-            openssl
-            pkg-config
-          ];
+        devShells = {
+          default = pkgs.mkShell {
+            packages = with pkgs; [
+              rustc
+              cargo
+              rustfmt
+              rust-analyzer
+              clippy
+              bun
+              nodejs
+              protobuf
+              cmake
+              openssl
+              pkg-config
+              onnxruntime
+              chromium
+            ];
+
+            ORT_LIB_LOCATION = "${pkgs.onnxruntime}/lib";
+            CHROME_PATH = "${pkgs.chromium}/bin/chromium";
+            CHROME_FLAGS = "--no-sandbox --disable-dev-shm-usage --disable-gpu";
+          };
+
+          backend = pkgs.mkShell {
+            packages = with pkgs; [
+              rustc
+              cargo
+              rustfmt
+              rust-analyzer
+              clippy
+              protobuf
+              cmake
+              openssl
+              pkg-config
+              onnxruntime
+            ];
+
+            ORT_LIB_LOCATION = "${pkgs.onnxruntime}/lib";
+          };
         };
 
         checks = {
           inherit spacebot;
         };
       }
-    ) // {
-      overlays.default = final: prev: {
+    )
+    // {
+      overlays.default = final: {
         inherit (self.packages.${final.system}) spacebot spacebot-full;
       };
 

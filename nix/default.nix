@@ -26,67 +26,66 @@
   ];
 
   frontendPackageLock = lib.importJSON "${frontendSrc}/interface/package-lock.json";
-  frontendPackage =
-    let
-      originalPackage = lib.importJSON "${frontendSrc}/interface/package.json";
-      rootDependencies = originalPackage.dependencies or {};
-      lockPackages = frontendPackageLock.packages;
-      rootDependencyNames = builtins.attrNames rootDependencies;
+  frontendPackage = let
+    originalPackage = lib.importJSON "${frontendSrc}/interface/package.json";
+    rootDependencies = originalPackage.dependencies or {};
+    lockPackages = frontendPackageLock.packages;
+    rootDependencyNames = builtins.attrNames rootDependencies;
 
-      collectPeerClosure = dependencyNames:
-        let
-          peerNames =
-            lib.unique
-            (builtins.concatLists (
-              map (
-                dependencyName:
-                  let
-                    packagePath = "node_modules/${dependencyName}";
-                    packageEntry =
-                      if builtins.hasAttr packagePath lockPackages
-                      then lockPackages.${packagePath}
-                      else {};
-                  in builtins.attrNames (packageEntry.peerDependencies or {})
-              )
-              dependencyNames
-            ));
-
-          expandedNames = lib.unique (dependencyNames ++ peerNames);
-        in
-          if builtins.length expandedNames == builtins.length dependencyNames
-          then dependencyNames
-          else collectPeerClosure expandedNames;
-
-      peerDependencyNames =
-        lib.filter (dependencyName: !(lib.elem dependencyName rootDependencyNames))
-        (collectPeerClosure rootDependencyNames);
-
-      peerDependencyVersions = builtins.listToAttrs (
-        lib.filter (entry: entry != null) (
+    collectPeerClosure = dependencyNames: let
+      peerNames =
+        lib.unique
+        (builtins.concatLists (
           map (
-            dependencyName:
-              let
-                packagePath = "node_modules/${dependencyName}";
-              in
+            dependencyName: let
+              packagePath = "node_modules/${dependencyName}";
+              packageEntry =
                 if builtins.hasAttr packagePath lockPackages
-                then {
-                  name = dependencyName;
-                  value = lockPackages.${packagePath}.version;
-                }
-                else null
+                then lockPackages.${packagePath}
+                else {};
+            in
+              builtins.attrNames (packageEntry.peerDependencies or {})
           )
-          peerDependencyNames
-        )
-      );
+          dependencyNames
+        ));
+
+      expandedNames = lib.unique (dependencyNames ++ peerNames);
     in
-      originalPackage
-      // {
-        dependencies = rootDependencies // peerDependencyVersions;
-      };
+      if builtins.length expandedNames == builtins.length dependencyNames
+      then dependencyNames
+      else collectPeerClosure expandedNames;
+
+    peerDependencyNames =
+      lib.filter (dependencyName: !(lib.elem dependencyName rootDependencyNames))
+      (collectPeerClosure rootDependencyNames);
+
+    peerDependencyVersions = builtins.listToAttrs (
+      lib.filter (entry: entry != null) (
+        map (
+          dependencyName: let
+            packagePath = "node_modules/${dependencyName}";
+          in
+            if builtins.hasAttr packagePath lockPackages
+            then {
+              name = dependencyName;
+              value = lockPackages.${packagePath}.version;
+            }
+            else null
+        )
+        peerDependencyNames
+      )
+    );
+  in
+    originalPackage
+    // {
+      dependencies = rootDependencies // peerDependencyVersions;
+    };
 
   frontend = pkgs.buildNpmPackage {
-    pname = "spacebot-frontend";
+    inherit (pkgs.importNpmLock) npmConfigHook;
     inherit version;
+
+    pname = "spacebot-frontend";
     src = "${frontendSrc}/interface";
 
     npmDeps = pkgs.importNpmLock {
@@ -94,7 +93,6 @@
       package = frontendPackage;
       packageLock = frontendPackageLock;
     };
-    npmConfigHook = pkgs.importNpmLock.npmConfigHook;
     npmInstallFlags = ["--legacy-peer-deps"];
     makeCacheWritable = true;
 

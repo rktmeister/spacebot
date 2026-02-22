@@ -12,12 +12,11 @@ self: {
     then self.packages.${pkgs.system}.spacebot-full
     else cfg.package;
 
-  profilePathEntries =
-    lib.optionals (cfg.pathUser != null) [
-      "/home/${cfg.pathUser}/.nix-profile/bin"
-      "/home/${cfg.pathUser}/.local/state/nix/profile/bin"
-      "/etc/profiles/per-user/${cfg.pathUser}/bin"
-    ];
+  profilePathEntries = lib.optionals (cfg.pathUser != null) [
+    "/home/${cfg.pathUser}/.nix-profile/bin"
+    "/home/${cfg.pathUser}/.local/state/nix/profile/bin"
+    "/etc/profiles/per-user/${cfg.pathUser}/bin"
+  ];
 
   servicePathEntries =
     cfg.pathPrepend

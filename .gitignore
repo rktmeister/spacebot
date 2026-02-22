@@ -9,3 +9,7 @@ interface/dist/
 .idea
 list/
 agents/
+
+# Nix
+result/
+.direnv/
