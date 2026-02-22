@@ -241,7 +241,7 @@ impl CortexChatSession {
             .await?;
 
         // Build the system prompt
-        let system_prompt = self.build_system_prompt(channel_context_id).await;
+        let system_prompt = self.build_system_prompt(channel_context_id).await?;
 
         // Load chat history and convert to Rig messages
         let chat_messages = self.store.load_history(thread_id, 100).await?;
@@ -313,7 +313,7 @@ impl CortexChatSession {
         Ok(event_rx)
     }
 
-    async fn build_system_prompt(&self, channel_context_id: Option<&str>) -> String {
+    async fn build_system_prompt(&self, channel_context_id: Option<&str>) -> crate::error::Result<String> {
         let runtime_config = &self.deps.runtime_config;
         let prompt_engine = runtime_config.prompts.load();
 
@@ -323,9 +323,8 @@ impl CortexChatSession {
         let browser_enabled = runtime_config.browser_config.load().enabled;
         let web_search_enabled = runtime_config.brave_search_key.load().is_some();
         let opencode_enabled = runtime_config.opencode.load().enabled;
-        let worker_capabilities = prompt_engine
-            .render_worker_capabilities(browser_enabled, web_search_enabled, opencode_enabled)
-            .expect("failed to render worker capabilities");
+        let worker_capabilities =
+            prompt_engine.render_worker_capabilities(browser_enabled, web_search_enabled, opencode_enabled)?;
 
         // Load channel transcript if a channel context is active
         let channel_transcript = if let Some(channel_id) = channel_context_id {
@@ -336,14 +335,12 @@ impl CortexChatSession {
 
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
 
-        prompt_engine
-            .render_cortex_chat_prompt(
-                empty_to_none(identity_context),
-                empty_to_none(memory_bulletin.to_string()),
-                channel_transcript,
-                worker_capabilities,
-            )
-            .expect("failed to render cortex chat prompt")
+        prompt_engine.render_cortex_chat_prompt(
+            empty_to_none(identity_context),
+            empty_to_none(memory_bulletin.to_string()),
+            channel_transcript,
+            worker_capabilities,
+        )
     }
 
     /// Load the last 50 messages from a channel as a formatted transcript.

@@ -357,9 +357,8 @@ impl Worker {
                             self.hook.send_status("compacting (overflow recovery)");
                             self.force_compact_history(&mut history).await;
                             let prompt_engine = self.deps.runtime_config.prompts.load();
-                            let overflow_msg = prompt_engine
-                                .render_system_worker_overflow()
-                                .expect("failed to render worker overflow message");
+                            let overflow_msg =
+                                prompt_engine.render_system_worker_overflow()?;
                             follow_up_prompt = format!("{follow_up}\n\n{overflow_msg}");
                         }
                         Err(error) => {
@@ -449,9 +448,13 @@ impl Worker {
 
         let recap = build_worker_recap(&removed);
         let prompt_engine = self.deps.runtime_config.prompts.load();
-        let marker = prompt_engine
-            .render_system_worker_compact(remove_count, &recap)
-            .expect("failed to render worker compact message");
+        let marker = match prompt_engine.render_system_worker_compact(remove_count, &recap) {
+            Ok(m) => m,
+            Err(error) => {
+                tracing::error!(%error, "failed to render worker compact marker");
+                return;
+            }
+        };
         history.insert(0, rig::message::Message::from(marker));
 
         tracing::info!(
