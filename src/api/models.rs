@@ -218,7 +218,7 @@ fn extra_models() -> Vec<ModelInfo> {
         },
         // MiniMax CN
         ModelInfo {
-            id: "minimax/MiniMax-M2.5".into(),
+            id: "minimax-cn/MiniMax-M2.5".into(),
             name: "MiniMax M2.5".into(),
             provider: "minimax-cn".into(),
             context_window: Some(200000),

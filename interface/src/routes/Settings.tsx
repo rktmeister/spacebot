@@ -190,7 +190,7 @@ const PROVIDERS = [
 		description: "MiniMax M2.5 (Anthropic message format)",
 		placeholder: "eyJ...",
 		envVar: "MINIMAX_CN_API_KEY",
-		defaultModel: "minimax/MiniMax-M2.5",
+		defaultModel: "minimax-cn/MiniMax-M2.5",
 	},
 	{
 		id: "moonshot",
