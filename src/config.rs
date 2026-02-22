@@ -165,6 +165,7 @@ pub struct LlmConfig {
     pub opencode_zen_key: Option<String>,
     pub nvidia_key: Option<String>,
     pub minimax_key: Option<String>,
+    pub minimax_cn_key: Option<String>,
     pub moonshot_key: Option<String>,
     pub zai_coding_plan_key: Option<String>,
     pub providers: HashMap<String, ProviderConfig>,
@@ -215,6 +216,7 @@ impl LlmConfig {
             || self.opencode_zen_key.is_some()
             || self.nvidia_key.is_some()
             || self.minimax_key.is_some()
+            || self.minimax_cn_key.is_some()
             || self.moonshot_key.is_some()
             || self.zai_coding_plan_key.is_some()
             || !self.providers.is_empty()
@@ -226,6 +228,7 @@ const OPENAI_PROVIDER_BASE_URL: &str = "https://api.openai.com";
 const OPENROUTER_PROVIDER_BASE_URL: &str = "https://openrouter.ai/api";
 const OPENCODE_ZEN_PROVIDER_BASE_URL: &str = "https://opencode.ai/zen";
 const MINIMAX_PROVIDER_BASE_URL: &str = "https://api.minimax.io/anthropic";
+const MINIMAX_CN_PROVIDER_BASE_URL: &str = "https://api.minimaxi.com/anthropic";
 const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
 
 const ZHIPU_PROVIDER_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
@@ -1312,6 +1315,7 @@ struct TomlLlmConfigFields {
     opencode_zen_key: Option<String>,
     nvidia_key: Option<String>,
     minimax_key: Option<String>,
+    minimax_cn_key: Option<String>,
     moonshot_key: Option<String>,
     zai_coding_plan_key: Option<String>,
     #[serde(default)]
@@ -1339,6 +1343,7 @@ struct TomlLlmConfig {
     opencode_zen_key: Option<String>,
     nvidia_key: Option<String>,
     minimax_key: Option<String>,
+    minimax_cn_key: Option<String>,
     moonshot_key: Option<String>,
     zai_coding_plan_key: Option<String>,
     providers: HashMap<String, TomlProviderConfig>,
@@ -1391,6 +1396,7 @@ impl<'de> Deserialize<'de> for TomlLlmConfig {
             opencode_zen_key: fields.opencode_zen_key,
             nvidia_key: fields.nvidia_key,
             minimax_key: fields.minimax_key,
+            minimax_cn_key: fields.minimax_cn_key,
             moonshot_key: fields.moonshot_key,
             zai_coding_plan_key: fields.zai_coding_plan_key,
             providers: fields.providers,
@@ -1933,6 +1939,7 @@ impl Config {
             opencode_zen_key: std::env::var("OPENCODE_ZEN_API_KEY").ok(),
             nvidia_key: std::env::var("NVIDIA_API_KEY").ok(),
             minimax_key: std::env::var("MINIMAX_API_KEY").ok(),
+            minimax_cn_key: std::env::var("MINIMAX_CN_API_KEY").ok(),
             moonshot_key: std::env::var("MOONSHOT_API_KEY").ok(),
             zai_coding_plan_key: std::env::var("ZAI_CODING_PLAN_API_KEY").ok(),
             providers: HashMap::new(),
@@ -2012,6 +2019,17 @@ impl Config {
                     api_type: ApiType::Anthropic,
                     base_url: MINIMAX_PROVIDER_BASE_URL.to_string(),
                     api_key: minimax_key,
+                    name: None,
+                });
+        }
+
+        if let Some(minimax_cn_key) = llm.minimax_cn_key.clone() {
+            llm.providers
+                .entry("minimax-cn".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::Anthropic,
+                    base_url: MINIMAX_CN_PROVIDER_BASE_URL.to_string(),
+                    api_key: minimax_cn_key,
                     name: None,
                 });
         }
@@ -2255,6 +2273,12 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("MINIMAX_API_KEY").ok()),
+            minimax_cn_key: toml
+                .llm
+                .minimax_cn_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("MINIMAX_CN_API_KEY").ok()),
             moonshot_key: toml
                 .llm
                 .moonshot_key
@@ -2364,6 +2388,17 @@ impl Config {
                     api_type: ApiType::Anthropic,
                     base_url: MINIMAX_PROVIDER_BASE_URL.to_string(),
                     api_key: minimax_key,
+                    name: None,
+                });
+        }
+
+        if let Some(minimax_cn_key) = llm.minimax_cn_key.clone() {
+            llm.providers
+                .entry("minimax-cn".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::Anthropic,
+                    base_url: MINIMAX_CN_PROVIDER_BASE_URL.to_string(),
+                    api_key: minimax_cn_key,
                     name: None,
                 });
         }
