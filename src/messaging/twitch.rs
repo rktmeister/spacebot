@@ -53,6 +53,9 @@ impl TokenStorage for TwitchTokenStorage {
                     expires_at = file.expires_at;
                 }
             }
+            if !self.refresh_token.is_empty() && expires_at.is_none() {
+                expires_at = Some(created_at + chrono::Duration::hours(1));
+            }
             let file = TwitchTokenFile {
                 access_token: self.access_token.clone(),
                 refresh_token: self.refresh_token.clone(),
