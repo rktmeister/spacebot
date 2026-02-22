@@ -127,7 +127,7 @@ impl<'de> serde::Deserialize<'de> for ApiType {
 }
 
 /// Configuration for a single LLM provider.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProviderConfig {
     pub api_type: ApiType,
     pub base_url: String,
@@ -135,8 +135,19 @@ pub struct ProviderConfig {
     pub name: Option<String>,
 }
 
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("api_type", &self.api_type)
+            .field("base_url", &self.base_url)
+            .field("api_key", &"[REDACTED]")
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
 /// LLM provider credentials (instance-level).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LlmConfig {
     pub anthropic_key: Option<String>,
     pub openai_key: Option<String>,
@@ -154,9 +165,36 @@ pub struct LlmConfig {
     pub opencode_zen_key: Option<String>,
     pub nvidia_key: Option<String>,
     pub minimax_key: Option<String>,
+    pub minimax_cn_key: Option<String>,
     pub moonshot_key: Option<String>,
     pub zai_coding_plan_key: Option<String>,
     pub providers: HashMap<String, ProviderConfig>,
+}
+
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("anthropic_key", &self.anthropic_key.as_ref().map(|_| "[REDACTED]"))
+            .field("openai_key", &self.openai_key.as_ref().map(|_| "[REDACTED]"))
+            .field("openrouter_key", &self.openrouter_key.as_ref().map(|_| "[REDACTED]"))
+            .field("zhipu_key", &self.zhipu_key.as_ref().map(|_| "[REDACTED]"))
+            .field("groq_key", &self.groq_key.as_ref().map(|_| "[REDACTED]"))
+            .field("together_key", &self.together_key.as_ref().map(|_| "[REDACTED]"))
+            .field("fireworks_key", &self.fireworks_key.as_ref().map(|_| "[REDACTED]"))
+            .field("deepseek_key", &self.deepseek_key.as_ref().map(|_| "[REDACTED]"))
+            .field("xai_key", &self.xai_key.as_ref().map(|_| "[REDACTED]"))
+            .field("mistral_key", &self.mistral_key.as_ref().map(|_| "[REDACTED]"))
+            .field("gemini_key", &self.gemini_key.as_ref().map(|_| "[REDACTED]"))
+            .field("ollama_key", &self.ollama_key.as_ref().map(|_| "[REDACTED]"))
+            .field("ollama_base_url", &self.ollama_base_url)
+            .field("opencode_zen_key", &self.opencode_zen_key.as_ref().map(|_| "[REDACTED]"))
+            .field("nvidia_key", &self.nvidia_key.as_ref().map(|_| "[REDACTED]"))
+            .field("minimax_key", &self.minimax_key.as_ref().map(|_| "[REDACTED]"))
+            .field("moonshot_key", &self.moonshot_key.as_ref().map(|_| "[REDACTED]"))
+            .field("zai_coding_plan_key", &self.zai_coding_plan_key.as_ref().map(|_| "[REDACTED]"))
+            .field("providers", &self.providers)
+            .finish()
+    }
 }
 
 impl LlmConfig {
@@ -178,6 +216,7 @@ impl LlmConfig {
             || self.opencode_zen_key.is_some()
             || self.nvidia_key.is_some()
             || self.minimax_key.is_some()
+            || self.minimax_cn_key.is_some()
             || self.moonshot_key.is_some()
             || self.zai_coding_plan_key.is_some()
             || !self.providers.is_empty()
@@ -189,16 +228,18 @@ const OPENAI_PROVIDER_BASE_URL: &str = "https://api.openai.com";
 const OPENROUTER_PROVIDER_BASE_URL: &str = "https://openrouter.ai/api";
 const OPENCODE_ZEN_PROVIDER_BASE_URL: &str = "https://opencode.ai/zen";
 const MINIMAX_PROVIDER_BASE_URL: &str = "https://api.minimax.io/anthropic";
+const MINIMAX_CN_PROVIDER_BASE_URL: &str = "https://api.minimaxi.com/anthropic";
 const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
 
 const ZHIPU_PROVIDER_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 const ZAI_CODING_PLAN_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 const NVIDIA_PROVIDER_BASE_URL: &str = "https://integrate.api.nvidia.com";
+const FIREWORKS_PROVIDER_BASE_URL: &str = "https://api.fireworks.ai/inference";
 pub(crate) const GEMINI_PROVIDER_BASE_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/openai";
 
 /// Defaults inherited by all agents. Individual agents can override any field.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DefaultsConfig {
     pub routing: RoutingConfig,
     pub max_concurrent_branches: usize,
@@ -220,6 +261,31 @@ pub struct DefaultsConfig {
     pub opencode: OpenCodeConfig,
     /// Worker log mode: "errors_only", "all_separate", or "all_combined".
     pub worker_log_mode: crate::settings::WorkerLogMode,
+}
+
+impl std::fmt::Debug for DefaultsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DefaultsConfig")
+            .field("routing", &self.routing)
+            .field("max_concurrent_branches", &self.max_concurrent_branches)
+            .field("max_concurrent_workers", &self.max_concurrent_workers)
+            .field("max_turns", &self.max_turns)
+            .field("branch_max_turns", &self.branch_max_turns)
+            .field("context_window", &self.context_window)
+            .field("compaction", &self.compaction)
+            .field("memory_persistence", &self.memory_persistence)
+            .field("coalesce", &self.coalesce)
+            .field("ingestion", &self.ingestion)
+            .field("cortex", &self.cortex)
+            .field("browser", &self.browser)
+            .field("mcp", &self.mcp)
+            .field("brave_search_key", &self.brave_search_key.as_ref().map(|_| "[REDACTED]"))
+            .field("history_backfill_count", &self.history_backfill_count)
+            .field("cron", &self.cron)
+            .field("opencode", &self.opencode)
+            .field("worker_log_mode", &self.worker_log_mode)
+            .finish()
+    }
 }
 
 /// MCP server configuration.
@@ -785,7 +851,7 @@ pub struct MessagingConfig {
     pub twitch: Option<TwitchConfig>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DiscordConfig {
     pub enabled: bool,
     pub token: String,
@@ -793,6 +859,17 @@ pub struct DiscordConfig {
     pub dm_allowed_users: Vec<String>,
     /// Whether to process messages from other bots (self-messages are always ignored).
     pub allow_bot_messages: bool,
+}
+
+impl std::fmt::Debug for DiscordConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiscordConfig")
+            .field("enabled", &self.enabled)
+            .field("token", &"[REDACTED]")
+            .field("dm_allowed_users", &self.dm_allowed_users)
+            .field("allow_bot_messages", &self.allow_bot_messages)
+            .finish()
+    }
 }
 
 /// A single slash command definition for the Slack adapter.
@@ -809,7 +886,7 @@ pub struct SlackCommandConfig {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SlackConfig {
     pub enabled: bool,
     pub bot_token: String,
@@ -818,6 +895,18 @@ pub struct SlackConfig {
     pub dm_allowed_users: Vec<String>,
     /// Slash command definitions. If empty, all slash commands are ignored.
     pub commands: Vec<SlackCommandConfig>,
+}
+
+impl std::fmt::Debug for SlackConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlackConfig")
+            .field("enabled", &self.enabled)
+            .field("bot_token", &"[REDACTED]")
+            .field("app_token", &"[REDACTED]")
+            .field("dm_allowed_users", &self.dm_allowed_users)
+            .field("commands", &self.commands)
+            .finish()
+    }
 }
 
 /// Hot-reloadable Discord permission filters.
@@ -952,12 +1041,22 @@ impl DiscordPermissions {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TelegramConfig {
     pub enabled: bool,
     pub token: String,
     /// User IDs allowed to DM the bot. If empty, DMs are ignored entirely.
     pub dm_allowed_users: Vec<String>,
+}
+
+impl std::fmt::Debug for TelegramConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramConfig")
+            .field("enabled", &self.enabled)
+            .field("token", &"[REDACTED]")
+            .field("dm_allowed_users", &self.dm_allowed_users)
+            .finish()
+    }
 }
 
 /// Hot-reloadable Telegram permission filters.
@@ -1014,15 +1113,30 @@ impl TelegramPermissions {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TwitchConfig {
     pub enabled: bool,
     pub username: String,
     pub oauth_token: String,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub refresh_token: Option<String>,
     /// Channels to join (without the # prefix).
     pub channels: Vec<String>,
     /// Optional prefix that triggers the bot (e.g. "!ask"). If empty, all messages are processed.
     pub trigger_prefix: Option<String>,
+}
+
+impl std::fmt::Debug for TwitchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TwitchConfig")
+            .field("enabled", &self.enabled)
+            .field("username", &self.username)
+            .field("oauth_token", &"[REDACTED]")
+            .field("channels", &self.channels)
+            .field("trigger_prefix", &self.trigger_prefix)
+            .finish()
+    }
 }
 
 /// Hot-reloadable Twitch permission filters.
@@ -1201,6 +1315,7 @@ struct TomlLlmConfigFields {
     opencode_zen_key: Option<String>,
     nvidia_key: Option<String>,
     minimax_key: Option<String>,
+    minimax_cn_key: Option<String>,
     moonshot_key: Option<String>,
     zai_coding_plan_key: Option<String>,
     #[serde(default)]
@@ -1228,6 +1343,7 @@ struct TomlLlmConfig {
     opencode_zen_key: Option<String>,
     nvidia_key: Option<String>,
     minimax_key: Option<String>,
+    minimax_cn_key: Option<String>,
     moonshot_key: Option<String>,
     zai_coding_plan_key: Option<String>,
     providers: HashMap<String, TomlProviderConfig>,
@@ -1280,6 +1396,7 @@ impl<'de> Deserialize<'de> for TomlLlmConfig {
             opencode_zen_key: fields.opencode_zen_key,
             nvidia_key: fields.nvidia_key,
             minimax_key: fields.minimax_key,
+            minimax_cn_key: fields.minimax_cn_key,
             moonshot_key: fields.moonshot_key,
             zai_coding_plan_key: fields.zai_coding_plan_key,
             providers: fields.providers,
@@ -1525,6 +1642,9 @@ struct TomlTwitchConfig {
     enabled: bool,
     username: Option<String>,
     oauth_token: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    refresh_token: Option<String>,
     #[serde(default)]
     channels: Vec<String>,
     trigger_prefix: Option<String>,
@@ -1821,6 +1941,7 @@ impl Config {
             opencode_zen_key: std::env::var("OPENCODE_ZEN_API_KEY").ok(),
             nvidia_key: std::env::var("NVIDIA_API_KEY").ok(),
             minimax_key: std::env::var("MINIMAX_API_KEY").ok(),
+            minimax_cn_key: std::env::var("MINIMAX_CN_API_KEY").ok(),
             moonshot_key: std::env::var("MOONSHOT_API_KEY").ok(),
             zai_coding_plan_key: std::env::var("ZAI_CODING_PLAN_API_KEY").ok(),
             providers: HashMap::new(),
@@ -1906,6 +2027,17 @@ impl Config {
                 });
         }
 
+        if let Some(minimax_cn_key) = llm.minimax_cn_key.clone() {
+            llm.providers
+                .entry("minimax-cn".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::Anthropic,
+                    base_url: MINIMAX_CN_PROVIDER_BASE_URL.to_string(),
+                    api_key: minimax_cn_key,
+                    name: None,
+                });
+        }
+
         if let Some(moonshot_key) = llm.moonshot_key.clone() {
             llm.providers
                 .entry("moonshot".to_string())
@@ -1924,6 +2056,17 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: NVIDIA_PROVIDER_BASE_URL.to_string(),
                     api_key: nvidia_key,
+                    name: None,
+                });
+        }
+
+        if let Some(fireworks_key) = llm.fireworks_key.clone() {
+            llm.providers
+                .entry("fireworks".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: FIREWORKS_PROVIDER_BASE_URL.to_string(),
+                    api_key: fireworks_key,
                     name: None,
                 });
         }
@@ -2143,6 +2286,12 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("MINIMAX_API_KEY").ok()),
+            minimax_cn_key: toml
+                .llm
+                .minimax_cn_key
+                .as_deref()
+                .and_then(resolve_env_value)
+                .or_else(|| std::env::var("MINIMAX_CN_API_KEY").ok()),
             moonshot_key: toml
                 .llm
                 .moonshot_key
@@ -2160,18 +2309,23 @@ impl Config {
                 .providers
                 .into_iter()
                 .map(|(provider_id, config)| {
-                    (
+                    let api_key = resolve_env_value(&config.api_key).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "failed to resolve API key for provider '{}'",
+                            provider_id
+                        )
+                    })?;
+                    Ok((
                         provider_id.to_lowercase(),
                         ProviderConfig {
                             api_type: config.api_type,
                             base_url: config.base_url,
-                            api_key: resolve_env_value(&config.api_key)
-                                .expect("Failed to resolve API key for provider"),
+                            api_key,
                             name: config.name,
                         },
-                    )
+                    ))
                 })
-                .collect(),
+                .collect::<anyhow::Result<_>>()?,
         };
 
         if let Some(anthropic_key) = llm.anthropic_key.clone() {
@@ -2253,6 +2407,17 @@ impl Config {
                 });
         }
 
+        if let Some(minimax_cn_key) = llm.minimax_cn_key.clone() {
+            llm.providers
+                .entry("minimax-cn".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::Anthropic,
+                    base_url: MINIMAX_CN_PROVIDER_BASE_URL.to_string(),
+                    api_key: minimax_cn_key,
+                    name: None,
+                });
+        }
+
         if let Some(moonshot_key) = llm.moonshot_key.clone() {
             llm.providers
                 .entry("moonshot".to_string())
@@ -2271,6 +2436,17 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: NVIDIA_PROVIDER_BASE_URL.to_string(),
                     api_key: nvidia_key,
+                    name: None,
+                });
+        }
+
+        if let Some(fireworks_key) = llm.fireworks_key.clone() {
+            llm.providers
+                .entry("fireworks".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: FIREWORKS_PROVIDER_BASE_URL.to_string(),
+                    api_key: fireworks_key,
                     name: None,
                 });
         }
@@ -2706,10 +2882,28 @@ impl Config {
                     .as_deref()
                     .and_then(resolve_env_value)
                     .or_else(|| std::env::var("TWITCH_OAUTH_TOKEN").ok())?;
+                let client_id = t
+                    .client_id
+                    .as_deref()
+                    .and_then(resolve_env_value)
+                    .or_else(|| std::env::var("TWITCH_CLIENT_ID").ok());
+                let client_secret = t
+                    .client_secret
+                    .as_deref()
+                    .and_then(resolve_env_value)
+                    .or_else(|| std::env::var("TWITCH_CLIENT_SECRET").ok());
+                let refresh_token = t
+                    .refresh_token
+                    .as_deref()
+                    .and_then(resolve_env_value)
+                    .or_else(|| std::env::var("TWITCH_REFRESH_TOKEN").ok());
                 Some(TwitchConfig {
                     enabled: t.enabled,
                     username,
                     oauth_token,
+                    client_id,
+                    client_secret,
+                    refresh_token,
                     channels: t.channels,
                     trigger_prefix: t.trigger_prefix,
                 })
@@ -3196,6 +3390,7 @@ pub fn spawn_file_watcher(
                     let slack_permissions = slack_permissions.clone();
                     let telegram_permissions = telegram_permissions.clone();
                     let twitch_permissions = twitch_permissions.clone();
+                    let instance_dir = instance_dir.clone();
 
                     rt.spawn(async move {
                         // Discord: start if enabled and not already running
@@ -3273,9 +3468,14 @@ pub fn spawn_file_watcher(
                                         Arc::new(arc_swap::ArcSwap::from_pointee(perms))
                                     }
                                 };
+                                let token_path = instance_dir.join("twitch_token.json");
                                 let adapter = crate::messaging::twitch::TwitchAdapter::new(
                                     &twitch_config.username,
                                     &twitch_config.oauth_token,
+                                    twitch_config.client_id.clone(),
+                                    twitch_config.client_secret.clone(),
+                                    twitch_config.refresh_token.clone(),
+                                    Some(token_path),
                                     twitch_config.channels.clone(),
                                     twitch_config.trigger_prefix.clone(),
                                     perms,
