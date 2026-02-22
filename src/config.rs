@@ -125,7 +125,7 @@ impl<'de> serde::Deserialize<'de> for ApiType {
 }
 
 /// Configuration for a single LLM provider.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProviderConfig {
     pub api_type: ApiType,
     pub base_url: String,
@@ -133,8 +133,19 @@ pub struct ProviderConfig {
     pub name: Option<String>,
 }
 
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("api_type", &self.api_type)
+            .field("base_url", &self.base_url)
+            .field("api_key", &"[REDACTED]")
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
 /// LLM provider credentials (instance-level).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LlmConfig {
     pub anthropic_key: Option<String>,
     pub openai_key: Option<String>,
@@ -155,6 +166,32 @@ pub struct LlmConfig {
     pub moonshot_key: Option<String>,
     pub zai_coding_plan_key: Option<String>,
     pub providers: HashMap<String, ProviderConfig>,
+}
+
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("anthropic_key", &self.anthropic_key.as_ref().map(|_| "[REDACTED]"))
+            .field("openai_key", &self.openai_key.as_ref().map(|_| "[REDACTED]"))
+            .field("openrouter_key", &self.openrouter_key.as_ref().map(|_| "[REDACTED]"))
+            .field("zhipu_key", &self.zhipu_key.as_ref().map(|_| "[REDACTED]"))
+            .field("groq_key", &self.groq_key.as_ref().map(|_| "[REDACTED]"))
+            .field("together_key", &self.together_key.as_ref().map(|_| "[REDACTED]"))
+            .field("fireworks_key", &self.fireworks_key.as_ref().map(|_| "[REDACTED]"))
+            .field("deepseek_key", &self.deepseek_key.as_ref().map(|_| "[REDACTED]"))
+            .field("xai_key", &self.xai_key.as_ref().map(|_| "[REDACTED]"))
+            .field("mistral_key", &self.mistral_key.as_ref().map(|_| "[REDACTED]"))
+            .field("gemini_key", &self.gemini_key.as_ref().map(|_| "[REDACTED]"))
+            .field("ollama_key", &self.ollama_key.as_ref().map(|_| "[REDACTED]"))
+            .field("ollama_base_url", &self.ollama_base_url)
+            .field("opencode_zen_key", &self.opencode_zen_key.as_ref().map(|_| "[REDACTED]"))
+            .field("nvidia_key", &self.nvidia_key.as_ref().map(|_| "[REDACTED]"))
+            .field("minimax_key", &self.minimax_key.as_ref().map(|_| "[REDACTED]"))
+            .field("moonshot_key", &self.moonshot_key.as_ref().map(|_| "[REDACTED]"))
+            .field("zai_coding_plan_key", &self.zai_coding_plan_key.as_ref().map(|_| "[REDACTED]"))
+            .field("providers", &self.providers)
+            .finish()
+    }
 }
 
 impl LlmConfig {
@@ -195,7 +232,7 @@ const NVIDIA_PROVIDER_BASE_URL: &str = "https://integrate.api.nvidia.com";
 pub(crate) const GEMINI_PROVIDER_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
 
 /// Defaults inherited by all agents. Individual agents can override any field.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DefaultsConfig {
     pub routing: RoutingConfig,
     pub max_concurrent_branches: usize,
@@ -217,6 +254,31 @@ pub struct DefaultsConfig {
     pub opencode: OpenCodeConfig,
     /// Worker log mode: "errors_only", "all_separate", or "all_combined".
     pub worker_log_mode: crate::settings::WorkerLogMode,
+}
+
+impl std::fmt::Debug for DefaultsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DefaultsConfig")
+            .field("routing", &self.routing)
+            .field("max_concurrent_branches", &self.max_concurrent_branches)
+            .field("max_concurrent_workers", &self.max_concurrent_workers)
+            .field("max_turns", &self.max_turns)
+            .field("branch_max_turns", &self.branch_max_turns)
+            .field("context_window", &self.context_window)
+            .field("compaction", &self.compaction)
+            .field("memory_persistence", &self.memory_persistence)
+            .field("coalesce", &self.coalesce)
+            .field("ingestion", &self.ingestion)
+            .field("cortex", &self.cortex)
+            .field("browser", &self.browser)
+            .field("mcp", &self.mcp)
+            .field("brave_search_key", &self.brave_search_key.as_ref().map(|_| "[REDACTED]"))
+            .field("history_backfill_count", &self.history_backfill_count)
+            .field("cron", &self.cron)
+            .field("opencode", &self.opencode)
+            .field("worker_log_mode", &self.worker_log_mode)
+            .finish()
+    }
 }
 
 /// MCP server configuration.
@@ -782,7 +844,7 @@ pub struct MessagingConfig {
     pub twitch: Option<TwitchConfig>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DiscordConfig {
     pub enabled: bool,
     pub token: String,
@@ -790,6 +852,17 @@ pub struct DiscordConfig {
     pub dm_allowed_users: Vec<String>,
     /// Whether to process messages from other bots (self-messages are always ignored).
     pub allow_bot_messages: bool,
+}
+
+impl std::fmt::Debug for DiscordConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiscordConfig")
+            .field("enabled", &self.enabled)
+            .field("token", &"[REDACTED]")
+            .field("dm_allowed_users", &self.dm_allowed_users)
+            .field("allow_bot_messages", &self.allow_bot_messages)
+            .finish()
+    }
 }
 
 /// A single slash command definition for the Slack adapter.
@@ -806,7 +879,7 @@ pub struct SlackCommandConfig {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SlackConfig {
     pub enabled: bool,
     pub bot_token: String,
@@ -815,6 +888,18 @@ pub struct SlackConfig {
     pub dm_allowed_users: Vec<String>,
     /// Slash command definitions. If empty, all slash commands are ignored.
     pub commands: Vec<SlackCommandConfig>,
+}
+
+impl std::fmt::Debug for SlackConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlackConfig")
+            .field("enabled", &self.enabled)
+            .field("bot_token", &"[REDACTED]")
+            .field("app_token", &"[REDACTED]")
+            .field("dm_allowed_users", &self.dm_allowed_users)
+            .field("commands", &self.commands)
+            .finish()
+    }
 }
 
 /// Hot-reloadable Discord permission filters.
@@ -949,12 +1034,22 @@ impl DiscordPermissions {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TelegramConfig {
     pub enabled: bool,
     pub token: String,
     /// User IDs allowed to DM the bot. If empty, DMs are ignored entirely.
     pub dm_allowed_users: Vec<String>,
+}
+
+impl std::fmt::Debug for TelegramConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramConfig")
+            .field("enabled", &self.enabled)
+            .field("token", &"[REDACTED]")
+            .field("dm_allowed_users", &self.dm_allowed_users)
+            .finish()
+    }
 }
 
 /// Hot-reloadable Telegram permission filters.
@@ -1011,7 +1106,7 @@ impl TelegramPermissions {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TwitchConfig {
     pub enabled: bool,
     pub username: String,
@@ -1020,6 +1115,18 @@ pub struct TwitchConfig {
     pub channels: Vec<String>,
     /// Optional prefix that triggers the bot (e.g. "!ask"). If empty, all messages are processed.
     pub trigger_prefix: Option<String>,
+}
+
+impl std::fmt::Debug for TwitchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TwitchConfig")
+            .field("enabled", &self.enabled)
+            .field("username", &self.username)
+            .field("oauth_token", &"[REDACTED]")
+            .field("channels", &self.channels)
+            .field("trigger_prefix", &self.trigger_prefix)
+            .finish()
+    }
 }
 
 /// Hot-reloadable Twitch permission filters.
