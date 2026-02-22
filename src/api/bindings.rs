@@ -359,12 +359,16 @@ pub(super) async fn create_binding(
                         Some(existing) => existing.clone(),
                         None => {
                             drop(perms_guard);
+                            let Some(discord_config) = new_config
+                                .messaging
+                                .discord
+                                .as_ref()
+                            else {
+                                tracing::error!("discord config missing despite token being provided");
+                                return;
+                            };
                             let perms = crate::config::DiscordPermissions::from_config(
-                                new_config
-                                    .messaging
-                                    .discord
-                                    .as_ref()
-                                    .expect("discord config exists when token is provided"),
+                                discord_config,
                                 &new_config.bindings,
                             );
                             let arc_swap =
@@ -387,12 +391,16 @@ pub(super) async fn create_binding(
                         Some(existing) => existing.clone(),
                         None => {
                             drop(perms_guard);
+                            let Some(slack_config) = new_config
+                                .messaging
+                                .slack
+                                .as_ref()
+                            else {
+                                tracing::error!("slack config missing despite tokens being provided");
+                                return;
+                            };
                             let perms = crate::config::SlackPermissions::from_config(
-                                new_config
-                                    .messaging
-                                    .slack
-                                    .as_ref()
-                                    .expect("slack config exists when tokens are provided"),
+                                slack_config,
                                 &new_config.bindings,
                             );
                             let arc_swap =
@@ -427,12 +435,16 @@ pub(super) async fn create_binding(
 
             if let Some(token) = new_telegram_token {
                 let telegram_perms = {
+                    let Some(telegram_config) = new_config
+                        .messaging
+                        .telegram
+                        .as_ref()
+                    else {
+                        tracing::error!("telegram config missing despite token being provided");
+                        return;
+                    };
                     let perms = crate::config::TelegramPermissions::from_config(
-                        new_config
-                            .messaging
-                            .telegram
-                            .as_ref()
-                            .expect("telegram config exists when token is provided"),
+                        telegram_config,
                         &new_config.bindings,
                     );
                     std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(perms))
@@ -445,11 +457,14 @@ pub(super) async fn create_binding(
             }
 
             if let Some((username, oauth_token)) = new_twitch_creds {
-                let twitch_config = new_config
+                let Some(twitch_config) = new_config
                     .messaging
                     .twitch
                     .as_ref()
-                    .expect("twitch config exists when credentials are provided");
+                else {
+                    tracing::error!("twitch config missing despite credentials being provided");
+                    return;
+                };
                 let twitch_perms = {
                     let perms = crate::config::TwitchPermissions::from_config(
                         twitch_config,
