@@ -1932,7 +1932,8 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: FIREWORKS_PROVIDER_BASE_URL.to_string(),
                     api_key: fireworks_key,
-                                  });
+                    name: None,
+                });
         }
 
         if let Some(gemini_key) = llm.gemini_key.clone() {
@@ -2278,6 +2279,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: FIREWORKS_PROVIDER_BASE_URL.to_string(),
                     api_key: fireworks_key,
+                    name: None,
                 });
         }
 
