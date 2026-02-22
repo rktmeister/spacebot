@@ -4,9 +4,7 @@
 //! via headless Chrome using chromiumoxide. Uses an accessibility-tree based
 //! ref system for LLM-friendly element addressing.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use crate::config::BrowserConfig;
-
 use chromiumoxide::browser::{Browser, BrowserConfig as ChromeConfig};
 use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide_cdp::cdp::browser_protocol::accessibility::{
@@ -17,11 +15,13 @@ use chromiumoxide_cdp::cdp::browser_protocol::input::{
 };
 use chromiumoxide_cdp::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use futures::StreamExt as _;
+use reqwest::Url;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -31,9 +31,8 @@ use tokio::task::JoinHandle;
 /// Blocks private/loopback IPs, link-local addresses, and cloud metadata endpoints
 /// to prevent server-side request forgery.
 fn validate_url(url: &str) -> Result<(), BrowserError> {
-    let parsed = url::Url::parse(url).map_err(|error| {
-        BrowserError::new(format!("invalid URL '{url}': {error}"))
-    })?;
+    let parsed = Url::parse(url)
+        .map_err(|error| BrowserError::new(format!("invalid URL '{url}': {error}")))?;
 
     match parsed.scheme() {
         "http" | "https" => {}
