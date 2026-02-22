@@ -111,7 +111,10 @@ impl SpacebotModel {
             ApiType::Anthropic => self.call_anthropic(request, &provider_config).await,
             ApiType::OpenAiCompletions => self.call_openai(request, &provider_config).await,
             ApiType::OpenAiResponses => self.call_openai_responses(request, &provider_config).await,
-            ApiType::Gemini => self.call_openai_compatible(request, "Google Gemini", &provider_config).await,
+            ApiType::Gemini => {
+                self.call_openai_compatible(request, "Google Gemini", &provider_config)
+                    .await
+            }
         }
     }
 

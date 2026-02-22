@@ -2,7 +2,7 @@
 
 use super::state::ApiState;
 use super::{
-    agents, bindings, channels, config, cortex, cron, ingest, memories, messaging, models,
+    agents, bindings, channels, config, cortex, cron, ingest, mcp, memories, messaging, models,
     providers, settings, skills, system, webchat,
 };
 
@@ -53,6 +53,18 @@ pub async fn start_http_server(
         )
         .route("/agents/mcp", get(agents::list_agent_mcp))
         .route("/agents/mcp/reconnect", post(agents::reconnect_agent_mcp))
+        .route(
+            "/mcp/servers",
+            get(mcp::list_mcp_servers)
+                .post(mcp::create_mcp_server)
+                .put(mcp::update_mcp_server),
+        )
+        .route("/mcp/servers/{name}", delete(mcp::delete_mcp_server))
+        .route(
+            "/mcp/servers/{name}/reconnect",
+            post(mcp::reconnect_mcp_server),
+        )
+        .route("/mcp/status", get(mcp::mcp_status))
         .route("/agents/overview", get(agents::agent_overview))
         .route("/channels", get(channels::list_channels))
         .route("/channels/messages", get(channels::channel_messages))
