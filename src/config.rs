@@ -3023,8 +3023,8 @@ pub fn spawn_file_watcher(
 
         // Watch per-agent workspace directories (skills, identity)
         for (_, workspace, _, _) in &agents {
-            for subdir in &["skills"] {
-                let path = workspace.join(subdir);
+            {
+                let path = workspace.join("skills");
                 if path.is_dir()
                     && let Err(error) = watcher.watch(&path, RecursiveMode::Recursive)
                 {
@@ -3616,7 +3616,7 @@ mod tests {
 
     impl EnvGuard {
         fn new() -> Self {
-            const KEYS: [&str; 20] = [
+            const KEYS: [&str; 21] = [
                 "SPACEBOT_DIR",
                 "SPACEBOT_DEPLOYMENT",
                 "ANTHROPIC_API_KEY",
@@ -3630,6 +3630,7 @@ mod tests {
                 "DEEPSEEK_API_KEY",
                 "XAI_API_KEY",
                 "MISTRAL_API_KEY",
+                "GEMINI_API_KEY",
                 "NVIDIA_API_KEY",
                 "OLLAMA_API_KEY",
                 "OLLAMA_BASE_URL",
@@ -3758,6 +3759,9 @@ api_key = "sk-proj-xyz789"
 
     #[test]
     fn test_llm_provider_tables_parse_with_env_and_lowercase_keys() {
+        let _lock = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _env = EnvGuard::new();
+
         let toml = r#"
 [llm.provider.MyProv]
 api_type = "openai_responses"

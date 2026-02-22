@@ -502,8 +502,11 @@ Contributions welcome. Read [RUST_STYLE_GUIDE.md](RUST_STYLE_GUIDE.md) before wr
 
 1. Fork the repo
 2. Create a feature branch
-3. Make your changes
-4. Submit a PR
+3. Run `./scripts/install-git-hooks.sh` once (installs pre-commit formatting hook)
+4. Make your changes
+5. Submit a PR
+
+Formatting is still enforced in CI, but the hook catches it earlier by running `cargo fmt --all` before each commit.
 
 ---
 
