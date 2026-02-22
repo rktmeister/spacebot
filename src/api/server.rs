@@ -6,11 +6,15 @@ use super::{
     providers, settings, skills, system, webchat,
 };
 
+use axum::Json;
+use axum::extract::Request;
 use axum::Router;
 use axum::http::{StatusCode, Uri, header};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use rust_embed::Embed;
+use serde_json::json;
 use tower_http::cors::{Any, CorsLayer};
 
 use std::net::SocketAddr;
@@ -131,7 +135,11 @@ pub async fn start_http_server(
         )
         .route("/update/apply", post(settings::update_apply))
         .route("/webchat/send", post(webchat::webchat_send))
-        .route("/webchat/history", get(webchat::webchat_history));
+        .route("/webchat/history", get(webchat::webchat_history))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            api_auth_middleware,
+        ));
 
     let app = Router::new()
         .nest("/api", api_routes)
@@ -155,6 +163,30 @@ pub async fn start_http_server(
     });
 
     Ok(handle)
+}
+
+async fn api_auth_middleware(state: Arc<ApiState>, request: Request, next: Next) -> Response {
+    let Some(expected_token) = state.auth_token.as_deref() else {
+        return next.run(request).await;
+    };
+
+    let path = request.uri().path();
+    if path == "/api/health" || path == "/health" {
+        return next.run(request).await;
+    }
+
+    let is_authorized = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token == expected_token);
+
+    if is_authorized {
+        next.run(request).await
+    } else {
+        (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response()
+    }
 }
 
 async fn static_handler(uri: Uri) -> Response {
