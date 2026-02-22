@@ -286,7 +286,11 @@ async fn fetch_models_dev() -> anyhow::Result<Vec<ModelInfo>> {
                 .modalities
                 .as_ref()
                 .and_then(|m| m.input.as_ref())
-                .is_some_and(|inputs| inputs.iter().any(|input| input.to_lowercase().contains("audio")));
+                .is_some_and(|inputs| {
+                    inputs
+                        .iter()
+                        .any(|input| input.to_lowercase().contains("audio"))
+                });
 
             models.push(ModelInfo {
                 id: routing_id,

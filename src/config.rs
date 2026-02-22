@@ -60,6 +60,7 @@ pub struct ApiConfig {
     pub port: u16,
     /// Address to bind the HTTP server on.
     pub bind: String,
+    pub auth_token: Option<String>,
 }
 
 impl Default for ApiConfig {
@@ -68,6 +69,7 @@ impl Default for ApiConfig {
             enabled: true,
             port: 19898,
             bind: "127.0.0.1".into(),
+            auth_token: None,
         }
     }
 }
@@ -229,7 +231,8 @@ const MOONSHOT_PROVIDER_BASE_URL: &str = "https://api.moonshot.ai";
 const ZHIPU_PROVIDER_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 const ZAI_CODING_PLAN_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 const NVIDIA_PROVIDER_BASE_URL: &str = "https://integrate.api.nvidia.com";
-pub(crate) const GEMINI_PROVIDER_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
+pub(crate) const GEMINI_PROVIDER_BASE_URL: &str =
+    "https://generativelanguage.googleapis.com/v1beta/openai";
 
 /// Defaults inherited by all agents. Individual agents can override any field.
 #[derive(Clone)]
@@ -1179,6 +1182,7 @@ pub struct WebhookConfig {
     pub enabled: bool,
     pub port: u16,
     pub bind: String,
+    pub auth_token: Option<String>,
 }
 
 // -- TOML deserialization types --
@@ -1219,6 +1223,8 @@ struct TomlApiConfig {
     port: u16,
     #[serde(default = "default_api_bind")]
     bind: String,
+    #[serde(default)]
+    auth_token: Option<String>,
 }
 
 impl Default for TomlApiConfig {
@@ -1227,6 +1233,7 @@ impl Default for TomlApiConfig {
             enabled: default_api_enabled(),
             port: default_api_port(),
             bind: default_api_bind(),
+            auth_token: None,
         }
     }
 }
@@ -1616,6 +1623,7 @@ struct TomlWebhookConfig {
     port: u16,
     #[serde(default = "default_webhook_bind")]
     bind: String,
+    auth_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2782,6 +2790,7 @@ impl Config {
                 enabled: w.enabled,
                 port: w.port,
                 bind: w.bind,
+                auth_token: w.auth_token.as_deref().and_then(resolve_env_value),
             }),
             twitch: toml.messaging.twitch.and_then(|t| {
                 let username = t
@@ -2823,6 +2832,7 @@ impl Config {
             enabled: toml.api.enabled,
             port: toml.api.port,
             bind: hosted_api_bind(toml.api.bind),
+            auth_token: toml.api.auth_token.as_deref().and_then(resolve_env_value),
         };
 
         let metrics = MetricsConfig {
@@ -3134,8 +3144,8 @@ pub fn spawn_file_watcher(
 
         // Watch per-agent workspace directories (skills, identity)
         for (_, workspace, _, _) in &agents {
-            for subdir in &["skills"] {
-                let path = workspace.join(subdir);
+            {
+                let path = workspace.join("skills");
                 if path.is_dir()
                     && let Err(error) = watcher.watch(&path, RecursiveMode::Recursive)
                 {
@@ -3727,7 +3737,7 @@ mod tests {
 
     impl EnvGuard {
         fn new() -> Self {
-            const KEYS: [&str; 20] = [
+            const KEYS: [&str; 21] = [
                 "SPACEBOT_DIR",
                 "SPACEBOT_DEPLOYMENT",
                 "ANTHROPIC_API_KEY",
@@ -3741,6 +3751,7 @@ mod tests {
                 "DEEPSEEK_API_KEY",
                 "XAI_API_KEY",
                 "MISTRAL_API_KEY",
+                "GEMINI_API_KEY",
                 "NVIDIA_API_KEY",
                 "OLLAMA_API_KEY",
                 "OLLAMA_BASE_URL",
@@ -3869,6 +3880,9 @@ api_key = "sk-proj-xyz789"
 
     #[test]
     fn test_llm_provider_tables_parse_with_env_and_lowercase_keys() {
+        let _lock = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _env = EnvGuard::new();
+
         let toml = r#"
 [llm.provider.MyProv]
 api_type = "openai_responses"

@@ -37,6 +37,7 @@ pub struct AgentInfo {
 /// State shared across all API handlers.
 pub struct ApiState {
     pub started_at: Instant,
+    pub auth_token: Option<String>,
     /// Aggregated event stream from all agents. SSE clients subscribe here.
     pub event_tx: broadcast::Sender<ApiEvent>,
     /// Per-agent SQLite pools for querying channel/conversation data.
@@ -182,6 +183,7 @@ impl ApiState {
         let (event_tx, _) = broadcast::channel(512);
         Self {
             started_at: Instant::now(),
+            auth_token: None,
             event_tx,
             agent_pools: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             agent_configs: arc_swap::ArcSwap::from_pointee(Vec::new()),
