@@ -4,10 +4,13 @@ use crate::error::{ConfigError, Result};
 use crate::llm::routing::RoutingConfig;
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
+use chrono_tz::Tz;
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+const CRON_TIMEZONE_ENV_VAR: &str = "SPACEBOT_CRON_TIMEZONE";
 
 /// OpenTelemetry export configuration.
 ///
@@ -216,6 +219,8 @@ pub struct DefaultsConfig {
     pub mcp: Vec<McpServerConfig>,
     /// Brave Search API key for web search tool. Supports "env:VAR_NAME" references.
     pub brave_search_key: Option<String>,
+    /// Default timezone used when evaluating cron active hours.
+    pub cron_timezone: Option<String>,
     pub history_backfill_count: usize,
     pub cron: Vec<CronDef>,
     pub opencode: OpenCodeConfig,
@@ -473,6 +478,8 @@ pub struct AgentConfig {
     pub mcp: Option<Vec<McpServerConfig>>,
     /// Per-agent Brave Search API key override. None inherits from defaults.
     pub brave_search_key: Option<String>,
+    /// Optional timezone override for cron active-hours evaluation.
+    pub cron_timezone: Option<String>,
     /// Cron job definitions for this agent.
     pub cron: Vec<CronDef>,
 }
@@ -515,6 +522,7 @@ pub struct ResolvedAgentConfig {
     pub browser: BrowserConfig,
     pub mcp: Vec<McpServerConfig>,
     pub brave_search_key: Option<String>,
+    pub cron_timezone: Option<String>,
     /// Number of messages to fetch from the platform when a new channel is created.
     pub history_backfill_count: usize,
     pub cron: Vec<CronDef>,
@@ -537,6 +545,7 @@ impl Default for DefaultsConfig {
             browser: BrowserConfig::default(),
             mcp: Vec::new(),
             brave_search_key: None,
+            cron_timezone: None,
             history_backfill_count: 50,
             cron: Vec::new(),
             opencode: OpenCodeConfig::default(),
@@ -587,6 +596,11 @@ impl AgentConfig {
                 .brave_search_key
                 .clone()
                 .or_else(|| defaults.brave_search_key.clone()),
+            cron_timezone: resolve_cron_timezone(
+                &self.id,
+                self.cron_timezone.as_deref(),
+                defaults.cron_timezone.as_deref(),
+            ),
             history_backfill_count: defaults.history_backfill_count,
             cron: self.cron.clone(),
         }
@@ -1305,6 +1319,7 @@ struct TomlDefaultsConfig {
     #[serde(default)]
     mcp: Vec<TomlMcpServerConfig>,
     brave_search_key: Option<String>,
+    cron_timezone: Option<String>,
     opencode: Option<TomlOpenCodeConfig>,
     worker_log_mode: Option<String>,
 }
@@ -1438,6 +1453,7 @@ struct TomlAgentConfig {
     browser: Option<TomlBrowserConfig>,
     mcp: Option<Vec<TomlMcpServerConfig>>,
     brave_search_key: Option<String>,
+    cron_timezone: Option<String>,
     #[serde(default)]
     cron: Vec<TomlCronDef>,
 }
@@ -1560,6 +1576,44 @@ fn resolve_env_value(value: &str) -> Option<String> {
     } else {
         Some(value.to_string())
     }
+}
+
+fn normalize_timezone(value: &str) -> Option<String> {
+    let timezone = value.trim();
+    if timezone.is_empty() {
+        return None;
+    }
+    Some(timezone.to_string())
+}
+
+fn resolve_cron_timezone(
+    agent_id: &str,
+    agent_timezone: Option<&str>,
+    default_timezone: Option<&str>,
+) -> Option<String> {
+    let timezone = agent_timezone
+        .and_then(normalize_timezone)
+        .or_else(|| default_timezone.and_then(normalize_timezone))
+        .or_else(|| {
+            std::env::var(CRON_TIMEZONE_ENV_VAR)
+                .ok()
+                .and_then(|value| normalize_timezone(&value))
+        });
+
+    let Some(timezone) = timezone else {
+        return None;
+    };
+
+    if timezone.parse::<Tz>().is_err() {
+        tracing::warn!(
+            agent_id,
+            cron_timezone = %timezone,
+            "invalid cron timezone configured, falling back to system local timezone"
+        );
+        return None;
+    }
+
+    Some(timezone)
 }
 
 fn parse_otlp_headers(value: Option<String>) -> Result<HashMap<String, String>> {
@@ -1980,6 +2034,7 @@ impl Config {
             browser: None,
             mcp: None,
             brave_search_key: None,
+            cron_timezone: None,
             cron: Vec::new(),
         }];
 
@@ -2440,6 +2495,11 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("BRAVE_SEARCH_API_KEY").ok()),
+            cron_timezone: toml
+                .defaults
+                .cron_timezone
+                .as_deref()
+                .and_then(resolve_env_value),
             history_backfill_count: base_defaults.history_backfill_count,
             cron: Vec::new(),
             opencode: toml
@@ -2610,6 +2670,7 @@ impl Config {
                         None => None,
                     },
                     brave_search_key: a.brave_search_key.as_deref().and_then(resolve_env_value),
+                    cron_timezone: a.cron_timezone.as_deref().and_then(resolve_env_value),
                     cron,
                 })
             })
@@ -2634,6 +2695,7 @@ impl Config {
                 browser: None,
                 mcp: None,
                 brave_search_key: None,
+                cron_timezone: None,
                 cron: Vec::new(),
             });
         }
@@ -2835,6 +2897,7 @@ pub struct RuntimeConfig {
     pub mcp: ArcSwap<Vec<McpServerConfig>>,
     pub history_backfill_count: ArcSwap<usize>,
     pub brave_search_key: ArcSwap<Option<String>>,
+    pub cron_timezone: ArcSwap<Option<String>>,
     pub cortex: ArcSwap<CortexConfig>,
     /// Cached memory bulletin generated by the cortex. Injected into every
     /// channel's system prompt. Empty string until the first cortex run.
@@ -2887,6 +2950,7 @@ impl RuntimeConfig {
             mcp: ArcSwap::from_pointee(agent_config.mcp.clone()),
             history_backfill_count: ArcSwap::from_pointee(agent_config.history_backfill_count),
             brave_search_key: ArcSwap::from_pointee(agent_config.brave_search_key.clone()),
+            cron_timezone: ArcSwap::from_pointee(agent_config.cron_timezone.clone()),
             cortex: ArcSwap::from_pointee(agent_config.cortex),
             memory_bulletin: ArcSwap::from_pointee(String::new()),
             prompts: ArcSwap::from_pointee(prompts),
@@ -2957,6 +3021,7 @@ impl RuntimeConfig {
             .store(Arc::new(resolved.history_backfill_count));
         self.brave_search_key
             .store(Arc::new(resolved.brave_search_key));
+        self.cron_timezone.store(Arc::new(resolved.cron_timezone));
         self.cortex.store(Arc::new(resolved.cortex));
 
         mcp_manager.reconcile(&old_mcp, &new_mcp).await;
@@ -3648,9 +3713,10 @@ mod tests {
 
     impl EnvGuard {
         fn new() -> Self {
-            const KEYS: [&str; 21] = [
+            const KEYS: [&str; 22] = [
                 "SPACEBOT_DIR",
                 "SPACEBOT_DEPLOYMENT",
+                "SPACEBOT_CRON_TIMEZONE",
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_OAUTH_TOKEN",
                 "OPENAI_API_KEY",
@@ -4007,5 +4073,86 @@ bind = "127.0.0.1"
             .expect("failed to load config from env");
 
         assert_eq!(config.api.bind, "[::]");
+    }
+
+    #[test]
+    fn test_cron_timezone_resolution_precedence() {
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        unsafe {
+            std::env::set_var(CRON_TIMEZONE_ENV_VAR, "Asia/Tokyo");
+        }
+
+        let toml = r#"
+[defaults]
+cron_timezone = "America/New_York"
+
+[[agents]]
+id = "main"
+cron_timezone = "Europe/Berlin"
+"#;
+
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+
+        assert_eq!(
+            config.defaults.cron_timezone.as_deref(),
+            Some("America/New_York")
+        );
+        assert_eq!(
+            config.agents[0].cron_timezone.as_deref(),
+            Some("Europe/Berlin")
+        );
+
+        let resolved = config.agents[0].resolve(&config.instance_dir, &config.defaults);
+        assert_eq!(resolved.cron_timezone.as_deref(), Some("Europe/Berlin"));
+
+        let toml_without_agent_override = r#"
+[defaults]
+cron_timezone = "America/New_York"
+
+[[agents]]
+id = "main"
+"#;
+        let parsed: TomlConfig =
+            toml::from_str(toml_without_agent_override).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+        let resolved = config.agents[0].resolve(&config.instance_dir, &config.defaults);
+        assert_eq!(resolved.cron_timezone.as_deref(), Some("America/New_York"));
+
+        let toml_without_default = r#"
+[[agents]]
+id = "main"
+"#;
+        let parsed: TomlConfig =
+            toml::from_str(toml_without_default).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+        let resolved = config.agents[0].resolve(&config.instance_dir, &config.defaults);
+        assert_eq!(resolved.cron_timezone.as_deref(), Some("Asia/Tokyo"));
+    }
+
+    #[test]
+    fn test_cron_timezone_invalid_falls_back_to_system() {
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        unsafe {
+            std::env::set_var(CRON_TIMEZONE_ENV_VAR, "Not/A-Real-Tz");
+        }
+
+        let toml = r#"
+[[agents]]
+id = "main"
+"#;
+
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+        let resolved = config.agents[0].resolve(&config.instance_dir, &config.defaults);
+        assert_eq!(resolved.cron_timezone, None);
     }
 }
