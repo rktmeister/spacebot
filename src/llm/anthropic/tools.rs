@@ -92,22 +92,21 @@ mod tests {
             ("my_read_tool".to_string(), "reads files".to_string()),
             ("my_bash".to_string(), "runs commands".to_string()),
         ];
-        assert_eq!(from_claude_code_name("my_read_tool", &tools), "my_read_tool");
+        assert_eq!(
+            from_claude_code_name("my_read_tool", &tools),
+            "my_read_tool"
+        );
     }
 
     #[test]
     fn reverse_mapping_case_insensitive() {
-        let tools = vec![
-            ("read_file".to_string(), "reads files".to_string()),
-        ];
+        let tools = vec![("read_file".to_string(), "reads files".to_string())];
         assert_eq!(from_claude_code_name("Read_File", &tools), "read_file");
     }
 
     #[test]
     fn reverse_mapping_falls_back_to_input() {
-        let tools = vec![
-            ("other_tool".to_string(), "does things".to_string()),
-        ];
+        let tools = vec![("other_tool".to_string(), "does things".to_string())];
         assert_eq!(from_claude_code_name("Read", &tools), "Read");
     }
 }

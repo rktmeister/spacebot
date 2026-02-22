@@ -10,6 +10,12 @@ Single binary. No server dependencies. Runs on tokio. All data lives in embedded
 
 **Stack:** Rust (edition 2024), tokio, Rig (v0.30.0, agentic loop framework), SQLite (sqlx), LanceDB (embedded vector + FTS), redb (embedded key-value).
 
+## Migration Safety
+
+- **NEVER edit an existing migration file in place** once it has been committed or applied in any environment.
+- Treat migration files as immutable; modifying historical migrations causes checksum mismatches and can block startup.
+- For schema changes, always create a new migration with a new timestamp/version.
+
 ## Architecture Overview
 
 Five process types. Every LLM process is a Rig `Agent<SpacebotModel, SpacebotHook>`. They differ in system prompt, tools, history, and hooks.
@@ -334,6 +340,8 @@ Phase 6 — Hardening:
 **Don't create many small files.** Implement functionality in existing files unless it's a new logical component.
 
 **Don't abbreviate variable names.** `queue` not `q`, `message` not `msg`, `channel` not `ch`. Common abbreviations like `config` are fine.
+
+**Don't add new features without updating existing docs.** When a feature change affects user-facing configuration, behaviour, or architecture, update the relevant existing documentation (`README.md`, `docs/`) in the same commit or PR. Don't create new doc files for this — update what's already there.
 
 ## Patterns to Implement
 

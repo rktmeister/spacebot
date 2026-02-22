@@ -43,6 +43,7 @@ export function ChannelEditModal({platform, name, status, open, onOpenChange}: C
 		workspace_id: "",
 		chat_id: "",
 		channel_ids: [] as string[],
+		require_mention: false,
 		dm_allowed_users: [] as string[],
 	});
 
@@ -131,7 +132,7 @@ export function ChannelEditModal({platform, name, status, open, onOpenChange}: C
 	});
 
 	function resetBindingForm() {
-		setBindingForm({agent_id: agentsData?.agents?.[0]?.id ?? "main", guild_id: "", workspace_id: "", chat_id: "", channel_ids: [], dm_allowed_users: []});
+		setBindingForm({agent_id: agentsData?.agents?.[0]?.id ?? "main", guild_id: "", workspace_id: "", chat_id: "", channel_ids: [], require_mention: false, dm_allowed_users: []});
 	}
 
 	function handleClose() {
@@ -174,6 +175,7 @@ export function ChannelEditModal({platform, name, status, open, onOpenChange}: C
 		if (platform === "slack" && bindingForm.workspace_id.trim()) request.workspace_id = bindingForm.workspace_id.trim();
 		if (platform === "telegram" && bindingForm.chat_id.trim()) request.chat_id = bindingForm.chat_id.trim();
 		if (bindingForm.channel_ids.length > 0) request.channel_ids = bindingForm.channel_ids;
+		if (platform === "discord" && bindingForm.require_mention) request.require_mention = true;
 		if (bindingForm.dm_allowed_users.length > 0) request.dm_allowed_users = bindingForm.dm_allowed_users;
 		addBinding.mutate(request);
 	}
@@ -193,6 +195,7 @@ export function ChannelEditModal({platform, name, status, open, onOpenChange}: C
 		if (platform === "slack" && bindingForm.workspace_id.trim()) request.workspace_id = bindingForm.workspace_id.trim();
 		if (platform === "telegram" && bindingForm.chat_id.trim()) request.chat_id = bindingForm.chat_id.trim();
 		request.channel_ids = bindingForm.channel_ids;
+		request.require_mention = platform === "discord" ? bindingForm.require_mention : false;
 		request.dm_allowed_users = bindingForm.dm_allowed_users;
 		updateBinding.mutate(request);
 	}
@@ -214,6 +217,7 @@ export function ChannelEditModal({platform, name, status, open, onOpenChange}: C
 			workspace_id: binding.workspace_id || "",
 			chat_id: binding.chat_id || "",
 			channel_ids: binding.channel_ids,
+			require_mention: binding.require_mention,
 			dm_allowed_users: binding.dm_allowed_users,
 		});
 	}
@@ -364,6 +368,7 @@ export function ChannelEditModal({platform, name, status, open, onOpenChange}: C
 												{binding.workspace_id && <span>Workspace: {binding.workspace_id}</span>}
 												{binding.chat_id && <span>Chat: {binding.chat_id}</span>}
 												{binding.channel_ids.length > 0 && <span>{binding.channel_ids.length} channel{binding.channel_ids.length > 1 ? "s" : ""}</span>}
+												{binding.require_mention && <span>Mention only</span>}
 												{binding.dm_allowed_users.length > 0 && <span>{binding.dm_allowed_users.length} DM user{binding.dm_allowed_users.length > 1 ? "s" : ""}</span>}
 												{!binding.guild_id && !binding.workspace_id && !binding.chat_id && binding.channel_ids.length === 0 && (
 													<span>All conversations</span>
@@ -443,6 +448,18 @@ export function ChannelEditModal({platform, name, status, open, onOpenChange}: C
 											onChange={(ids) => setBindingForm({...bindingForm, channel_ids: ids})}
 											placeholder="Add channel ID..."
 										/>
+									</div>
+								)}
+
+								{platform === "discord" && (
+									<div className="flex items-center gap-2">
+										<input
+											type="checkbox"
+											checked={bindingForm.require_mention}
+											onChange={(e) => setBindingForm({...bindingForm, require_mention: e.target.checked})}
+											className="h-4 w-4 rounded border-app-line bg-app-box"
+										/>
+										<label className="text-sm text-ink-dull">Require @mention or reply to bot</label>
 									</div>
 								)}
 

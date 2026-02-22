@@ -12,6 +12,7 @@ pub mod error;
 pub mod hooks;
 pub mod identity;
 pub mod llm;
+pub mod mcp;
 pub mod memory;
 pub mod messaging;
 pub mod opencode;
@@ -99,6 +100,7 @@ pub enum ProcessEvent {
         branch_id: BranchId,
         channel_id: ChannelId,
         description: String,
+        reply_to_message_id: Option<u64>,
     },
     BranchResult {
         agent_id: AgentId,
@@ -176,6 +178,7 @@ pub struct AgentDeps {
     pub agent_id: AgentId,
     pub memory_search: Arc<memory::MemorySearch>,
     pub llm_manager: Arc<llm::LlmManager>,
+    pub mcp_manager: Arc<mcp::McpManager>,
     pub cron_tool: Option<tools::CronTool>,
     pub runtime_config: Arc<config::RuntimeConfig>,
     pub event_tx: tokio::sync::broadcast::Sender<ProcessEvent>,

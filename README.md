@@ -31,7 +31,7 @@
   <a href="https://docs.spacebot.sh">Docs</a>
 </p>
 
-> **One-click deploy with [spacebot.sh](https://spacebot.sh)** — connect your Discord, Slack, or Telegram, configure your agent, and go. No self-hosting required.
+> **One-click deploy with [spacebot.sh](https://spacebot.sh)** — connect your Discord, Slack, Telegram, or Twitch, configure your agent, and go. No self-hosting required.
 
 <p align="center">
   <img src=".github/spacebot-ui.jpg" alt="Spacebot UI" />
@@ -88,15 +88,17 @@ Workers come loaded with tools for real work:
 
 ### Messaging
 
-Native adapters for Discord and Slack with full platform feature support:
+Native adapters for Discord, Slack, Telegram, Twitch, and Webchat with full platform feature support:
 
 - **Message coalescing** — rapid-fire messages are batched into a single LLM turn with timing context, so the agent reads the room instead of spamming replies
 - **File attachments** — send and receive files, images, and documents
+- **Rich messages** — embeds/cards, interactive buttons, select menus, and polls (Discord). Block Kit messages and slash commands (Slack)
 - **Threading** — automatic thread creation for long conversations
 - **Reactions** — emoji reactions on messages
 - **Typing indicators** — visual feedback while the agent is thinking
 - **Message history backfill** — reads recent conversation context on first message
 - **Per-channel permissions** — guild, channel, and DM-level access control, hot-reloadable
+- **Webchat** — embeddable portal chat with SSE streaming, per-agent session isolation
 
 ### Memory
 
@@ -107,7 +109,7 @@ Every memory has a type, an importance score, and graph edges connecting it to r
 - **Eight memory types** — Fact, Preference, Decision, Identity, Event, Observation, Goal, Todo
 - **Graph edges** — RelatedTo, Updates, Contradicts, CausedBy, PartOf
 - **Hybrid recall** — vector similarity + full-text search merged via Reciprocal Rank Fusion
-- **Memory import** — dump files into the `ingest/` folder and Spacebot extracts structured memories automatically. Migrating from OpenClaw? Drop your markdown memory files in and walk away.
+- **Memory import** — dump files into the `ingest/` folder and Spacebot extracts structured memories automatically. Supports text, markdown, and PDF files. Migrating from OpenClaw? Drop your markdown memory files in and walk away.
 - **Cross-channel recall** — branches can read transcripts from other conversations
 - **Memory bulletin** — the cortex generates a periodic briefing of the agent's knowledge, injected into every conversation
 
@@ -116,6 +118,8 @@ Every memory has a type, an importance score, and graph edges connecting it to r
 Cron jobs created and managed from conversation or config:
 
 - **Natural scheduling** — "check my inbox every 30 minutes" becomes a cron job with a delivery target
+- **Clock-aligned intervals** — sub-daily intervals snap to UTC boundaries so jobs fire on clean marks (e.g. every 30 min fires at :00 and :30)
+- **Configurable timeouts** — per-job `timeout_secs` to cap execution time (defaults to 120s)
 - **Active hours** — restrict jobs to specific time windows (supports midnight wrapping)
 - **Circuit breaker** — auto-disables after 3 consecutive failures
 - **Full agent capabilities** — each job gets a fresh channel with branching and workers
@@ -175,6 +179,20 @@ worker = "ollama/gemma3"
 coding = "ollama/qwen3"
 ```
 
+**Custom provider example** — add any OpenAI-compatible or Anthropic-compatible endpoint:
+
+```toml
+[llm.provider.my-provider]
+api_type = "openai_completions"  # or "anthropic"
+base_url = "https://my-llm-host.example.com"
+api_key = "env:MY_PROVIDER_KEY"
+
+[defaults.routing]
+channel = "my-provider/my-model"
+```
+
+Additional built-in providers include **NVIDIA**, **MiniMax**, **Moonshot AI (Kimi)**, and **Z.AI Coding Plan** — configure with `nvidia_key`, `minimax_key`, `moonshot_key`, or `zai_coding_plan_key` in `[llm]`.
+
 ### Skills
 
 Extensible skill system integrated with [skills.sh](https://skills.sh):
@@ -191,6 +209,31 @@ Extensible skill system integrated with [skills.sh](https://skills.sh):
 spacebot skill add vercel-labs/agent-skills
 spacebot skill add anthropics/skills/pdf
 spacebot skill list
+```
+
+### MCP Integration
+
+Connect workers to external [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) servers for arbitrary tool access -- databases, APIs, SaaS products, custom integrations -- without native Rust implementations:
+
+- **Per-agent config** — each agent declares its own MCP servers in `config.toml`
+- **Both transports** — stdio (subprocess) for local tools, streamable HTTP for remote servers
+- **Automatic tool discovery** — tools are discovered via the MCP protocol and registered on worker ToolServers with namespaced names (`{server}_{tool}`)
+- **Automatic retry** — failed connections retry in the background with exponential backoff (5s initial, 60s cap, 12 attempts). A broken server never blocks agent startup
+- **Hot-reloadable** — add, remove, or change servers in config and they reconcile live
+- **API management** — full CRUD API under `/api/mcp/` for managing server definitions and monitoring connection status programmatically
+
+```toml
+[[mcp_servers]]
+name = "filesystem"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+
+[[mcp_servers]]
+name = "sentry"
+transport = "http"
+url = "https://mcp.sentry.io"
+headers = { Authorization = "Bearer ${SENTRY_TOKEN}" }
 ```
 
 ---
@@ -313,6 +356,8 @@ Scheduled recurring tasks. Each cron job gets a fresh short-lived channel with f
 
 - Multiple cron jobs run independently at different intervals
 - Stored in the database, created via config, conversation, or programmatically
+- Clock-aligned intervals snap to UTC boundaries for predictable firing times
+- Per-job `timeout_secs` to cap execution time
 - Circuit breaker auto-disables after 3 consecutive failures
 - Active hours support with midnight wrapping
 
@@ -335,7 +380,7 @@ Read the full vision in the [roadmap](docs/content/docs/(deployment)/roadmap.mdx
 ### Prerequisites
 
 - **Rust** 1.85+ ([rustup](https://rustup.rs/))
-- An LLM API key from any supported provider (Anthropic, OpenAI, OpenRouter, Z.ai, Groq, Together, Fireworks, DeepSeek, xAI, Mistral, or OpenCode Zen)
+- An LLM API key from any supported provider (Anthropic, OpenAI, OpenRouter, Z.ai, Groq, Together, Fireworks, DeepSeek, xAI, Mistral, NVIDIA, MiniMax, Moonshot AI, OpenCode Zen) — or use `spacebot auth login` for Anthropic OAuth
 
 ### Build and Run
 
@@ -375,9 +420,24 @@ spacebot start --foreground   # or run in the foreground
 spacebot stop                 # graceful shutdown
 spacebot restart              # stop + start
 spacebot status               # show pid and uptime
+spacebot auth login           # authenticate via Anthropic OAuth
 ```
 
 The binary creates all databases and directories automatically on first run. See the [quickstart guide](docs/content/docs/(getting-started)/quickstart.mdx) for more detail.
+
+### Authentication
+
+Spacebot supports Anthropic OAuth as an alternative to static API keys. Use your Claude Pro, Max, or API Console subscription directly:
+
+```bash
+spacebot auth login             # OAuth via Claude Pro/Max (opens browser)
+spacebot auth login --console   # OAuth via API Console
+spacebot auth status            # show credential status and expiry
+spacebot auth refresh           # manually refresh the access token
+spacebot auth logout            # remove stored credentials
+```
+
+OAuth tokens are stored in `anthropic_oauth.json` and auto-refresh transparently before each API call. When OAuth credentials are present, they take priority over a static `ANTHROPIC_API_KEY`.
 
 ---
 
@@ -393,9 +453,11 @@ The binary creates all databases and directories automatically on first run. See
 | Key-value       | **[redb](https://github.com/cberner/redb)** — settings, encrypted secrets                                       |
 | Embeddings      | **FastEmbed** — local embedding generation                                                                      |
 | Crypto          | **AES-256-GCM** — secret encryption at rest                                                                     |
-| Discord         | **Serenity** — gateway, cache, events                                                                           |
-| Slack           | **slack-morphism** — Socket Mode, events, streaming via message edits                                           |
-| Browser         | **Chromiumoxide** — headless Chrome via CDP                                                                     |
+| Discord         | **Serenity** — gateway, cache, events, rich messages, interactions                              |
+| Slack           | **slack-morphism** — Socket Mode, events, Block Kit, slash commands, streaming via message edits |
+| Telegram        | **teloxide** — long-poll, media attachments, group/DM support                                   |
+| Twitch          | **twitch-irc** — chat integration with trigger prefix                                           |
+| Browser         | **Chromiumoxide** — headless Chrome via CDP                                                     |
 | CLI             | **Clap** — command line interface                                                                               |
 
 No server dependencies. Single binary. All data lives in embedded databases in a local directory.
@@ -415,9 +477,10 @@ No server dependencies. Single binary. All data lives in embedded databases in a
 | [Cortex](docs/content/docs/(core)/cortex.mdx)                    | Memory bulletin and system observation                   |
 | [Cron Jobs](docs/content/docs/(features)/cron.mdx)               | Scheduled recurring tasks                                |
 | [Routing](docs/content/docs/(core)/routing.mdx)                  | Model routing and fallback chains                        |
-| [Messaging](docs/content/docs/(messaging)/messaging.mdx)         | Adapter architecture (Discord, Slack, Telegram, webhook) |
+| [Messaging](docs/content/docs/(messaging)/messaging.mdx)         | Adapter architecture (Discord, Slack, Telegram, Twitch, Webchat, webhook) |
 | [Discord Setup](docs/content/docs/(messaging)/discord-setup.mdx) | Discord bot setup guide                                  |
 | [Browser](docs/content/docs/(features)/browser.mdx)              | Headless Chrome for workers                              |
+| [MCP](docs/content/docs/(features)/mcp.mdx)                      | External tool servers via Model Context Protocol         |
 | [OpenCode](docs/content/docs/(features)/opencode.mdx)            | OpenCode as a worker backend                             |
 | [Philosophy](docs/content/docs/(core)/philosophy.mdx)            | Why Rust                                                 |
 
@@ -439,8 +502,11 @@ Contributions welcome. Read [RUST_STYLE_GUIDE.md](RUST_STYLE_GUIDE.md) before wr
 
 1. Fork the repo
 2. Create a feature branch
-3. Make your changes
-4. Submit a PR
+3. Run `./scripts/install-git-hooks.sh` once (installs pre-commit formatting hook)
+4. Make your changes
+5. Submit a PR
+
+Formatting is still enforced in CI, but the hook catches it earlier by running `cargo fmt --all` before each commit.
 
 ---
 

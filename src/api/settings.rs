@@ -101,14 +101,13 @@ pub(super) async fn get_global_settings(
                 .get("defaults")
                 .and_then(|d| d.get("brave_search_key"))
                 .and_then(|v| v.as_str())
-                .map(|s| {
+                .and_then(|s| {
                     if let Some(var) = s.strip_prefix("env:") {
                         std::env::var(var).ok()
                     } else {
                         Some(s.to_string())
                     }
-                })
-                .flatten();
+                });
 
             let api_enabled = doc
                 .get("api")
@@ -432,8 +431,26 @@ pub(super) async fn update_raw_config(
     match crate::config::Config::load_from_path(&config_path) {
         Ok(new_config) => {
             let runtime_configs = state.runtime_configs.load();
-            for (agent_id, rc) in runtime_configs.iter() {
-                rc.reload_config(&new_config, agent_id);
+            let mcp_managers = state.mcp_managers.load();
+            let reload_targets = runtime_configs
+                .iter()
+                .filter_map(|(agent_id, runtime_config)| {
+                    mcp_managers.get(agent_id).map(|mcp_manager| {
+                        (
+                            agent_id.clone(),
+                            runtime_config.clone(),
+                            mcp_manager.clone(),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            drop(runtime_configs);
+            drop(mcp_managers);
+
+            for (agent_id, runtime_config, mcp_manager) in reload_targets {
+                runtime_config
+                    .reload_config(&new_config, &agent_id, &mcp_manager)
+                    .await;
             }
         }
         Err(error) => {

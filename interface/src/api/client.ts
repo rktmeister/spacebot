@@ -212,6 +212,7 @@ export interface CronJobInfo {
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
+	run_once: boolean;
 	active_hours: [number, number] | null;
 }
 
@@ -461,6 +462,7 @@ export interface RoutingSection {
 	worker: string;
 	compactor: string;
 	cortex: string;
+	voice: string;
 	rate_limit_cooldown_secs: number;
 	channel_thinking_effort: string;
 	branch_thinking_effort: string;
@@ -536,6 +538,7 @@ export interface RoutingUpdate {
 	worker?: string;
 	compactor?: string;
 	cortex?: string;
+	voice?: string;
 	rate_limit_cooldown_secs?: number;
 	channel_thinking_effort?: string;
 	branch_thinking_effort?: string;
@@ -612,6 +615,7 @@ export interface CronJobWithStats {
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
+	run_once: boolean;
 	active_hours: [number, number] | null;
 	success_count: number;
 	failure_count: number;
@@ -646,6 +650,7 @@ export interface CreateCronRequest {
 	active_start_hour?: number;
 	active_end_hour?: number;
 	enabled: boolean;
+	run_once: boolean;
 }
 
 export interface CronExecutionsParams {
@@ -699,6 +704,7 @@ export interface ModelInfo {
 	context_window: number | null;
 	tool_call: boolean;
 	reasoning: boolean;
+	input_audio: boolean;
 }
 
 export interface ModelsResponse {
@@ -809,6 +815,7 @@ export interface BindingInfo {
 	workspace_id: string | null;
 	chat_id: string | null;
 	channel_ids: string[];
+	require_mention: boolean;
 	dm_allowed_users: string[];
 }
 
@@ -823,6 +830,7 @@ export interface CreateBindingRequest {
 	workspace_id?: string;
 	chat_id?: string;
 	channel_ids?: string[];
+	require_mention?: boolean;
 	dm_allowed_users?: string[];
 	platform_credentials?: {
 		discord_token?: string;
@@ -851,6 +859,7 @@ export interface UpdateBindingRequest {
 	workspace_id?: string;
 	chat_id?: string;
 	channel_ids?: string[];
+	require_mention?: boolean;
 	dm_allowed_users?: string[];
 }
 
@@ -1152,8 +1161,11 @@ export const api = {
 	},
 
 	// Model listing
-	models: (provider?: string) => {
-		const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+	models: (provider?: string, capability?: "input_audio" | "voice_transcription") => {
+		const params = new URLSearchParams();
+		if (provider) params.set("provider", provider);
+		if (capability) params.set("capability", capability);
+		const query = params.toString() ? `?${params.toString()}` : "";
 		return fetchJson<ModelsResponse>(`/models${query}`);
 	},
 	refreshModels: async () => {

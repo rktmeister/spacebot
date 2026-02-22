@@ -9,7 +9,7 @@
 //! `get_api_key()` calls read the new values lock-free.
 
 use crate::auth::OAuthCredentials;
-use crate::config::{LlmConfig, ProviderConfig};
+use crate::config::{ApiType, LlmConfig, ProviderConfig};
 use crate::error::{LlmError, Result};
 
 use anyhow::Context as _;
@@ -124,10 +124,10 @@ impl LlmManager {
         match creds.refresh().await {
             Ok(new_creds) => {
                 // Save to disk
-                if let Some(ref instance_dir) = self.instance_dir {
-                    if let Err(error) = crate::auth::save_credentials(instance_dir, &new_creds) {
-                        tracing::warn!(%error, "failed to persist refreshed OAuth credentials");
-                    }
+                if let Some(ref instance_dir) = self.instance_dir
+                    && let Err(error) = crate::auth::save_credentials(instance_dir, &new_creds)
+                {
+                    tracing::warn!(%error, "failed to persist refreshed OAuth credentials");
                 }
                 let token = new_creds.access_token.clone();
                 *creds_guard = Some(new_creds);
@@ -140,6 +140,32 @@ impl LlmManager {
                 // and the error message will be clearer than "no key"
                 Ok(Some(creds.access_token.clone()))
             }
+        }
+    }
+
+    /// Resolve the Anthropic provider config, preferring OAuth credentials.
+    ///
+    /// If a static provider exists in config, returns it with the API key
+    /// overridden by the OAuth token when available. If no static provider
+    /// exists but OAuth credentials are present, builds a provider from
+    /// the OAuth token alone.
+    pub async fn get_anthropic_provider(&self) -> Result<ProviderConfig> {
+        let token = self.get_anthropic_token().await?;
+        let static_provider = self.get_provider("anthropic").ok();
+
+        match (static_provider, token) {
+            (Some(mut provider), Some(token)) => {
+                provider.api_key = token;
+                Ok(provider)
+            }
+            (Some(provider), None) => Ok(provider),
+            (None, Some(token)) => Ok(ProviderConfig {
+                api_type: ApiType::Anthropic,
+                base_url: "https://api.anthropic.com".to_string(),
+                api_key: token,
+                name: None,
+            }),
+            (None, None) => Err(LlmError::UnknownProvider("anthropic".to_string()).into()),
         }
     }
 

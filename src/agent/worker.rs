@@ -21,6 +21,11 @@ const TURNS_PER_SEGMENT: usize = 25;
 /// Prevents infinite compact-retry loops if something is fundamentally wrong.
 const MAX_OVERFLOW_RETRIES: usize = 3;
 
+/// Max segments before the worker gives up and returns a partial result.
+/// Prevents unbounded worker loops when the LLM keeps hitting max_turns
+/// without completing the task.
+const MAX_SEGMENTS: usize = 10;
+
 /// Worker state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerState {
@@ -61,6 +66,7 @@ pub struct Worker {
 
 impl Worker {
     /// Create a new fire-and-forget worker.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         channel_id: Option<ChannelId>,
         task: impl Into<String>,
@@ -101,6 +107,7 @@ impl Worker {
     }
 
     /// Create a new interactive worker.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_interactive(
         channel_id: Option<ChannelId>,
         task: impl Into<String>,
@@ -183,6 +190,8 @@ impl Worker {
 
         tracing::info!(worker_id = %self.id, task = %self.task, "worker starting");
 
+        let mcp_tools = self.deps.mcp_manager.get_tools().await;
+
         // Create per-worker ToolServer with task tools
         let worker_tool_server = crate::tools::create_worker_tool_server(
             self.deps.agent_id.clone(),
@@ -194,6 +203,7 @@ impl Worker {
             self.brave_search_key.clone(),
             self.deps.runtime_config.workspace_dir.clone(),
             self.deps.runtime_config.instance_dir.clone(),
+            mcp_tools,
         );
 
         let routing = self.deps.runtime_config.routing.load();
@@ -229,10 +239,37 @@ impl Worker {
                 }
                 Err(rig::completion::PromptError::MaxTurnsError { .. }) => {
                     overflow_retries = 0;
+
+                    if segments_run >= MAX_SEGMENTS {
+                        tracing::warn!(
+                            worker_id = %self.id,
+                            segments = segments_run,
+                            "worker hit max segments, returning partial result"
+                        );
+                        self.hook.send_status("done (max segments)");
+                        break history
+                            .iter()
+                            .rev()
+                            .find_map(|message| {
+                                if let rig::message::Message::Assistant { content, .. } = message {
+                                    content.iter().find_map(|part| {
+                                        if let rig::message::AssistantContent::Text(text) = part {
+                                            Some(text.text.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| "Worker reached maximum segments without a final response.".to_string());
+                    }
+
                     self.maybe_compact_history(&mut history).await;
                     prompt = "Continue where you left off. Do not repeat completed work.".into();
                     self.hook
-                        .send_status(&format!("working (segment {segments_run})"));
+                        .send_status(format!("working (segment {segments_run})"));
 
                     tracing::debug!(
                         worker_id = %self.id,
@@ -631,10 +668,10 @@ fn build_worker_recap(messages: &[rig::message::Message]) -> String {
                         let args = tc.function.arguments.to_string();
                         recap.push_str(&format!("- Called `{}` ({args})\n", tc.function.name));
                     }
-                    if let rig::message::AssistantContent::Text(t) = item {
-                        if !t.text.is_empty() {
-                            recap.push_str(&format!("- Noted: {}\n", t.text));
-                        }
+                    if let rig::message::AssistantContent::Text(t) = item
+                        && !t.text.is_empty()
+                    {
+                        recap.push_str(&format!("- Noted: {}\n", t.text));
                     }
                 }
             }
@@ -660,6 +697,7 @@ fn build_worker_recap(messages: &[rig::message::Message]) -> String {
 }
 
 /// Extract the last assistant text message from a history.
+#[allow(dead_code)]
 fn extract_last_assistant_text(history: &[rig::message::Message]) -> Option<String> {
     for message in history.iter().rev() {
         if let rig::message::Message::Assistant { content, .. } = message {

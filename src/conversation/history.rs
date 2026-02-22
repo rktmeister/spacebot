@@ -79,7 +79,7 @@ impl ConversationLogger {
         tokio::spawn(async move {
             if let Err(error) = sqlx::query(
                 "INSERT INTO conversation_messages (id, channel_id, role, content) \
-                 VALUES (?, ?, 'assistant', ?)"
+                 VALUES (?, ?, 'assistant', ?)",
             )
             .bind(&id)
             .bind(&channel_id)
@@ -103,7 +103,7 @@ impl ConversationLogger {
              FROM conversation_messages \
              WHERE channel_id = ? \
              ORDER BY created_at DESC \
-             LIMIT ?"
+             LIMIT ?",
         )
         .bind(channel_id.as_ref())
         .bind(limit)
@@ -121,7 +121,9 @@ impl ConversationLogger {
                 sender_id: row.try_get("sender_id").ok(),
                 content: row.try_get("content").unwrap_or_default(),
                 metadata: row.try_get("metadata").ok(),
-                created_at: row.try_get("created_at").unwrap_or_else(|_| chrono::Utc::now()),
+                created_at: row
+                    .try_get("created_at")
+                    .unwrap_or_else(|_| chrono::Utc::now()),
             })
             .collect();
 
@@ -142,7 +144,7 @@ impl ConversationLogger {
              FROM conversation_messages \
              WHERE channel_id = ? \
              ORDER BY created_at DESC \
-             LIMIT ?"
+             LIMIT ?",
         )
         .bind(channel_id)
         .bind(limit)
@@ -160,14 +162,15 @@ impl ConversationLogger {
                 sender_id: row.try_get("sender_id").ok(),
                 content: row.try_get("content").unwrap_or_default(),
                 metadata: row.try_get("metadata").ok(),
-                created_at: row.try_get("created_at").unwrap_or_else(|_| chrono::Utc::now()),
+                created_at: row
+                    .try_get("created_at")
+                    .unwrap_or_else(|_| chrono::Utc::now()),
             })
             .collect();
 
         messages.reverse();
         Ok(messages)
     }
-
 }
 
 /// A unified timeline item combining messages, branch runs, and worker runs.
@@ -213,7 +216,12 @@ impl ProcessRunLogger {
     }
 
     /// Record a branch starting. Fire-and-forget.
-    pub fn log_branch_started(&self, channel_id: &ChannelId, branch_id: BranchId, description: &str) {
+    pub fn log_branch_started(
+        &self,
+        channel_id: &ChannelId,
+        branch_id: BranchId,
+        description: &str,
+    ) {
         let pool = self.pool.clone();
         let id = branch_id.to_string();
         let channel_id = channel_id.to_string();
@@ -221,7 +229,7 @@ impl ProcessRunLogger {
 
         tokio::spawn(async move {
             if let Err(error) = sqlx::query(
-                "INSERT OR IGNORE INTO branch_runs (id, channel_id, description) VALUES (?, ?, ?)"
+                "INSERT OR IGNORE INTO branch_runs (id, channel_id, description) VALUES (?, ?, ?)",
             )
             .bind(&id)
             .bind(&channel_id)
@@ -255,7 +263,12 @@ impl ProcessRunLogger {
     }
 
     /// Record a worker starting. Fire-and-forget.
-    pub fn log_worker_started(&self, channel_id: Option<&ChannelId>, worker_id: WorkerId, task: &str) {
+    pub fn log_worker_started(
+        &self,
+        channel_id: Option<&ChannelId>,
+        worker_id: WorkerId,
+        task: &str,
+    ) {
         let pool = self.pool.clone();
         let id = worker_id.to_string();
         let channel_id = channel_id.map(|c| c.to_string());
@@ -263,7 +276,7 @@ impl ProcessRunLogger {
 
         tokio::spawn(async move {
             if let Err(error) = sqlx::query(
-                "INSERT OR IGNORE INTO worker_runs (id, channel_id, task) VALUES (?, ?, ?)"
+                "INSERT OR IGNORE INTO worker_runs (id, channel_id, task) VALUES (?, ?, ?)",
             )
             .bind(&id)
             .bind(&channel_id)
@@ -283,13 +296,11 @@ impl ProcessRunLogger {
         let status = status.to_string();
 
         tokio::spawn(async move {
-            if let Err(error) = sqlx::query(
-                "UPDATE worker_runs SET status = ? WHERE id = ?"
-            )
-            .bind(&status)
-            .bind(&id)
-            .execute(&pool)
-            .await
+            if let Err(error) = sqlx::query("UPDATE worker_runs SET status = ? WHERE id = ?")
+                .bind(&status)
+                .bind(&id)
+                .execute(&pool)
+                .await
             {
                 tracing::warn!(%error, worker_id = %id, "failed to persist worker status");
             }
@@ -327,7 +338,11 @@ impl ProcessRunLogger {
         limit: i64,
         before: Option<&str>,
     ) -> crate::error::Result<Vec<TimelineItem>> {
-        let before_clause = if before.is_some() { "AND timestamp < ?3" } else { "" };
+        let before_clause = if before.is_some() {
+            "AND timestamp < ?3"
+        } else {
+            ""
+        };
 
         let query_str = format!(
             "SELECT * FROM ( \
@@ -348,9 +363,7 @@ impl ProcessRunLogger {
             ) WHERE 1=1 {before_clause} ORDER BY timestamp DESC LIMIT ?2"
         );
 
-        let mut query = sqlx::query(&query_str)
-            .bind(channel_id)
-            .bind(limit);
+        let mut query = sqlx::query(&query_str).bind(channel_id).bind(limit);
 
         if let Some(before_ts) = before {
             query = query.bind(before_ts);
@@ -372,7 +385,8 @@ impl ProcessRunLogger {
                         sender_name: row.try_get("sender_name").ok(),
                         sender_id: row.try_get("sender_id").ok(),
                         content: row.try_get("content").unwrap_or_default(),
-                        created_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("timestamp")
+                        created_at: row
+                            .try_get::<chrono::DateTime<chrono::Utc>, _>("timestamp")
                             .map(|t| t.to_rfc3339())
                             .unwrap_or_default(),
                     }),
@@ -380,10 +394,12 @@ impl ProcessRunLogger {
                         id: row.try_get("id").unwrap_or_default(),
                         description: row.try_get("description").unwrap_or_default(),
                         conclusion: row.try_get("conclusion").ok(),
-                        started_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("timestamp")
+                        started_at: row
+                            .try_get::<chrono::DateTime<chrono::Utc>, _>("timestamp")
                             .map(|t| t.to_rfc3339())
                             .unwrap_or_default(),
-                        completed_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("completed_at")
+                        completed_at: row
+                            .try_get::<chrono::DateTime<chrono::Utc>, _>("completed_at")
                             .ok()
                             .map(|t| t.to_rfc3339()),
                     }),
@@ -392,10 +408,12 @@ impl ProcessRunLogger {
                         task: row.try_get("task").unwrap_or_default(),
                         result: row.try_get("result").ok(),
                         status: row.try_get("status").unwrap_or_default(),
-                        started_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("timestamp")
+                        started_at: row
+                            .try_get::<chrono::DateTime<chrono::Utc>, _>("timestamp")
                             .map(|t| t.to_rfc3339())
                             .unwrap_or_default(),
-                        completed_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("completed_at")
+                        completed_at: row
+                            .try_get::<chrono::DateTime<chrono::Utc>, _>("completed_at")
                             .ok()
                             .map(|t| t.to_rfc3339()),
                     }),

@@ -28,6 +28,7 @@ pub mod channel_recall;
 pub mod cron;
 pub mod exec;
 pub mod file;
+pub mod mcp;
 pub mod memory_delete;
 pub mod memory_recall;
 pub mod memory_save;
@@ -54,6 +55,7 @@ pub use channel_recall::{
 pub use cron::{CronArgs, CronError, CronOutput, CronTool};
 pub use exec::{EnvVar, ExecArgs, ExecError, ExecOutput, ExecResult, ExecTool};
 pub use file::{FileArgs, FileEntry, FileEntryOutput, FileError, FileOutput, FileTool, FileType};
+pub use mcp::{McpToolAdapter, McpToolError, McpToolOutput};
 pub use memory_delete::{
     MemoryDeleteArgs, MemoryDeleteError, MemoryDeleteOutput, MemoryDeleteTool,
 };
@@ -213,6 +215,7 @@ pub fn create_branch_tool_server(
 ///
 /// File operations are restricted to `workspace`. Shell and exec commands are
 /// blocked from accessing sensitive files in `instance_dir`.
+#[allow(clippy::too_many_arguments)]
 pub fn create_worker_tool_server(
     agent_id: AgentId,
     worker_id: WorkerId,
@@ -223,6 +226,7 @@ pub fn create_worker_tool_server(
     brave_search_key: Option<String>,
     workspace: PathBuf,
     instance_dir: PathBuf,
+    mcp_tools: Vec<McpToolAdapter>,
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(ShellTool::new(instance_dir.clone(), workspace.clone()))
@@ -238,6 +242,10 @@ pub fn create_worker_tool_server(
 
     if let Some(key) = brave_search_key {
         server = server.tool(WebSearchTool::new(key));
+    }
+
+    for mcp_tool in mcp_tools {
+        server = server.tool(mcp_tool);
     }
 
     server.run()
@@ -258,6 +266,7 @@ pub fn create_cortex_tool_server(memory_search: Arc<MemorySearch>) -> ToolServer
 /// Combines branch tools (memory) with worker tools (shell, file, exec) to give
 /// the interactive cortex full capabilities. Does not include channel-specific
 /// tools (reply, react, skip) since the cortex chat doesn't talk to platforms.
+#[allow(clippy::too_many_arguments)]
 pub fn create_cortex_chat_tool_server(
     memory_search: Arc<MemorySearch>,
     conversation_logger: crate::conversation::history::ConversationLogger,
