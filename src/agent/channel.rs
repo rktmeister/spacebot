@@ -1872,7 +1872,11 @@ async fn download_image_attachment(
     http: &reqwest::Client,
     attachment: &crate::Attachment,
 ) -> UserContent {
-    let response = match http.get(&attachment.url).send().await {
+    let mut request = http.get(&attachment.url);
+    if let Some(ref auth) = attachment.auth_header {
+        request = request.header(reqwest::header::AUTHORIZATION, auth);
+    }
+    let response = match request.send().await {
         Ok(r) => r,
         Err(error) => {
             tracing::warn!(%error, filename = %attachment.filename, "failed to download image");
@@ -1914,7 +1918,11 @@ async fn transcribe_audio_attachment(
     http: &reqwest::Client,
     attachment: &crate::Attachment,
 ) -> UserContent {
-    let response = match http.get(&attachment.url).send().await {
+    let mut request = http.get(&attachment.url);
+    if let Some(ref auth) = attachment.auth_header {
+        request = request.header(reqwest::header::AUTHORIZATION, auth);
+    }
+    let response = match request.send().await {
         Ok(r) => r,
         Err(error) => {
             tracing::warn!(%error, filename = %attachment.filename, "failed to download audio");
@@ -2138,7 +2146,11 @@ async fn download_text_attachment(
     http: &reqwest::Client,
     attachment: &crate::Attachment,
 ) -> UserContent {
-    let response = match http.get(&attachment.url).send().await {
+    let mut request = http.get(&attachment.url);
+    if let Some(ref auth) = attachment.auth_header {
+        request = request.header(reqwest::header::AUTHORIZATION, auth);
+    }
+    let response = match request.send().await {
         Ok(r) => r,
         Err(error) => {
             tracing::warn!(%error, filename = %attachment.filename, "failed to download text file");
