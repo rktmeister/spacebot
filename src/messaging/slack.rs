@@ -148,7 +148,9 @@ async fn handle_message_event(
     let state_guard = states.read().await;
     let adapter_state = state_guard
         .get_user_state::<Arc<SlackAdapterState>>()
-        .expect("SlackAdapterState must be in user_state");
+        .ok_or_else(|| Box::<dyn std::error::Error + Send + Sync>::from(
+            "SlackAdapterState not found in user_state",
+        ))?;
 
     let user_id = msg_event.sender.user.as_ref().map(|u| u.0.clone());
 
@@ -253,7 +255,9 @@ async fn handle_app_mention_event(
     let state_guard = states.read().await;
     let adapter_state = state_guard
         .get_user_state::<Arc<SlackAdapterState>>()
-        .expect("SlackAdapterState must be in user_state");
+        .ok_or_else(|| Box::<dyn std::error::Error + Send + Sync>::from(
+            "SlackAdapterState not found in user_state",
+        ))?;
 
     let user_id = mention.user.0.clone();
 
@@ -352,7 +356,9 @@ async fn handle_command_event(
     let state_guard = states.read().await;
     let adapter_state = state_guard
         .get_user_state::<Arc<SlackAdapterState>>()
-        .expect("SlackAdapterState must be in user_state");
+        .ok_or_else(|| Box::<dyn std::error::Error + Send + Sync>::from(
+            "SlackAdapterState not found in user_state",
+        ))?;
 
     let command_str = event.command.0.clone();
     let team_id = event.team_id.0.clone();
@@ -491,7 +497,9 @@ async fn handle_interaction_event(
     let state_guard = states.read().await;
     let adapter_state = state_guard
         .get_user_state::<Arc<SlackAdapterState>>()
-        .expect("SlackAdapterState must be in user_state");
+        .ok_or_else(|| Box::<dyn std::error::Error + Send + Sync>::from(
+            "SlackAdapterState not found in user_state",
+        ))?;
 
     let user_id = block_actions
         .user

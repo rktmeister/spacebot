@@ -90,7 +90,7 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
             || v4.is_link_local()                         // 169.254.0.0/16
             || v4.is_broadcast()                          // 255.255.255.255
             || v4.is_unspecified()                        // 0.0.0.0
-            || is_v4_cgnat(v4)                            // 100.64.0.0/10
+            || is_v4_cgnat(v4) // 100.64.0.0/10
         }
         IpAddr::V6(v6) => {
             v6.is_loopback()                             // ::1
