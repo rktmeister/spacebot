@@ -51,21 +51,6 @@ impl FileTool {
             )));
         }
 
-        // Prevent writes to identity files — these define the agent's core
-        // personality and must only be modified through the dedicated API.
-        let file_name = canonical
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-        const PROTECTED_FILES: &[&str] = &["SOUL.md", "IDENTITY.md", "USER.md"];
-        if PROTECTED_FILES.iter().any(|f| file_name.eq_ignore_ascii_case(f)) {
-            return Err(FileError(
-                "ACCESS DENIED: Identity files are protected and cannot be modified \
-                 through file operations. Use the identity management API instead."
-                    .to_string(),
-            ));
-        }
-
         // Reject paths containing symlinks to prevent TOCTOU races where a
         // path component is replaced with a symlink between resolution and I/O.
         {
@@ -215,6 +200,18 @@ impl Tool for FileTool {
         match args.operation.as_str() {
             "read" => do_file_read(&path).await,
             "write" => {
+                // Identity files remain readable, but writes must go through
+                // the dedicated identity API to keep update flow consistent.
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                const PROTECTED_FILES: &[&str] = &["SOUL.md", "IDENTITY.md", "USER.md"];
+                if PROTECTED_FILES.iter().any(|f| file_name.eq_ignore_ascii_case(f)) {
+                    return Err(FileError(
+                        "ACCESS DENIED: Identity files are protected and cannot be modified \
+                         through file operations. Use the identity management API instead."
+                            .to_string(),
+                    ));
+                }
+
                 let content = args.content.ok_or_else(|| {
                     FileError("Content is required for write operation".to_string())
                 })?;
