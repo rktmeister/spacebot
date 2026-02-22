@@ -60,6 +60,7 @@ pub struct ApiConfig {
     pub port: u16,
     /// Address to bind the HTTP server on.
     pub bind: String,
+    pub auth_token: Option<String>,
 }
 
 impl Default for ApiConfig {
@@ -68,6 +69,7 @@ impl Default for ApiConfig {
             enabled: true,
             port: 19898,
             bind: "127.0.0.1".into(),
+            auth_token: None,
         }
     }
 }
@@ -1073,6 +1075,7 @@ pub struct WebhookConfig {
     pub enabled: bool,
     pub port: u16,
     pub bind: String,
+    pub auth_token: Option<String>,
 }
 
 // -- TOML deserialization types --
@@ -1113,6 +1116,8 @@ struct TomlApiConfig {
     port: u16,
     #[serde(default = "default_api_bind")]
     bind: String,
+    #[serde(default)]
+    auth_token: Option<String>,
 }
 
 impl Default for TomlApiConfig {
@@ -1121,6 +1126,7 @@ impl Default for TomlApiConfig {
             enabled: default_api_enabled(),
             port: default_api_port(),
             bind: default_api_bind(),
+            auth_token: None,
         }
     }
 }
@@ -1510,6 +1516,7 @@ struct TomlWebhookConfig {
     port: u16,
     #[serde(default = "default_webhook_bind")]
     bind: String,
+    auth_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2671,6 +2678,7 @@ impl Config {
                 enabled: w.enabled,
                 port: w.port,
                 bind: w.bind,
+                auth_token: w.auth_token.as_deref().and_then(resolve_env_value),
             }),
             twitch: toml.messaging.twitch.and_then(|t| {
                 let username = t
@@ -2712,6 +2720,7 @@ impl Config {
             enabled: toml.api.enabled,
             port: toml.api.port,
             bind: hosted_api_bind(toml.api.bind),
+            auth_token: toml.api.auth_token.as_deref().and_then(resolve_env_value),
         };
 
         let metrics = MetricsConfig {

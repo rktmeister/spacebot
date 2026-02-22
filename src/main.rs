@@ -607,11 +607,13 @@ async fn run(
     let (agent_remove_tx, mut agent_remove_rx) = mpsc::channel::<String>(8);
 
     // Start HTTP API server if enabled
-    let api_state = Arc::new(spacebot::api::ApiState::new_with_provider_sender(
+    let mut api_state = spacebot::api::ApiState::new_with_provider_sender(
         provider_tx,
         agent_tx,
         agent_remove_tx,
-    ));
+    );
+    api_state.auth_token = config.api.auth_token.clone();
+    let api_state = Arc::new(api_state);
 
     // Start background update checker
     spacebot::update::spawn_update_checker(api_state.update_status.clone());
@@ -1432,6 +1434,7 @@ async fn initialize_agents(
         let adapter = spacebot::messaging::webhook::WebhookAdapter::new(
             webhook_config.port,
             &webhook_config.bind,
+            webhook_config.auth_token.clone(),
         );
         new_messaging_manager.register(adapter).await;
     }

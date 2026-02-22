@@ -386,6 +386,7 @@ pub(super) async fn toggle_platform(
                         let adapter = crate::messaging::webhook::WebhookAdapter::new(
                             webhook_config.port,
                             &webhook_config.bind,
+                            webhook_config.auth_token.clone(),
                         );
                         if let Err(error) = manager.register_and_start(adapter).await {
                             tracing::error!(%error, "failed to start webhook adapter on toggle");
