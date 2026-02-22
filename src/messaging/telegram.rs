@@ -7,13 +7,13 @@ use crate::{Attachment, InboundMessage, MessageContent, OutboundResponse, Status
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
 use regex::Regex;
-use teloxide::Bot;
 use teloxide::payloads::setters::*;
 use teloxide::requests::{Request, Requester};
 use teloxide::types::{
     ChatAction, ChatId, FileId, InputFile, InputPollOption, MediaKind, MessageId, MessageKind,
     ParseMode, ReactionType, ReplyParameters, UpdateKind, UserId,
 };
+use teloxide::{ApiError, Bot, RequestError};
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock};
@@ -331,16 +331,24 @@ impl Messaging for TelegramAdapter {
                 };
 
                 if let Err(error) = sent {
-                    tracing::debug!(%error, "HTML caption send failed, retrying as plain text");
-                    let fallback_file = InputFile::memory(data).file_name(filename);
-                    let mut request = self.bot.send_document(chat_id, fallback_file);
-                    if let Some(caption_text) = caption {
-                        request = request.caption(caption_text);
+                    if should_retry_plain_caption(&error) {
+                        tracing::debug!(
+                            %error,
+                            "HTML caption parse failed, retrying telegram file with plain caption"
+                        );
+                        let fallback_file = InputFile::memory(data).file_name(filename);
+                        let mut request = self.bot.send_document(chat_id, fallback_file);
+                        if let Some(caption_text) = caption {
+                            request = request.caption(caption_text);
+                        }
+                        request
+                            .send()
+                            .await
+                            .context("failed to send telegram file")?;
+                    } else {
+                        return Err(error)
+                            .context("failed to send telegram file with HTML caption")?;
                     }
-                    request
-                        .send()
-                        .await
-                        .context("failed to send telegram file")?;
                 }
             }
             OutboundResponse::Reaction(emoji) => {
@@ -895,6 +903,11 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
     chunks
 }
 
+/// Return true when Telegram rejected rich text entities and a plain-caption retry is safe.
+fn should_retry_plain_caption(error: &RequestError) -> bool {
+    matches!(error, RequestError::Api(ApiError::CantParseEntities(_)))
+}
+
 // -- Markdown-to-Telegram-HTML formatting --
 
 static BOLD_PATTERN: LazyLock<Regex> =
@@ -1281,5 +1294,16 @@ mod tests {
         let input = "- item one\n- item two\n- item three";
         let expected = "- item one\n- item two\n- item three";
         assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn retries_plain_caption_only_for_parse_entity_errors() {
+        let parse_error = RequestError::Api(ApiError::CantParseEntities(
+            "Bad Request: can't parse entities".into(),
+        ));
+        let non_parse_error = RequestError::Api(ApiError::BotBlocked);
+
+        assert!(should_retry_plain_caption(&parse_error));
+        assert!(!should_retry_plain_caption(&non_parse_error));
     }
 }
