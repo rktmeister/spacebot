@@ -449,9 +449,7 @@ export function Settings() {
 
 		setMessage(null);
 		try {
-			const redirectUri = `${window.location.origin}${BASE_PATH}/api/providers/openai/oauth/browser/callback`;
 			const result = await startOpenAiBrowserOAuthMutation.mutateAsync({
-				redirectUri,
 				model: modelInput.trim(),
 			});
 			if (!result.success || !result.authorization_url || !result.state) {
@@ -684,7 +682,7 @@ export function Settings() {
 									variant="outline"
 									size="sm"
 								>
-									Sign in with browser
+									Sign in with ChatGPT Plus
 								</Button>
 								<Button
 									onClick={handleStartOpenAiOAuth}
@@ -693,7 +691,7 @@ export function Settings() {
 									variant="outline"
 									size="sm"
 								>
-									Sign in with ChatGPT Plus
+									Use device code flow
 								</Button>
 								<Button
 									onClick={handleCompleteOpenAiOAuth}

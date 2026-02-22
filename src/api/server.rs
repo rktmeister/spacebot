@@ -139,10 +139,6 @@ pub async fn start_http_server(
             "/providers/openai/oauth/browser/status",
             get(providers::openai_browser_oauth_status),
         )
-        .route(
-            "/providers/openai/oauth/browser/callback",
-            get(providers::openai_browser_oauth_callback),
-        )
         .route("/providers/test", post(providers::test_provider_model))
         .route("/providers/{provider}", delete(providers::delete_provider))
         .route("/models", get(models::get_models))
@@ -216,10 +212,7 @@ async fn api_auth_middleware(
     };
 
     let path = request.uri().path();
-    if path == "/api/health"
-        || path == "/health"
-        || path.ends_with("/api/providers/openai/oauth/browser/callback")
-    {
+    if path == "/api/health" || path == "/health" {
         return next.run(request).await;
     }
 

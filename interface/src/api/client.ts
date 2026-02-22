@@ -1206,12 +1206,11 @@ export const api = {
 		}
 		return response.json() as Promise<ProviderActionResponse>;
 	},
-	startOpenAiOAuthBrowser: async (params: {redirectUri: string; model: string}) => {
+	startOpenAiOAuthBrowser: async (params: {model: string}) => {
 		const response = await fetch(`${API_BASE}/providers/openai/oauth/browser/start`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
-				redirect_uri: params.redirectUri,
 				model: params.model,
 			}),
 		});

@@ -156,7 +156,7 @@ pub fn start_browser_authorization(redirect_uri: &str) -> BrowserAuthorization {
     let state = generate_random_urlsafe_string(32);
 
     let authorization_url = format!(
-        "{authorize}?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&code_challenge={challenge}&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&originator=spacebot&state={state}",
+        "{authorize}?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&code_challenge={challenge}&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&originator=opencode&state={state}",
         authorize = AUTHORIZE_URL,
         client_id = urlencoding::encode(CLIENT_ID),
         redirect_uri = urlencoding::encode(redirect_uri),
