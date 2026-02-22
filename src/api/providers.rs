@@ -66,6 +66,24 @@ pub(super) struct ProviderModelTestResponse {
     sample: Option<String>,
 }
 
+#[derive(Serialize)]
+pub(super) struct OpenAiOAuthStartResponse {
+    success: bool,
+    message: String,
+    device_auth_id: Option<String>,
+    user_code: Option<String>,
+    poll_interval_secs: Option<u64>,
+    authorization_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct OpenAiOAuthCompleteRequest {
+    device_auth_id: String,
+    user_code: String,
+    poll_interval_secs: u64,
+    model: String,
+}
+
 fn provider_toml_key(provider: &str) -> Option<&'static str> {
     match provider {
         "anthropic" => Some("anthropic_key"),
@@ -232,10 +250,58 @@ fn build_test_llm_config(provider: &str, credential: &str) -> crate::config::Llm
     }
 }
 
+fn apply_model_routing(doc: &mut toml_edit::DocumentMut, model: &str) {
+    if doc.get("defaults").is_none() {
+        doc["defaults"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    if let Some(defaults) = doc.get_mut("defaults").and_then(|item| item.as_table_mut()) {
+        if defaults.get("routing").is_none() {
+            defaults["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        if let Some(routing_table) = defaults
+            .get_mut("routing")
+            .and_then(|item| item.as_table_mut())
+        {
+            routing_table["channel"] = toml_edit::value(model);
+            routing_table["branch"] = toml_edit::value(model);
+            routing_table["worker"] = toml_edit::value(model);
+            routing_table["compactor"] = toml_edit::value(model);
+            routing_table["cortex"] = toml_edit::value(model);
+        }
+    }
+
+    if let Some(agents) = doc
+        .get_mut("agents")
+        .and_then(|agents_item| agents_item.as_array_of_tables_mut())
+        && let Some(default_agent) = agents.iter_mut().find(|agent| {
+            agent
+                .get("default")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        })
+    {
+        if default_agent.get("routing").is_none() {
+            default_agent["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        if let Some(routing_table) = default_agent
+            .get_mut("routing")
+            .and_then(|routing_item| routing_item.as_table_mut())
+        {
+            routing_table["channel"] = toml_edit::value(model);
+            routing_table["branch"] = toml_edit::value(model);
+            routing_table["worker"] = toml_edit::value(model);
+            routing_table["compactor"] = toml_edit::value(model);
+            routing_table["cortex"] = toml_edit::value(model);
+        }
+    }
+}
+
 pub(super) async fn get_providers(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<ProvidersResponse>, StatusCode> {
     let config_path = state.config_path.read().await.clone();
+    let instance_dir = (**state.instance_dir.load()).clone();
+    let openai_oauth_configured = crate::openai_auth::credentials_path(&instance_dir).exists();
 
     let (
         anthropic,
@@ -279,7 +345,7 @@ pub(super) async fn get_providers(
 
         (
             has_value("anthropic_key", "ANTHROPIC_API_KEY"),
-            has_value("openai_key", "OPENAI_API_KEY"),
+            has_value("openai_key", "OPENAI_API_KEY") || openai_oauth_configured,
             has_value("openrouter_key", "OPENROUTER_API_KEY"),
             has_value("zhipu_key", "ZHIPU_API_KEY"),
             has_value("groq_key", "GROQ_API_KEY"),
@@ -301,7 +367,7 @@ pub(super) async fn get_providers(
     } else {
         (
             std::env::var("ANTHROPIC_API_KEY").is_ok(),
-            std::env::var("OPENAI_API_KEY").is_ok(),
+            std::env::var("OPENAI_API_KEY").is_ok() || openai_oauth_configured,
             std::env::var("OPENROUTER_API_KEY").is_ok(),
             std::env::var("ZHIPU_API_KEY").is_ok(),
             std::env::var("GROQ_API_KEY").is_ok(),
@@ -363,6 +429,124 @@ pub(super) async fn get_providers(
     Ok(Json(ProvidersResponse { providers, has_any }))
 }
 
+pub(super) async fn start_openai_oauth() -> Result<Json<OpenAiOAuthStartResponse>, StatusCode> {
+    match crate::openai_auth::start_device_authorization().await {
+        Ok(auth) => Ok(Json(OpenAiOAuthStartResponse {
+            success: true,
+            message: "OpenAI device authorization started".to_string(),
+            device_auth_id: Some(auth.device_auth_id),
+            user_code: Some(auth.user_code),
+            poll_interval_secs: Some(auth.poll_interval_secs),
+            authorization_url: Some(auth.authorization_url),
+        })),
+        Err(error) => Ok(Json(OpenAiOAuthStartResponse {
+            success: false,
+            message: format!("Failed to start ChatGPT Plus sign-in: {error}"),
+            device_auth_id: None,
+            user_code: None,
+            poll_interval_secs: None,
+            authorization_url: None,
+        })),
+    }
+}
+
+pub(super) async fn complete_openai_oauth(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<OpenAiOAuthCompleteRequest>,
+) -> Result<Json<ProviderUpdateResponse>, StatusCode> {
+    if request.device_auth_id.trim().is_empty() {
+        return Ok(Json(ProviderUpdateResponse {
+            success: false,
+            message: "Missing device_auth_id".to_string(),
+        }));
+    }
+
+    if request.user_code.trim().is_empty() {
+        return Ok(Json(ProviderUpdateResponse {
+            success: false,
+            message: "Missing user_code".to_string(),
+        }));
+    }
+
+    if request.model.trim().is_empty() {
+        return Ok(Json(ProviderUpdateResponse {
+            success: false,
+            message: "Model cannot be empty".to_string(),
+        }));
+    }
+
+    if !model_matches_provider("openai", &request.model) {
+        return Ok(Json(ProviderUpdateResponse {
+            success: false,
+            message: format!(
+                "Model '{}' does not match provider 'openai'.",
+                request.model
+            ),
+        }));
+    }
+
+    let credentials = match crate::openai_auth::complete_device_authorization(
+        &request.device_auth_id,
+        &request.user_code,
+        request.poll_interval_secs,
+    )
+    .await
+    {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            return Ok(Json(ProviderUpdateResponse {
+                success: false,
+                message: format!("Failed to complete ChatGPT Plus sign-in: {error}"),
+            }));
+        }
+    };
+
+    let instance_dir = (**state.instance_dir.load()).clone();
+    if let Err(error) = crate::openai_auth::save_credentials(&instance_dir, &credentials) {
+        return Ok(Json(ProviderUpdateResponse {
+            success: false,
+            message: format!("Failed to save OpenAI OAuth credentials: {error}"),
+        }));
+    }
+
+    if let Some(llm_manager) = state.llm_manager.read().await.as_ref() {
+        llm_manager
+            .set_openai_oauth_credentials(credentials.clone())
+            .await;
+    }
+
+    let config_path = state.config_path.read().await.clone();
+    let content = if config_path.exists() {
+        tokio::fs::read_to_string(&config_path)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    } else {
+        String::new()
+    };
+
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    apply_model_routing(&mut doc, request.model.trim());
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    state
+        .provider_setup_tx
+        .try_send(crate::ProviderSetupEvent::ProvidersConfigured)
+        .ok();
+
+    Ok(Json(ProviderUpdateResponse {
+        success: true,
+        message: format!(
+            "OpenAI configured via ChatGPT Plus OAuth. Model '{}' applied to defaults and the default agent routing.",
+            request.model.trim()
+        ),
+    }))
+}
+
 pub(super) async fn update_provider(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<ProviderUpdateRequest>,
@@ -417,47 +601,7 @@ pub(super) async fn update_provider(
     }
 
     doc["llm"][key_name] = toml_edit::value(request.api_key);
-
-    if doc.get("defaults").is_none() {
-        doc["defaults"] = toml_edit::Item::Table(toml_edit::Table::new());
-    }
-    if let Some(defaults) = doc.get_mut("defaults").and_then(|d| d.as_table_mut()) {
-        if defaults.get("routing").is_none() {
-            defaults["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
-        }
-        if let Some(routing_table) = defaults.get_mut("routing").and_then(|r| r.as_table_mut()) {
-            routing_table["channel"] = toml_edit::value(request.model.as_str());
-            routing_table["branch"] = toml_edit::value(request.model.as_str());
-            routing_table["worker"] = toml_edit::value(request.model.as_str());
-            routing_table["compactor"] = toml_edit::value(request.model.as_str());
-            routing_table["cortex"] = toml_edit::value(request.model.as_str());
-        }
-    }
-
-    if let Some(agents) = doc
-        .get_mut("agents")
-        .and_then(|agents_item| agents_item.as_array_of_tables_mut())
-        && let Some(default_agent) = agents.iter_mut().find(|agent| {
-            agent
-                .get("default")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-        })
-    {
-        if default_agent.get("routing").is_none() {
-            default_agent["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
-        }
-        if let Some(routing_table) = default_agent
-            .get_mut("routing")
-            .and_then(|routing_item| routing_item.as_table_mut())
-        {
-            routing_table["channel"] = toml_edit::value(request.model.as_str());
-            routing_table["branch"] = toml_edit::value(request.model.as_str());
-            routing_table["worker"] = toml_edit::value(request.model.as_str());
-            routing_table["compactor"] = toml_edit::value(request.model.as_str());
-            routing_table["cortex"] = toml_edit::value(request.model.as_str());
-        }
-    }
+    apply_model_routing(&mut doc, request.model.as_str());
 
     tokio::fs::write(&config_path, doc.to_string())
         .await

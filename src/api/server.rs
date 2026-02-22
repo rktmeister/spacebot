@@ -123,6 +123,14 @@ pub async fn start_http_server(
             "/providers",
             get(providers::get_providers).put(providers::update_provider),
         )
+        .route(
+            "/providers/openai/oauth/start",
+            post(providers::start_openai_oauth),
+        )
+        .route(
+            "/providers/openai/oauth/complete",
+            post(providers::complete_openai_oauth),
+        )
         .route("/providers/test", post(providers::test_provider_model))
         .route("/providers/{provider}", delete(providers::delete_provider))
         .route("/models", get(models::get_models))

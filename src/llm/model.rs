@@ -89,15 +89,21 @@ impl SpacebotModel {
             .map(|(provider, _)| provider)
             .unwrap_or("anthropic");
 
-        let provider_config = if provider_id == "anthropic" {
-            self.llm_manager
+        let provider_config = match provider_id {
+            "anthropic" => self
+                .llm_manager
                 .get_anthropic_provider()
                 .await
-                .map_err(|e| CompletionError::ProviderError(e.to_string()))?
-        } else {
-            self.llm_manager
+                .map_err(|e| CompletionError::ProviderError(e.to_string()))?,
+            "openai" => self
+                .llm_manager
+                .get_openai_provider()
+                .await
+                .map_err(|e| CompletionError::ProviderError(e.to_string()))?,
+            _ => self
+                .llm_manager
                 .get_provider(provider_id)
-                .map_err(|e| CompletionError::ProviderError(e.to_string()))?
+                .map_err(|e| CompletionError::ProviderError(e.to_string()))?,
         };
 
         if provider_id == "zai-coding-plan" || provider_id == "zhipu" {
@@ -536,6 +542,11 @@ impl SpacebotModel {
             "{}/v1/chat/completions",
             provider_config.base_url.trim_end_matches('/')
         );
+        let openai_account_id = if self.provider == "openai" {
+            self.llm_manager.get_openai_account_id().await
+        } else {
+            None
+        };
 
         let mut request_builder = self
             .llm_manager
@@ -543,6 +554,9 @@ impl SpacebotModel {
             .post(&chat_completions_url)
             .header("authorization", format!("Bearer {api_key}"))
             .header("content-type", "application/json");
+        if let Some(account_id) = openai_account_id {
+            request_builder = request_builder.header("chatgpt-account-id", account_id);
+        }
 
         // Kimi endpoints require a specific user-agent header.
         if chat_completions_url.contains("kimi.com") || chat_completions_url.contains("moonshot.ai")
@@ -625,12 +639,23 @@ impl SpacebotModel {
             body["tools"] = serde_json::json!(tools);
         }
 
-        let response = self
+        let openai_account_id = if self.provider == "openai" {
+            self.llm_manager.get_openai_account_id().await
+        } else {
+            None
+        };
+
+        let mut request_builder = self
             .llm_manager
             .http_client()
             .post(&responses_url)
             .header("authorization", format!("Bearer {api_key}"))
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        if let Some(account_id) = openai_account_id {
+            request_builder = request_builder.header("chatgpt-account-id", account_id);
+        }
+
+        let response = request_builder
             .json(&body)
             .send()
             .await

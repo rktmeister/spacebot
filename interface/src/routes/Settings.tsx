@@ -236,6 +236,12 @@ export function Settings() {
 		message: string;
 		sample?: string | null;
 	} | null>(null);
+	const [openAiOAuthSession, setOpenAiOAuthSession] = useState<{
+		deviceAuthId: string;
+		userCode: string;
+		pollIntervalSecs: number;
+		authorizationUrl: string;
+	} | null>(null);
 	const [message, setMessage] = useState<{
 		text: string;
 		type: "success" | "error";
@@ -286,6 +292,17 @@ export function Settings() {
 	const testModelMutation = useMutation({
 		mutationFn: ({ provider, apiKey, model }: { provider: string; apiKey: string; model: string }) =>
 			api.testProviderModel(provider, apiKey, model),
+	});
+	const startOpenAiOAuthMutation = useMutation({
+		mutationFn: () => api.startOpenAiOAuth(),
+	});
+	const completeOpenAiOAuthMutation = useMutation({
+		mutationFn: (params: {
+			deviceAuthId: string;
+			userCode: string;
+			pollIntervalSecs: number;
+			model: string;
+		}) => api.completeOpenAiOAuth(params),
 	});
 
 	const removeMutation = useMutation({
@@ -347,12 +364,79 @@ export function Settings() {
 		});
 	};
 
+	const handleStartOpenAiOAuth = async () => {
+		if (!modelInput.trim()) {
+			setMessage({text: "Model cannot be empty", type: "error"});
+			return;
+		}
+
+		setMessage(null);
+		try {
+			const result = await startOpenAiOAuthMutation.mutateAsync();
+			if (
+				!result.success ||
+				!result.device_auth_id ||
+				!result.user_code ||
+				!result.poll_interval_secs ||
+				!result.authorization_url
+			) {
+				setMessage({text: result.message || "Failed to start ChatGPT Plus sign-in", type: "error"});
+				return;
+			}
+
+			setOpenAiOAuthSession({
+				deviceAuthId: result.device_auth_id,
+				userCode: result.user_code,
+				pollIntervalSecs: result.poll_interval_secs,
+				authorizationUrl: result.authorization_url,
+			});
+			window.open(result.authorization_url, "_blank", "noopener,noreferrer");
+			setMessage({text: "Sign-in started. Complete authorization in your browser, then click Complete sign-in.", type: "success"});
+		} catch (error: any) {
+			setMessage({text: `Failed: ${error.message}`, type: "error"});
+		}
+	};
+
+	const handleCompleteOpenAiOAuth = async () => {
+		if (!openAiOAuthSession || !modelInput.trim()) return;
+		setMessage(null);
+
+		try {
+			const result = await completeOpenAiOAuthMutation.mutateAsync({
+				deviceAuthId: openAiOAuthSession.deviceAuthId,
+				userCode: openAiOAuthSession.userCode,
+				pollIntervalSecs: openAiOAuthSession.pollIntervalSecs,
+				model: modelInput.trim(),
+			});
+
+			if (result.success) {
+				setEditingProvider(null);
+				setKeyInput("");
+				setModelInput("");
+				setTestedSignature(null);
+				setTestResult(null);
+				setOpenAiOAuthSession(null);
+				setMessage({text: result.message, type: "success"});
+				queryClient.invalidateQueries({queryKey: ["providers"]});
+				setTimeout(() => {
+					queryClient.invalidateQueries({queryKey: ["agents"]});
+					queryClient.invalidateQueries({queryKey: ["overview"]});
+				}, 3000);
+			} else {
+				setMessage({text: result.message, type: "error"});
+			}
+		} catch (error: any) {
+			setMessage({text: `Failed: ${error.message}`, type: "error"});
+		}
+	};
+
 	const handleClose = () => {
 		setEditingProvider(null);
 		setKeyInput("");
 		setModelInput("");
 		setTestedSignature(null);
 		setTestResult(null);
+		setOpenAiOAuthSession(null);
 	};
 
 	const isConfigured = (providerId: string): boolean => {
@@ -483,6 +567,8 @@ export function Settings() {
 						<DialogDescription>
 							{editingProvider === "ollama"
 								? `Enter your ${editingProviderData?.name} base URL. It will be saved to your instance config.`
+								: editingProvider === "openai"
+									? "Enter an OpenAI API key or use ChatGPT Plus sign-in. The model below will be applied to routing."
 								: `Enter your ${editingProviderData?.name} API key. It will be saved to your instance config.`}
 						</DialogDescription>
 					</DialogHeader>
@@ -509,6 +595,48 @@ export function Settings() {
 						}}
 						provider={editingProvider ?? undefined}
 					/>
+					{editingProvider === "openai" && (
+						<div className="rounded-md border border-app-line bg-app-darkBox/20 px-3 py-2">
+							<div className="text-xs text-ink-faint">
+								Use your ChatGPT Plus account instead of an API key.
+							</div>
+							<div className="mt-2 flex flex-wrap items-center gap-2">
+								<Button
+									onClick={handleStartOpenAiOAuth}
+									disabled={!modelInput.trim()}
+									loading={startOpenAiOAuthMutation.isPending}
+									variant="outline"
+									size="sm"
+								>
+									Sign in with ChatGPT Plus
+								</Button>
+								<Button
+									onClick={handleCompleteOpenAiOAuth}
+									disabled={!openAiOAuthSession || !modelInput.trim()}
+									loading={completeOpenAiOAuthMutation.isPending}
+									variant="outline"
+									size="sm"
+								>
+									Complete sign-in
+								</Button>
+							</div>
+							{openAiOAuthSession && (
+								<div className="mt-2 text-xs text-ink-dull">
+									<div>
+										User code: <code className="rounded bg-app-box px-1 py-0.5">{openAiOAuthSession.userCode}</code>
+									</div>
+									<a
+										href={openAiOAuthSession.authorizationUrl}
+										target="_blank"
+										rel="noreferrer"
+										className="text-accent underline"
+									>
+										Open verification page
+									</a>
+								</div>
+							)}
+						</div>
+					)}
 					<div className="flex items-center gap-2">
 						<Button
 							onClick={handleTestModel}
