@@ -21,6 +21,11 @@ const TURNS_PER_SEGMENT: usize = 25;
 /// Prevents infinite compact-retry loops if something is fundamentally wrong.
 const MAX_OVERFLOW_RETRIES: usize = 3;
 
+/// Max segments before the worker gives up and returns a partial result.
+/// Prevents unbounded worker loops when the LLM keeps hitting max_turns
+/// without completing the task.
+const MAX_SEGMENTS: usize = 10;
+
 /// Worker state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerState {
@@ -234,6 +239,33 @@ impl Worker {
                 }
                 Err(rig::completion::PromptError::MaxTurnsError { .. }) => {
                     overflow_retries = 0;
+
+                    if segments_run >= MAX_SEGMENTS {
+                        tracing::warn!(
+                            worker_id = %self.id,
+                            segments = segments_run,
+                            "worker hit max segments, returning partial result"
+                        );
+                        self.hook.send_status("done (max segments)");
+                        break history
+                            .iter()
+                            .rev()
+                            .find_map(|message| {
+                                if let rig::message::Message::Assistant { content, .. } = message {
+                                    content.iter().find_map(|part| {
+                                        if let rig::message::AssistantContent::Text(text) = part {
+                                            Some(text.text.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| "Worker reached maximum segments without a final response.".to_string());
+                    }
+
                     self.maybe_compact_history(&mut history).await;
                     prompt = "Continue where you left off. Do not repeat completed work.".into();
                     self.hook
