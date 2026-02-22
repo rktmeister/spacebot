@@ -8251,6 +8251,7 @@ dependencies = [
  "chromiumoxide",
  "chromiumoxide_cdp",
  "chrono",
+ "chrono-tz",
  "clap",
  "config",
  "daemonize",
