@@ -2122,9 +2122,16 @@ mod tests {
     }
 
     fn make_history(msgs: &[&str]) -> Vec<Message> {
-        msgs.iter().enumerate().map(|(i, text)| {
-            if i % 2 == 0 { user_msg(text) } else { assistant_msg(text) }
-        }).collect()
+        msgs.iter()
+            .enumerate()
+            .map(|(i, text)| {
+                if i % 2 == 0 {
+                    user_msg(text)
+                } else {
+                    assistant_msg(text)
+                }
+            })
+            .collect()
     }
 
     /// On success, the full post-turn history is written back.
@@ -2134,7 +2141,13 @@ mod tests {
         let history = make_history(&["hello", "hi there", "how are you?"]);
         let len_before = 1;
 
-        apply_history_after_turn(&Ok("hi there".to_string()), &mut guard, history.clone(), len_before, "test");
+        apply_history_after_turn(
+            &Ok("hi there".to_string()),
+            &mut guard,
+            history.clone(),
+            len_before,
+            "test",
+        );
 
         assert_eq!(guard, history);
     }
@@ -2175,7 +2188,10 @@ mod tests {
 
         apply_history_after_turn(&err, &mut guard, history, len_before, "test");
 
-        assert_eq!(guard, initial, "history should be rolled back to pre-turn snapshot");
+        assert_eq!(
+            guard, initial,
+            "history should be rolled back to pre-turn snapshot"
+        );
     }
 
     /// Hard completion errors also roll back to prevent dangling tool-calls.
@@ -2187,13 +2203,16 @@ mod tests {
         history.push(user_msg("[dangling tool-call]"));
         let len_before = initial.len();
 
-        let err = Err(PromptError::CompletionError(CompletionError::ResponseError(
-            "API error".to_string(),
-        )));
+        let err = Err(PromptError::CompletionError(
+            CompletionError::ResponseError("API error".to_string()),
+        ));
 
         apply_history_after_turn(&err, &mut guard, history, len_before, "test");
 
-        assert_eq!(guard, initial, "history should be rolled back after hard error");
+        assert_eq!(
+            guard, initial,
+            "history should be rolled back after hard error"
+        );
     }
 
     /// ToolError (tool not found) rolls back — same catch-all arm as hard errors.
@@ -2211,7 +2230,10 @@ mod tests {
 
         apply_history_after_turn(&err, &mut guard, history, len_before, "test");
 
-        assert_eq!(guard, initial, "history should be rolled back after tool error");
+        assert_eq!(
+            guard, initial,
+            "history should be rolled back after tool error"
+        );
     }
 
     /// Rollback on empty history is a no-op and must not panic.
@@ -2228,7 +2250,10 @@ mod tests {
 
         apply_history_after_turn(&err, &mut guard, history, len_before, "test");
 
-        assert!(guard.is_empty(), "empty history should stay empty after rollback");
+        assert!(
+            guard.is_empty(),
+            "empty history should stay empty after rollback"
+        );
     }
 
     /// Rollback when nothing was appended is also a no-op (len unchanged).
@@ -2247,7 +2272,10 @@ mod tests {
 
         apply_history_after_turn(&err, &mut guard, history, len_before, "test");
 
-        assert_eq!(guard, initial, "history should be unchanged when nothing was appended");
+        assert_eq!(
+            guard, initial,
+            "history should be unchanged when nothing was appended"
+        );
     }
 
     /// After rollback, the next turn starts clean with no dangling messages.
@@ -2277,9 +2305,18 @@ mod tests {
         let mut history2 = guard.clone();
         history2.push(assistant_msg("clean response"));
 
-        apply_history_after_turn(&Ok("clean response".to_string()), &mut guard, history2.clone(), len_before2, "test");
+        apply_history_after_turn(
+            &Ok("clean response".to_string()),
+            &mut guard,
+            history2.clone(),
+            len_before2,
+            "test",
+        );
 
-        assert_eq!(guard, history2, "second turn should succeed with clean history");
+        assert_eq!(
+            guard, history2,
+            "second turn should succeed with clean history"
+        );
         // Crucially: no dangling tool-call in history
         let has_dangling = guard.iter().any(|m| {
             if let Message::User { content } = m {
@@ -2294,6 +2331,9 @@ mod tests {
                 false
             }
         });
-        assert!(!has_dangling, "no dangling tool-call messages in history after rollback");
+        assert!(
+            !has_dangling,
+            "no dangling tool-call messages in history after rollback"
+        );
     }
 }
