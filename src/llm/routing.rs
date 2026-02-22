@@ -305,16 +305,21 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
             }
         }
         "gemini" => {
-            let channel: String = "gemini/gemini-2.5-flash".into();
+            let channel: String = "gemini/gemini-2.5-pro".into();
             let worker: String = "gemini/gemini-2.5-flash".into();
+            let lite: String = "gemini/gemini-2.5-flash-lite".into();
             RoutingConfig {
                 channel: channel.clone(),
                 branch: channel.clone(),
                 worker: worker.clone(),
                 compactor: worker.clone(),
                 cortex: worker.clone(),
+                voice: String::new(),
                 task_overrides: HashMap::from([("coding".into(), channel.clone())]),
-                fallbacks: HashMap::new(),
+                fallbacks: HashMap::from([
+                    (channel, vec![worker.clone()]),
+                    (worker, vec![lite]),
+                ]),
                 rate_limit_cooldown_secs: 60,
                 ..RoutingConfig::default()
             }
