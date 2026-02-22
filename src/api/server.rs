@@ -7,8 +7,8 @@ use super::{
 };
 
 use axum::Json;
-use axum::extract::{Request, State};
 use axum::Router;
+use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
@@ -201,7 +201,11 @@ async fn api_auth_middleware(
     if is_authorized {
         next.run(request).await
     } else {
-        (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response()
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        )
+            .into_response()
     }
 }
 
