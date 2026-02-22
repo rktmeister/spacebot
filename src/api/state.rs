@@ -93,8 +93,8 @@ pub struct ApiState {
     pub agent_remove_tx: mpsc::Sender<String>,
     /// Shared webchat adapter for session management from API handlers.
     pub webchat_adapter: ArcSwap<Option<Arc<WebChatAdapter>>>,
-    /// Instance-level link store for agent communication graph.
-    pub link_store: ArcSwap<Option<Arc<crate::links::LinkStore>>>,
+    /// Instance-level agent links for the communication graph.
+    pub agent_links: ArcSwap<Vec<crate::links::AgentLink>>,
 }
 
 /// Events sent to SSE clients. Wraps ProcessEvents with agent context.
@@ -227,7 +227,7 @@ impl ApiState {
             agent_tx,
             agent_remove_tx,
             webchat_adapter: ArcSwap::from_pointee(None),
-            link_store: ArcSwap::from_pointee(None),
+            agent_links: ArcSwap::from_pointee(Vec::new()),
         }
     }
 
@@ -526,9 +526,9 @@ impl ApiState {
         self.webchat_adapter.store(Arc::new(Some(adapter)));
     }
 
-    /// Set the link store for the agent communication graph.
-    pub fn set_link_store(&self, store: Arc<crate::links::LinkStore>) {
-        self.link_store.store(Arc::new(Some(store)));
+    /// Set the agent links for the communication graph.
+    pub fn set_agent_links(&self, links: Vec<crate::links::AgentLink>) {
+        self.agent_links.store(Arc::new(links));
     }
 
     /// Send an event to all SSE subscribers.

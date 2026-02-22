@@ -3050,6 +3050,7 @@ pub fn spawn_file_watcher(
     bindings: Arc<arc_swap::ArcSwap<Vec<Binding>>>,
     messaging_manager: Option<Arc<crate::messaging::MessagingManager>>,
     llm_manager: Arc<crate::llm::LlmManager>,
+    agent_links: Arc<arc_swap::ArcSwap<Vec<crate::links::AgentLink>>>,
 ) -> tokio::task::JoinHandle<()> {
     use notify::{Event, RecursiveMode, Watcher};
     use std::time::Duration;
@@ -3139,7 +3140,7 @@ pub fn spawn_file_watcher(
             let mut config_changed = changed_paths.iter().any(|p| p.ends_with("config.toml"));
             let identity_changed = changed_paths.iter().any(|p| {
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                matches!(name, "SOUL.md" | "IDENTITY.md" | "USER.md")
+                matches!(name, "SOUL.md" | "IDENTITY.md" | "USER.md" | "ROLE.md")
             });
             let skills_changed = changed_paths
                 .iter()
@@ -3204,6 +3205,16 @@ pub fn spawn_file_watcher(
 
                 bindings.store(Arc::new(config.bindings.clone()));
                 tracing::info!("bindings reloaded ({} entries)", config.bindings.len());
+
+                match crate::links::AgentLink::from_config(&config.links) {
+                    Ok(links) => {
+                        agent_links.store(Arc::new(links));
+                        tracing::info!("agent links reloaded ({} entries)", config.links.len());
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "failed to parse links from reloaded config");
+                    }
+                }
 
                 if let Some(ref perms) = discord_permissions
                     && let Some(discord_config) = &config.messaging.discord

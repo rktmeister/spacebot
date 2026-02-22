@@ -432,7 +432,7 @@ pub(super) async fn create_agent(
             let guard = state.messaging_manager.read().await;
             guard.as_ref().cloned()
         },
-        link_store: state.link_store.load().as_ref().clone(),
+        links: Arc::new(arc_swap::ArcSwap::from_pointee((**state.agent_links.load()).clone())),
     };
 
     let event_rx = event_tx.subscribe();

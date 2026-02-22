@@ -1,24 +1,55 @@
 //! Types for the agent communication graph.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// A directed edge in the agent communication graph.
 ///
-/// Represents a persistent, policy-governed communication channel between two agents.
+/// Represents a policy-governed communication channel between two agents.
 /// When agent A has a link to agent B, agent A can send messages to agent B.
 /// The link carries direction and relationship flags that define the nature
 /// of the communication.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentLink {
-    pub id: String,
     pub from_agent_id: String,
     pub to_agent_id: String,
     pub direction: LinkDirection,
     pub relationship: LinkRelationship,
-    pub enabled: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+}
+
+impl AgentLink {
+    /// Parse config link definitions into agent links.
+    pub fn from_config(defs: &[crate::config::LinkDef]) -> anyhow::Result<Vec<Self>> {
+        defs.iter()
+            .map(|def| {
+                let direction: LinkDirection = def
+                    .direction
+                    .parse()
+                    .map_err(|e: String| anyhow::anyhow!("{e} (link {} → {})", def.from, def.to))?;
+                let relationship: LinkRelationship = def
+                    .relationship
+                    .parse()
+                    .map_err(|e: String| anyhow::anyhow!("{e} (link {} → {})", def.from, def.to))?;
+                Ok(AgentLink {
+                    from_agent_id: def.from.clone(),
+                    to_agent_id: def.to.clone(),
+                    direction,
+                    relationship,
+                })
+            })
+            .collect()
+    }
+
+    /// Stable identifier for the link channel conversation ID.
+    /// Deterministic from agent IDs so the same link always maps to the same channel.
+    pub fn channel_id(&self) -> String {
+        // Sort agent IDs to ensure the same pair always produces the same channel
+        let (a, b) = if self.from_agent_id <= self.to_agent_id {
+            (&self.from_agent_id, &self.to_agent_id)
+        } else {
+            (&self.to_agent_id, &self.from_agent_id)
+        };
+        format!("link:{a}:{b}")
+    }
 }
 
 /// Direction policy for an agent link.

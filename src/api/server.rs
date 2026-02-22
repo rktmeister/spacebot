@@ -148,16 +148,7 @@ pub async fn start_http_server(
         .route("/update/apply", post(settings::update_apply))
         .route("/webchat/send", post(webchat::webchat_send))
         .route("/webchat/history", get(webchat::webchat_history))
-        .route(
-            "/links",
-            get(links::list_links).post(links::create_link),
-        )
-        .route(
-            "/links/{id}",
-            get(links::get_link)
-                .put(links::update_link)
-                .delete(links::delete_link),
-        )
+        .route("/links", get(links::list_links))
         .route("/agents/{id}/links", get(links::agent_links))
         .route("/topology", get(links::topology))
         .layer(middleware::from_fn_with_state(

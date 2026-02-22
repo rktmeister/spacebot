@@ -1,9 +1,10 @@
 //! Send message to another agent through the communication graph.
 
-use crate::links::LinkStore;
+use crate::links::AgentLink;
 use crate::messaging::MessagingManager;
 use crate::{AgentId, InboundMessage, MessageContent, ProcessEvent};
 
+use arc_swap::ArcSwap;
 use chrono::Utc;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
@@ -22,7 +23,7 @@ use tokio::sync::broadcast;
 pub struct SendAgentMessageTool {
     agent_id: AgentId,
     agent_name: String,
-    link_store: Arc<LinkStore>,
+    links: Arc<ArcSwap<Vec<AgentLink>>>,
     messaging_manager: Arc<MessagingManager>,
     event_tx: broadcast::Sender<ProcessEvent>,
     /// Map of known agent IDs to display names, for resolving targets.
@@ -41,7 +42,7 @@ impl SendAgentMessageTool {
     pub fn new(
         agent_id: AgentId,
         agent_name: String,
-        link_store: Arc<LinkStore>,
+        links: Arc<ArcSwap<Vec<AgentLink>>>,
         messaging_manager: Arc<MessagingManager>,
         event_tx: broadcast::Sender<ProcessEvent>,
         agent_names: Arc<HashMap<String, String>>,
@@ -49,7 +50,7 @@ impl SendAgentMessageTool {
         Self {
             agent_id,
             agent_name,
-            link_store,
+            links,
             messaging_manager,
             event_tx,
             agent_names,
@@ -76,7 +77,7 @@ pub struct SendAgentMessageArgs {
 pub struct SendAgentMessageOutput {
     pub success: bool,
     pub target_agent: String,
-    pub link_id: String,
+    pub channel_id: String,
 }
 
 impl Tool for SendAgentMessageTool {
@@ -116,36 +117,23 @@ impl Tool for SendAgentMessageTool {
         );
 
         // Resolve target agent ID (could be name or ID)
-        let target_agent_id = self
-            .resolve_agent_id(&args.target)
-            .ok_or_else(|| {
-                SendAgentMessageError(format!(
-                    "unknown agent '{}'. Check your organization context for available agents.",
-                    args.target
-                ))
-            })?;
+        let target_agent_id = self.resolve_agent_id(&args.target).ok_or_else(|| {
+            SendAgentMessageError(format!(
+                "unknown agent '{}'. Check your organization context for available agents.",
+                args.target
+            ))
+        })?;
 
         // Look up the link between sending agent and target
-        let link = self
-            .link_store
-            .get_between(&self.agent_id, &target_agent_id)
-            .await
-            .map_err(|error| {
-                SendAgentMessageError(format!("failed to look up link: {error}"))
-            })?
+        let links = self.links.load();
+        let link = crate::links::find_link_between(&links, &self.agent_id, &target_agent_id)
             .ok_or_else(|| {
                 SendAgentMessageError(format!(
                     "no communication link exists between you and agent '{}'.",
                     args.target
                 ))
-            })?;
-
-        if !link.enabled {
-            return Err(SendAgentMessageError(format!(
-                "the link to agent '{}' is currently disabled.",
-                args.target
-            )));
-        }
+            })?
+            .clone();
 
         // Check direction: if the link is one_way, only from_agent can initiate
         let sending_agent_id = self.agent_id.as_ref();
@@ -173,7 +161,7 @@ impl Tool for SendAgentMessageTool {
         };
 
         let target_agent_arc: AgentId = Arc::from(receiving_agent_id.as_str());
-        let conversation_id = format!("link:{}", link.id);
+        let conversation_id = link.channel_id();
 
         // Construct the internal message
         let message = InboundMessage {
@@ -185,7 +173,6 @@ impl Tool for SendAgentMessageTool {
             content: MessageContent::Text(args.message),
             timestamp: Utc::now(),
             metadata: HashMap::from([
-                ("link_id".into(), serde_json::json!(link.id)),
                 ("from_agent_id".into(), serde_json::json!(sending_agent_id)),
                 (
                     "relationship".into(),
@@ -208,7 +195,7 @@ impl Tool for SendAgentMessageTool {
             .send(ProcessEvent::AgentMessageSent {
                 from_agent_id: self.agent_id.clone(),
                 to_agent_id: Arc::from(receiving_agent_id.as_str()),
-                link_id: link.id.clone(),
+                link_id: conversation_id.clone(),
                 channel_id: Arc::from(conversation_id.as_str()),
             })
             .ok();
@@ -222,14 +209,14 @@ impl Tool for SendAgentMessageTool {
         tracing::info!(
             from = %self.agent_id,
             to = %receiving_agent_id,
-            link_id = %link.id,
+            channel_id = %conversation_id,
             "agent message sent"
         );
 
         Ok(SendAgentMessageOutput {
             success: true,
             target_agent: target_display,
-            link_id: link.id,
+            channel_id: conversation_id,
         })
     }
 }

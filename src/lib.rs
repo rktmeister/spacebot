@@ -197,7 +197,7 @@ pub struct AgentDeps {
     pub event_tx: tokio::sync::broadcast::Sender<ProcessEvent>,
     pub sqlite_pool: sqlx::SqlitePool,
     pub messaging_manager: Option<Arc<messaging::MessagingManager>>,
-    pub link_store: Option<Arc<links::LinkStore>>,
+    pub links: Arc<arc_swap::ArcSwap<Vec<links::AgentLink>>>,
 }
 
 impl AgentDeps {

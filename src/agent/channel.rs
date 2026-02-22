@@ -626,8 +626,8 @@ impl Channel {
 
         let available_channels = self.build_available_channels().await;
 
-        let org_context = self.build_org_context(&prompt_engine).await;
-        let link_context = self.build_link_context(&prompt_engine).await;
+        let org_context = self.build_org_context(&prompt_engine);
+        let link_context = self.build_link_context(&prompt_engine);
 
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
 
@@ -817,20 +817,13 @@ impl Channel {
     }
 
     /// Build org context showing the agent's position in the communication hierarchy.
-    async fn build_org_context(
+    fn build_org_context(
         &self,
         prompt_engine: &crate::prompts::PromptEngine,
     ) -> Option<String> {
-        let link_store = self.deps.link_store.as_ref()?;
         let agent_id = self.deps.agent_id.as_ref();
-
-        let links = match link_store.get_links_for_agent(agent_id).await {
-            Ok(links) => links,
-            Err(error) => {
-                tracing::warn!(%error, "failed to fetch links for org context");
-                return None;
-            }
-        };
+        let all_links = self.deps.links.load();
+        let links = crate::links::links_for_agent(&all_links, agent_id);
 
         if links.is_empty() {
             return None;
@@ -841,10 +834,6 @@ impl Channel {
         let mut peers = Vec::new();
 
         for link in &links {
-            if !link.enabled {
-                continue;
-            }
-
             let is_from = link.from_agent_id == agent_id;
             let other_agent_id = if is_from {
                 &link.to_agent_id
@@ -852,15 +841,12 @@ impl Channel {
                 &link.from_agent_id
             };
 
-            // Determine relationship from this agent's perspective
             let relationship = if is_from {
                 link.relationship
             } else {
                 link.relationship.inverse()
             };
 
-            // For one-way links where this agent is the to_agent (can't initiate),
-            // still show them in the org context for awareness
             let agent_info = crate::prompts::engine::LinkedAgent {
                 name: other_agent_id.clone(),
                 id: other_agent_id.clone(),
@@ -887,25 +873,24 @@ impl Channel {
     }
 
     /// Build link context for the current channel if it's an internal agent-to-agent channel.
-    async fn build_link_context(
+    fn build_link_context(
         &self,
         prompt_engine: &crate::prompts::PromptEngine,
     ) -> Option<String> {
         // Link channels have conversation IDs starting with "link:"
         let conversation_id = self.conversation_id.as_deref()?;
-        let link_id = conversation_id.strip_prefix("link:")?;
-
-        let link_store = self.deps.link_store.as_ref()?;
-        let link = match link_store.get(link_id).await {
-            Ok(Some(link)) => link,
-            Ok(None) => return None,
-            Err(error) => {
-                tracing::warn!(%error, "failed to fetch link for channel context");
-                return None;
-            }
-        };
+        if !conversation_id.starts_with("link:") {
+            return None;
+        }
 
         let agent_id = self.deps.agent_id.as_ref();
+        let all_links = self.deps.links.load();
+
+        // Find the link that matches this channel's conversation ID
+        let link = all_links
+            .iter()
+            .find(|link| link.channel_id() == conversation_id)?;
+
         let is_from = link.from_agent_id == agent_id;
         let other_agent_id = if is_from {
             &link.to_agent_id
@@ -913,7 +898,6 @@ impl Channel {
             &link.from_agent_id
         };
 
-        // Relationship from the other agent's perspective toward this agent
         let relationship = if is_from {
             link.relationship
         } else {
@@ -952,8 +936,8 @@ impl Channel {
 
         let available_channels = self.build_available_channels().await;
 
-        let org_context = self.build_org_context(&prompt_engine).await;
-        let link_context = self.build_link_context(&prompt_engine).await;
+        let org_context = self.build_org_context(&prompt_engine);
+        let link_context = self.build_link_context(&prompt_engine);
 
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
 
