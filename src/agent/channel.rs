@@ -151,6 +151,13 @@ pub struct Channel {
     link_turn_count: u32,
     /// Originating channel that triggered this link conversation (for routing conclusions back).
     originating_channel: Option<String>,
+    /// Messaging adapter name from the originating channel (e.g. "webchat", "discord").
+    /// Used by `route_link_conclusion` to set the correct `source` on injected messages.
+    originating_source: Option<String>,
+    /// Set after `conclude_link` fires. Prevents the channel from processing
+    /// further messages, stopping the ping-pong that happens when both sides
+    /// keep responding to each other after the task is done.
+    link_concluded: bool,
 }
 
 impl Channel {
@@ -254,9 +261,19 @@ impl Channel {
             send_agent_message_tool,
             link_turn_count: 0,
             originating_channel: None,
+            originating_source: None,
+            link_concluded: false,
         };
 
         (channel, message_tx)
+    }
+
+    /// Get the agent's display name (falls back to agent ID).
+    fn agent_display_name(&self) -> &str {
+        self.deps.agent_names
+            .get(self.deps.agent_id.as_ref())
+            .map(String::as_str)
+            .unwrap_or(self.deps.agent_id.as_ref())
     }
 
     /// Run the channel event loop.
@@ -348,6 +365,12 @@ impl Channel {
             return false;
         }
         if message.source == "system" {
+            return false;
+        }
+        // Internal link channels are stateful handshakes between two agents.
+        // Coalescing can merge conclusion + follow-up messages into one turn and
+        // bypass per-message guards, so process link messages immediately.
+        if message.conversation_id.starts_with("link:") {
             return false;
         }
         if config.multi_user_only && self.is_dm() {
@@ -592,12 +615,14 @@ impl Channel {
         }
 
         // Run agent turn with any image/audio attachments preserved
+        let source = messages.first().map(|m| m.source.clone());
         let (result, skip_flag, replied_flag, _conclude_flag, _conclude_summary) = self
             .run_agent_turn(
                 &combined_text,
                 &system_prompt,
                 &conversation_id,
                 attachment_parts,
+                source,
             )
             .await?;
 
@@ -716,7 +741,15 @@ impl Channel {
         }
 
         // Persist user messages (skip system re-triggers)
-        if message.source != "system" {
+        let is_link_conclusion = message.metadata.get("link_conclusion").is_some();
+        if is_link_conclusion {
+            // Link conclusions are surfaced as assistant messages (from the agent, not the user)
+            self.state.conversation_logger.log_bot_message_with_name(
+                &self.state.channel_id,
+                &raw_text,
+                Some(self.agent_display_name()),
+            );
+        } else if message.source != "system" {
             let sender_name = message
                 .metadata
                 .get("sender_display_name")
@@ -766,10 +799,14 @@ impl Channel {
         // On link channels, seed conversation history with the original outgoing message
         // so the agent has context for what it previously said when the reply arrives.
         if message.source == "internal" {
-            // Capture the originating channel for routing conclusions back
+            // Capture the originating channel and adapter source for routing conclusions back
             if self.originating_channel.is_none() {
                 self.originating_channel = message.metadata
                     .get("originating_channel")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                self.originating_source = message.metadata
+                    .get("originating_source")
                     .and_then(|v| v.as_str())
                     .map(String::from);
             }
@@ -788,16 +825,26 @@ impl Channel {
                     drop(history);
 
                     // Persist so the message appears in the dashboard timeline
-                    self.state.conversation_logger.log_bot_message(
+                    self.state.conversation_logger.log_bot_message_with_name(
                         &self.state.channel_id,
                         original,
+                        Some(self.agent_display_name()),
                     );
                 }
             }
         }
 
-        // Track link channel turns for safety cap
+        // Drop messages on concluded link channels
         let is_link_channel = message.conversation_id.starts_with("link:");
+        if is_link_channel && self.link_concluded {
+            tracing::debug!(
+                channel_id = %self.id,
+                "dropping message on concluded link channel"
+            );
+            return Ok(());
+        }
+
+        // Track link channel turns for safety cap
         if is_link_channel && message.source != "system" {
             self.link_turn_count += 1;
         }
@@ -822,12 +869,15 @@ impl Channel {
 
         let is_retrigger = message.source == "system";
 
+        let message_source = if is_retrigger { None } else { Some(message.source.clone()) };
+
         let (result, skip_flag, replied_flag, conclude_flag, conclude_summary) = self
             .run_agent_turn(
                 &user_text,
                 &system_prompt,
                 &message.conversation_id,
                 attachment_content,
+                message_source,
             )
             .await?;
 
@@ -839,6 +889,7 @@ impl Channel {
         if concluded {
             let summary = conclude_summary.read().await.clone().unwrap_or_default();
             self.route_link_conclusion(&summary, &message).await;
+            self.link_concluded = true;
         }
 
         // Check context size and trigger compaction if needed
@@ -1027,16 +1078,30 @@ impl Channel {
                     peer_agent, summary
                 );
 
+                // Use the captured adapter source. Falls back to parsing the
+                // conversation_id prefix, which may not match the adapter name
+                // (e.g. "portal:chat:*" is actually the "webchat" adapter).
+                let source = self.originating_source.clone().unwrap_or_else(|| {
+                    originating
+                        .split(':')
+                        .next()
+                        .unwrap_or("webchat")
+                        .to_string()
+                });
+
+                let mut metadata = std::collections::HashMap::new();
+                metadata.insert("link_conclusion".into(), serde_json::json!(true));
+
                 let conclusion_message = crate::InboundMessage {
                     id: uuid::Uuid::new_v4().to_string(),
-                    source: "system".into(),
+                    source,
                     conversation_id: originating.clone(),
-                    sender_id: "system".into(),
+                    sender_id: peer_agent.clone(),
                     agent_id: Some(self.deps.agent_id.clone()),
                     content: crate::MessageContent::Text(conclusion_text),
                     timestamp: chrono::Utc::now(),
-                    metadata: std::collections::HashMap::new(),
-                    formatted_author: None,
+                    metadata,
+                    formatted_author: Some(format!("[{}]", peer_agent)),
                 };
 
                 if let Err(error) = mm.inject_message(conclusion_message).await {
@@ -1117,13 +1182,14 @@ impl Channel {
     /// Register per-turn tools, run the LLM agentic loop, and clean up.
     ///
     /// Returns the prompt result and skip flag for the caller to dispatch.
-    #[tracing::instrument(skip(self, user_text, system_prompt, attachment_content), fields(channel_id = %self.id, agent_id = %self.deps.agent_id))]
+    #[tracing::instrument(skip(self, user_text, system_prompt, attachment_content, message_source), fields(channel_id = %self.id, agent_id = %self.deps.agent_id))]
     async fn run_agent_turn(
         &self,
         user_text: &str,
         system_prompt: &str,
         conversation_id: &str,
         attachment_content: Vec<UserContent>,
+        message_source: Option<String>,
     ) -> Result<(
         std::result::Result<String, rig::completion::PromptError>,
         crate::tools::SkipFlag,
@@ -1153,6 +1219,8 @@ impl Channel {
             self.deps.cron_tool.clone(),
             self.send_agent_message_tool.clone(),
             conclude_link_args,
+            message_source,
+            self.originating_source.clone(),
         )
         .await
         {
@@ -1285,7 +1353,7 @@ impl Channel {
                         }
                         self.state
                             .conversation_logger
-                            .log_bot_message(&self.state.channel_id, &final_text);
+                            .log_bot_message_with_name(&self.state.channel_id, &final_text, Some(self.agent_display_name()));
                         if let Err(error) = self
                             .response_tx
                             .send(OutboundResponse::Text(final_text))

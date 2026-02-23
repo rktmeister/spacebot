@@ -186,7 +186,7 @@ export function ChannelCard({
 									<span className={`flex-shrink-0 text-tiny font-medium ${
 										message.role === "user" ? "text-accent-faint" : "text-green-400"
 									}`}>
-										{message.role === "user" ? (message.sender_name ?? "user") : "bot"}
+										{message.role === "user" ? (message.sender_name ?? "user") : (message.sender_name ?? "bot")}
 									</span>
 									<p className="line-clamp-1 text-sm text-ink-faint">{message.content}</p>
 								</motion.div>

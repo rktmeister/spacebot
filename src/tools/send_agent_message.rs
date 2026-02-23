@@ -2,6 +2,7 @@
 
 use crate::links::AgentLink;
 use crate::messaging::MessagingManager;
+use crate::tools::SkipFlag;
 use crate::{AgentId, InboundMessage, MessageContent, ProcessEvent};
 
 use arc_swap::ArcSwap;
@@ -12,6 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::sync::broadcast;
 
 /// Tool for sending messages to other agents through the agent communication graph.
@@ -29,6 +31,12 @@ pub struct SendAgentMessageTool {
     event_tx: broadcast::Sender<ProcessEvent>,
     /// Map of known agent IDs to display names, for resolving targets.
     agent_names: Arc<HashMap<String, String>>,
+    /// Per-turn skip flag. When set after sending, the channel turn ends immediately
+    /// instead of looping back to the LLM (which would burn depth calling skip).
+    skip_flag: Option<SkipFlag>,
+    /// Source of the originating channel's inbound message (e.g. "webchat", "discord").
+    /// Propagated through metadata so conclusion routing uses the correct adapter.
+    originating_source: Option<String>,
 }
 
 impl std::fmt::Debug for SendAgentMessageTool {
@@ -57,7 +65,23 @@ impl SendAgentMessageTool {
             messaging_manager,
             event_tx,
             agent_names,
+            skip_flag: None,
+            originating_source: None,
         }
+    }
+}
+
+impl SendAgentMessageTool {
+    /// Set the per-turn skip flag so the channel turn ends after sending.
+    pub fn with_skip_flag(mut self, flag: SkipFlag) -> Self {
+        self.skip_flag = Some(flag);
+        self
+    }
+
+    /// Set the originating source (adapter name) for conclusion routing.
+    pub fn with_originating_source(mut self, source: String) -> Self {
+        self.originating_source = Some(source);
+        self
     }
 }
 
@@ -127,6 +151,18 @@ impl Tool for SendAgentMessageTool {
             ))
         })?;
 
+        // In link channels, responding to the current peer should use the reply tool
+        // so metadata and conclusion routing stay on the same conversation chain.
+        if self
+            .current_link_peer_id()
+            .as_deref()
+            .is_some_and(|peer| peer == target_agent_id)
+        {
+            return Err(SendAgentMessageError(
+                "you are already in a direct link conversation with this agent. Use reply to respond in the current link channel. Use send_agent_message to contact a different agent.".to_string(),
+            ));
+        }
+
         // Look up the link between sending agent and target
         let links = self.links.load();
         let link = crate::links::find_link_between(&links, &self.agent_id, &target_agent_id)
@@ -162,7 +198,22 @@ impl Tool for SendAgentMessageTool {
         let receiver_channel = link.channel_id_for(receiving_agent_id);
         let sender_channel = link.channel_id_for(sending_agent_id);
 
-        // Construct the internal message targeting the receiver's link channel
+        // Construct the internal message targeting the receiver's link channel.
+        // originating_channel is always the current channel — the direct parent
+        // of this link conversation. Conclusions route one hop back, not to the root.
+        let mut metadata = HashMap::from([
+            ("from_agent_id".into(), serde_json::json!(sending_agent_id)),
+            ("link_kind".into(), serde_json::json!(link.kind.as_str())),
+            ("reply_to_agent".into(), serde_json::json!(sending_agent_id)),
+            ("reply_to_channel".into(), serde_json::json!(&sender_channel)),
+            ("originating_channel".into(), serde_json::json!(self.channel_id.as_ref())),
+        ]);
+        // Propagate the adapter name from the originating channel so conclusion
+        // routing can look up the correct messaging adapter (e.g. "webchat").
+        if let Some(source) = &self.originating_source {
+            metadata.insert("originating_source".into(), serde_json::json!(source));
+        }
+
         let message = InboundMessage {
             id: uuid::Uuid::new_v4().to_string(),
             source: "internal".into(),
@@ -171,13 +222,7 @@ impl Tool for SendAgentMessageTool {
             agent_id: Some(target_agent_arc),
             content: MessageContent::Text(args.message),
             timestamp: Utc::now(),
-            metadata: HashMap::from([
-                ("from_agent_id".into(), serde_json::json!(sending_agent_id)),
-                ("link_kind".into(), serde_json::json!(link.kind.as_str())),
-                ("reply_to_agent".into(), serde_json::json!(sending_agent_id)),
-                ("reply_to_channel".into(), serde_json::json!(&sender_channel)),
-                ("originating_channel".into(), serde_json::json!(self.channel_id.as_ref())),
-            ]),
+            metadata,
             formatted_author: Some(format!("[{}]", self.agent_name)),
         };
 
@@ -188,6 +233,14 @@ impl Tool for SendAgentMessageTool {
             .map_err(|error| {
                 SendAgentMessageError(format!("failed to deliver message: {error}"))
             })?;
+
+        // End the current turn immediately. Delegating to another agent means
+        // this agent is done — without this, the LLM loops calling skip and
+        // burns through its depth budget while waiting for a response that
+        // arrives asynchronously.
+        if let Some(ref flag) = self.skip_flag {
+            flag.store(true, Ordering::Relaxed);
+        }
 
         // Emit process event for dashboard visibility
         self.event_tx
@@ -222,6 +275,21 @@ impl Tool for SendAgentMessageTool {
 }
 
 impl SendAgentMessageTool {
+    /// If this tool is running in a link channel, return the peer agent ID.
+    fn current_link_peer_id(&self) -> Option<String> {
+        self.channel_id
+            .as_ref()
+            .strip_prefix("link:")
+            .and_then(|rest| {
+                let (self_id, peer_id) = rest.split_once(':')?;
+                if self_id == self.agent_id.as_ref() {
+                    Some(peer_id.to_string())
+                } else {
+                    None
+                }
+            })
+    }
+
     /// Resolve an agent target string to an agent ID.
     /// Checks both IDs and display names.
     fn resolve_agent_id(&self, target: &str) -> Option<String> {
