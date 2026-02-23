@@ -854,17 +854,6 @@ impl Channel {
                 &link.from_agent_id
             };
 
-            // The link's relationship describes from_agent's role relative to to_agent.
-            // When we ARE from_agent, we need to invert to get the other node's role
-            // relative to us. When we ARE to_agent, the relationship already describes
-            // from_agent's role relative to us.
-            let relationship = if is_from {
-                link.relationship.inverse()
-            } else {
-                link.relationship
-            };
-
-            // If the other ID is in the agent names map, it's an agent; otherwise a human
             let is_human = !self.deps.agent_names.contains_key(other_id.as_str());
             let name = self
                 .deps
@@ -879,10 +868,16 @@ impl Channel {
                 is_human,
             };
 
-            match relationship {
-                crate::links::LinkRelationship::Superior => superiors.push(info),
-                crate::links::LinkRelationship::Subordinate => subordinates.push(info),
-                crate::links::LinkRelationship::Peer => peers.push(info),
+            match link.kind {
+                crate::links::LinkKind::Hierarchical => {
+                    // from is above to: if we're `from`, the other is our subordinate
+                    if is_from {
+                        subordinates.push(info);
+                    } else {
+                        superiors.push(info);
+                    }
+                }
+                crate::links::LinkKind::Peer => peers.push(info),
             }
         }
 
@@ -925,15 +920,15 @@ impl Channel {
             &link.from_agent_id
         };
 
-        let relationship = if is_from {
-            link.relationship
-        } else {
-            link.relationship.inverse()
+        let role = match link.kind {
+            crate::links::LinkKind::Hierarchical if is_from => "manages",
+            crate::links::LinkKind::Hierarchical => "reports to",
+            crate::links::LinkKind::Peer => "peer",
         };
 
         let link_context = crate::prompts::engine::LinkContext {
             agent_name: other_agent_id.clone(),
-            relationship: relationship.as_str().to_string(),
+            relationship: role.to_string(),
         };
 
         prompt_engine.render_link_context(link_context).ok()

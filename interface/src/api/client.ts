@@ -948,13 +948,13 @@ export interface RawConfigUpdateResponse {
 // -- Agent Links & Topology --
 
 export type LinkDirection = "one_way" | "two_way";
-export type LinkRelationship = "peer" | "superior" | "subordinate";
+export type LinkKind = "hierarchical" | "peer";
 
 export interface AgentLinkResponse {
 	from_agent_id: string;
 	to_agent_id: string;
 	direction: LinkDirection;
-	relationship: LinkRelationship;
+	kind: LinkKind;
 }
 
 export interface LinksResponse {
@@ -972,7 +972,7 @@ export interface TopologyLink {
 	from: string;
 	to: string;
 	direction: string;
-	relationship: string;
+	kind: string;
 }
 
 export interface TopologyGroup {
@@ -985,6 +985,7 @@ export interface TopologyHuman {
 	id: string;
 	display_name?: string;
 	role?: string;
+	bio?: string;
 }
 
 export interface TopologyResponse {
@@ -998,11 +999,13 @@ export interface CreateHumanRequest {
 	id: string;
 	display_name?: string;
 	role?: string;
+	bio?: string;
 }
 
 export interface UpdateHumanRequest {
 	display_name?: string;
 	role?: string;
+	bio?: string;
 }
 
 export interface CreateGroupRequest {
@@ -1021,12 +1024,12 @@ export interface CreateLinkRequest {
 	from: string;
 	to: string;
 	direction?: LinkDirection;
-	relationship?: LinkRelationship;
+	kind?: LinkKind;
 }
 
 export interface UpdateLinkRequest {
 	direction?: LinkDirection;
-	relationship?: LinkRelationship;
+	kind?: LinkKind;
 }
 
 export interface AgentMessageEvent {

@@ -4,16 +4,15 @@ use serde::{Deserialize, Serialize};
 
 /// A directed edge in the agent communication graph.
 ///
-/// Represents a policy-governed communication channel between two agents.
-/// When agent A has a link to agent B, agent A can send messages to agent B.
-/// The link carries direction and relationship flags that define the nature
-/// of the communication.
+/// Represents a policy-governed communication channel between two nodes (agents or humans).
+/// For hierarchical links, `from` is the superior and `to` is the subordinate.
+/// For peer links, the ordering is arbitrary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentLink {
     pub from_agent_id: String,
     pub to_agent_id: String,
     pub direction: LinkDirection,
-    pub relationship: LinkRelationship,
+    pub kind: LinkKind,
 }
 
 impl AgentLink {
@@ -25,15 +24,15 @@ impl AgentLink {
                     .direction
                     .parse()
                     .map_err(|e: String| anyhow::anyhow!("{e} (link {} → {})", def.from, def.to))?;
-                let relationship: LinkRelationship = def
-                    .relationship
+                let kind: LinkKind = def
+                    .kind
                     .parse()
                     .map_err(|e: String| anyhow::anyhow!("{e} (link {} → {})", def.from, def.to))?;
                 Ok(AgentLink {
                     from_agent_id: def.from.clone(),
                     to_agent_id: def.to.clone(),
                     direction,
-                    relationship,
+                    kind,
                 })
             })
             .collect()
@@ -91,59 +90,46 @@ impl std::str::FromStr for LinkDirection {
     }
 }
 
-/// Relationship semantics for an agent link.
+/// The kind of link between two nodes.
 ///
-/// Affects the receiving agent's system prompt context. A superior can delegate tasks,
-/// a subordinate reports status and escalates. Peers communicate collaboratively.
-/// The relationship doesn't restrict message delivery — it frames context.
+/// `Hierarchical` means `from` is above `to` in the org — `from` manages `to`.
+/// `Peer` means both nodes are at the same level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LinkRelationship {
-    /// Equal peers — neither agent has authority over the other.
+pub enum LinkKind {
+    /// from is above to in the hierarchy. from manages to.
+    Hierarchical,
+    /// Both nodes are at the same level.
     Peer,
-    /// from_agent is superior to to_agent. Can delegate tasks,
-    /// request status, and override decisions.
-    Superior,
-    /// from_agent is subordinate to to_agent. Reports status,
-    /// escalates issues, requests approval.
-    Subordinate,
 }
 
-impl LinkRelationship {
+impl LinkKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            LinkRelationship::Peer => "peer",
-            LinkRelationship::Superior => "superior",
-            LinkRelationship::Subordinate => "subordinate",
-        }
-    }
-
-    /// Get the inverse relationship from the other agent's perspective.
-    pub fn inverse(&self) -> Self {
-        match self {
-            LinkRelationship::Peer => LinkRelationship::Peer,
-            LinkRelationship::Superior => LinkRelationship::Subordinate,
-            LinkRelationship::Subordinate => LinkRelationship::Superior,
+            LinkKind::Hierarchical => "hierarchical",
+            LinkKind::Peer => "peer",
         }
     }
 }
 
-impl std::fmt::Display for LinkRelationship {
+impl std::fmt::Display for LinkKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl std::str::FromStr for LinkRelationship {
+impl std::str::FromStr for LinkKind {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "peer" => Ok(LinkRelationship::Peer),
-            "superior" => Ok(LinkRelationship::Superior),
-            "subordinate" => Ok(LinkRelationship::Subordinate),
+            "hierarchical" => Ok(LinkKind::Hierarchical),
+            "peer" => Ok(LinkKind::Peer),
+            // Backward compat: map old relationship values
+            "superior" => Ok(LinkKind::Hierarchical),
+            "subordinate" => Ok(LinkKind::Hierarchical),
             other => Err(format!(
-                "invalid link relationship: '{other}', expected 'peer', 'superior', or 'subordinate'"
+                "invalid link kind: '{other}', expected 'hierarchical' or 'peer'"
             )),
         }
     }

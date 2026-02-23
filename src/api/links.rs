@@ -1,7 +1,7 @@
 //! API handlers for agent links and topology.
 
 use crate::api::state::ApiState;
-use crate::links::{AgentLink, LinkDirection, LinkRelationship};
+use crate::links::{AgentLink, LinkDirection, LinkKind};
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -42,6 +42,8 @@ struct TopologyHuman {
     display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bio: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,7 +61,7 @@ struct TopologyLink {
     from: String,
     to: String,
     direction: String,
-    relationship: String,
+    kind: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,7 +92,7 @@ pub async fn topology(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
             from: link.from_agent_id.clone(),
             to: link.to_agent_id.clone(),
             direction: link.direction.as_str().to_string(),
-            relationship: link.relationship.as_str().to_string(),
+            kind: link.kind.as_str().to_string(),
         })
         .collect();
 
@@ -111,6 +113,7 @@ pub async fn topology(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
             id: h.id.clone(),
             display_name: h.display_name.clone(),
             role: h.role.clone(),
+            bio: h.bio.clone(),
         })
         .collect();
 
@@ -130,22 +133,22 @@ pub struct CreateLinkRequest {
     pub to: String,
     #[serde(default = "default_direction")]
     pub direction: String,
-    #[serde(default = "default_relationship")]
-    pub relationship: String,
+    #[serde(default = "default_kind")]
+    pub kind: String,
 }
 
 fn default_direction() -> String {
     "two_way".into()
 }
 
-fn default_relationship() -> String {
+fn default_kind() -> String {
     "peer".into()
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateLinkRequest {
     pub direction: Option<String>,
-    pub relationship: Option<String>,
+    pub kind: Option<String>,
 }
 
 /// Create a new link between two agents. Persists to config.toml and updates in-memory state.
@@ -158,8 +161,8 @@ pub async fn create_link(
         .direction
         .parse()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    let relationship: LinkRelationship = request
-        .relationship
+    let kind: LinkKind = request
+        .kind
         .parse()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -218,7 +221,7 @@ pub async fn create_link(
     link_table["from"] = toml_edit::value(&request.from);
     link_table["to"] = toml_edit::value(&request.to);
     link_table["direction"] = toml_edit::value(direction.as_str());
-    link_table["relationship"] = toml_edit::value(relationship.as_str());
+    link_table["kind"] = toml_edit::value(kind.as_str());
     links_array.push(link_table);
 
     tokio::fs::write(&config_path, doc.to_string())
@@ -233,7 +236,7 @@ pub async fn create_link(
         from_agent_id: request.from.clone(),
         to_agent_id: request.to.clone(),
         direction,
-        relationship,
+        kind,
     };
     let mut links = (**existing).clone();
     links.push(new_link.clone());
@@ -243,8 +246,8 @@ pub async fn create_link(
         from = %request.from,
         to = %request.to,
         direction = %direction,
-        relationship = %relationship,
-        "agent link created via API"
+        kind = %kind,
+        "link created via API"
     );
 
     Ok((
@@ -271,8 +274,8 @@ pub async fn update_link(
     if let Some(dir) = &request.direction {
         updated.direction = dir.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
     }
-    if let Some(rel) = &request.relationship {
-        updated.relationship = rel.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    if let Some(k) = &request.kind {
+        updated.kind = k.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
     }
 
     // Write to config.toml
@@ -297,8 +300,9 @@ pub async fn update_link(
                 if request.direction.is_some() {
                     table["direction"] = toml_edit::value(updated.direction.as_str());
                 }
-                if request.relationship.is_some() {
-                    table["relationship"] = toml_edit::value(updated.relationship.as_str());
+                if request.kind.is_some() {
+                    table["kind"] = toml_edit::value(updated.kind.as_str());
+                    table.remove("relationship"); // clean up old field
                 }
                 break;
             }
@@ -617,12 +621,14 @@ pub struct CreateHumanRequest {
     pub id: String,
     pub display_name: Option<String>,
     pub role: Option<String>,
+    pub bio: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateHumanRequest {
     pub display_name: Option<String>,
     pub role: Option<String>,
+    pub bio: Option<String>,
 }
 
 /// List all humans.
@@ -683,6 +689,11 @@ pub async fn create_human(
             table["role"] = toml_edit::value(role.as_str());
         }
     }
+    if let Some(bio) = &request.bio {
+        if !bio.is_empty() {
+            table["bio"] = toml_edit::value(bio.as_str());
+        }
+    }
     humans_array.push(table);
 
     tokio::fs::write(&config_path, doc.to_string())
@@ -696,6 +707,7 @@ pub async fn create_human(
         id: id.clone(),
         display_name: request.display_name.clone().filter(|s| !s.is_empty()),
         role: request.role.clone().filter(|s| !s.is_empty()),
+        bio: request.bio.clone().filter(|s| !s.is_empty()),
     };
     let mut humans = (**existing).clone();
     humans.push(new_human.clone());
@@ -729,6 +741,9 @@ pub async fn update_human(
     if let Some(role) = &request.role {
         updated.role = if role.is_empty() { None } else { Some(role.clone()) };
     }
+    if let Some(bio) = &request.bio {
+        updated.bio = if bio.is_empty() { None } else { Some(bio.clone()) };
+    }
 
     let config_path = state.config_path.read().await.clone();
     let content = tokio::fs::read_to_string(&config_path)
@@ -755,6 +770,11 @@ pub async fn update_human(
                     table["role"] = toml_edit::value(role.as_str());
                 } else if request.role.is_some() {
                     table.remove("role");
+                }
+                if let Some(bio) = &updated.bio {
+                    table["bio"] = toml_edit::value(bio.as_str());
+                } else if request.bio.is_some() {
+                    table.remove("bio");
                 }
                 break;
             }

@@ -5,7 +5,7 @@
 
 pub mod types;
 
-pub use types::{AgentLink, LinkDirection, LinkRelationship};
+pub use types::{AgentLink, LinkDirection, LinkKind};
 
 /// Find the link between two agents (checking both directions).
 pub fn find_link_between<'a>(

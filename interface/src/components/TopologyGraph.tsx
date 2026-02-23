@@ -29,24 +29,15 @@ import {
 	type TopologyResponse,
 	type TopologyGroup,
 	type LinkDirection,
-	type LinkRelationship,
+	type LinkKind,
 } from "@/api/client";
-import { Button } from "@/ui";
+import { Button, Input, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/ui";
 import { Link } from "@tanstack/react-router";
 
 // -- Colors --
 
-const RELATIONSHIP_COLORS: Record<string, string> = {
-	peer: "#6366f1",
-	superior: "#f59e0b",
-	subordinate: "#22c55e",
-};
-
-const RELATIONSHIP_LABELS: Record<string, string> = {
-	peer: "Peer",
-	superior: "Superior",
-	subordinate: "Subordinate",
-};
+const EDGE_COLOR = "hsla(230, 10%, 35%, 0.6)";
+const EDGE_COLOR_ACTIVE = "hsla(230, 10%, 55%, 0.9)";
 
 const GROUP_COLORS = [
 	"#6366f1",
@@ -192,20 +183,10 @@ function ProfileNode({ data, selected }: NodeProps) {
 					</defs>
 					<rect width="240" height="48" fill={`url(#node-grad-${nodeId})`} />
 				</svg>
-				{/* Badge */}
-				<span
-					className={`absolute top-2 right-2 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
-						isAgent
-							? "bg-accent/20 text-accent"
-							: "bg-amber-500/20 text-amber-400"
-					}`}
-				>
-					{nodeKind}
-				</span>
 			</div>
 
-			{/* Avatar overlapping banner */}
-			<div className="relative -mt-6 px-4">
+			{/* Avatar + badge row */}
+			<div className="relative -mt-6 px-4 pt-3 flex items-end justify-between">
 				<div className="relative inline-block">
 					<svg
 						width={48}
@@ -235,6 +216,16 @@ function ProfileNode({ data, selected }: NodeProps) {
 						/>
 					)}
 				</div>
+				{/* Badge */}
+				<span
+					className={`mb-1 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
+						isAgent
+							? "bg-accent/20 text-accent"
+							: "bg-ink-faint/10 text-ink-faint"
+					}`}
+				>
+					{nodeKind}
+				</span>
 			</div>
 
 			{/* Profile content */}
@@ -271,8 +262,8 @@ function ProfileNode({ data, selected }: NodeProps) {
 					</p>
 				)}
 
-				{/* Bio (agents only) */}
-				{isAgent && bio && (
+				{/* Bio */}
+				{bio && (
 					<p className="mt-2 text-[11px] leading-relaxed text-ink-faint line-clamp-3">
 						{bio}
 					</p>
@@ -294,22 +285,16 @@ function ProfileNode({ data, selected }: NodeProps) {
 			</div>
 
 			{/* Handles on all four sides */}
-			<Handle type="source" id="top" position={Position.Top}
-				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.top ? "!bg-amber-400" : "!bg-app-line"}`} />
-			<Handle type="source" id="bottom" position={Position.Bottom}
-				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.bottom ? "!bg-green-400" : "!bg-app-line"}`} />
-			<Handle type="source" id="right" position={Position.Right}
-				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.right ? "!bg-indigo-400" : "!bg-app-line"}`} />
-			<Handle type="source" id="left" position={Position.Left}
-				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.left ? "!bg-indigo-400" : "!bg-app-line"}`} />
-			<Handle type="target" id="top" position={Position.Top}
-				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.top ? "!bg-amber-400" : "!bg-app-line"}`} />
-			<Handle type="target" id="bottom" position={Position.Bottom}
-				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.bottom ? "!bg-green-400" : "!bg-app-line"}`} />
-			<Handle type="target" id="right" position={Position.Right}
-				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.right ? "!bg-indigo-400" : "!bg-app-line"}`} />
-			<Handle type="target" id="left" position={Position.Left}
-				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.left ? "!bg-indigo-400" : "!bg-app-line"}`} />
+			{(["top", "bottom", "left", "right"] as const).map((side) => (
+				<Handle key={`src-${side}`} type="source" id={side}
+					position={side === "top" ? Position.Top : side === "bottom" ? Position.Bottom : side === "left" ? Position.Left : Position.Right}
+					className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected[side] ? "!bg-accent" : "!bg-app-line"}`} />
+			))}
+			{(["top", "bottom", "left", "right"] as const).map((side) => (
+				<Handle key={`tgt-${side}`} type="target" id={side}
+					position={side === "top" ? Position.Top : side === "bottom" ? Position.Bottom : side === "left" ? Position.Left : Position.Right}
+					className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected[side] ? "!bg-accent" : "!bg-app-line"}`} />
+			))}
 		</div>
 	);
 }
@@ -327,7 +312,7 @@ function LinkEdge({
 	data,
 	selected,
 }: EdgeProps) {
-	const [edgePath, labelX, labelY] = getSmoothStepPath({
+	const [edgePath] = getSmoothStepPath({
 		sourceX,
 		sourceY,
 		sourcePosition,
@@ -337,9 +322,8 @@ function LinkEdge({
 		borderRadius: 16,
 	});
 
-	const relationship = (data?.relationship as string) ?? "peer";
-	const color = RELATIONSHIP_COLORS[relationship] ?? "#6366f1";
 	const isActive = data?.active as boolean;
+	const color = isActive ? EDGE_COLOR_ACTIVE : EDGE_COLOR;
 
 	return (
 		<>
@@ -348,88 +332,57 @@ function LinkEdge({
 				path={edgePath}
 				style={{
 					stroke: selected ? "#fff" : color,
-					strokeWidth: selected ? 2.5 : isActive ? 2.5 : 1.5,
-					opacity: selected ? 1 : isActive ? 1 : 0.6,
-					filter: isActive ? `drop-shadow(0 0 4px ${color})` : undefined,
+					strokeWidth: selected ? 2.5 : isActive ? 2 : 1.5,
+					opacity: selected ? 1 : isActive ? 0.9 : 0.4,
 				}}
 			/>
-			{/* Edge label */}
-			<foreignObject
-				x={labelX - 40}
-				y={labelY - 10}
-				width={80}
-				height={20}
-				className="pointer-events-none overflow-visible"
-			>
-				<div className="flex items-center justify-center">
-					<span
-						className="rounded-full px-2 py-0.5 text-[10px] font-medium backdrop-blur-sm"
-						style={{
-							backgroundColor: `${color}22`,
-							color,
-						}}
-					>
-						{RELATIONSHIP_LABELS[relationship] ?? relationship}
-					</span>
-				</div>
-			</foreignObject>
-			{/* Activity pulse */}
+			{/* Animated dot traveling along the edge during active message traffic */}
 			{isActive && (
-				<circle r="4" fill={color} className="animate-pulse">
-					<animateMotion dur="1.5s" repeatCount="indefinite" path={edgePath} />
+				<circle r="3" fill={EDGE_COLOR_ACTIVE}>
+					<animateMotion dur="2s" repeatCount="indefinite" path={edgePath} />
 				</circle>
 			)}
 		</>
 	);
 }
 
-/** Map a relationship to source/target handle IDs. For peers, pick the side facing the other node. */
-function getHandlesForRelationship(
-	relationship: string,
+/** Pick source/target handle IDs based on link kind and node positions. */
+function getHandlesForKind(
+	kind: string,
 	sourcePos?: { x: number; y: number },
 	targetPos?: { x: number; y: number },
 ): {
 	sourceHandle: string;
 	targetHandle: string;
 } {
-	switch (relationship) {
-		case "superior":
-			return { sourceHandle: "bottom", targetHandle: "top" };
-		case "subordinate":
-			return { sourceHandle: "top", targetHandle: "bottom" };
-		default: {
-			if (sourcePos && targetPos) {
-				const dx = targetPos.x - sourcePos.x;
-				const dy = targetPos.y - sourcePos.y;
-				// If the vertical distance is larger, use top/bottom even for peers
-				if (Math.abs(dy) > Math.abs(dx)) {
-					return dy > 0
-						? { sourceHandle: "bottom", targetHandle: "top" }
-						: { sourceHandle: "top", targetHandle: "bottom" };
-				}
-				// Horizontal: connect on the side facing each other
-				return dx > 0
-					? { sourceHandle: "right", targetHandle: "left" }
-					: { sourceHandle: "left", targetHandle: "right" };
-			}
-			return { sourceHandle: "right", targetHandle: "left" };
-		}
+	if (kind === "hierarchical") {
+		// from is above to: connect bottom of superior to top of subordinate
+		return { sourceHandle: "bottom", targetHandle: "top" };
 	}
+	// Peer: pick the side facing the other node
+	if (sourcePos && targetPos) {
+		const dx = targetPos.x - sourcePos.x;
+		const dy = targetPos.y - sourcePos.y;
+		if (Math.abs(dy) > Math.abs(dx)) {
+			return dy > 0
+				? { sourceHandle: "bottom", targetHandle: "top" }
+				: { sourceHandle: "top", targetHandle: "bottom" };
+		}
+		return dx > 0
+			? { sourceHandle: "right", targetHandle: "left" }
+			: { sourceHandle: "left", targetHandle: "right" };
+	}
+	return { sourceHandle: "right", targetHandle: "left" };
 }
 
-/** Infer relationship from the handle the user dragged from. */
-function inferRelationshipFromHandle(
-	sourceHandle: string | null,
-): { relationship: LinkRelationship } {
+/** Infer link kind from the handle the user dragged from. */
+function inferKindFromHandle(sourceHandle: string | null): LinkKind {
 	switch (sourceHandle) {
 		case "top":
-			// Dragged from top = "I am subordinate to the target"
-			return { relationship: "subordinate" };
 		case "bottom":
-			// Dragged from bottom = "I am superior to the target"
-			return { relationship: "superior" };
+			return "hierarchical";
 		default:
-			return { relationship: "peer" };
+			return "peer";
 	}
 }
 
@@ -447,7 +400,7 @@ const edgeTypes: EdgeTypes = {
 
 interface EdgeConfigPanelProps {
 	edge: Edge;
-	onUpdate: (direction: LinkDirection, relationship: LinkRelationship) => void;
+	onUpdate: (direction: LinkDirection, kind: LinkKind) => void;
 	onDelete: () => void;
 	onClose: () => void;
 }
@@ -461,8 +414,8 @@ function EdgeConfigPanel({
 	const [direction, setDirection] = useState<LinkDirection>(
 		(edge.data?.direction as LinkDirection) ?? "two_way",
 	);
-	const [relationship, setRelationship] = useState<LinkRelationship>(
-		(edge.data?.relationship as LinkRelationship) ?? "peer",
+	const [kind, setKind] = useState<LinkKind>(
+		(edge.data?.kind as LinkKind) ?? "peer",
 	);
 
 	return (
@@ -487,11 +440,29 @@ function EdgeConfigPanel({
 				{edge.source} → {edge.target}
 			</div>
 
-			{/* Direction */}
+			{/* Kind */}
 			<div className="mb-3">
-				<label className="mb-1 block text-tiny font-medium text-ink-dull">
-					Direction
-				</label>
+				<label className="mb-1 block text-tiny font-medium text-ink-dull">Kind</label>
+				<div className="flex gap-1.5">
+					{(["hierarchical", "peer"] as const).map((k) => (
+						<button
+							key={k}
+							onClick={() => setKind(k)}
+							className={`flex-1 rounded px-2 py-1.5 text-tiny transition-colors capitalize ${
+								kind === k
+									? "bg-accent/20 text-accent"
+									: "bg-app-box text-ink-faint hover:text-ink-dull"
+							}`}
+						>
+							{k}
+						</button>
+					))}
+				</div>
+			</div>
+
+			{/* Direction */}
+			<div className="mb-4">
+				<label className="mb-1 block text-tiny font-medium text-ink-dull">Direction</label>
 				<div className="flex gap-1.5">
 					{(["one_way", "two_way"] as const).map((d) => (
 						<button
@@ -509,31 +480,9 @@ function EdgeConfigPanel({
 				</div>
 			</div>
 
-			{/* Relationship */}
-			<div className="mb-4">
-				<label className="mb-1 block text-tiny font-medium text-ink-dull">
-					Relationship
-				</label>
-				<div className="flex gap-1.5">
-					{(["peer", "superior", "subordinate"] as const).map((r) => (
-						<button
-							key={r}
-							onClick={() => setRelationship(r)}
-							className={`flex-1 rounded px-2 py-1.5 text-tiny transition-colors ${
-								relationship === r
-									? "bg-accent/20 text-accent"
-									: "bg-app-box text-ink-faint hover:text-ink-dull"
-							}`}
-						>
-							{r.charAt(0).toUpperCase() + r.slice(1)}
-						</button>
-					))}
-				</div>
-			</div>
-
 			<div className="flex gap-2">
 				<Button
-					onClick={() => onUpdate(direction, relationship)}
+					onClick={() => onUpdate(direction, kind)}
 					size="sm"
 					className="flex-1 bg-accent/15 text-tiny text-accent hover:bg-accent/25"
 				>
@@ -552,82 +501,89 @@ function EdgeConfigPanel({
 	);
 }
 
-// -- Human Config Panel --
+// -- Human Edit Dialog --
 
-interface HumanConfigPanelProps {
-	human: { id: string; display_name?: string; role?: string };
-	onUpdate: (displayName: string, role: string) => void;
+interface HumanEditDialogProps {
+	human: { id: string; display_name?: string; role?: string; bio?: string } | null;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	onUpdate: (displayName: string, role: string, bio: string) => void;
 	onDelete: () => void;
-	onClose: () => void;
 }
 
-function HumanConfigPanel({
+function HumanEditDialog({
 	human,
+	open,
+	onOpenChange,
 	onUpdate,
 	onDelete,
-	onClose,
-}: HumanConfigPanelProps) {
-	const [displayName, setDisplayName] = useState(human.display_name ?? "");
-	const [role, setRole] = useState(human.role ?? "");
+}: HumanEditDialogProps) {
+	const [displayName, setDisplayName] = useState("");
+	const [role, setRole] = useState("");
+	const [bio, setBio] = useState("");
+
+	// Sync state when a different human is selected
+	const prevId = useRef<string | null>(null);
+	if (human && human.id !== prevId.current) {
+		prevId.current = human.id;
+		setDisplayName(human.display_name ?? "");
+		setRole(human.role ?? "");
+		setBio(human.bio ?? "");
+	}
+
+	if (!human) return null;
 
 	return (
-		<motion.div
-			initial={{ opacity: 0, y: 8 }}
-			animate={{ opacity: 1, y: 0 }}
-			exit={{ opacity: 0, y: 8 }}
-			transition={{ duration: 0.15 }}
-			className="absolute right-4 top-4 z-20 w-64 rounded-lg border border-app-line/50 bg-app-darkBox/95 p-4 shadow-xl backdrop-blur-sm"
-		>
-			<div className="mb-3 flex items-center justify-between">
-				<span className="text-sm font-medium text-ink">Human Settings</span>
-				<button
-					onClick={onClose}
-					className="text-ink-faint hover:text-ink transition-colors text-sm"
-				>
-					Close
-				</button>
-			</div>
-
-			<div className="mb-2 text-tiny text-ink-faint">{human.id}</div>
-
-			<div className="mb-3">
-				<label className="mb-1 block text-tiny font-medium text-ink-dull">Display Name</label>
-				<input
-					value={displayName}
-					onChange={(e) => setDisplayName(e.target.value)}
-					className="w-full rounded bg-app-input px-2.5 py-1.5 text-sm text-ink outline-none border border-app-line/50 focus:border-accent/50"
-					placeholder={human.id}
-				/>
-			</div>
-
-			<div className="mb-4">
-				<label className="mb-1 block text-tiny font-medium text-ink-dull">Role</label>
-				<input
-					value={role}
-					onChange={(e) => setRole(e.target.value)}
-					className="w-full rounded bg-app-input px-2.5 py-1.5 text-sm text-ink outline-none border border-app-line/50 focus:border-accent/50"
-					placeholder="e.g. CEO, Lead Developer"
-				/>
-			</div>
-
-			<div className="flex gap-2">
-				<Button
-					onClick={() => onUpdate(displayName, role)}
-					size="sm"
-					className="flex-1 bg-accent/15 text-tiny text-accent hover:bg-accent/25"
-				>
-					Save
-				</Button>
-				<Button
-					onClick={onDelete}
-					size="sm"
-					variant="destructive"
-					className="text-tiny"
-				>
-					Delete
-				</Button>
-			</div>
-		</motion.div>
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="max-w-sm">
+				<DialogHeader>
+					<DialogTitle>Edit Human</DialogTitle>
+				</DialogHeader>
+				<div className="flex flex-col gap-3">
+					<div className="text-tiny text-ink-faint">{human.id}</div>
+					<div>
+						<label className="mb-1.5 block text-sm font-medium text-ink-dull">Display Name</label>
+						<Input
+							size="lg"
+							value={displayName}
+							onChange={(e) => setDisplayName(e.target.value)}
+							placeholder={human.id}
+						/>
+					</div>
+					<div>
+						<label className="mb-1.5 block text-sm font-medium text-ink-dull">Role</label>
+						<Input
+							size="lg"
+							value={role}
+							onChange={(e) => setRole(e.target.value)}
+							placeholder="e.g. CEO, Lead Developer"
+						/>
+					</div>
+					<div>
+						<label className="mb-1.5 block text-sm font-medium text-ink-dull">Bio</label>
+						<textarea
+							value={bio}
+							onChange={(e) => setBio(e.target.value)}
+							placeholder="A short description..."
+							rows={3}
+							className="w-full rounded-md bg-app-input px-3 py-2 text-sm text-ink outline-none border border-app-line/50 focus:border-accent/50 resize-none"
+						/>
+					</div>
+				</div>
+				<DialogFooter>
+					<Button variant="destructive" size="sm" onClick={onDelete}>
+						Delete
+					</Button>
+					<div className="flex-1" />
+					<Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+						Cancel
+					</Button>
+					<Button size="sm" onClick={() => onUpdate(displayName, role, bio)}>
+						Save
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }
 
@@ -745,7 +701,8 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 	const queryClient = useQueryClient();
 	const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
 	const [selectedGroup, setSelectedGroup] = useState<TopologyGroup | null>(null);
-	const [selectedHuman, setSelectedHuman] = useState<{ id: string; display_name?: string; role?: string } | null>(null);
+	const [selectedHuman, setSelectedHuman] = useState<{ id: string; display_name?: string; role?: string; bio?: string } | null>(null);
+	const [humanDialogOpen, setHumanDialogOpen] = useState(false);
 
 	const { data, isLoading, error } = useQuery({
 		queryKey: ["topology"],
@@ -817,13 +774,13 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 			from: string;
 			to: string;
 			direction: LinkDirection;
-			relationship: LinkRelationship;
+			kind: LinkKind;
 		}) =>
 			api.createLink({
 				from: params.from,
 				to: params.to,
 				direction: params.direction,
-				relationship: params.relationship,
+				kind: params.kind,
 			}),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["topology"] });
@@ -835,11 +792,11 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 			from: string;
 			to: string;
 			direction: LinkDirection;
-			relationship: LinkRelationship;
+			kind: LinkKind;
 		}) =>
 			api.updateLink(params.from, params.to, {
 				direction: params.direction,
-				relationship: params.relationship,
+				kind: params.kind,
 			}),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["topology"] });
@@ -892,10 +849,11 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 	});
 
 	const updateHuman = useMutation({
-		mutationFn: (params: { id: string; displayName?: string; role?: string }) =>
+		mutationFn: (params: { id: string; displayName?: string; role?: string; bio?: string }) =>
 			api.updateHuman(params.id, {
 				display_name: params.displayName,
 				role: params.role,
+				bio: params.bio,
 			}),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["topology"] });
@@ -923,15 +881,19 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 			);
 			if (exists) return;
 
-			const { relationship } = inferRelationshipFromHandle(
-				connection.sourceHandle ?? null,
-			);
+			const kind = inferKindFromHandle(connection.sourceHandle ?? null);
+
+			// For hierarchical links from bottom handle, from=source (superior), to=target
+			// For hierarchical links from top handle, from=target (superior), to=source
+			const isFromTop = connection.sourceHandle === "top";
+			const from = (kind === "hierarchical" && isFromTop) ? connection.target : connection.source;
+			const to = (kind === "hierarchical" && isFromTop) ? connection.source : connection.target;
 
 			createLink.mutate({
-				from: connection.source,
-				to: connection.target,
+				from,
+				to,
 				direction: "two_way",
-				relationship,
+				kind,
 			});
 		},
 		[edges, createLink],
@@ -961,6 +923,7 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 				const human = humans.find((h) => h.id === node.id);
 				if (human) {
 					setSelectedHuman(human);
+					setHumanDialogOpen(true);
 					setSelectedEdge(null);
 					setSelectedGroup(null);
 				}
@@ -1138,22 +1101,12 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 
 			{/* Legend + controls */}
 			<div className="absolute bottom-4 left-4 z-10 rounded-md bg-app-darkBox/80 p-3 backdrop-blur-sm">
-				<div className="mb-2 text-tiny font-medium text-ink-faint">
-					Drag handles to link
+				<div className="mb-2 text-tiny text-ink-faint">
+					Drag between handles to link
 				</div>
-				<div className="flex flex-col gap-1.5">
-					<div className="flex items-center gap-1.5">
-						<span className="inline-block h-2 w-2 rounded-full bg-amber-400" />
-						<span className="text-tiny text-ink-faint">Top → Superior</span>
-					</div>
-					<div className="flex items-center gap-1.5">
-						<span className="inline-block h-2 w-2 rounded-full bg-green-400" />
-						<span className="text-tiny text-ink-faint">Bottom → Subordinate</span>
-					</div>
-					<div className="flex items-center gap-1.5">
-						<span className="inline-block h-2 w-2 rounded-full bg-indigo-400" />
-						<span className="text-tiny text-ink-faint">Side → Peer</span>
-					</div>
+				<div className="flex flex-col gap-1 text-tiny text-ink-faint">
+					<span>Top/Bottom → Hierarchical</span>
+					<span>Left/Right → Peer</span>
 				</div>
 				<div className="mt-2 flex flex-col gap-1">
 					<button
@@ -1180,12 +1133,12 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 					<EdgeConfigPanel
 						key={selectedEdge.id}
 						edge={selectedEdge}
-						onUpdate={(direction, relationship) =>
+						onUpdate={(direction, kind) =>
 							updateLink.mutate({
 								from: selectedEdge.source,
 								to: selectedEdge.target,
 								direction,
-								relationship,
+								kind,
 							})
 						}
 						onDelete={() =>
@@ -1219,24 +1172,32 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 				)}
 			</AnimatePresence>
 
-			{/* Human config panel */}
-			<AnimatePresence>
-				{selectedHuman && (
-					<HumanConfigPanel
-						key={selectedHuman.id}
-						human={selectedHuman}
-						onUpdate={(displayName, role) =>
-							updateHuman.mutate({
-								id: selectedHuman.id,
-								displayName: displayName || undefined,
-								role: role || undefined,
-							})
-						}
-						onDelete={() => deleteHuman.mutate(selectedHuman.id)}
-						onClose={() => setSelectedHuman(null)}
-					/>
-				)}
-			</AnimatePresence>
+			{/* Human edit dialog */}
+			<HumanEditDialog
+				human={selectedHuman}
+				open={humanDialogOpen}
+				onOpenChange={(open) => {
+					setHumanDialogOpen(open);
+					if (!open) setSelectedHuman(null);
+				}}
+				onUpdate={(displayName, role, bio) => {
+					if (selectedHuman) {
+						updateHuman.mutate({
+							id: selectedHuman.id,
+							displayName: displayName || undefined,
+							role: role || undefined,
+							bio: bio || undefined,
+						});
+						setHumanDialogOpen(false);
+					}
+				}}
+				onDelete={() => {
+					if (selectedHuman) {
+						deleteHuman.mutate(selectedHuman.id);
+						setHumanDialogOpen(false);
+					}
+				}}
+			/>
 		</div>
 	);
 }
@@ -1412,6 +1373,7 @@ function buildGraph(
 				nodeKind: "human",
 				configDisplayName: human.display_name ?? null,
 				configRole: human.role ?? null,
+				bio: human.bio ?? null,
 				avatarSeed: human.id,
 				connectedHandles: { top: false, bottom: false, left: false, right: false },
 			},
@@ -1435,11 +1397,11 @@ function buildGraph(
 		nodePositionMap.set(node.id, node.position);
 	}
 
-	// Now compute connected handles using actual positions
+	// Compute connected handles using actual positions
 	const connectedHandles = new Set<string>();
 	for (const link of links) {
-		const { sourceHandle, targetHandle } = getHandlesForRelationship(
-			link.relationship,
+		const { sourceHandle, targetHandle } = getHandlesForKind(
+			link.kind,
 			nodePositionMap.get(link.from),
 			nodePositionMap.get(link.to),
 		);
@@ -1447,17 +1409,17 @@ function buildGraph(
 		connectedHandles.add(`${link.to}:${targetHandle}`);
 	}
 
-	// Patch connectedHandles onto agent nodes
+	// Patch connectedHandles onto nodes
 	for (const node of allNodes) {
 		if (node.type === "agent" || node.type === "human") {
-			const aid = node.id;
+			const nid = node.id;
 			node.data = {
 				...node.data,
 				connectedHandles: {
-					top: connectedHandles.has(`${aid}:top`),
-					bottom: connectedHandles.has(`${aid}:bottom`),
-					left: connectedHandles.has(`${aid}:left`),
-					right: connectedHandles.has(`${aid}:right`),
+					top: connectedHandles.has(`${nid}:top`),
+					bottom: connectedHandles.has(`${nid}:bottom`),
+					left: connectedHandles.has(`${nid}:left`),
+					right: connectedHandles.has(`${nid}:right`),
 				},
 			};
 		}
@@ -1465,8 +1427,8 @@ function buildGraph(
 
 	const initialEdges: Edge[] = data.links.map((link) => {
 		const edgeId = `${link.from}->${link.to}`;
-		const { sourceHandle, targetHandle } = getHandlesForRelationship(
-			link.relationship,
+		const { sourceHandle, targetHandle } = getHandlesForKind(
+			link.kind,
 			nodePositionMap.get(link.from),
 			nodePositionMap.get(link.to),
 		);
@@ -1479,23 +1441,11 @@ function buildGraph(
 			type: "link",
 			data: {
 				direction: link.direction,
-				relationship: link.relationship,
+				kind: link.kind,
 				active: activeEdges.has(edgeId),
 			},
-			markerEnd:
-				link.direction === "one_way"
-					? {
-							type: MarkerType.ArrowClosed,
-							width: 16,
-							height: 16,
-							color:
-								RELATIONSHIP_COLORS[link.relationship] ??
-								"#6366f1",
-						}
-					: undefined,
 			style: {
-				stroke:
-					RELATIONSHIP_COLORS[link.relationship] ?? "#6366f1",
+				stroke: EDGE_COLOR,
 			},
 		};
 	});

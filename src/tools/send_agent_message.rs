@@ -154,12 +154,6 @@ impl Tool for SendAgentMessageTool {
             &link.from_agent_id
         };
 
-        let relationship = if is_from_agent {
-            link.relationship
-        } else {
-            link.relationship.inverse()
-        };
-
         let target_agent_arc: AgentId = Arc::from(receiving_agent_id.as_str());
         let conversation_id = link.channel_id();
 
@@ -174,10 +168,7 @@ impl Tool for SendAgentMessageTool {
             timestamp: Utc::now(),
             metadata: HashMap::from([
                 ("from_agent_id".into(), serde_json::json!(sending_agent_id)),
-                (
-                    "relationship".into(),
-                    serde_json::json!(relationship.as_str()),
-                ),
+                ("link_kind".into(), serde_json::json!(link.kind.as_str())),
             ]),
             formatted_author: Some(format!("[{}]", self.agent_name)),
         };

@@ -60,13 +60,13 @@ pub struct Config {
     pub telemetry: TelemetryConfig,
 }
 
-/// A link definition from config, connecting two agents.
+/// A link definition from config, connecting two nodes (agents or humans).
 #[derive(Debug, Clone)]
 pub struct LinkDef {
     pub from: String,
     pub to: String,
     pub direction: String,
-    pub relationship: String,
+    pub kind: String,
 }
 
 /// An org-level human definition.
@@ -77,6 +77,8 @@ pub struct HumanDef {
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bio: Option<String>,
 }
 
 /// A visual group definition for the topology UI.
@@ -1282,15 +1284,18 @@ struct TomlLinkDef {
     to: String,
     #[serde(default = "default_link_direction")]
     direction: String,
-    #[serde(default = "default_link_relationship")]
-    relationship: String,
+    #[serde(default = "default_link_kind")]
+    kind: String,
+    /// Backward compat: old configs use `relationship` instead of `kind`
+    #[serde(default)]
+    relationship: Option<String>,
 }
 
 fn default_link_direction() -> String {
     "two_way".into()
 }
 
-fn default_link_relationship() -> String {
+fn default_link_kind() -> String {
     "peer".into()
 }
 
@@ -1307,6 +1312,7 @@ struct TomlHumanDef {
     id: String,
     display_name: Option<String>,
     role: Option<String>,
+    bio: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -2280,6 +2286,7 @@ impl Config {
                 id: "admin".into(),
                 display_name: None,
                 role: None,
+                bio: None,
             }],
             messaging: MessagingConfig::default(),
             bindings: Vec::new(),
@@ -3122,11 +3129,19 @@ impl Config {
         let links = toml
             .links
             .into_iter()
-            .map(|l| LinkDef {
-                from: l.from,
-                to: l.to,
-                direction: l.direction,
-                relationship: l.relationship,
+            .map(|l| {
+                // Backward compat: use `relationship` field if `kind` is default and `relationship` is set
+                let kind = if l.kind == "peer" {
+                    l.relationship.unwrap_or(l.kind)
+                } else {
+                    l.kind
+                };
+                LinkDef {
+                    from: l.from,
+                    to: l.to,
+                    direction: l.direction,
+                    kind,
+                }
             })
             .collect();
 
@@ -3147,6 +3162,7 @@ impl Config {
                 id: h.id,
                 display_name: h.display_name,
                 role: h.role,
+                bio: h.bio,
             })
             .collect();
 
@@ -3156,6 +3172,7 @@ impl Config {
                 id: "admin".into(),
                 display_name: None,
                 role: None,
+                bio: None,
             });
         }
 
