@@ -13,6 +13,7 @@ import {
 	type NodeChange,
 	useNodesState,
 	useEdgesState,
+	useReactFlow,
 	MarkerType,
 	Handle,
 	Position,
@@ -152,16 +153,32 @@ function ProfileNode({ data, selected }: NodeProps) {
 	const nodeKind = (data.nodeKind as string) ?? "agent";
 	const isAgent = nodeKind === "agent";
 	const primaryName = configDisplayName ?? nodeId;
+	const onEdit = data.onEdit as (() => void) | undefined;
 
 	return (
 		<div
-			className={`relative rounded-xl border bg-app-darkBox transition-all ${
+			className={`group/node relative rounded-xl border bg-app-darkBox transition-all ${
 				selected
 					? "border-accent shadow-lg shadow-accent/20"
 					: "border-app-line hover:border-app-line/80"
 			}`}
 			style={{ width: NODE_WIDTH }}
 		>
+			{/* Edit button (visible on hover) */}
+			{onEdit && (
+				<button
+					onClick={(e) => {
+						e.stopPropagation();
+						onEdit();
+					}}
+					className="absolute top-2 right-2 z-10 rounded p-1 text-ink-faint opacity-0 transition-opacity hover:bg-ink/10 hover:text-ink group-hover/node:opacity-100"
+				>
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+						<path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" />
+					</svg>
+				</button>
+			)}
+
 			{/* Gradient banner */}
 			<div className="relative h-12 overflow-hidden rounded-t-xl">
 				<svg
@@ -331,7 +348,7 @@ function LinkEdge({
 				id={id}
 				path={edgePath}
 				style={{
-					stroke: selected ? "#fff" : color,
+					stroke: selected ? "hsl(var(--color-accent))" : color,
 					strokeWidth: selected ? 2.5 : isActive ? 2 : 1.5,
 					opacity: selected ? 1 : isActive ? 0.9 : 0.4,
 				}}
@@ -450,8 +467,8 @@ function EdgeConfigPanel({
 							onClick={() => setKind(k)}
 							className={`flex-1 rounded px-2 py-1.5 text-tiny transition-colors capitalize ${
 								kind === k
-									? "bg-accent/20 text-accent"
-									: "bg-app-box text-ink-faint hover:text-ink-dull"
+									? "bg-ink/10 text-ink"
+									: "bg-app-box/50 text-ink-faint hover:text-ink-dull"
 							}`}
 						>
 							{k}
@@ -470,8 +487,8 @@ function EdgeConfigPanel({
 							onClick={() => setDirection(d)}
 							className={`flex-1 rounded px-2 py-1.5 text-tiny transition-colors ${
 								direction === d
-									? "bg-accent/20 text-accent"
-									: "bg-app-box text-ink-faint hover:text-ink-dull"
+									? "bg-ink/10 text-ink"
+									: "bg-app-box/50 text-ink-faint hover:text-ink-dull"
 							}`}
 						>
 							{d === "one_way" ? "One Way" : "Two Way"}
@@ -484,15 +501,15 @@ function EdgeConfigPanel({
 				<Button
 					onClick={() => onUpdate(direction, kind)}
 					size="sm"
-					className="flex-1 bg-accent/15 text-tiny text-accent hover:bg-accent/25"
+					className="flex-1"
 				>
 					Save
 				</Button>
 				<Button
 					onClick={onDelete}
 					size="sm"
-					variant="destructive"
-					className="text-tiny"
+					variant="outline"
+					className="text-tiny text-ink-faint"
 				>
 					Delete
 				</Button>
@@ -579,6 +596,74 @@ function HumanEditDialog({
 						Cancel
 					</Button>
 					<Button size="sm" onClick={() => onUpdate(displayName, role, bio)}>
+						Save
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+// -- Agent Edit Dialog --
+
+interface AgentEditDialogProps {
+	agent: { id: string; display_name?: string; role?: string } | null;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	onUpdate: (displayName: string, role: string) => void;
+}
+
+function AgentEditDialog({
+	agent,
+	open,
+	onOpenChange,
+	onUpdate,
+}: AgentEditDialogProps) {
+	const [displayName, setDisplayName] = useState("");
+	const [role, setRole] = useState("");
+
+	const prevId = useRef<string | null>(null);
+	if (agent && agent.id !== prevId.current) {
+		prevId.current = agent.id;
+		setDisplayName(agent.display_name ?? "");
+		setRole(agent.role ?? "");
+	}
+
+	if (!agent) return null;
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="max-w-sm">
+				<DialogHeader>
+					<DialogTitle>Edit Agent</DialogTitle>
+				</DialogHeader>
+				<div className="flex flex-col gap-3">
+					<div className="text-tiny text-ink-faint">{agent.id}</div>
+					<div>
+						<label className="mb-1.5 block text-sm font-medium text-ink-dull">Display Name</label>
+						<Input
+							size="lg"
+							value={displayName}
+							onChange={(e) => setDisplayName(e.target.value)}
+							placeholder={agent.id}
+						/>
+					</div>
+					<div>
+						<label className="mb-1.5 block text-sm font-medium text-ink-dull">Role</label>
+						<Input
+							size="lg"
+							value={role}
+							onChange={(e) => setRole(e.target.value)}
+							placeholder="e.g. Research Assistant, Code Reviewer"
+						/>
+					</div>
+				</div>
+				<DialogFooter>
+					<div className="flex-1" />
+					<Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+						Cancel
+					</Button>
+					<Button size="sm" onClick={() => onUpdate(displayName, role)}>
 						Save
 					</Button>
 				</DialogFooter>
@@ -703,12 +788,18 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 	const [selectedGroup, setSelectedGroup] = useState<TopologyGroup | null>(null);
 	const [selectedHuman, setSelectedHuman] = useState<{ id: string; display_name?: string; role?: string; bio?: string } | null>(null);
 	const [humanDialogOpen, setHumanDialogOpen] = useState(false);
+	const [selectedAgent, setSelectedAgent] = useState<{ id: string; display_name?: string; role?: string } | null>(null);
+	const [agentDialogOpen, setAgentDialogOpen] = useState(false);
 
 	const { data, isLoading, error } = useQuery({
 		queryKey: ["topology"],
 		queryFn: api.topology,
 		refetchInterval: 10_000,
 	});
+
+	// Stable refs for opening edit dialogs from node callbacks
+	const openHumanEditRef = useRef<(humanId: string) => void>(() => {});
+	const openAgentEditRef = useRef<(agentId: string) => void>(() => {});
 
 	// Build agent profile lookup
 	const agentProfiles = useMemo(() => {
@@ -719,11 +810,25 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 		return map;
 	}, [agents]);
 
+	/** Inject onEdit callbacks into profile nodes */
+	const patchEditCallbacks = useCallback((nodes: Node[]): Node[] =>
+		nodes.map((n) => {
+			if (n.type === "human") {
+				return { ...n, data: { ...n.data, onEdit: () => openHumanEditRef.current(n.id) } };
+			}
+			if (n.type === "agent") {
+				return { ...n, data: { ...n.data, onEdit: () => openAgentEditRef.current(n.id) } };
+			}
+			return n;
+		}),
+	[]);
+
 	// Build nodes and edges from topology data
 	const { initialNodes, initialEdges } = useMemo(() => {
 		if (!data) return { initialNodes: [], initialEdges: [] };
-		return buildGraph(data, activeEdges, agentProfiles);
-	}, [data, activeEdges, agentProfiles]);
+		const graph = buildGraph(data, activeEdges, agentProfiles);
+		return { initialNodes: patchEditCallbacks(graph.initialNodes), initialEdges: graph.initialEdges };
+	}, [data, activeEdges, agentProfiles, patchEditCallbacks]);
 
 	const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
 	const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -745,10 +850,10 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 			const positionMap = new Map(
 				nodes.map((n) => [n.id, n.position]),
 			);
-			const mergedNodes = newNodes.map((n) => ({
+			const mergedNodes = patchEditCallbacks(newNodes.map((n) => ({
 				...n,
 				position: positionMap.get(n.id) ?? n.position,
-			}));
+			})));
 
 			setNodes(mergedNodes);
 			setEdges(newEdges);
@@ -869,6 +974,20 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 		},
 	});
 
+	const updateAgentMutation = useMutation({
+		mutationFn: (params: { id: string; displayName?: string; role?: string }) =>
+			api.updateAgent(params.id, {
+				display_name: params.displayName,
+				role: params.role,
+			}),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["topology"] });
+			queryClient.invalidateQueries({ queryKey: ["agents"] });
+			setSelectedAgent(null);
+			setAgentDialogOpen(false);
+		},
+	});
+
 	// Handle new connection (drag from handle to handle)
 	const onConnect = useCallback(
 		(connection: Connection) => {
@@ -908,6 +1027,41 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 	);
 
 	const groups = data?.groups ?? [];
+	const { fitView } = useReactFlow();
+
+	const openHumanEdit = useCallback(
+		(humanId: string) => {
+			const humans = data?.humans ?? [];
+			const human = humans.find((h) => h.id === humanId);
+			if (human) {
+				setSelectedHuman(human);
+				setHumanDialogOpen(true);
+				setSelectedEdge(null);
+				setSelectedGroup(null);
+			}
+		},
+		[data],
+	);
+	openHumanEditRef.current = openHumanEdit;
+
+	const openAgentEdit = useCallback(
+		(agentId: string) => {
+			const topoAgent = data?.agents.find((a) => a.id === agentId);
+			if (topoAgent) {
+				setSelectedAgent({
+					id: topoAgent.id,
+					display_name: topoAgent.display_name,
+					role: topoAgent.role,
+				});
+				setAgentDialogOpen(true);
+				setSelectedEdge(null);
+				setSelectedGroup(null);
+				setSelectedHuman(null);
+			}
+		},
+		[data],
+	);
+	openAgentEditRef.current = openAgentEdit;
 
 	const onNodeClick = useCallback(
 		(_: React.MouseEvent, node: Node) => {
@@ -918,21 +1072,22 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 					setSelectedEdge(null);
 					setSelectedHuman(null);
 				}
-			} else if (node.type === "human") {
-				const humans = data?.humans ?? [];
-				const human = humans.find((h) => h.id === node.id);
-				if (human) {
-					setSelectedHuman(human);
-					setHumanDialogOpen(true);
-					setSelectedEdge(null);
-					setSelectedGroup(null);
-				}
 			} else {
 				setSelectedGroup(null);
 				setSelectedHuman(null);
 			}
+
+			// Zoom the selected node into view
+			if (node.type === "agent" || node.type === "human") {
+				fitView({
+					nodes: [{ id: node.id }],
+					duration: 400,
+					padding: 0.5,
+					maxZoom: 1.5,
+				});
+			}
 		},
-		[groups, data],
+		[groups, fitView],
 	);
 
 	const onPaneClick = useCallback(() => {
@@ -1195,6 +1350,25 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 					if (selectedHuman) {
 						deleteHuman.mutate(selectedHuman.id);
 						setHumanDialogOpen(false);
+					}
+				}}
+			/>
+
+			{/* Agent edit dialog */}
+			<AgentEditDialog
+				agent={selectedAgent}
+				open={agentDialogOpen}
+				onOpenChange={(open) => {
+					setAgentDialogOpen(open);
+					if (!open) setSelectedAgent(null);
+				}}
+				onUpdate={(displayName, role) => {
+					if (selectedAgent) {
+						updateAgentMutation.mutate({
+							id: selectedAgent.id,
+							displayName: displayName || undefined,
+							role: role || undefined,
+						});
 					}
 				}}
 			/>

@@ -64,6 +64,7 @@ pub async fn start_http_server(
             "/agents",
             get(agents::list_agents)
                 .post(agents::create_agent)
+                .put(agents::update_agent)
                 .delete(agents::delete_agent),
         )
         .route("/agents/mcp", get(agents::list_agent_mcp))

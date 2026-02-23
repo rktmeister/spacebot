@@ -132,6 +132,13 @@ pub(super) struct CreateAgentRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct UpdateAgentRequest {
+    agent_id: String,
+    display_name: Option<String>,
+    role: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct DeleteAgentQuery {
     agent_id: String,
 }
@@ -581,6 +588,86 @@ pub(super) async fn create_agent(
         "success": true,
         "agent_id": agent_id,
         "message": format!("Agent '{agent_id}' created and running")
+    })))
+}
+
+/// Update an agent's display_name and role in config.toml.
+pub(super) async fn update_agent(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<UpdateAgentRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let agent_id = request.agent_id.trim().to_string();
+    if agent_id.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "success": false,
+            "message": "Agent ID cannot be empty"
+        })));
+    }
+
+    let existing = state.agent_configs.load();
+    let index = existing
+        .iter()
+        .position(|a| a.id == agent_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let config_path = state.config_path.read().await.clone();
+    let content = tokio::fs::read_to_string(&config_path)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to read config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let mut doc: toml_edit::DocumentMut = content.parse().map_err(|error| {
+        tracing::warn!(%error, "failed to parse config.toml");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    if let Some(agents_array) = doc.get_mut("agents").and_then(|a| a.as_array_of_tables_mut()) {
+        for table in agents_array.iter_mut() {
+            let table_id = table.get("id").and_then(|v| v.as_str());
+            if table_id == Some(&agent_id) {
+                if let Some(display_name) = &request.display_name {
+                    if display_name.is_empty() {
+                        table.remove("display_name");
+                    } else {
+                        table["display_name"] = toml_edit::value(display_name.as_str());
+                    }
+                }
+                if let Some(role) = &request.role {
+                    if role.is_empty() {
+                        table.remove("role");
+                    } else {
+                        table["role"] = toml_edit::value(role.as_str());
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to write config.toml");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let mut configs = (**existing).clone();
+    let info = &mut configs[index];
+    if let Some(display_name) = &request.display_name {
+        info.display_name = if display_name.is_empty() { None } else { Some(display_name.clone()) };
+    }
+    if let Some(role) = &request.role {
+        info.role = if role.is_empty() { None } else { Some(role.clone()) };
+    }
+    state.set_agent_configs(configs);
+
+    tracing::info!(agent_id = %agent_id, "agent updated via API");
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "agent_id": agent_id,
+        "message": format!("Agent '{agent_id}' updated")
     })))
 }
 

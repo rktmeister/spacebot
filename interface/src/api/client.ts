@@ -1130,6 +1130,18 @@ export const api = {
 		return response.json() as Promise<{ success: boolean; agent_id: string; message: string }>;
 	},
 
+	updateAgent: async (agentId: string, update: { display_name?: string; role?: string }) => {
+		const response = await fetch(`${API_BASE}/agents`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ agent_id: agentId, ...update }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ success: boolean; agent_id: string; message: string }>;
+	},
+
 	deleteAgent: async (agentId: string) => {
 		const params = new URLSearchParams({ agent_id: agentId });
 		const response = await fetch(`${API_BASE}/agents?${params}`, {
