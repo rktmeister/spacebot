@@ -95,6 +95,33 @@ kind = "peer"
 
 When a link exists, the connected agent gets a `send_agent_message` tool that lets it send messages to the other node. Messages flow through the existing messaging pipeline as internal messages with `source: "internal"`.
 
+#### Link Channels
+
+Each side of a link gets its own channel: `link:{self}:{peer}`. When Agent A messages Agent B, Agent B's link channel receives the message. When Agent B replies, the reply routes back to Agent A's link channel. Both agents maintain full conversation history on their side.
+
+The originating channel (e.g., the Discord chat where a user asked Agent A to delegate) is tracked automatically. When the link conversation concludes, the summary is injected back into the originating channel so the agent can relay results to the user.
+
+#### Concluding Link Conversations
+
+Link channels have a `conclude_link` tool. When the conversation objective is met, either agent calls it with a summary of outcomes and decisions. This:
+
+1. Routes the summary back to the originating channel as a system message
+2. Retriggers the originating channel so the agent can relay results
+3. Ends the link conversation
+
+If neither agent concludes, a safety cap of **20 turns** stops the conversation automatically. The link context prompt instructs agents to conclude promptly and avoid exchanging pleasantries after the objective is complete.
+
+#### Status Block Awareness
+
+When an agent delegates via `send_agent_message`, the source channel's status block shows the active link conversation:
+
+```markdown
+## Active Link Conversations
+- **Engineering Agent** (4 turns, started 11:29)
+```
+
+This gives the source channel's LLM awareness that a delegation is in progress without requiring a re-trigger.
+
 ### Org Context
 
 Each agent's system prompt includes an organization section derived from its links:
@@ -220,9 +247,10 @@ Identity files are per-agent. `ROLE.md` defines what the agent does — responsi
 ### Agents
 
 ```
-GET    /api/agents           — list all agents
-POST   /api/agents           — create a new agent
-DELETE /api/agents?agent_id=  — delete an agent
+GET    /api/agents                    — list all agents
+POST   /api/agents                    — create a new agent
+PUT    /api/agents                    — update agent display_name/role
+DELETE /api/agents?agent_id=          — delete an agent
 ```
 
 ### Links
@@ -242,6 +270,13 @@ GET    /api/humans           — list all humans
 POST   /api/humans           — create a human
 PUT    /api/humans/{id}      — update a human
 DELETE /api/humans/{id}      — delete a human (also removes their links)
+```
+
+### Channels
+
+```
+GET    /api/channels                              — list all active channels
+DELETE /api/channels?agent_id=&channel_id=        — delete a channel and its history
 ```
 
 ### Topology

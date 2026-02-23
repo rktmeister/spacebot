@@ -1014,6 +1014,10 @@ async fn run(
                                         if let Some(original) = original_text {
                                             metadata.insert("original_sent_message".into(), serde_json::json!(original));
                                         }
+                                        // Propagate originating_channel so both sides know where to route conclusions
+                                        if let Some(originating) = current_message.metadata.get("originating_channel") {
+                                            metadata.insert("originating_channel".into(), originating.clone());
+                                        }
 
                                         let reply_message = spacebot::InboundMessage {
                                             id: uuid::Uuid::new_v4().to_string(),

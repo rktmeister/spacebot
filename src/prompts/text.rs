@@ -169,6 +169,9 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         ("en", "tools/send_agent_message") => {
             include_str!("../../prompts/en/tools/send_agent_message_description.md.j2")
         }
+        ("en", "tools/conclude_link") => {
+            include_str!("../../prompts/en/tools/conclude_link_description.md.j2")
+        }
 
         // Fallback: unknown language or key -> try English
         (lang, key) if lang != "en" => {

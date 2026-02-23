@@ -25,6 +25,7 @@ pub mod branch_tool;
 pub mod browser;
 pub mod cancel;
 pub mod channel_recall;
+pub mod conclude_link;
 pub mod cron;
 pub mod exec;
 pub mod file;
@@ -52,6 +53,10 @@ pub use browser::{
 pub use cancel::{CancelArgs, CancelError, CancelOutput, CancelTool};
 pub use channel_recall::{
     ChannelRecallArgs, ChannelRecallError, ChannelRecallOutput, ChannelRecallTool,
+};
+pub use conclude_link::{
+    ConcludeLinkArgs, ConcludeLinkError, ConcludeLinkFlag, ConcludeLinkOutput, ConcludeLinkSummary,
+    ConcludeLinkTool, new_conclude_link,
 };
 pub use cron::{CronArgs, CronError, CronOutput, CronTool};
 pub use exec::{EnvVar, ExecArgs, ExecError, ExecOutput, ExecResult, ExecTool};
@@ -138,6 +143,7 @@ pub async fn add_channel_tools(
     replied_flag: RepliedFlag,
     cron_tool: Option<CronTool>,
     send_agent_message_tool: Option<SendAgentMessageTool>,
+    conclude_link: Option<(ConcludeLinkFlag, ConcludeLinkSummary)>,
 ) -> Result<(), rig::tool::server::ToolServerError> {
     handle
         .add_tool(ReplyTool::new(
@@ -166,12 +172,17 @@ pub async fn add_channel_tools(
     handle
         .add_tool(SendFileTool::new(response_tx.clone()))
         .await?;
-    handle.add_tool(ReactTool::new(response_tx)).await?;
+    handle.add_tool(ReactTool::new(response_tx.clone())).await?;
     if let Some(cron) = cron_tool {
         handle.add_tool(cron).await?;
     }
     if let Some(agent_msg) = send_agent_message_tool {
         handle.add_tool(agent_msg).await?;
+    }
+    if let Some((flag, summary)) = conclude_link {
+        handle
+            .add_tool(ConcludeLinkTool::new(flag, summary, response_tx))
+            .await?;
     }
     Ok(())
 }
@@ -191,10 +202,11 @@ pub async fn remove_channel_tools(
     handle.remove_tool(SkipTool::NAME).await?;
     handle.remove_tool(SendFileTool::NAME).await?;
     handle.remove_tool(ReactTool::NAME).await?;
-    // Cron, send_message, and send_agent_message removal is best-effort since not all channels have them
+    // Cron, send_message, send_agent_message, and conclude_link removal is best-effort since not all channels have them
     let _ = handle.remove_tool(CronTool::NAME).await;
     let _ = handle.remove_tool(SendMessageTool::NAME).await;
     let _ = handle.remove_tool(SendAgentMessageTool::NAME).await;
+    let _ = handle.remove_tool(ConcludeLinkTool::NAME).await;
     Ok(())
 }
 

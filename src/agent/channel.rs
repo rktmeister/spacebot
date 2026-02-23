@@ -147,6 +147,10 @@ pub struct Channel {
     retrigger_deadline: Option<tokio::time::Instant>,
     /// Optional send_agent_message tool (only when agent has active links).
     send_agent_message_tool: Option<crate::tools::SendAgentMessageTool>,
+    /// Turn counter for link channels (used for safety cap).
+    link_turn_count: u32,
+    /// Originating channel that triggered this link conversation (for routing conclusions back).
+    originating_channel: Option<String>,
 }
 
 impl Channel {
@@ -213,6 +217,7 @@ impl Channel {
                 (Some(mm), true) => Some(crate::tools::SendAgentMessageTool::new(
                     deps.agent_id.clone(),
                     deps.agent_id.to_string(),
+                    id.clone(),
                     deps.links.clone(),
                     mm.clone(),
                     deps.event_tx.clone(),
@@ -247,6 +252,8 @@ impl Channel {
             pending_retrigger_metadata: HashMap::new(),
             retrigger_deadline: None,
             send_agent_message_tool,
+            link_turn_count: 0,
+            originating_channel: None,
         };
 
         (channel, message_tx)
@@ -585,7 +592,7 @@ impl Channel {
         }
 
         // Run agent turn with any image/audio attachments preserved
-        let (result, skip_flag, replied_flag) = self
+        let (result, skip_flag, replied_flag, _conclude_flag, _conclude_summary) = self
             .run_agent_turn(
                 &combined_text,
                 &system_prompt,
@@ -759,6 +766,14 @@ impl Channel {
         // On link channels, seed conversation history with the original outgoing message
         // so the agent has context for what it previously said when the reply arrives.
         if message.source == "internal" {
+            // Capture the originating channel for routing conclusions back
+            if self.originating_channel.is_none() {
+                self.originating_channel = message.metadata
+                    .get("originating_channel")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+            }
+
             if let Some(original) = message.metadata.get("original_sent_message").and_then(|v| v.as_str()) {
                 let history = self.state.history.read().await;
                 let is_first_message = history.is_empty();
@@ -781,6 +796,23 @@ impl Channel {
             }
         }
 
+        // Track link channel turns for safety cap
+        let is_link_channel = message.conversation_id.starts_with("link:");
+        if is_link_channel && message.source != "system" {
+            self.link_turn_count += 1;
+        }
+
+        // Safety cap: force-conclude link conversations at 20 turns
+        const LINK_MAX_TURNS: u32 = 20;
+        if is_link_channel && self.link_turn_count > LINK_MAX_TURNS {
+            tracing::warn!(
+                channel_id = %self.id,
+                turns = self.link_turn_count,
+                "link conversation hit safety cap, dropping message"
+            );
+            return Ok(());
+        }
+
         let system_prompt = self.build_system_prompt().await?;
 
         {
@@ -790,7 +822,7 @@ impl Channel {
 
         let is_retrigger = message.source == "system";
 
-        let (result, skip_flag, replied_flag) = self
+        let (result, skip_flag, replied_flag, conclude_flag, conclude_summary) = self
             .run_agent_turn(
                 &user_text,
                 &system_prompt,
@@ -801,6 +833,13 @@ impl Channel {
 
         self.handle_agent_result(result, &skip_flag, &replied_flag, is_retrigger)
             .await;
+
+        // Handle link conversation conclusion
+        let concluded = conclude_flag.load(std::sync::atomic::Ordering::Relaxed);
+        if concluded {
+            let summary = conclude_summary.read().await.clone().unwrap_or_default();
+            self.route_link_conclusion(&summary, &message).await;
+        }
 
         // Check context size and trigger compaction if needed
         if let Err(error) = self.compactor.check_and_compact().await {
@@ -957,6 +996,81 @@ impl Channel {
         prompt_engine.render_link_context(link_context).ok()
     }
 
+    /// Route a link conversation conclusion back to the originating channel.
+    ///
+    /// Injects a system message into the channel that originally called
+    /// `send_agent_message`, then stops processing further messages on this
+    /// link channel.
+    async fn route_link_conclusion(
+        &self,
+        summary: &str,
+        last_message: &crate::InboundMessage,
+    ) {
+        // Derive the peer agent name from the link channel conversation_id
+        let peer_agent = self.conversation_id.as_deref()
+            .and_then(|cid| cid.strip_prefix("link:"))
+            .and_then(|rest| {
+                // Format is "link:{self}:{peer}", skip past self
+                let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                parts.get(1).copied()
+            })
+            .map(|id| {
+                self.deps.agent_names.get(id).cloned().unwrap_or_else(|| id.to_string())
+            })
+            .unwrap_or_else(|| "agent".to_string());
+
+        // Route conclusion to the originating channel (the one that called send_agent_message)
+        if let Some(originating) = &self.originating_channel {
+            if let Some(mm) = &self.deps.messaging_manager {
+                let conclusion_text = format!(
+                    "[Link conversation with {} concluded]\n{}",
+                    peer_agent, summary
+                );
+
+                let conclusion_message = crate::InboundMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    source: "system".into(),
+                    conversation_id: originating.clone(),
+                    sender_id: "system".into(),
+                    agent_id: Some(self.deps.agent_id.clone()),
+                    content: crate::MessageContent::Text(conclusion_text),
+                    timestamp: chrono::Utc::now(),
+                    metadata: std::collections::HashMap::new(),
+                    formatted_author: None,
+                };
+
+                if let Err(error) = mm.inject_message(conclusion_message).await {
+                    tracing::error!(
+                        %error,
+                        originating_channel = %originating,
+                        "failed to route link conclusion to originating channel"
+                    );
+                } else {
+                    tracing::info!(
+                        originating_channel = %originating,
+                        peer = %peer_agent,
+                        "routed link conclusion to originating channel"
+                    );
+                }
+            }
+        } else {
+            tracing::debug!(
+                channel_id = %self.id,
+                "link conversation concluded but no originating channel to notify"
+            );
+        }
+
+        // Also try to propagate originating_channel via the reply metadata so
+        // the peer's side can also conclude back to the same originating channel
+        if let Some(from_agent) = last_message.metadata.get("from_agent_id").and_then(|v| v.as_str()) {
+            tracing::info!(
+                from = %from_agent,
+                channel_id = %self.id,
+                "link conversation concluded"
+            );
+        }
+    }
+
     /// Assemble the full system prompt using the PromptEngine.
     async fn build_system_prompt(&self) -> crate::error::Result<String> {
         let rc = &self.deps.runtime_config;
@@ -1014,9 +1128,20 @@ impl Channel {
         std::result::Result<String, rig::completion::PromptError>,
         crate::tools::SkipFlag,
         crate::tools::RepliedFlag,
+        crate::tools::ConcludeLinkFlag,
+        crate::tools::ConcludeLinkSummary,
     )> {
         let skip_flag = crate::tools::new_skip_flag();
         let replied_flag = crate::tools::new_replied_flag();
+
+        // Only provide conclude_link on link channels
+        let is_link_channel = conversation_id.starts_with("link:");
+        let (conclude_flag, conclude_summary) = crate::tools::new_conclude_link();
+        let conclude_link_args = if is_link_channel {
+            Some((conclude_flag.clone(), conclude_summary.clone()))
+        } else {
+            None
+        };
 
         if let Err(error) = crate::tools::add_channel_tools(
             &self.tool_server,
@@ -1027,6 +1152,7 @@ impl Channel {
             replied_flag.clone(),
             self.deps.cron_tool.clone(),
             self.send_agent_message_tool.clone(),
+            conclude_link_args,
         )
         .await
         {
@@ -1102,7 +1228,7 @@ impl Channel {
             tracing::warn!(%error, "failed to remove channel tools");
         }
 
-        Ok((result, skip_flag, replied_flag))
+        Ok((result, skip_flag, replied_flag, conclude_flag, conclude_summary))
     }
 
     /// Dispatch the LLM result: send fallback text, log errors, clean up typing.

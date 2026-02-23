@@ -23,6 +23,7 @@ use tokio::sync::broadcast;
 pub struct SendAgentMessageTool {
     agent_id: AgentId,
     agent_name: String,
+    channel_id: crate::ChannelId,
     links: Arc<ArcSwap<Vec<AgentLink>>>,
     messaging_manager: Arc<MessagingManager>,
     event_tx: broadcast::Sender<ProcessEvent>,
@@ -42,6 +43,7 @@ impl SendAgentMessageTool {
     pub fn new(
         agent_id: AgentId,
         agent_name: String,
+        channel_id: crate::ChannelId,
         links: Arc<ArcSwap<Vec<AgentLink>>>,
         messaging_manager: Arc<MessagingManager>,
         event_tx: broadcast::Sender<ProcessEvent>,
@@ -50,6 +52,7 @@ impl SendAgentMessageTool {
         Self {
             agent_id,
             agent_name,
+            channel_id,
             links,
             messaging_manager,
             event_tx,
@@ -173,6 +176,7 @@ impl Tool for SendAgentMessageTool {
                 ("link_kind".into(), serde_json::json!(link.kind.as_str())),
                 ("reply_to_agent".into(), serde_json::json!(sending_agent_id)),
                 ("reply_to_channel".into(), serde_json::json!(&sender_channel)),
+                ("originating_channel".into(), serde_json::json!(self.channel_id.as_ref())),
             ]),
             formatted_author: Some(format!("[{}]", self.agent_name)),
         };
