@@ -1281,6 +1281,7 @@ pub async fn spawn_branch_from_state(
         &description,
         &system_prompt,
         &description,
+        "branch",
     )
     .await
 }
@@ -1308,8 +1309,42 @@ async fn spawn_memory_persistence_branch(
         &prompt,
         &system_prompt,
         "persisting memories...",
+        "memory_persistence_branch",
     )
     .await
+}
+
+fn ensure_dispatch_readiness(state: &ChannelState, dispatch_type: &'static str) {
+    let readiness = state.deps.runtime_config.work_readiness();
+    if readiness.ready {
+        return;
+    }
+
+    let reason = readiness
+        .reason
+        .map(|value| value.as_str())
+        .unwrap_or("unknown");
+    tracing::warn!(
+        agent_id = %state.deps.agent_id,
+        channel_id = %state.channel_id,
+        dispatch_type,
+        reason,
+        warmup_state = ?readiness.warmup_state,
+        embedding_ready = readiness.embedding_ready,
+        bulletin_age_secs = ?readiness.bulletin_age_secs,
+        stale_after_secs = readiness.stale_after_secs,
+        "dispatch requested before readiness contract was satisfied"
+    );
+
+    #[cfg(feature = "metrics")]
+    crate::telemetry::Metrics::global()
+        .dispatch_while_cold_count
+        .with_label_values(&[&*state.deps.agent_id, dispatch_type, reason])
+        .inc();
+
+    if readiness.warmup_state != crate::config::WarmupState::Warming {
+        crate::agent::cortex::trigger_forced_warmup(state.deps.clone(), dispatch_type);
+    }
 }
 
 /// Shared branch spawning logic.
@@ -1322,6 +1357,7 @@ async fn spawn_branch(
     prompt: &str,
     system_prompt: &str,
     status_label: &str,
+    dispatch_type: &'static str,
 ) -> std::result::Result<BranchId, AgentError> {
     let max_branches = **state.deps.runtime_config.max_concurrent_branches.load();
     {
@@ -1333,6 +1369,7 @@ async fn spawn_branch(
             });
         }
     }
+    ensure_dispatch_readiness(state, dispatch_type);
 
     let history = {
         let h = state.history.read().await;
@@ -1428,6 +1465,7 @@ pub async fn spawn_worker_from_state(
     suggested_skills: &[&str],
 ) -> std::result::Result<WorkerId, AgentError> {
     check_worker_limit(state).await?;
+    ensure_dispatch_readiness(state, "worker");
     let task = task.into();
 
     let rc = &state.deps.runtime_config;
@@ -1538,6 +1576,7 @@ pub async fn spawn_opencode_worker_from_state(
     interactive: bool,
 ) -> std::result::Result<crate::WorkerId, AgentError> {
     check_worker_limit(state).await?;
+    ensure_dispatch_readiness(state, "opencode_worker");
     let task = task.into();
     let directory = std::path::PathBuf::from(directory);
 
