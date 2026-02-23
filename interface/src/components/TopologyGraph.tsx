@@ -392,21 +392,37 @@ function LinkEdge({
 	);
 }
 
-/** Map a relationship to source/target handle IDs. */
-function getHandlesForRelationship(relationship: string): {
+/** Map a relationship to source/target handle IDs. For peers, pick the side facing the other node. */
+function getHandlesForRelationship(
+	relationship: string,
+	sourcePos?: { x: number; y: number },
+	targetPos?: { x: number; y: number },
+): {
 	sourceHandle: string;
 	targetHandle: string;
 } {
 	switch (relationship) {
 		case "superior":
-			// from_agent is superior → connects downward to subordinate
 			return { sourceHandle: "bottom", targetHandle: "top" };
 		case "subordinate":
-			// from_agent is subordinate → connects upward to superior
 			return { sourceHandle: "top", targetHandle: "bottom" };
-		default:
-			// peer → horizontal
+		default: {
+			if (sourcePos && targetPos) {
+				const dx = targetPos.x - sourcePos.x;
+				const dy = targetPos.y - sourcePos.y;
+				// If the vertical distance is larger, use top/bottom even for peers
+				if (Math.abs(dy) > Math.abs(dx)) {
+					return dy > 0
+						? { sourceHandle: "bottom", targetHandle: "top" }
+						: { sourceHandle: "top", targetHandle: "bottom" };
+				}
+				// Horizontal: connect on the side facing each other
+				return dx > 0
+					? { sourceHandle: "right", targetHandle: "left" }
+					: { sourceHandle: "left", targetHandle: "right" };
+			}
 			return { sourceHandle: "right", targetHandle: "left" };
+		}
 	}
 }
 
@@ -1106,15 +1122,8 @@ function buildGraph(
 	// Topology agent lookup for display_name / role
 	const topologyAgentMap = new Map(data.agents.map((a) => [a.id, a]));
 
-	// Build a set of connected handles per agent from link relationships.
-	// Key: "agentId:handleId", e.g. "support:top"
-	const connectedHandles = new Set<string>();
 	const links = data.links ?? [];
-	for (const link of links) {
-		const { sourceHandle, targetHandle } = getHandlesForRelationship(link.relationship);
-		connectedHandles.add(`${link.from}:${sourceHandle}`);
-		connectedHandles.add(`${link.to}:${targetHandle}`);
-	}
+	// connectedHandles is computed after nodes are positioned (needs position map for peers)
 
 	// Build group membership lookup
 	const groups = data.groups ?? [];
@@ -1196,12 +1205,7 @@ function buildGraph(
 					isOnline,
 					channelCount: summary?.channel_count ?? 0,
 					memoryCount: summary?.memory_total ?? 0,
-					connectedHandles: {
-						top: connectedHandles.has(`${agentId}:top`),
-						bottom: connectedHandles.has(`${agentId}:bottom`),
-						left: connectedHandles.has(`${agentId}:left`),
-						right: connectedHandles.has(`${agentId}:right`),
-					},
+					connectedHandles: { top: false, bottom: false, left: false, right: false },
 				},
 			});
 		});
@@ -1245,24 +1249,62 @@ function buildGraph(
 				isOnline,
 				channelCount: summary?.channel_count ?? 0,
 				memoryCount: summary?.memory_total ?? 0,
-				connectedHandles: {
-					top: connectedHandles.has(`${agent.id}:top`),
-					bottom: connectedHandles.has(`${agent.id}:bottom`),
-					left: connectedHandles.has(`${agent.id}:left`),
-					right: connectedHandles.has(`${agent.id}:right`),
-				},
+				connectedHandles: { top: false, bottom: false, left: false, right: false },
 			},
 		});
 	});
 
-	const initialEdges: Edge[] = data.links.map((link) => {
-		const edgeId = `${link.from}->${link.to}`;
-		// Route edges through handles based on relationship:
-		// superior: from is above to → source bottom, target top
-		// subordinate: from is below to → source top, target bottom
-		// peer: horizontal → source right, target left
+	// Build absolute position lookup for handle routing
+	const nodePositionMap = new Map<string, { x: number; y: number }>();
+	for (const node of allNodes) {
+		if (node.parentId) {
+			// Child nodes have positions relative to parent — compute absolute
+			const parent = allNodes.find((n) => n.id === node.parentId);
+			if (parent) {
+				nodePositionMap.set(node.id, {
+					x: parent.position.x + node.position.x,
+					y: parent.position.y + node.position.y,
+				});
+				continue;
+			}
+		}
+		nodePositionMap.set(node.id, node.position);
+	}
+
+	// Now compute connected handles using actual positions
+	const connectedHandles = new Set<string>();
+	for (const link of links) {
 		const { sourceHandle, targetHandle } = getHandlesForRelationship(
 			link.relationship,
+			nodePositionMap.get(link.from),
+			nodePositionMap.get(link.to),
+		);
+		connectedHandles.add(`${link.from}:${sourceHandle}`);
+		connectedHandles.add(`${link.to}:${targetHandle}`);
+	}
+
+	// Patch connectedHandles onto agent nodes
+	for (const node of allNodes) {
+		if (node.type === "agent") {
+			const aid = node.id;
+			node.data = {
+				...node.data,
+				connectedHandles: {
+					top: connectedHandles.has(`${aid}:top`),
+					bottom: connectedHandles.has(`${aid}:bottom`),
+					left: connectedHandles.has(`${aid}:left`),
+					right: connectedHandles.has(`${aid}:right`),
+				},
+			};
+		}
+	}
+
+	const initialEdges: Edge[] = data.links.map((link) => {
+		const edgeId = `${link.from}->${link.to}`;
+		const { sourceHandle, targetHandle } = getHandlesForRelationship(
+			link.relationship,
+			nodePositionMap.get(link.from),
+			nodePositionMap.get(link.to),
 		);
 		return {
 			id: edgeId,

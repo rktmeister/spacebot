@@ -854,10 +854,14 @@ impl Channel {
                 &link.from_agent_id
             };
 
+            // The link's relationship describes from_agent's role relative to to_agent.
+            // When we ARE from_agent, we need to invert to get the other agent's role
+            // relative to us. When we ARE to_agent, the relationship already describes
+            // from_agent's role relative to us.
             let relationship = if is_from {
-                link.relationship
-            } else {
                 link.relationship.inverse()
+            } else {
+                link.relationship
             };
 
             let agent_info = crate::prompts::engine::LinkedAgent {
