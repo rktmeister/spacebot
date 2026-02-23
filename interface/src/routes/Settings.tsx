@@ -1567,8 +1567,9 @@ function ProviderCard({ provider, name, description, configured, defaultModel, o
 					<div className="flex items-center gap-2">
 						<span className="text-sm font-medium text-ink">{name}</span>
 						{configured && (
-							<span className="text-tiny text-green-400">
-								● Configured
+							<span className="inline-flex items-center">
+								<span className="h-2 w-2 rounded-full bg-green-400" aria-hidden="true" />
+								<span className="sr-only">Configured</span>
 							</span>
 						)}
 					</div>
@@ -1609,8 +1610,9 @@ function ChatGptOAuthCard({ configured, defaultModel, isPolling, message, onSign
 					<div className="flex items-center gap-2">
 						<span className="text-sm font-medium text-ink">ChatGPT Plus (OAuth)</span>
 						{configured && (
-							<span className="text-tiny text-green-400">
-								● Configured
+							<span className="inline-flex items-center">
+								<span className="h-2 w-2 rounded-full bg-green-400" aria-hidden="true" />
+								<span className="sr-only">Configured</span>
 							</span>
 						)}
 					</div>
