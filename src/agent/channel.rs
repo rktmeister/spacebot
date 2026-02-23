@@ -978,11 +978,10 @@ impl Channel {
                             .as_deref()
                             .and_then(|conversation_id| conversation_id.split(':').next())
                             .unwrap_or("unknown");
-                        let final_text =
-                            crate::tools::reply::normalize_discord_mention_tokens(
-                                extracted.as_deref().unwrap_or(text),
-                                source,
-                            );
+                        let final_text = crate::tools::reply::normalize_discord_mention_tokens(
+                            extracted.as_deref().unwrap_or(text),
+                            source,
+                        );
                         if !final_text.is_empty() {
                             if extracted.is_some() {
                                 tracing::warn!(channel_id = %self.id, "extracted reply from malformed tool syntax in retrigger fallback");
