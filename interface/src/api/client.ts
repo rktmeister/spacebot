@@ -195,6 +195,8 @@ export type ChannelStatusResponse = Record<string, StatusBlockSnapshot>;
 
 export interface AgentInfo {
 	id: string;
+	display_name?: string;
+	role?: string;
 	workspace: string;
 	context_window: number;
 	max_turns: number;
@@ -962,6 +964,8 @@ export interface LinksResponse {
 export interface TopologyAgent {
 	id: string;
 	name: string;
+	display_name?: string;
+	role?: string;
 }
 
 export interface TopologyLink {
@@ -971,9 +975,28 @@ export interface TopologyLink {
 	relationship: string;
 }
 
+export interface TopologyGroup {
+	name: string;
+	agent_ids: string[];
+	color?: string;
+}
+
 export interface TopologyResponse {
 	agents: TopologyAgent[];
 	links: TopologyLink[];
+	groups: TopologyGroup[];
+}
+
+export interface CreateGroupRequest {
+	name: string;
+	agent_ids?: string[];
+	color?: string;
+}
+
+export interface UpdateGroupRequest {
+	name?: string;
+	agent_ids?: string[];
+	color?: string;
 }
 
 export interface CreateLinkRequest {
@@ -1074,11 +1097,11 @@ export const api = {
 		}
 		return response.json() as Promise<IdentityFiles>;
 	},
-	createAgent: async (agentId: string) => {
+	createAgent: async (agentId: string, displayName?: string, role?: string) => {
 		const response = await fetch(`${API_BASE}/agents`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ agent_id: agentId }),
+			body: JSON.stringify({ agent_id: agentId, display_name: displayName || undefined, role: role || undefined }),
 		});
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
@@ -1451,6 +1474,43 @@ export const api = {
 	deleteLink: async (from: string, to: string): Promise<void> => {
 		const response = await fetch(
 			`${API_BASE}/links/${encodeURIComponent(from)}/${encodeURIComponent(to)}`,
+			{ method: "DELETE" },
+		);
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+	},
+
+	// Agent Groups API
+	groups: () => fetchJson<{ groups: TopologyGroup[] }>("/groups"),
+	createGroup: async (request: CreateGroupRequest): Promise<{ group: TopologyGroup }> => {
+		const response = await fetch(`${API_BASE}/groups`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(request),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json();
+	},
+	updateGroup: async (name: string, request: UpdateGroupRequest): Promise<{ group: TopologyGroup }> => {
+		const response = await fetch(
+			`${API_BASE}/groups/${encodeURIComponent(name)}`,
+			{
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(request),
+			},
+		);
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json();
+	},
+	deleteGroup: async (name: string): Promise<void> => {
+		const response = await fetch(
+			`${API_BASE}/groups/${encodeURIComponent(name)}`,
 			{ method: "DELETE" },
 		);
 		if (!response.ok) {

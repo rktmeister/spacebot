@@ -27,6 +27,10 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentInfo {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     pub workspace: PathBuf,
     pub context_window: usize,
     pub max_turns: usize,
@@ -95,6 +99,8 @@ pub struct ApiState {
     pub webchat_adapter: ArcSwap<Option<Arc<WebChatAdapter>>>,
     /// Instance-level agent links for the communication graph.
     pub agent_links: ArcSwap<Vec<crate::links::AgentLink>>,
+    /// Visual agent groups for the topology UI.
+    pub agent_groups: ArcSwap<Vec<crate::config::GroupDef>>,
 }
 
 /// Events sent to SSE clients. Wraps ProcessEvents with agent context.
@@ -228,6 +234,7 @@ impl ApiState {
             agent_remove_tx,
             webchat_adapter: ArcSwap::from_pointee(None),
             agent_links: ArcSwap::from_pointee(Vec::new()),
+            agent_groups: ArcSwap::from_pointee(Vec::new()),
         }
     }
 
@@ -529,6 +536,11 @@ impl ApiState {
     /// Set the agent links for the communication graph.
     pub fn set_agent_links(&self, links: Vec<crate::links::AgentLink>) {
         self.agent_links.store(Arc::new(links));
+    }
+
+    /// Set the visual agent groups for the topology UI.
+    pub fn set_agent_groups(&self, groups: Vec<crate::config::GroupDef>) {
+        self.agent_groups.store(Arc::new(groups));
     }
 
     /// Send an event to all SSE subscribers.

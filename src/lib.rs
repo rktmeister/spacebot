@@ -198,6 +198,8 @@ pub struct AgentDeps {
     pub sqlite_pool: sqlx::SqlitePool,
     pub messaging_manager: Option<Arc<messaging::MessagingManager>>,
     pub links: Arc<arc_swap::ArcSwap<Vec<links::AgentLink>>>,
+    /// Map of all agent IDs to display names, for inter-agent message routing.
+    pub agent_names: Arc<std::collections::HashMap<String, String>>,
 }
 
 impl AgentDeps {

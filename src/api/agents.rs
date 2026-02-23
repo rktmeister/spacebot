@@ -127,6 +127,8 @@ pub(super) struct AgentOverviewQuery {
 #[derive(Deserialize)]
 pub(super) struct CreateAgentRequest {
     agent_id: String,
+    display_name: Option<String>,
+    role: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -263,6 +265,16 @@ pub(super) async fn create_agent(
 
     let mut new_table = toml_edit::Table::new();
     new_table["id"] = toml_edit::value(&agent_id);
+    if let Some(display_name) = &request.display_name {
+        if !display_name.is_empty() {
+            new_table["display_name"] = toml_edit::value(display_name.as_str());
+        }
+    }
+    if let Some(role) = &request.role {
+        if !role.is_empty() {
+            new_table["role"] = toml_edit::value(role.as_str());
+        }
+    }
     agents_array.push(new_table);
 
     tokio::fs::write(&config_path, doc.to_string())
@@ -281,6 +293,8 @@ pub(super) async fn create_agent(
     let raw_config = crate::config::AgentConfig {
         id: agent_id.clone(),
         default: false,
+        display_name: request.display_name.clone().filter(|s| !s.is_empty()),
+        role: request.role.clone().filter(|s| !s.is_empty()),
         workspace: None,
         routing: None,
         max_concurrent_branches: None,
@@ -434,6 +448,10 @@ pub(super) async fn create_agent(
             guard.as_ref().cloned()
         },
         links: Arc::new(arc_swap::ArcSwap::from_pointee((**state.agent_links.load()).clone())),
+        agent_names: {
+            let configs = state.agent_configs.load();
+            Arc::new(configs.iter().map(|c| (c.id.clone(), c.id.clone())).collect())
+        },
     };
 
     let event_rx = event_tx.subscribe();
@@ -530,6 +548,8 @@ pub(super) async fn create_agent(
         let mut agent_infos = (**state.agent_configs.load()).clone();
         agent_infos.push(AgentInfo {
             id: agent_config.id.clone(),
+            display_name: agent_config.display_name.clone(),
+            role: agent_config.role.clone(),
             workspace: agent_config.workspace.clone(),
             context_window: agent_config.context_window,
             max_turns: agent_config.max_turns,

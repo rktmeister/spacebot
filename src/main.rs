@@ -731,6 +731,7 @@ async fn run(
     api_state.set_prompt_engine(prompt_engine.clone()).await;
     api_state.set_defaults_config(config.defaults.clone()).await;
     api_state.set_agent_links((**agent_links.load()).clone());
+    api_state.set_agent_groups(config.groups.clone());
 
     // Track whether agents have been initialized
     let mut agents_initialized = false;
@@ -1205,6 +1206,17 @@ async fn initialize_agents(
 ) -> anyhow::Result<()> {
     let resolved_agents = config.resolve_agents();
 
+    // Build agent name map for inter-agent message routing
+    let agent_name_map: Arc<std::collections::HashMap<String, String>> = Arc::new(
+        resolved_agents
+            .iter()
+            .map(|a| {
+                let name = a.display_name.clone().unwrap_or_else(|| a.id.clone());
+                (a.id.clone(), name)
+            })
+            .collect(),
+    );
+
     for agent_config in &resolved_agents {
         tracing::info!(agent_id = %agent_config.id, "initializing agent");
 
@@ -1337,6 +1349,7 @@ async fn initialize_agents(
             sqlite_pool: db.sqlite.clone(),
             messaging_manager: None,
             links: agent_links.clone(),
+            agent_names: agent_name_map.clone(),
         };
 
         let agent = spacebot::Agent {
@@ -1370,6 +1383,8 @@ async fn initialize_agents(
             runtime_configs.insert(agent_id.to_string(), agent.deps.runtime_config.clone());
             agent_configs.push(spacebot::api::AgentInfo {
                 id: agent.config.id.clone(),
+                display_name: agent.config.display_name.clone(),
+                role: agent.config.role.clone(),
                 workspace: agent.config.workspace.clone(),
                 context_window: agent.config.context_window,
                 max_turns: agent.config.max_turns,

@@ -166,6 +166,11 @@ pub async fn start_http_server(
         )
         .route("/agents/{id}/links", get(links::agent_links))
         .route("/topology", get(links::topology))
+        .route("/groups", get(links::list_groups).post(links::create_group))
+        .route(
+            "/groups/{name}",
+            put(links::update_group).delete(links::delete_group),
+        )
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(
             state.clone(),

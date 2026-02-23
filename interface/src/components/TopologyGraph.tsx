@@ -10,6 +10,7 @@ import {
 	type EdgeTypes,
 	type NodeProps,
 	type EdgeProps,
+	type NodeChange,
 	useNodesState,
 	useEdgesState,
 	MarkerType,
@@ -26,6 +27,7 @@ import {
 	api,
 	type AgentSummary,
 	type TopologyResponse,
+	type TopologyGroup,
 	type LinkDirection,
 	type LinkRelationship,
 } from "@/api/client";
@@ -46,6 +48,45 @@ const RELATIONSHIP_LABELS: Record<string, string> = {
 	subordinate: "Subordinate",
 };
 
+const GROUP_COLORS = [
+	"#6366f1",
+	"#8b5cf6",
+	"#ec4899",
+	"#f59e0b",
+	"#22c55e",
+	"#06b6d4",
+	"#f97316",
+	"#14b8a6",
+];
+
+// -- Position persistence --
+
+const POSITIONS_KEY = "spacebot:topology:positions";
+
+type SavedPositions = Record<string, { x: number; y: number }>;
+
+function loadPositions(): SavedPositions {
+	try {
+		const raw = localStorage.getItem(POSITIONS_KEY);
+		if (raw) return JSON.parse(raw);
+	} catch {
+		// ignore
+	}
+	return {};
+}
+
+function savePositions(nodes: Node[]) {
+	const positions: SavedPositions = {};
+	for (const node of nodes) {
+		positions[node.id] = node.position;
+	}
+	try {
+		localStorage.setItem(POSITIONS_KEY, JSON.stringify(positions));
+	} catch {
+		// ignore
+	}
+}
+
 /** Deterministic gradient from a seed string. */
 function seedGradient(seed: string): [string, string] {
 	let hash = 0;
@@ -58,6 +99,49 @@ function seedGradient(seed: string): [string, string] {
 	return [`hsl(${hue1}, 70%, 55%)`, `hsl(${hue2}, 60%, 45%)`];
 }
 
+// -- Custom Node: Group --
+
+const GROUP_PADDING = 30;
+const GROUP_HEADER = 36;
+
+function GroupNode({ data, selected }: NodeProps) {
+	const color = (data.color as string) ?? "#6366f1";
+	const name = data.label as string;
+
+	return (
+		<div
+			className={`rounded-2xl border transition-all ${
+				selected ? "border-opacity-60" : "border-opacity-30"
+			}`}
+			style={{
+				width: data.width as number,
+				height: data.height as number,
+				borderColor: color,
+				backgroundColor: `${color}08`,
+			}}
+		>
+			<div
+				className="flex items-center gap-2 rounded-t-2xl px-4"
+				style={{
+					height: GROUP_HEADER,
+					background: `linear-gradient(135deg, ${color}18, ${color}08)`,
+				}}
+			>
+				<span
+					className="h-2 w-2 rounded-full"
+					style={{ backgroundColor: color }}
+				/>
+				<span
+					className="text-[11px] font-semibold uppercase tracking-wider"
+					style={{ color }}
+				>
+					{name}
+				</span>
+			</div>
+		</div>
+	);
+}
+
 // -- Custom Node: Agent Profile Card --
 
 const NODE_WIDTH = 240;
@@ -65,13 +149,16 @@ const NODE_WIDTH = 240;
 function AgentNode({ data, selected }: NodeProps) {
 	const avatarSeed = (data.avatarSeed as string) ?? (data.agentId as string);
 	const [c1, c2] = seedGradient(avatarSeed);
-	const displayName = (data.displayName as string) ?? (data.agentId as string);
-	const status = data.status as string | null;
+	const agentId = data.agentId as string;
+	const configDisplayName = data.configDisplayName as string | null;
+	const configRole = data.configRole as string | null;
+	const chosenName = data.chosenName as string | null;
 	const bio = data.bio as string | null;
 	const isOnline = data.isOnline as boolean;
 	const channelCount = data.channelCount as number;
 	const memoryCount = data.memoryCount as number;
-	const agentId = data.agentId as string;
+	const connected = (data.connectedHandles as Record<string, boolean>) ?? {};
+	const primaryName = configDisplayName ?? agentId;
 
 	return (
 		<div
@@ -138,20 +225,27 @@ function AgentNode({ data, selected }: NodeProps) {
 
 			{/* Profile content */}
 			<div className="px-4 pt-1.5 pb-3">
-				{/* Name + link to agent */}
+				{/* Primary name + self-chosen name inline */}
 				<Link
 					to="/agents/$agentId"
 					params={{ agentId }}
-					className="font-plex text-sm font-semibold text-ink hover:text-accent transition-colors truncate block"
+					className="flex items-baseline gap-1.5 truncate"
 					onClick={(e) => e.stopPropagation()}
 				>
-					{displayName}
+					<span className="font-plex text-sm font-semibold text-ink hover:text-accent transition-colors truncate">
+						{primaryName}
+					</span>
+					{chosenName && chosenName !== primaryName && chosenName !== agentId && (
+						<span className="text-[11px] text-ink-faint truncate">
+							"{chosenName}"
+						</span>
+					)}
 				</Link>
 
-				{/* Status line */}
-				{status && (
-					<p className="mt-0.5 text-[11px] text-ink-dull italic truncate">
-						{status}
+				{/* Role */}
+				{configRole && (
+					<p className="mt-0.5 text-[11px] text-ink-dull truncate">
+						{configRole}
 					</p>
 				)}
 
@@ -175,16 +269,55 @@ function AgentNode({ data, selected }: NodeProps) {
 				</div>
 			</div>
 
-			{/* Handles */}
+			{/* Handles on all four sides for relationship-based routing */}
 			<Handle
 				type="source"
+				id="top"
+				position={Position.Top}
+				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.top ? "!bg-amber-400" : "!bg-app-line"}`}
+			/>
+			<Handle
+				type="source"
+				id="bottom"
+				position={Position.Bottom}
+				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.bottom ? "!bg-green-400" : "!bg-app-line"}`}
+			/>
+			<Handle
+				type="source"
+				id="right"
 				position={Position.Right}
-				className="!h-3 !w-3 !border-2 !border-app-darkBox !bg-accent"
+				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.right ? "!bg-indigo-400" : "!bg-app-line"}`}
+			/>
+			<Handle
+				type="source"
+				id="left"
+				position={Position.Left}
+				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.left ? "!bg-indigo-400" : "!bg-app-line"}`}
+			/>
+			{/* Target handles (same positions, different type) */}
+			<Handle
+				type="target"
+				id="top"
+				position={Position.Top}
+				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.top ? "!bg-amber-400" : "!bg-app-line"}`}
 			/>
 			<Handle
 				type="target"
+				id="bottom"
+				position={Position.Bottom}
+				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.bottom ? "!bg-green-400" : "!bg-app-line"}`}
+			/>
+			<Handle
+				type="target"
+				id="right"
+				position={Position.Right}
+				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.right ? "!bg-indigo-400" : "!bg-app-line"}`}
+			/>
+			<Handle
+				type="target"
+				id="left"
 				position={Position.Left}
-				className="!h-3 !w-3 !border-2 !border-app-darkBox !bg-accent"
+				className={`!h-2.5 !w-2.5 !border-2 !border-app-darkBox ${connected.left ? "!bg-indigo-400" : "!bg-app-line"}`}
 			/>
 		</div>
 	);
@@ -259,8 +392,43 @@ function LinkEdge({
 	);
 }
 
+/** Map a relationship to source/target handle IDs. */
+function getHandlesForRelationship(relationship: string): {
+	sourceHandle: string;
+	targetHandle: string;
+} {
+	switch (relationship) {
+		case "superior":
+			// from_agent is superior → connects downward to subordinate
+			return { sourceHandle: "bottom", targetHandle: "top" };
+		case "subordinate":
+			// from_agent is subordinate → connects upward to superior
+			return { sourceHandle: "top", targetHandle: "bottom" };
+		default:
+			// peer → horizontal
+			return { sourceHandle: "right", targetHandle: "left" };
+	}
+}
+
+/** Infer relationship from the handle the user dragged from. */
+function inferRelationshipFromHandle(
+	sourceHandle: string | null,
+): { relationship: LinkRelationship } {
+	switch (sourceHandle) {
+		case "top":
+			// Dragged from top = "I am subordinate to the target"
+			return { relationship: "subordinate" };
+		case "bottom":
+			// Dragged from bottom = "I am superior to the target"
+			return { relationship: "superior" };
+		default:
+			return { relationship: "peer" };
+	}
+}
+
 const nodeTypes: NodeTypes = {
 	agent: AgentNode,
+	group: GroupNode,
 };
 
 const edgeTypes: EdgeTypes = {
@@ -376,6 +544,109 @@ function EdgeConfigPanel({
 	);
 }
 
+// -- Group Config Panel --
+
+interface GroupConfigPanelProps {
+	group: TopologyGroup;
+	allAgents: string[];
+	onUpdate: (agentIds: string[], name: string) => void;
+	onDelete: () => void;
+	onClose: () => void;
+}
+
+function GroupConfigPanel({
+	group,
+	allAgents,
+	onUpdate,
+	onDelete,
+	onClose,
+}: GroupConfigPanelProps) {
+	const [name, setName] = useState(group.name);
+	const [agentIds, setAgentIds] = useState<Set<string>>(new Set(group.agent_ids));
+
+	const toggleAgent = (id: string) => {
+		setAgentIds((prev) => {
+			const next = new Set(prev);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	};
+
+	return (
+		<motion.div
+			initial={{ opacity: 0, y: 8 }}
+			animate={{ opacity: 1, y: 0 }}
+			exit={{ opacity: 0, y: 8 }}
+			transition={{ duration: 0.15 }}
+			className="absolute right-4 top-4 z-20 w-64 rounded-lg border border-app-line/50 bg-app-darkBox/95 p-4 shadow-xl backdrop-blur-sm"
+		>
+			<div className="mb-3 flex items-center justify-between">
+				<span className="text-sm font-medium text-ink">Group Settings</span>
+				<button
+					onClick={onClose}
+					className="text-ink-faint hover:text-ink transition-colors text-sm"
+				>
+					Close
+				</button>
+			</div>
+
+			{/* Name */}
+			<div className="mb-3">
+				<label className="mb-1 block text-tiny font-medium text-ink-dull">Name</label>
+				<input
+					value={name}
+					onChange={(e) => setName(e.target.value)}
+					className="w-full rounded bg-app-input px-2.5 py-1.5 text-sm text-ink outline-none border border-app-line/50 focus:border-accent/50"
+				/>
+			</div>
+
+			{/* Agent membership */}
+			<div className="mb-4">
+				<label className="mb-1 block text-tiny font-medium text-ink-dull">Agents</label>
+				<div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
+					{allAgents.map((id) => (
+						<button
+							key={id}
+							onClick={() => toggleAgent(id)}
+							className={`flex items-center gap-2 rounded px-2 py-1.5 text-tiny transition-colors text-left ${
+								agentIds.has(id)
+									? "bg-accent/15 text-accent"
+									: "bg-app-box text-ink-faint hover:text-ink-dull"
+							}`}
+						>
+							<span
+								className={`h-2 w-2 rounded-full flex-shrink-0 ${
+									agentIds.has(id) ? "bg-accent" : "bg-app-line"
+								}`}
+							/>
+							{id}
+						</button>
+					))}
+				</div>
+			</div>
+
+			<div className="flex gap-2">
+				<Button
+					onClick={() => onUpdate([...agentIds], name)}
+					size="sm"
+					className="flex-1 bg-accent/15 text-tiny text-accent hover:bg-accent/25"
+				>
+					Save
+				</Button>
+				<Button
+					onClick={onDelete}
+					size="sm"
+					variant="destructive"
+					className="text-tiny"
+				>
+					Delete
+				</Button>
+			</div>
+		</motion.div>
+	);
+}
+
 // -- Main Component (inner, needs ReactFlowProvider) --
 
 interface TopologyGraphInnerProps {
@@ -386,6 +657,7 @@ interface TopologyGraphInnerProps {
 function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 	const queryClient = useQueryClient();
 	const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
+	const [selectedGroup, setSelectedGroup] = useState<TopologyGroup | null>(null);
 
 	const { data, isLoading, error } = useQuery({
 		queryKey: ["topology"],
@@ -450,7 +722,8 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 		);
 	}
 
-	// Mutations
+	// -- Mutations --
+
 	const createLink = useMutation({
 		mutationFn: (params: {
 			from: string;
@@ -495,24 +768,55 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 		},
 	});
 
+	const createGroup = useMutation({
+		mutationFn: (name: string) =>
+			api.createGroup({ name, agent_ids: [] }),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["topology"] });
+		},
+	});
+
+	const updateGroup = useMutation({
+		mutationFn: (params: { originalName: string; agentIds: string[]; name: string }) =>
+			api.updateGroup(params.originalName, {
+				name: params.name,
+				agent_ids: params.agentIds,
+			}),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["topology"] });
+			setSelectedGroup(null);
+		},
+	});
+
+	const deleteGroup = useMutation({
+		mutationFn: (name: string) => api.deleteGroup(name),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["topology"] });
+			setSelectedGroup(null);
+		},
+	});
+
 	// Handle new connection (drag from handle to handle)
 	const onConnect = useCallback(
 		(connection: Connection) => {
 			if (!connection.source || !connection.target) return;
 			if (connection.source === connection.target) return;
 
-			// Check if link already exists
 			const exists = edges.some(
 				(e) =>
 					e.source === connection.source && e.target === connection.target,
 			);
 			if (exists) return;
 
+			const { relationship } = inferRelationshipFromHandle(
+				connection.sourceHandle ?? null,
+			);
+
 			createLink.mutate({
 				from: connection.source,
 				to: connection.target,
 				direction: "two_way",
-				relationship: "peer",
+				relationship,
 			});
 		},
 		[edges, createLink],
@@ -521,13 +825,120 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 	const onEdgeClick = useCallback(
 		(_: React.MouseEvent, edge: Edge) => {
 			setSelectedEdge(edge);
+			setSelectedGroup(null);
 		},
 		[],
 	);
 
+	const groups = data?.groups ?? [];
+
+	const onNodeClick = useCallback(
+		(_: React.MouseEvent, node: Node) => {
+			if (node.type === "group" && groups.length > 0) {
+				const group = groups.find((g) => `group:${g.name}` === node.id);
+				if (group) {
+					setSelectedGroup(group);
+					setSelectedEdge(null);
+				}
+			} else {
+				setSelectedGroup(null);
+			}
+		},
+		[groups],
+	);
+
 	const onPaneClick = useCallback(() => {
 		setSelectedEdge(null);
+		setSelectedGroup(null);
 	}, []);
+
+	// Handle node drops into/out of groups via position change
+	const handleNodesChange = useCallback(
+		(changes: NodeChange[]) => {
+			onNodesChange(changes);
+
+			// Persist positions when any drag ends
+			const hasDragEnd = changes.some(
+				(c) => c.type === "position" && !c.dragging,
+			);
+			if (hasDragEnd) {
+				// Read latest nodes after the change is applied
+				setNodes((current) => {
+					savePositions(current);
+					return current;
+				});
+			}
+
+			// After a drag ends, check if an agent node was dropped onto a group
+			for (const change of changes) {
+				if (change.type === "position" && !change.dragging && groups.length > 0) {
+					const draggedNode = nodes.find((n) => n.id === change.id);
+					if (!draggedNode || draggedNode.type !== "agent") continue;
+
+					const agentId = draggedNode.id;
+					const currentGroup = groups.find((g) =>
+						g.agent_ids.includes(agentId),
+					);
+
+					// Find if the agent was dropped onto a group node
+					const groupNodes = nodes.filter((n) => n.type === "group");
+					let targetGroup: TopologyGroup | null = null;
+
+					for (const gNode of groupNodes) {
+						const gw = (gNode.data.width as number) ?? 0;
+						const gh = (gNode.data.height as number) ?? 0;
+						const pos = draggedNode.position;
+						if (
+							pos.x > gNode.position.x &&
+							pos.x < gNode.position.x + gw &&
+							pos.y > gNode.position.y &&
+							pos.y < gNode.position.y + gh
+						) {
+							const group = groups.find(
+								(g) => `group:${g.name}` === gNode.id,
+							);
+							if (group) {
+								targetGroup = group;
+								break;
+							}
+						}
+					}
+
+					if (targetGroup && !targetGroup.agent_ids.includes(agentId)) {
+						// Add to target group
+						const newIds = [...targetGroup.agent_ids, agentId];
+						// Remove from current group if any
+						if (currentGroup && currentGroup.name !== targetGroup.name) {
+							api.updateGroup(currentGroup.name, {
+								agent_ids: currentGroup.agent_ids.filter(
+									(id) => id !== agentId,
+								),
+							}).then(() => queryClient.invalidateQueries({ queryKey: ["topology"] }));
+						}
+						api.updateGroup(targetGroup.name, {
+							agent_ids: newIds,
+						}).then(() => queryClient.invalidateQueries({ queryKey: ["topology"] }));
+					} else if (
+						!targetGroup &&
+						currentGroup
+					) {
+						// Dragged out of a group
+						api.updateGroup(currentGroup.name, {
+							agent_ids: currentGroup.agent_ids.filter(
+								(id) => id !== agentId,
+							),
+						}).then(() => queryClient.invalidateQueries({ queryKey: ["topology"] }));
+					}
+				}
+			}
+		},
+		[onNodesChange, nodes, groups, queryClient],
+	);
+
+	const handleCreateGroup = useCallback(() => {
+		const name = `Group ${groups.length + 1}`;
+		createGroup.mutate(name);
+	}, [data, createGroup]);
 
 	if (isLoading) {
 		return (
@@ -560,15 +971,18 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 		);
 	}
 
+	const allAgentIds = data.agents.map((a) => a.id);
+
 	return (
-		<div className="relative h-full w-full">
+		<div className="relative h-full w-full select-none">
 			<ReactFlow
 				nodes={nodes}
 				edges={edges}
-				onNodesChange={onNodesChange}
+				onNodesChange={handleNodesChange}
 				onEdgesChange={onEdgesChange}
 				onConnect={onConnect}
 				onEdgeClick={onEdgeClick}
+				onNodeClick={onNodeClick}
 				onPaneClick={onPaneClick}
 				nodeTypes={nodeTypes}
 				edgeTypes={edgeTypes}
@@ -596,29 +1010,31 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 				/>
 			</ReactFlow>
 
-			{/* Legend */}
+			{/* Legend + controls */}
 			<div className="absolute bottom-4 left-4 z-10 rounded-md bg-app-darkBox/80 p-3 backdrop-blur-sm">
 				<div className="mb-2 text-tiny font-medium text-ink-faint">
-					Relationships
+					Drag handles to link
 				</div>
-				<div className="flex flex-col gap-1">
-					{Object.entries(RELATIONSHIP_COLORS).map(
-						([type, color]) => (
-							<div key={type} className="flex items-center gap-1.5">
-								<span
-									className="inline-block h-0.5 w-4 rounded"
-									style={{ backgroundColor: color }}
-								/>
-								<span className="text-tiny text-ink-faint capitalize">
-									{type}
-								</span>
-							</div>
-						),
-					)}
+				<div className="flex flex-col gap-1.5">
+					<div className="flex items-center gap-1.5">
+						<span className="inline-block h-2 w-2 rounded-full bg-amber-400" />
+						<span className="text-tiny text-ink-faint">Top → Superior</span>
+					</div>
+					<div className="flex items-center gap-1.5">
+						<span className="inline-block h-2 w-2 rounded-full bg-green-400" />
+						<span className="text-tiny text-ink-faint">Bottom → Subordinate</span>
+					</div>
+					<div className="flex items-center gap-1.5">
+						<span className="inline-block h-2 w-2 rounded-full bg-indigo-400" />
+						<span className="text-tiny text-ink-faint">Side → Peer</span>
+					</div>
 				</div>
-				<div className="mt-2 border-t border-app-line/30 pt-2 text-tiny text-ink-faint">
-					Drag between nodes to create links
-				</div>
+				<button
+					onClick={handleCreateGroup}
+					className="mt-2 w-full rounded bg-app-box px-2 py-1.5 text-tiny text-ink-faint hover:text-ink transition-colors text-left"
+				>
+					+ New Group
+				</button>
 			</div>
 
 			{/* Edge config panel */}
@@ -645,58 +1061,215 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 					/>
 				)}
 			</AnimatePresence>
+
+			{/* Group config panel */}
+			<AnimatePresence>
+				{selectedGroup && (
+					<GroupConfigPanel
+						key={selectedGroup.name}
+						group={selectedGroup}
+						allAgents={allAgentIds}
+						onUpdate={(agentIds, name) =>
+							updateGroup.mutate({
+								originalName: selectedGroup.name,
+								agentIds,
+								name,
+							})
+						}
+						onDelete={() => deleteGroup.mutate(selectedGroup.name)}
+						onClose={() => setSelectedGroup(null)}
+					/>
+				)}
+			</AnimatePresence>
 		</div>
 	);
 }
 
 // -- Graph Builder --
 
+/** Estimate the rendered height of an agent node based on profile data. */
+function estimateNodeHeight(summary: AgentSummary | undefined): number {
+	let h = 48 + 24 + 8 + 16 + 24; // banner + avatar + name row + stats + padding
+	if (summary?.profile?.status) h += 16;
+	if (summary?.profile?.bio) h += 40;
+	return h;
+}
+
 function buildGraph(
 	data: TopologyResponse,
 	activeEdges: Set<string>,
 	agentProfiles: Map<string, AgentSummary>,
 ): { initialNodes: Node[]; initialEdges: Edge[] } {
-	const agentCount = data.agents.length;
+	const saved = loadPositions();
+	const allNodes: Node[] = [];
 
-	// Arrange agents in a circle for initial layout
-	const radius = Math.max(200, agentCount * 80);
-	const centerX = 400;
+	// Topology agent lookup for display_name / role
+	const topologyAgentMap = new Map(data.agents.map((a) => [a.id, a]));
+
+	// Build a set of connected handles per agent from link relationships.
+	// Key: "agentId:handleId", e.g. "support:top"
+	const connectedHandles = new Set<string>();
+	const links = data.links ?? [];
+	for (const link of links) {
+		const { sourceHandle, targetHandle } = getHandlesForRelationship(link.relationship);
+		connectedHandles.add(`${link.from}:${sourceHandle}`);
+		connectedHandles.add(`${link.to}:${targetHandle}`);
+	}
+
+	// Build group membership lookup
+	const groups = data.groups ?? [];
+	const agentToGroup = new Map<string, TopologyGroup>();
+	for (const group of groups) {
+		for (const agentId of group.agent_ids) {
+			agentToGroup.set(agentId, group);
+		}
+	}
+
+	// Agents not in any group
+	const ungroupedAgents = data.agents.filter((a) => !agentToGroup.has(a.id));
+
+	// Create group nodes
+	const groupPositions = new Map<string, { x: number; y: number }>();
+	let groupX = 0;
+
+	for (let gi = 0; gi < groups.length; gi++) {
+		const group = groups[gi];
+		const memberCount = group.agent_ids.length;
+		const cols = Math.max(1, Math.min(memberCount, 2));
+		const rows = Math.ceil(memberCount / cols);
+		const groupWidth =
+			cols * (NODE_WIDTH + GROUP_PADDING) + GROUP_PADDING;
+		const maxMemberHeight = group.agent_ids.reduce((max, id) => {
+			return Math.max(max, estimateNodeHeight(agentProfiles.get(id)));
+		}, 170);
+		const groupHeight =
+			GROUP_HEADER + rows * (maxMemberHeight + GROUP_PADDING) + GROUP_PADDING;
+
+		const color = group.color ?? GROUP_COLORS[gi % GROUP_COLORS.length];
+		const pos = { x: groupX, y: 0 };
+		groupPositions.set(group.name, pos);
+
+		allNodes.push({
+			id: `group:${group.name}`,
+			type: "group",
+			position: pos,
+			data: {
+				label: group.name,
+				color,
+				width: groupWidth,
+				height: groupHeight,
+			},
+			style: { width: groupWidth, height: groupHeight },
+			draggable: true,
+			selectable: true,
+			zIndex: -1,
+		});
+
+		// Position member agents inside the group
+		group.agent_ids.forEach((agentId, idx) => {
+			const col = idx % cols;
+			const row = Math.floor(idx / cols);
+			const summary = agentProfiles.get(agentId);
+			const profile = summary?.profile;
+			const isOnline =
+				summary?.last_activity_at != null &&
+				new Date(summary.last_activity_at).getTime() >
+					Date.now() - 5 * 60 * 1000;
+
+			const topoAgent = topologyAgentMap.get(agentId);
+			allNodes.push({
+				id: agentId,
+				type: "agent",
+				position: {
+					x: GROUP_PADDING + col * (NODE_WIDTH + GROUP_PADDING),
+					y: GROUP_HEADER + GROUP_PADDING + row * (maxMemberHeight + GROUP_PADDING),
+				},
+				parentId: `group:${group.name}`,
+				extent: "parent" as const,
+				data: {
+					agentId,
+					configDisplayName: topoAgent?.display_name ?? null,
+					configRole: topoAgent?.role ?? null,
+					chosenName: profile?.display_name ?? null,
+					avatarSeed: profile?.avatar_seed ?? agentId,
+					bio: profile?.bio ?? null,
+					isOnline,
+					channelCount: summary?.channel_count ?? 0,
+					memoryCount: summary?.memory_total ?? 0,
+					connectedHandles: {
+						top: connectedHandles.has(`${agentId}:top`),
+						bottom: connectedHandles.has(`${agentId}:bottom`),
+						left: connectedHandles.has(`${agentId}:left`),
+						right: connectedHandles.has(`${agentId}:right`),
+					},
+				},
+			});
+		});
+
+		groupX += groupWidth + 80;
+	}
+
+	// Position ungrouped agents
+	const ungroupedStartX = groupX;
+	const radius = Math.max(200, ungroupedAgents.length * 80);
+	const centerX = ungroupedStartX + radius + NODE_WIDTH / 2;
 	const centerY = 300;
 
-	const initialNodes: Node[] = data.agents.map((agent, index) => {
-		const angle = (2 * Math.PI * index) / agentCount - Math.PI / 2;
+	ungroupedAgents.forEach((agent, index) => {
+		const count = ungroupedAgents.length;
+		const angle = (2 * Math.PI * index) / count - Math.PI / 2;
 		const summary = agentProfiles.get(agent.id);
 		const profile = summary?.profile;
 		const isOnline =
 			summary?.last_activity_at != null &&
-			new Date(summary.last_activity_at).getTime() > Date.now() - 5 * 60 * 1000;
+			new Date(summary.last_activity_at).getTime() >
+				Date.now() - 5 * 60 * 1000;
 
-		return {
+		allNodes.push({
 			id: agent.id,
 			type: "agent",
-			position: {
-				x: centerX + radius * Math.cos(angle),
-				y: centerY + radius * Math.sin(angle),
-			},
+			position:
+				count === 1
+					? { x: ungroupedStartX, y: 100 }
+					: {
+							x: centerX + radius * Math.cos(angle),
+							y: centerY + radius * Math.sin(angle),
+						},
 			data: {
 				agentId: agent.id,
-				displayName: profile?.display_name ?? agent.name,
+				configDisplayName: agent.display_name ?? null,
+				configRole: agent.role ?? null,
+				chosenName: profile?.display_name ?? null,
 				avatarSeed: profile?.avatar_seed ?? agent.id,
-				status: profile?.status ?? null,
 				bio: profile?.bio ?? null,
 				isOnline,
 				channelCount: summary?.channel_count ?? 0,
 				memoryCount: summary?.memory_total ?? 0,
+				connectedHandles: {
+					top: connectedHandles.has(`${agent.id}:top`),
+					bottom: connectedHandles.has(`${agent.id}:bottom`),
+					left: connectedHandles.has(`${agent.id}:left`),
+					right: connectedHandles.has(`${agent.id}:right`),
+				},
 			},
-		};
+		});
 	});
 
 	const initialEdges: Edge[] = data.links.map((link) => {
 		const edgeId = `${link.from}->${link.to}`;
+		// Route edges through handles based on relationship:
+		// superior: from is above to → source bottom, target top
+		// subordinate: from is below to → source top, target bottom
+		// peer: horizontal → source right, target left
+		const { sourceHandle, targetHandle } = getHandlesForRelationship(
+			link.relationship,
+		);
 		return {
 			id: edgeId,
 			source: link.from,
 			target: link.to,
+			sourceHandle,
+			targetHandle,
 			type: "link",
 			data: {
 				direction: link.direction,
@@ -721,7 +1294,15 @@ function buildGraph(
 		};
 	});
 
-	return { initialNodes, initialEdges };
+	// Apply saved positions (override computed layout)
+	for (const node of allNodes) {
+		const savedPos = saved[node.id];
+		if (savedPos) {
+			node.position = savedPos;
+		}
+	}
+
+	return { initialNodes: allNodes, initialEdges };
 }
 
 // -- Exported component with provider wrapper --

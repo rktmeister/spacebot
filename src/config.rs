@@ -44,6 +44,8 @@ pub struct Config {
     pub agents: Vec<AgentConfig>,
     /// Agent communication graph links.
     pub links: Vec<LinkDef>,
+    /// Visual grouping of agents in the topology UI.
+    pub groups: Vec<GroupDef>,
     /// Messaging platform credentials.
     pub messaging: MessagingConfig,
     /// Routing bindings (maps platform conversations to agents).
@@ -63,6 +65,15 @@ pub struct LinkDef {
     pub to: String,
     pub direction: String,
     pub relationship: String,
+}
+
+/// A visual group definition for the topology UI.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GroupDef {
+    pub name: String,
+    pub agent_ids: Vec<String>,
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 /// HTTP API server configuration.
@@ -536,6 +547,10 @@ impl Default for CortexConfig {
 pub struct AgentConfig {
     pub id: String,
     pub default: bool,
+    /// User-defined display name for the agent (shown in UI).
+    pub display_name: Option<String>,
+    /// User-defined role description (e.g. "handles tier 1 support").
+    pub role: Option<String>,
     /// Custom workspace path. If None, resolved to instance_dir/agents/{id}/workspace.
     pub workspace: Option<PathBuf>,
     /// Per-agent routing overrides. None inherits from defaults.
@@ -581,6 +596,8 @@ pub struct CronDef {
 #[derive(Debug, Clone)]
 pub struct ResolvedAgentConfig {
     pub id: String,
+    pub display_name: Option<String>,
+    pub role: Option<String>,
     pub workspace: PathBuf,
     pub data_dir: PathBuf,
     pub archives_dir: PathBuf,
@@ -637,6 +654,8 @@ impl AgentConfig {
 
         ResolvedAgentConfig {
             id: self.id.clone(),
+            display_name: self.display_name.clone(),
+            role: self.role.clone(),
             workspace: self
                 .workspace
                 .clone()
@@ -1230,6 +1249,8 @@ struct TomlConfig {
     #[serde(default)]
     links: Vec<TomlLinkDef>,
     #[serde(default)]
+    groups: Vec<TomlGroupDef>,
+    #[serde(default)]
     messaging: TomlMessagingConfig,
     #[serde(default)]
     bindings: Vec<TomlBinding>,
@@ -1257,6 +1278,14 @@ fn default_link_direction() -> String {
 
 fn default_link_relationship() -> String {
     "peer".into()
+}
+
+#[derive(Deserialize)]
+struct TomlGroupDef {
+    name: String,
+    #[serde(default)]
+    agent_ids: Vec<String>,
+    color: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1585,6 +1614,8 @@ struct TomlAgentConfig {
     id: String,
     #[serde(default)]
     default: bool,
+    display_name: Option<String>,
+    role: Option<String>,
     workspace: Option<String>,
     routing: Option<TomlRoutingConfig>,
     max_concurrent_branches: Option<usize>,
@@ -2193,6 +2224,8 @@ impl Config {
         let agents = vec![AgentConfig {
             id: "main".into(),
             default: true,
+            display_name: None,
+            role: None,
             workspace: None,
             routing: Some(routing),
             max_concurrent_branches: None,
@@ -2221,6 +2254,7 @@ impl Config {
             defaults: DefaultsConfig::default(),
             agents,
             links: Vec::new(),
+            groups: Vec::new(),
             messaging: MessagingConfig::default(),
             bindings: Vec::new(),
             api,
@@ -2771,6 +2805,8 @@ impl Config {
                 Ok(AgentConfig {
                     id: a.id,
                     default: a.default,
+                    display_name: a.display_name,
+                    role: a.role,
                     workspace: a.workspace.map(PathBuf::from),
                     routing: agent_routing,
                     max_concurrent_branches: a.max_concurrent_branches,
@@ -2880,6 +2916,8 @@ impl Config {
             agents.push(AgentConfig {
                 id: "main".into(),
                 default: true,
+                display_name: None,
+                role: None,
                 workspace: None,
                 routing: None,
                 max_concurrent_branches: None,
@@ -3066,12 +3104,23 @@ impl Config {
             })
             .collect();
 
+        let groups = toml
+            .groups
+            .into_iter()
+            .map(|g| GroupDef {
+                name: g.name,
+                agent_ids: g.agent_ids,
+                color: g.color,
+            })
+            .collect();
+
         Ok(Config {
             instance_dir,
             llm,
             defaults,
             agents,
             links,
+            groups,
             messaging,
             bindings,
             api,

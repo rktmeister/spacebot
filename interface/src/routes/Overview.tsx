@@ -1,32 +1,32 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/api/client";
-import { CreateAgentDialog } from "@/components/CreateAgentDialog";
-import { TopologyGraph } from "@/components/TopologyGraph";
-import type { ChannelLiveState } from "@/hooks/useChannelLiveState";
-import { formatUptime } from "@/lib/format";
+import {useMemo, useState} from "react";
+import {useQuery} from "@tanstack/react-query";
+import {api} from "@/api/client";
+import {CreateAgentDialog} from "@/components/CreateAgentDialog";
+import {TopologyGraph} from "@/components/TopologyGraph";
+import type {ChannelLiveState} from "@/hooks/useChannelLiveState";
+import {formatUptime} from "@/lib/format";
 
 interface OverviewProps {
 	liveStates: Record<string, ChannelLiveState>;
 	activeLinks?: Set<string>;
 }
 
-export function Overview({ liveStates, activeLinks }: OverviewProps) {
+export function Overview({liveStates, activeLinks}: OverviewProps) {
 	const [createOpen, setCreateOpen] = useState(false);
 
-	const { data: statusData } = useQuery({
+	const {data: statusData} = useQuery({
 		queryKey: ["status"],
 		queryFn: api.status,
 		refetchInterval: 5000,
 	});
 
-	const { data: overviewData, isLoading: overviewLoading } = useQuery({
+	const {data: overviewData, isLoading: overviewLoading} = useQuery({
 		queryKey: ["overview"],
 		queryFn: api.overview,
 		refetchInterval: 10_000,
 	});
 
-	const { data: channelsData } = useQuery({
+	const {data: channelsData} = useQuery({
 		queryKey: ["channels"],
 		queryFn: api.channels,
 		refetchInterval: 10000,
@@ -43,7 +43,7 @@ export function Overview({ liveStates, activeLinks }: OverviewProps) {
 			workers += Object.keys(state.workers).length;
 			branches += Object.keys(state.branches).length;
 		}
-		return { workers, branches };
+		return {workers, branches};
 	}, [liveStates]);
 
 	const uptime = statusData?.uptime_seconds ?? 0;
@@ -51,7 +51,7 @@ export function Overview({ liveStates, activeLinks }: OverviewProps) {
 	return (
 		<div className="flex flex-col h-full">
 			{/* Compact status bar */}
-			<div className="flex items-center justify-between border-b border-app-line bg-app-darkBox/50 px-6 py-3">
+			<div className="flex items-center justify-between border-b border-app-line bg-app-darkBox/50 px-6 py-3.5">
 				<div className="flex items-center gap-4">
 					<div className="flex items-center gap-2">
 						<h1 className="font-plex text-sm font-medium text-ink">Spacebot</h1>
@@ -63,8 +63,12 @@ export function Overview({ liveStates, activeLinks }: OverviewProps) {
 					</div>
 
 					<div className="flex items-center gap-4 text-tiny text-ink-faint">
-						<span>{agents.length} agent{agents.length !== 1 ? "s" : ""}</span>
-						<span>{channels.length} channel{channels.length !== 1 ? "s" : ""}</span>
+						<span>
+							{agents.length} agent{agents.length !== 1 ? "s" : ""}
+						</span>
+						<span>
+							{channels.length} channel{channels.length !== 1 ? "s" : ""}
+						</span>
 						<span>{formatUptime(uptime)}</span>
 					</div>
 

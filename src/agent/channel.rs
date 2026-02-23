@@ -204,6 +204,24 @@ impl Channel {
         // concurrent channels sharing per-turn add/remove cycles.
         let tool_server = ToolServer::new().run();
 
+        // Construct the send_agent_message tool if this agent has links and a messaging manager.
+        let send_agent_message_tool = {
+            let has_links = crate::links::links_for_agent(&deps.links.load(), &deps.agent_id)
+                .len()
+                > 0;
+            match (&deps.messaging_manager, has_links) {
+                (Some(mm), true) => Some(crate::tools::SendAgentMessageTool::new(
+                    deps.agent_id.clone(),
+                    deps.agent_id.to_string(),
+                    deps.links.clone(),
+                    mm.clone(),
+                    deps.event_tx.clone(),
+                    deps.agent_names.clone(),
+                )),
+                _ => None,
+            }
+        };
+
         let self_tx = message_tx.clone();
         let channel = Self {
             id: id.clone(),
@@ -228,7 +246,7 @@ impl Channel {
             pending_retrigger: false,
             pending_retrigger_metadata: HashMap::new(),
             retrigger_deadline: None,
-            send_agent_message_tool: None,
+            send_agent_message_tool,
         };
 
         (channel, message_tx)
