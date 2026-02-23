@@ -7,6 +7,42 @@
 }: let
   inherit (pkgs) lib onnxruntime stdenv;
 
+  bunInstallOs =
+    if stdenv.hostPlatform.isDarwin
+    then "darwin"
+    else if stdenv.hostPlatform.isLinux
+    then "linux"
+    else throw "Unsupported host platform for frontend Bun install: ${stdenv.hostPlatform.system}";
+
+  bunInstallCpu =
+    if stdenv.hostPlatform.isAarch64
+    then "arm64"
+    else if stdenv.hostPlatform.isx86_64
+    then "x64"
+    else throw "Unsupported host CPU for frontend Bun install: ${stdenv.hostPlatform.system}";
+
+  rollupNativePackage =
+    if stdenv.hostPlatform.isLinux && stdenv.hostPlatform.isx86_64
+    then "@rollup/rollup-linux-x64-gnu"
+    else if stdenv.hostPlatform.isLinux && stdenv.hostPlatform.isAarch64
+    then "@rollup/rollup-linux-arm64-gnu"
+    else if stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isx86_64
+    then "@rollup/rollup-darwin-x64"
+    else if stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isAarch64
+    then "@rollup/rollup-darwin-arm64"
+    else null;
+
+  esbuildNativePackage =
+    if stdenv.hostPlatform.isLinux && stdenv.hostPlatform.isx86_64
+    then "@esbuild/linux-x64"
+    else if stdenv.hostPlatform.isLinux && stdenv.hostPlatform.isAarch64
+    then "@esbuild/linux-arm64"
+    else if stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isx86_64
+    then "@esbuild/darwin-x64"
+    else if stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isAarch64
+    then "@esbuild/darwin-arm64"
+    else null;
+
   # Read version from Cargo.toml
   cargoToml = fromTOML (builtins.readFile "${cargoSrc}/Cargo.toml");
   inherit (cargoToml.package) version;
@@ -25,80 +61,91 @@
     cmake
   ] ++ lib.optionals stdenv.isLinux [pkgs.mold];
 
-  frontendPackageLock = lib.importJSON "${frontendSrc}/interface/package-lock.json";
-  frontendPackage = let
-    originalPackage = lib.importJSON "${frontendSrc}/interface/package.json";
-    rootDependencies = originalPackage.dependencies or {};
-    lockPackages = frontendPackageLock.packages;
-    rootDependencyNames = builtins.attrNames rootDependencies;
-
-    collectPeerClosure = dependencyNames: let
-      peerNames =
-        lib.unique
-        (builtins.concatLists (
-          map (
-            dependencyName: let
-              packagePath = "node_modules/${dependencyName}";
-              packageEntry =
-                if builtins.hasAttr packagePath lockPackages
-                then lockPackages.${packagePath}
-                else {};
-            in
-              builtins.attrNames (packageEntry.peerDependencies or {})
-          )
-          dependencyNames
-        ));
-
-      expandedNames = lib.unique (dependencyNames ++ peerNames);
-    in
-      if builtins.length expandedNames == builtins.length dependencyNames
-      then dependencyNames
-      else collectPeerClosure expandedNames;
-
-    peerDependencyNames =
-      lib.filter (dependencyName: !(lib.elem dependencyName rootDependencyNames))
-      (collectPeerClosure rootDependencyNames);
-
-    peerDependencyVersions = builtins.listToAttrs (
-      lib.filter (entry: entry != null) (
-        map (
-          dependencyName: let
-            packagePath = "node_modules/${dependencyName}";
-          in
-            if builtins.hasAttr packagePath lockPackages
-            then {
-              name = dependencyName;
-              value = lockPackages.${packagePath}.version;
-            }
-            else null
-        )
-        peerDependencyNames
-      )
-    );
-  in
-    originalPackage
-    // {
-      dependencies = rootDependencies // peerDependencyVersions;
-    };
-
-  frontend = pkgs.buildNpmPackage {
-    inherit (pkgs.importNpmLock) npmConfigHook;
+  frontendNodeModules = stdenv.mkDerivation {
+    pname = "spacebot-frontend-node-modules";
     inherit version;
-
-    pname = "spacebot-frontend";
     src = "${frontendSrc}/interface";
 
-    npmDeps = pkgs.importNpmLock {
-      npmRoot = "${frontendSrc}/interface";
-      package = frontendPackage;
-      packageLock = frontendPackageLock;
-    };
-    npmInstallFlags = ["--legacy-peer-deps"];
-    makeCacheWritable = true;
+    nativeBuildInputs = with pkgs; [
+      bun
+      nodejs
+      writableTmpDirAsHomeHook
+    ];
+
+    dontConfigure = true;
+    dontFixup = true;
+
+    buildPhase = ''
+      runHook preBuild
+
+      export BUN_INSTALL_CACHE_DIR="$(mktemp -d)"
+      bun install \
+        --frozen-lockfile \
+        --ignore-scripts \
+        --no-progress \
+        --os=${bunInstallOs} \
+        --cpu=${bunInstallCpu}
+
+      esbuild_native_package="${if esbuildNativePackage == null then "" else esbuildNativePackage}"
+      if [ -n "$esbuild_native_package" ]; then
+        esbuild_version="$(node -p "require('./node_modules/esbuild/package.json').version")"
+        bun add --dev --no-save --no-progress "$esbuild_native_package@$esbuild_version"
+      fi
+
+      rollup_native_package="${if rollupNativePackage == null then "" else rollupNativePackage}"
+      if [ -n "$rollup_native_package" ]; then
+        rollup_version="$(node -p "require('./node_modules/rollup/package.json').version")"
+        bun add --dev --no-save --no-progress "$rollup_native_package@$rollup_version"
+      fi
+
+      runHook postBuild
+    '';
 
     installPhase = ''
+      runHook preInstall
+
+      mkdir -p $out
+      cp -r node_modules $out/node_modules
+
+      runHook postInstall
+    '';
+
+    outputHash = "sha256-WPKB3bzJoBRvWk1BwKGSJGNQVkLuT49AjB8weDvm0dk=";
+    outputHashAlgo = "sha256";
+    outputHashMode = "recursive";
+  };
+
+  frontend = stdenv.mkDerivation {
+    pname = "spacebot-frontend";
+    inherit version;
+    src = "${frontendSrc}/interface";
+
+    nativeBuildInputs = with pkgs; [
+      bun
+      nodejs
+    ];
+
+    dontConfigure = true;
+
+    buildPhase = ''
+      runHook preBuild
+
+      cp -r ${frontendNodeModules}/node_modules .
+      chmod -R u+w node_modules
+      patchShebangs --build node_modules
+
+      bun run build
+
+      runHook postBuild
+    '';
+
+    installPhase = ''
+      runHook preInstall
+
       mkdir -p $out
       cp -r dist/* $out/
+
+      runHook postInstall
     '';
   };
 
@@ -228,5 +275,5 @@
       };
   };
 in {
-  inherit spacebot spacebot-full spacebot-tests;
+  inherit frontend spacebot spacebot-full spacebot-tests;
 }

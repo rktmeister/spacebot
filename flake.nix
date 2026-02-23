@@ -50,7 +50,7 @@
           root = ./.;
           fileset = pkgs.lib.fileset.unions [
             ./interface/package.json
-            ./interface/package-lock.json
+            ./interface/bun.lock
             ./interface/index.html
             ./interface/tsconfig.json
             ./interface/tsconfig.node.json
@@ -66,11 +66,11 @@
           inherit pkgs craneLib cargoSrc runtimeAssetsSrc frontendSrc;
         };
 
-        inherit (spacebotPackages) spacebot spacebot-full spacebot-tests;
+        inherit (spacebotPackages) frontend spacebot spacebot-full spacebot-tests;
       in {
         packages = {
           default = spacebot;
-          inherit spacebot spacebot-full;
+          inherit frontend spacebot spacebot-full;
         };
 
         devShells = {
