@@ -972,15 +972,21 @@ impl Channel {
                             response_len = text.len(),
                             "LLM skipped on retrigger but produced text, sending as fallback"
                         );
+                        let extracted = extract_reply_from_tool_syntax(text);
                         let source = self
                             .conversation_id
                             .as_deref()
                             .and_then(|conversation_id| conversation_id.split(':').next())
                             .unwrap_or("unknown");
-                        // TODO: Discord specific code in channel handler bad - jamie
                         let final_text =
-                            crate::tools::reply::normalize_discord_mention_tokens(text, source);
+                            crate::tools::reply::normalize_discord_mention_tokens(
+                                extracted.as_deref().unwrap_or(text),
+                                source,
+                            );
                         if !final_text.is_empty() {
+                            if extracted.is_some() {
+                                tracing::warn!(channel_id = %self.id, "extracted reply from malformed tool syntax in retrigger fallback");
+                            }
                             self.state
                                 .conversation_logger
                                 .log_bot_message(&self.state.channel_id, &final_text);

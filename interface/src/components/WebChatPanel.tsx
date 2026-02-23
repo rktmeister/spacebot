@@ -152,7 +152,7 @@ function FloatingChatInput({
 	);
 }
 
-	export function WebChatPanel({ agentId }: WebChatPanelProps) {
+export function WebChatPanel({ agentId }: WebChatPanelProps) {
 	const { messages, isStreaming, error, toolActivity, sendMessage } = useWebChat(agentId);
 	const { liveStates } = useLiveContext();
 	const [input, setInput] = useState("");
