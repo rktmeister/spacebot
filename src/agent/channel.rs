@@ -1342,7 +1342,12 @@ fn ensure_dispatch_readiness(state: &ChannelState, dispatch_type: &'static str) 
         .with_label_values(&[&*state.deps.agent_id, dispatch_type, reason])
         .inc();
 
-    if readiness.warmup_state != crate::config::WarmupState::Warming {
+    let warmup_config = **state.deps.runtime_config.warmup.load();
+    let should_trigger = readiness.warmup_state != crate::config::WarmupState::Warming
+        && (readiness.reason != Some(crate::config::WorkReadinessReason::EmbeddingNotReady)
+            || warmup_config.eager_embedding_load);
+
+    if should_trigger {
         crate::agent::cortex::trigger_forced_warmup(state.deps.clone(), dispatch_type);
     }
 }

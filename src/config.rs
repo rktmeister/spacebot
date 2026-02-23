@@ -673,7 +673,7 @@ fn evaluate_work_readiness(
 
     let reason = if status.state != WarmupState::Warm {
         Some(WorkReadinessReason::StateNotWarm)
-    } else if !status.embedding_ready {
+    } else if warmup_config.eager_embedding_load && !status.embedding_ready {
         Some(WorkReadinessReason::EmbeddingNotReady)
     } else if bulletin_age_secs.is_none() {
         Some(WorkReadinessReason::BulletinMissing)
@@ -4791,6 +4791,27 @@ startup_delay_secs = 2
             readiness.reason,
             Some(WorkReadinessReason::EmbeddingNotReady)
         );
+    }
+
+    #[test]
+    fn test_work_readiness_does_not_require_embedding_when_eager_load_disabled() {
+        let readiness = evaluate_work_readiness(
+            WarmupConfig {
+                eager_embedding_load: false,
+                ..Default::default()
+            },
+            WarmupStatus {
+                state: WarmupState::Warm,
+                embedding_ready: false,
+                last_refresh_unix_ms: Some(1_000),
+                last_error: None,
+                bulletin_age_secs: None,
+            },
+            2_000,
+        );
+
+        assert!(readiness.ready);
+        assert_eq!(readiness.reason, None);
     }
 
     #[test]

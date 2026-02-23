@@ -593,10 +593,12 @@ fn update_warmup_table(
         table["eager_embedding_load"] = toml_edit::value(v);
     }
     if let Some(v) = warmup.refresh_secs {
-        table["refresh_secs"] = toml_edit::value(v as i64);
+        table["refresh_secs"] =
+            toml_edit::value(i64::try_from(v).map_err(|_| StatusCode::BAD_REQUEST)?);
     }
     if let Some(v) = warmup.startup_delay_secs {
-        table["startup_delay_secs"] = toml_edit::value(v as i64);
+        table["startup_delay_secs"] =
+            toml_edit::value(i64::try_from(v).map_err(|_| StatusCode::BAD_REQUEST)?);
     }
     Ok(())
 }
@@ -732,5 +734,27 @@ id = "main"
         assert!(warmup.get("eager_embedding_load").is_none());
         assert!(warmup.get("refresh_secs").is_none());
         assert!(warmup.get("startup_delay_secs").is_none());
+    }
+
+    #[test]
+    fn test_update_warmup_table_rejects_large_u64_values() {
+        let mut doc: toml_edit::DocumentMut = r#"
+[[agents]]
+id = "main"
+"#
+        .parse()
+        .expect("failed to parse test TOML");
+
+        let agent_idx =
+            find_or_create_agent_table(&mut doc, "main").expect("failed to find/create agent");
+        let update = WarmupUpdate {
+            enabled: None,
+            eager_embedding_load: None,
+            refresh_secs: Some(u64::MAX),
+            startup_delay_secs: None,
+        };
+
+        let result = update_warmup_table(&mut doc, agent_idx, &update);
+        assert_eq!(result, Err(StatusCode::BAD_REQUEST));
     }
 }

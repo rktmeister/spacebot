@@ -191,7 +191,7 @@ impl Tool for SpawnWorkerTool {
                 .map(|value| value.as_str())
                 .unwrap_or("unknown");
             format!(
-                " Readiness note: warmup is not fully ready ({reason}, state: {:?}); forced warmup was queued in the background.",
+                " Readiness note: warmup is not fully ready ({reason}, state: {:?}); a warmup pass may already be running or was queued in the background.",
                 readiness.warmup_state
             )
         };

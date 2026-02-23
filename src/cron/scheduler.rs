@@ -547,7 +547,12 @@ fn ensure_cron_dispatch_readiness(context: &CronContext, cron_id: &str) {
         .with_label_values(&[&*context.deps.agent_id, "cron", reason])
         .inc();
 
-    if readiness.warmup_state != crate::config::WarmupState::Warming {
+    let warmup_config = **context.deps.runtime_config.warmup.load();
+    let should_trigger = readiness.warmup_state != crate::config::WarmupState::Warming
+        && (readiness.reason != Some(crate::config::WorkReadinessReason::EmbeddingNotReady)
+            || warmup_config.eager_embedding_load);
+
+    if should_trigger {
         crate::agent::cortex::trigger_forced_warmup(context.deps.clone(), "cron");
     }
 }
