@@ -100,6 +100,11 @@ impl SpacebotModel {
                 .get_openai_provider()
                 .await
                 .map_err(|e| CompletionError::ProviderError(e.to_string()))?,
+            "openai-chatgpt" => self
+                .llm_manager
+                .get_openai_chatgpt_provider()
+                .await
+                .map_err(|e| CompletionError::ProviderError(e.to_string()))?,
             _ => self
                 .llm_manager
                 .get_provider(provider_id)
@@ -542,7 +547,7 @@ impl SpacebotModel {
             "{}/v1/chat/completions",
             provider_config.base_url.trim_end_matches('/')
         );
-        let openai_account_id = if self.provider == "openai" {
+        let openai_account_id = if self.provider == "openai-chatgpt" {
             self.llm_manager.get_openai_account_id().await
         } else {
             None
@@ -639,7 +644,7 @@ impl SpacebotModel {
             body["tools"] = serde_json::json!(tools);
         }
 
-        let openai_account_id = if self.provider == "openai" {
+        let openai_account_id = if self.provider == "openai-chatgpt" {
             self.llm_manager.get_openai_account_id().await
         } else {
             None

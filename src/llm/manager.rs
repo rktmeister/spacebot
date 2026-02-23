@@ -227,24 +227,29 @@ impl LlmManager {
         }
     }
 
-    /// Resolve the OpenAI provider config, preferring OAuth credentials.
+    /// Resolve the OpenAI provider config from static API-key configuration.
+    ///
+    /// OpenAI ChatGPT OAuth is intentionally handled via a separate internal
+    /// provider (`openai-chatgpt`) so a saved OAuth token cannot shadow a
+    /// configured `openai` API key.
     pub async fn get_openai_provider(&self) -> Result<ProviderConfig> {
-        let token = self.get_openai_token().await?;
-        let static_provider = self.get_provider("openai").ok();
+        self.get_provider("openai")
+    }
 
-        match (static_provider, token) {
-            (Some(mut provider), Some(token)) => {
-                provider.api_key = token;
-                Ok(provider)
-            }
-            (Some(provider), None) => Ok(provider),
-            (None, Some(token)) => Ok(ProviderConfig {
+    /// Resolve the OpenAI ChatGPT OAuth provider config.
+    ///
+    /// This internal provider uses OAuth access tokens from ChatGPT Plus/Pro.
+    pub async fn get_openai_chatgpt_provider(&self) -> Result<ProviderConfig> {
+        let token = self.get_openai_token().await?;
+
+        match token {
+            Some(token) => Ok(ProviderConfig {
                 api_type: ApiType::OpenAiCompletions,
                 base_url: "https://api.openai.com".to_string(),
                 api_key: token,
                 name: None,
             }),
-            (None, None) => Err(LlmError::UnknownProvider("openai".to_string()).into()),
+            None => Err(LlmError::UnknownProvider("openai-chatgpt".to_string()).into()),
         }
     }
 

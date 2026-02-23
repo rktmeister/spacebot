@@ -180,6 +180,20 @@ fn model_matches_provider(provider: &str, model: &str) -> bool {
     crate::llm::routing::provider_from_model(model) == provider
 }
 
+fn normalize_openai_chatgpt_model(model: &str) -> Option<String> {
+    let trimmed = model.trim();
+    let (provider, model_name) = trimmed.split_once('/')?;
+    if model_name.is_empty() {
+        return None;
+    }
+
+    match provider {
+        "openai" => Some(format!("openai-chatgpt/{model_name}")),
+        "openai-chatgpt" => Some(trimmed.to_string()),
+        _ => None,
+    }
+}
+
 fn build_test_llm_config(provider: &str, credential: &str) -> crate::config::LlmConfig {
     use crate::config::{ApiType, ProviderConfig};
 
@@ -641,15 +655,15 @@ pub(super) async fn complete_openai_oauth(
         }));
     }
 
-    if !model_matches_provider("openai", &request.model) {
+    let Some(chatgpt_model) = normalize_openai_chatgpt_model(&request.model) else {
         return Ok(Json(ProviderUpdateResponse {
             success: false,
             message: format!(
-                "Model '{}' does not match provider 'openai'.",
+                "Model '{}' must use provider 'openai' or 'openai-chatgpt'.",
                 request.model
             ),
         }));
-    }
+    };
 
     let credentials = match crate::openai_auth::complete_device_authorization(
         &request.device_auth_id,
@@ -693,7 +707,7 @@ pub(super) async fn complete_openai_oauth(
     let mut doc: toml_edit::DocumentMut = content
         .parse()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    apply_model_routing(&mut doc, request.model.trim());
+    apply_model_routing(&mut doc, &chatgpt_model);
 
     tokio::fs::write(&config_path, doc.to_string())
         .await
@@ -708,7 +722,7 @@ pub(super) async fn complete_openai_oauth(
         success: true,
         message: format!(
             "OpenAI configured via ChatGPT Plus OAuth. Model '{}' applied to defaults and the default agent routing.",
-            request.model.trim()
+            chatgpt_model
         ),
     }))
 }
@@ -725,17 +739,17 @@ pub(super) async fn start_openai_browser_oauth(
             state: None,
         }));
     }
-    if !model_matches_provider("openai", &request.model) {
+    let Some(chatgpt_model) = normalize_openai_chatgpt_model(&request.model) else {
         return Ok(Json(OpenAiOAuthBrowserStartResponse {
             success: false,
             message: format!(
-                "Model '{}' does not match provider 'openai'.",
+                "Model '{}' must use provider 'openai' or 'openai-chatgpt'.",
                 request.model
             ),
             authorization_url: None,
             state: None,
         }));
-    }
+    };
 
     if let Err(error) = ensure_openai_browser_oauth_callback_server(state.clone()).await {
         return Ok(Json(OpenAiOAuthBrowserStartResponse {
@@ -759,7 +773,7 @@ pub(super) async fn start_openai_browser_oauth(
         BrowserOAuthSession {
             pkce_verifier: browser_authorization.pkce_verifier,
             redirect_uri: OPENAI_BROWSER_OAUTH_REDIRECT_URI.to_string(),
-            model: request.model.trim().to_string(),
+            model: chatgpt_model,
             created_at: chrono::Utc::now().timestamp(),
             status: BrowserOAuthSessionStatus::Pending,
         },
