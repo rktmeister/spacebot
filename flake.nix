@@ -66,7 +66,7 @@
           inherit pkgs craneLib cargoSrc runtimeAssetsSrc frontendSrc;
         };
 
-        inherit (spacebotPackages) spacebot spacebot-full;
+        inherit (spacebotPackages) spacebot spacebot-full spacebot-tests;
       in {
         packages = {
           default = spacebot;
@@ -115,7 +115,7 @@
         };
 
         checks = {
-          inherit spacebot;
+          inherit spacebot spacebot-full spacebot-tests;
         };
       }
     )
