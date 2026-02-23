@@ -190,6 +190,22 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
                 ..RoutingConfig::default()
             }
         }
+        "openai-chatgpt" => {
+            let channel: String = "openai-chatgpt/gpt-4.1".into();
+            let worker: String = "openai-chatgpt/gpt-4.1-mini".into();
+            RoutingConfig {
+                channel: channel.clone(),
+                branch: channel.clone(),
+                worker: worker.clone(),
+                compactor: worker.clone(),
+                cortex: worker.clone(),
+                voice: String::new(),
+                task_overrides: HashMap::from([("coding".into(), channel.clone())]),
+                fallbacks: HashMap::from([(channel, vec![worker])]),
+                rate_limit_cooldown_secs: 60,
+                ..RoutingConfig::default()
+            }
+        }
         "zhipu" => {
             let channel: String = "zhipu/glm-4-plus".into();
             let worker: String = "zhipu/glm-4-flash".into();
@@ -352,6 +368,7 @@ pub fn provider_to_prefix(provider: &str) -> &str {
     match provider {
         "openrouter" => "openrouter/",
         "openai" => "openai/",
+        "openai-chatgpt" => "openai-chatgpt/",
         "anthropic" => "anthropic/",
         "zhipu" => "zhipu/",
         "groq" => "groq/",
