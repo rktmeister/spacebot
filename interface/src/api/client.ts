@@ -943,6 +943,58 @@ export interface RawConfigUpdateResponse {
 	message: string;
 }
 
+// -- Agent Links & Topology --
+
+export type LinkDirection = "one_way" | "two_way";
+export type LinkRelationship = "peer" | "superior" | "subordinate";
+
+export interface AgentLinkResponse {
+	from_agent_id: string;
+	to_agent_id: string;
+	direction: LinkDirection;
+	relationship: LinkRelationship;
+}
+
+export interface LinksResponse {
+	links: AgentLinkResponse[];
+}
+
+export interface TopologyAgent {
+	id: string;
+	name: string;
+}
+
+export interface TopologyLink {
+	from: string;
+	to: string;
+	direction: string;
+	relationship: string;
+}
+
+export interface TopologyResponse {
+	agents: TopologyAgent[];
+	links: TopologyLink[];
+}
+
+export interface CreateLinkRequest {
+	from: string;
+	to: string;
+	direction?: LinkDirection;
+	relationship?: LinkRelationship;
+}
+
+export interface UpdateLinkRequest {
+	direction?: LinkDirection;
+	relationship?: LinkRelationship;
+}
+
+export interface AgentMessageEvent {
+	from_agent_id: string;
+	to_agent_id: string;
+	link_id: string;
+	channel_id: string;
+}
+
 export const api = {
 	status: () => fetchJson<StatusResponse>("/status"),
 	overview: () => fetchJson<InstanceOverviewResponse>("/overview"),
@@ -1365,6 +1417,46 @@ export const api = {
 		fetchJson<RegistrySearchResponse>(
 			`/skills/registry/search?q=${encodeURIComponent(query)}&limit=${limit}`,
 		),
+
+	// Agent Links & Topology API
+	topology: () => fetchJson<TopologyResponse>("/topology"),
+	links: () => fetchJson<LinksResponse>("/links"),
+	agentLinks: (agentId: string) =>
+		fetchJson<LinksResponse>(`/agents/${encodeURIComponent(agentId)}/links`),
+	createLink: async (request: CreateLinkRequest): Promise<{ link: AgentLinkResponse }> => {
+		const response = await fetch(`${API_BASE}/links`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(request),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json();
+	},
+	updateLink: async (from: string, to: string, request: UpdateLinkRequest): Promise<{ link: AgentLinkResponse }> => {
+		const response = await fetch(
+			`${API_BASE}/links/${encodeURIComponent(from)}/${encodeURIComponent(to)}`,
+			{
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(request),
+			},
+		);
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json();
+	},
+	deleteLink: async (from: string, to: string): Promise<void> => {
+		const response = await fetch(
+			`${API_BASE}/links/${encodeURIComponent(from)}/${encodeURIComponent(to)}`,
+			{ method: "DELETE" },
+		);
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+	},
 
 	// Web Chat API
 	webChatSend: (agentId: string, sessionId: string, message: string, senderName?: string) =>
