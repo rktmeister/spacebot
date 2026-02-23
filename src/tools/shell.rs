@@ -106,7 +106,9 @@ impl ShellTool {
                 let after = pos + dollar_var.len();
                 let next_char = command[after..].chars().next();
                 // $VAR is a match if followed by non-alphanumeric/underscore or end-of-string
-                if next_char.is_none() || (!next_char.unwrap().is_alphanumeric() && next_char.unwrap() != '_') {
+                if next_char.is_none()
+                    || (!next_char.unwrap().is_alphanumeric() && next_char.unwrap() != '_')
+                {
                     return Err(ShellError {
                         message: "Cannot access secret environment variables.".to_string(),
                         exit_code: -1,
@@ -184,11 +186,19 @@ impl ShellTool {
         }
 
         // Block interpreter one-liners that can bypass shell-level restrictions
-        for interpreter in ["python3 -c", "python -c", "perl -e", "ruby -e", "node -e", "node --eval"] {
+        for interpreter in [
+            "python3 -c",
+            "python -c",
+            "perl -e",
+            "ruby -e",
+            "node -e",
+            "node --eval",
+        ] {
             if command.contains(interpreter) {
                 return Err(ShellError {
-                    message: "Inline interpreter execution is not permitted — use script files instead."
-                        .to_string(),
+                    message:
+                        "Inline interpreter execution is not permitted — use script files instead."
+                            .to_string(),
                     exit_code: -1,
                 });
             }
@@ -238,7 +248,10 @@ pub struct ShellArgs {
     /// Optional working directory for the command.
     pub working_dir: Option<String>,
     /// Optional timeout in seconds (default: 60).
-    #[serde(default = "default_timeout")]
+    #[serde(
+        default = "default_timeout",
+        deserialize_with = "crate::tools::deserialize_string_or_u64"
+    )]
     pub timeout_seconds: u64,
 }
 

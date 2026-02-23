@@ -328,10 +328,10 @@ impl Channel {
                 _ = tokio::time::sleep(sleep_duration), if next_deadline.is_some() => {
                     let now = tokio::time::Instant::now();
                     // Check coalesce deadline
-                    if self.coalesce_deadline.is_some_and(|d| d <= now) {
-                        if let Err(error) = self.flush_coalesce_buffer().await {
-                            tracing::error!(%error, channel_id = %self.id, "error flushing coalesce buffer on deadline");
-                        }
+                    if self.coalesce_deadline.is_some_and(|d| d <= now)
+                        && let Err(error) = self.flush_coalesce_buffer().await
+                    {
+                        tracing::error!(%error, channel_id = %self.id, "error flushing coalesce buffer on deadline");
                     }
                     // Check retrigger deadline
                     if self.retrigger_deadline.is_some_and(|d| d <= now) {
@@ -443,7 +443,10 @@ impl Channel {
 
         if messages.len() == 1 {
             // Single message - process normally
-            let message = messages.into_iter().next().ok_or_else(|| anyhow::anyhow!("empty iterator after length check"))?;
+            let message = messages
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("empty iterator after length check"))?;
             self.handle_message(message).await
         } else {
             // Multiple messages - batch them
@@ -514,10 +517,11 @@ impl Channel {
                         .get("telegram_chat_type")
                         .and_then(|v| v.as_str())
                 });
-            self.conversation_context = Some(
-                prompt_engine
-                    .render_conversation_context(&first.source, server_name, channel_name)?,
-            );
+            self.conversation_context = Some(prompt_engine.render_conversation_context(
+                &first.source,
+                server_name,
+                channel_name,
+            )?);
         }
 
         // Persist each message to conversation log (individual audit trail)
@@ -659,8 +663,11 @@ impl Channel {
         let browser_enabled = rc.browser_config.load().enabled;
         let web_search_enabled = rc.brave_search_key.load().is_some();
         let opencode_enabled = rc.opencode.load().enabled;
-        let worker_capabilities =
-            prompt_engine.render_worker_capabilities(browser_enabled, web_search_enabled, opencode_enabled)?;
+        let worker_capabilities = prompt_engine.render_worker_capabilities(
+            browser_enabled,
+            web_search_enabled,
+            opencode_enabled,
+        )?;
 
         let status_text = {
             let status = self.state.status_block.read().await;
@@ -792,10 +799,11 @@ impl Channel {
                         .get("telegram_chat_type")
                         .and_then(|v| v.as_str())
                 });
-            self.conversation_context = Some(
-                prompt_engine
-                    .render_conversation_context(&message.source, server_name, channel_name)?,
-            );
+            self.conversation_context = Some(prompt_engine.render_conversation_context(
+                &message.source,
+                server_name,
+                channel_name,
+            )?);
         }
 
         // On link channels, seed conversation history with the original outgoing message
@@ -1181,8 +1189,11 @@ impl Channel {
         let browser_enabled = rc.browser_config.load().enabled;
         let web_search_enabled = rc.brave_search_key.load().is_some();
         let opencode_enabled = rc.opencode.load().enabled;
-        let worker_capabilities = prompt_engine
-            .render_worker_capabilities(browser_enabled, web_search_enabled, opencode_enabled)?;
+        let worker_capabilities = prompt_engine.render_worker_capabilities(
+            browser_enabled,
+            web_search_enabled,
+            opencode_enabled,
+        )?;
 
         let status_text = {
             let status = self.state.status_block.read().await;
@@ -1548,8 +1559,10 @@ impl Channel {
                 for (key, value) in retrigger_metadata {
                     self.pending_retrigger_metadata.insert(key, value);
                 }
-                self.retrigger_deadline =
-                    Some(tokio::time::Instant::now() + std::time::Duration::from_millis(RETRIGGER_DEBOUNCE_MS));
+                self.retrigger_deadline = Some(
+                    tokio::time::Instant::now()
+                        + std::time::Duration::from_millis(RETRIGGER_DEBOUNCE_MS),
+                );
             }
         }
 
