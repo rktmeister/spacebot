@@ -244,8 +244,8 @@ impl LlmManager {
 
         match token {
             Some(token) => Ok(ProviderConfig {
-                api_type: ApiType::OpenAiCompletions,
-                base_url: "https://api.openai.com".to_string(),
+                api_type: ApiType::OpenAiResponses,
+                base_url: "https://chatgpt.com/backend-api/codex".to_string(),
                 api_key: token,
                 name: None,
             }),
