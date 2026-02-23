@@ -1772,9 +1772,7 @@ fn resolve_cron_timezone(
                 .and_then(|value| normalize_timezone(&value))
         });
 
-    let Some(timezone) = timezone else {
-        return None;
-    };
+    let timezone = timezone?;
 
     if timezone.parse::<Tz>().is_err() {
         tracing::warn!(
@@ -2189,6 +2187,20 @@ impl Config {
                 });
         }
 
+        if llm.ollama_base_url.is_some() || llm.ollama_key.is_some() {
+            llm.providers
+                .entry("ollama".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: llm
+                        .ollama_base_url
+                        .clone()
+                        .unwrap_or_else(|| "http://localhost:11434".to_string()),
+                    api_key: llm.ollama_key.clone().unwrap_or_default(),
+                    name: None,
+                });
+        }
+
         // Note: We allow boot without provider keys now. System starts in setup mode.
         // Agents are initialized later when keys are added via API.
 
@@ -2563,6 +2575,20 @@ impl Config {
                     api_type: ApiType::Gemini,
                     base_url: GEMINI_PROVIDER_BASE_URL.to_string(),
                     api_key: gemini_key,
+                    name: None,
+                });
+        }
+
+        if llm.ollama_base_url.is_some() || llm.ollama_key.is_some() {
+            llm.providers
+                .entry("ollama".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: llm
+                        .ollama_base_url
+                        .clone()
+                        .unwrap_or_else(|| "http://localhost:11434".to_string()),
+                    api_key: llm.ollama_key.clone().unwrap_or_default(),
                     name: None,
                 });
         }
@@ -4495,5 +4521,71 @@ id = "main"
         let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
         let resolved = config.agents[0].resolve(&config.instance_dir, &config.defaults);
         assert_eq!(resolved.cron_timezone, None);
+    }
+
+    #[test]
+    fn ollama_base_url_registers_provider() {
+        let toml = r#"
+[llm]
+ollama_base_url = "http://localhost:11434"
+
+[[agents]]
+id = "main"
+"#;
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+        let provider = config
+            .llm
+            .providers
+            .get("ollama")
+            .expect("ollama provider should be registered");
+        assert_eq!(provider.base_url, "http://localhost:11434");
+        assert_eq!(provider.api_type, ApiType::OpenAiCompletions);
+        assert_eq!(provider.api_key, "");
+    }
+
+    #[test]
+    fn ollama_key_alone_registers_provider_with_default_url() {
+        let toml = r#"
+[llm]
+ollama_key = "test-key"
+
+[[agents]]
+id = "main"
+"#;
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+        let provider = config
+            .llm
+            .providers
+            .get("ollama")
+            .expect("ollama provider should be registered");
+        assert_eq!(provider.base_url, "http://localhost:11434");
+        assert_eq!(provider.api_key, "test-key");
+    }
+
+    #[test]
+    fn ollama_custom_provider_takes_precedence_over_shorthand() {
+        // Custom provider block should win over shorthand keys (or_insert_with semantics)
+        let toml = r#"
+[llm]
+ollama_base_url = "http://localhost:11434"
+
+[llm.providers.ollama]
+api_type = "openai_completions"
+base_url = "http://remote-ollama:11434"
+api_key = ""
+
+[[agents]]
+id = "main"
+"#;
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+        let provider = config
+            .llm
+            .providers
+            .get("ollama")
+            .expect("ollama provider should be registered");
+        assert_eq!(provider.base_url, "http://remote-ollama:11434");
     }
 }

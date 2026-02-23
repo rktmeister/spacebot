@@ -81,6 +81,15 @@ const MODELS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(360
 /// Models known to work with Spacebot's current voice transcription path
 /// (OpenAI-compatible `/v1/chat/completions` with `input_audio`).
 const KNOWN_VOICE_TRANSCRIPTION_MODELS: &[&str] = &[
+    // Native Gemini API
+    "gemini/gemini-2.0-flash",
+    "gemini/gemini-2.5-flash",
+    "gemini/gemini-2.5-flash-lite",
+    "gemini/gemini-2.5-pro",
+    "gemini/gemini-3-flash-preview",
+    "gemini/gemini-3-pro-preview",
+    "gemini/gemini-3.1-pro-preview",
+    // Via OpenRouter
     "openrouter/google/gemini-2.0-flash-001",
     "openrouter/google/gemini-2.5-flash",
     "openrouter/google/gemini-2.5-flash-lite",
