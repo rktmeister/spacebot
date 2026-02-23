@@ -248,7 +248,10 @@ pub struct ShellArgs {
     /// Optional working directory for the command.
     pub working_dir: Option<String>,
     /// Optional timeout in seconds (default: 60).
-    #[serde(default = "default_timeout")]
+    #[serde(
+        default = "default_timeout",
+        deserialize_with = "crate::tools::deserialize_string_or_u64"
+    )]
     pub timeout_seconds: u64,
 }
 
