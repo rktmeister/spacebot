@@ -145,8 +145,41 @@ pub async fn add_channel_tools(
     send_agent_message_tool: Option<SendAgentMessageTool>,
     conclude_link: Option<(ConcludeLinkFlag, ConcludeLinkSummary)>,
     message_source: Option<String>,
+    originating_channel_override: Option<String>,
     originating_source_override: Option<String>,
 ) -> Result<(), rig::tool::server::ToolServerError> {
+    let conversation_id = conversation_id.into();
+    let is_link_channel = conversation_id.starts_with("link:");
+    let current_link_counterparty =
+        link_counterparty_for_agent(&conversation_id, state.deps.agent_id.as_ref());
+    // In direct link channels, only expose send_agent_message when this agent
+    // can initiate to at least one other linked agent (not the current peer).
+    // This avoids LLM loops where agents try to delegate back to the same peer
+    // or hallucinate unrelated targets instead of using `reply`.
+    let has_other_delegation_targets = if let Some(counterparty_id) = current_link_counterparty.as_deref() {
+        let agent_id = state.deps.agent_id.as_ref();
+        let links = state.deps.links.load();
+
+        links.iter().any(|link| {
+            let (target_id, can_initiate) = if link.from_agent_id == agent_id {
+                (&link.to_agent_id, true)
+            } else if link.to_agent_id == agent_id {
+                (
+                    &link.from_agent_id,
+                    link.direction == crate::links::LinkDirection::TwoWay,
+                )
+            } else {
+                return false;
+            };
+
+            can_initiate
+                && target_id != counterparty_id
+                && state.deps.agent_names.contains_key(target_id)
+        })
+    } else {
+        true
+    };
+
     let agent_display_name = state.deps.agent_names
         .get(state.deps.agent_id.as_ref())
         .cloned()
@@ -154,7 +187,7 @@ pub async fn add_channel_tools(
     handle
         .add_tool(ReplyTool::new(
             response_tx.clone(),
-            conversation_id,
+            conversation_id.clone(),
             state.conversation_logger.clone(),
             state.channel_id.clone(),
             replied_flag.clone(),
@@ -164,7 +197,7 @@ pub async fn add_channel_tools(
     handle.add_tool(BranchTool::new(state.clone())).await?;
     handle.add_tool(SpawnWorkerTool::new(state.clone())).await?;
     handle.add_tool(RouteTool::new(state.clone())).await?;
-    if let Some(messaging_manager) = &state.deps.messaging_manager {
+    if !is_link_channel && let Some(messaging_manager) = &state.deps.messaging_manager {
         handle
             .add_tool(SendMessageTool::new(
                 messaging_manager.clone(),
@@ -184,16 +217,21 @@ pub async fn add_channel_tools(
         handle.add_tool(cron).await?;
     }
     if let Some(mut agent_msg) = send_agent_message_tool {
-        // Bind per-turn state so the tool auto-ends the turn after sending and
-        // propagates the correct adapter name for conclusion routing.
-        agent_msg = agent_msg.with_skip_flag(skip_flag.clone());
-        // Prefer the upstream originating_source (for multi-hop chains) over
-        // the current message source (which is "internal" on link channels).
-        let effective_source = originating_source_override.or(message_source);
-        if let Some(source) = effective_source {
-            agent_msg = agent_msg.with_originating_source(source);
+        if has_other_delegation_targets {
+            // Bind per-turn state so the tool auto-ends the turn after sending and
+            // propagates the correct adapter name for conclusion routing.
+            agent_msg = agent_msg.with_skip_flag(skip_flag.clone());
+            if let Some(originating_channel) = originating_channel_override {
+                agent_msg = agent_msg.with_originating_channel(originating_channel);
+            }
+            // Prefer the upstream originating_source (for multi-hop chains) over
+            // the current message source (which is "internal" on link channels).
+            let effective_source = originating_source_override.or(message_source);
+            if let Some(source) = effective_source {
+                agent_msg = agent_msg.with_originating_source(source);
+            }
+            handle.add_tool(agent_msg).await?;
         }
-        handle.add_tool(agent_msg).await?;
     }
     if let Some((flag, summary)) = conclude_link {
         handle
@@ -201,6 +239,16 @@ pub async fn add_channel_tools(
             .await?;
     }
     Ok(())
+}
+
+fn link_counterparty_for_agent(conversation_id: &str, agent_id: &str) -> Option<String> {
+    let rest = conversation_id.strip_prefix("link:")?;
+    let (self_id, counterparty_id) = rest.split_once(':')?;
+    if self_id == agent_id {
+        Some(counterparty_id.to_string())
+    } else {
+        None
+    }
 }
 
 /// Remove per-channel tools from a running ToolServer.

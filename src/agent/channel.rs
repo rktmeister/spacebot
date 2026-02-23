@@ -206,7 +206,7 @@ impl Channel {
             conversation_logger,
             process_run_logger,
             reply_target_message_id: Arc::new(RwLock::new(None)),
-            channel_store,
+            channel_store: channel_store.clone(),
             screenshot_dir,
             logs_dir,
         };
@@ -227,6 +227,7 @@ impl Channel {
                     id.clone(),
                     deps.links.clone(),
                     mm.clone(),
+                    channel_store.clone(),
                     deps.event_tx.clone(),
                     deps.agent_names.clone(),
                 )),
@@ -743,11 +744,12 @@ impl Channel {
         // Persist user messages (skip system re-triggers)
         let is_link_conclusion = message.metadata.get("link_conclusion").is_some();
         if is_link_conclusion {
-            // Link conclusions are surfaced as assistant messages (from the agent, not the user)
-            self.state.conversation_logger.log_bot_message_with_name(
-                &self.state.channel_id,
-                &raw_text,
-                Some(self.agent_display_name()),
+            // Link conclusion messages are internal control messages used to
+            // retrigger the originating channel. Do not persist them to the
+            // visible conversation timeline.
+            tracing::debug!(
+                channel_id = %self.id,
+                "received link conclusion control message"
             );
         } else if message.source != "system" {
             let sender_name = message
@@ -837,6 +839,30 @@ impl Channel {
         // Drop messages on concluded link channels
         let is_link_channel = message.conversation_id.starts_with("link:");
         if is_link_channel && self.link_concluded {
+            // Late-arriving link conclusions should still cascade up the chain.
+            // This handles races where a parent link concludes before a child
+            // link finishes and reports back.
+            if is_link_conclusion {
+                let summary = message
+                    .metadata
+                    .get("link_conclusion_summary")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| {
+                        raw_text.split_once('\n').and_then(|(header, body)| {
+                            if header.starts_with("[Link conversation with ")
+                                && header.ends_with(" concluded]")
+                            {
+                                Some(body)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .unwrap_or(raw_text.as_str());
+
+                self.route_link_conclusion(summary, &message).await;
+            }
+
             tracing::debug!(
                 channel_id = %self.id,
                 "dropping message on concluded link channel"
@@ -1078,19 +1104,25 @@ impl Channel {
                     peer_agent, summary
                 );
 
-                // Use the captured adapter source. Falls back to parsing the
-                // conversation_id prefix, which may not match the adapter name
-                // (e.g. "portal:chat:*" is actually the "webchat" adapter).
-                let source = self.originating_source.clone().unwrap_or_else(|| {
-                    originating
-                        .split(':')
-                        .next()
-                        .unwrap_or("webchat")
-                        .to_string()
-                });
+                // Link-to-link conclusions are internal control messages and must
+                // stay on the internal routing path. For non-link destinations,
+                // use the captured adapter source.
+                let source = if originating.starts_with("link:") {
+                    "internal".to_string()
+                } else {
+                    self.originating_source.clone().unwrap_or_else(|| {
+                        originating
+                            .split(':')
+                            .next()
+                            .unwrap_or("webchat")
+                            .to_string()
+                    })
+                };
 
                 let mut metadata = std::collections::HashMap::new();
                 metadata.insert("link_conclusion".into(), serde_json::json!(true));
+                metadata.insert("link_conclusion_summary".into(), serde_json::json!(summary));
+                metadata.insert("link_conclusion_peer".into(), serde_json::json!(peer_agent));
 
                 let conclusion_message = crate::InboundMessage {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -1220,6 +1252,7 @@ impl Channel {
             self.send_agent_message_tool.clone(),
             conclude_link_args,
             message_source,
+            self.originating_channel.clone(),
             self.originating_source.clone(),
         )
         .await

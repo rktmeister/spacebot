@@ -3,6 +3,7 @@
 use crate::links::AgentLink;
 use crate::messaging::MessagingManager;
 use crate::tools::SkipFlag;
+use crate::conversation::ChannelStore;
 use crate::{AgentId, InboundMessage, MessageContent, ProcessEvent};
 
 use arc_swap::ArcSwap;
@@ -28,6 +29,7 @@ pub struct SendAgentMessageTool {
     channel_id: crate::ChannelId,
     links: Arc<ArcSwap<Vec<AgentLink>>>,
     messaging_manager: Arc<MessagingManager>,
+    channel_store: ChannelStore,
     event_tx: broadcast::Sender<ProcessEvent>,
     /// Map of known agent IDs to display names, for resolving targets.
     agent_names: Arc<HashMap<String, String>>,
@@ -37,6 +39,10 @@ pub struct SendAgentMessageTool {
     /// Source of the originating channel's inbound message (e.g. "webchat", "discord").
     /// Propagated through metadata so conclusion routing uses the correct adapter.
     originating_source: Option<String>,
+    /// Channel that originated the current link conversation (if any).
+    /// Used for guardrails to prevent re-delegating to the upstream counterparty
+    /// instead of concluding back to them.
+    originating_channel: Option<String>,
 }
 
 impl std::fmt::Debug for SendAgentMessageTool {
@@ -54,6 +60,7 @@ impl SendAgentMessageTool {
         channel_id: crate::ChannelId,
         links: Arc<ArcSwap<Vec<AgentLink>>>,
         messaging_manager: Arc<MessagingManager>,
+        channel_store: ChannelStore,
         event_tx: broadcast::Sender<ProcessEvent>,
         agent_names: Arc<HashMap<String, String>>,
     ) -> Self {
@@ -63,10 +70,12 @@ impl SendAgentMessageTool {
             channel_id,
             links,
             messaging_manager,
+            channel_store,
             event_tx,
             agent_names,
             skip_flag: None,
             originating_source: None,
+            originating_channel: None,
         }
     }
 }
@@ -81,6 +90,12 @@ impl SendAgentMessageTool {
     /// Set the originating source (adapter name) for conclusion routing.
     pub fn with_originating_source(mut self, source: String) -> Self {
         self.originating_source = Some(source);
+        self
+    }
+
+    /// Set the direct originating channel for this turn.
+    pub fn with_originating_channel(mut self, channel_id: String) -> Self {
+        self.originating_channel = Some(channel_id);
         self
     }
 }
@@ -151,15 +166,29 @@ impl Tool for SendAgentMessageTool {
             ))
         })?;
 
-        // In link channels, responding to the current peer should use the reply tool
+        // In link channels, responding to the current counterparty should use the reply tool
         // so metadata and conclusion routing stay on the same conversation chain.
         if self
-            .current_link_peer_id()
+            .current_link_counterparty_id()
             .as_deref()
-            .is_some_and(|peer| peer == target_agent_id)
+            .is_some_and(|counterparty| counterparty == target_agent_id)
         {
             return Err(SendAgentMessageError(
                 "you are already in a direct link conversation with this agent. Use reply to respond in the current link channel. Use send_agent_message to contact a different agent.".to_string(),
+            ));
+        }
+
+        // In nested link flows, if the target is the upstream counterparty
+        // from the parent link channel, the correct action is conclude_link.
+        // Re-sending to that agent creates parallel link threads with incorrect
+        // originating metadata.
+        if self
+            .upstream_counterparty_id()
+            .as_deref()
+            .is_some_and(|counterparty| counterparty == target_agent_id)
+        {
+            return Err(SendAgentMessageError(
+                "this target is the upstream counterparty for this link conversation. Use conclude_link to route the result back up the chain instead of send_agent_message.".to_string(),
             ));
         }
 
@@ -197,6 +226,12 @@ impl Tool for SendAgentMessageTool {
         // Each agent gets its own side of the link channel
         let receiver_channel = link.channel_id_for(receiving_agent_id);
         let sender_channel = link.channel_id_for(sending_agent_id);
+
+        // Materialize the sender-side link channel immediately so both sides
+        // are visible in their channel lists even before the first reply.
+        let sender_channel_metadata: HashMap<String, serde_json::Value> = HashMap::new();
+        self.channel_store
+            .upsert(&sender_channel, &sender_channel_metadata);
 
         // Construct the internal message targeting the receiver's link channel.
         // originating_channel is always the current channel — the direct parent
@@ -276,7 +311,7 @@ impl Tool for SendAgentMessageTool {
 
 impl SendAgentMessageTool {
     /// If this tool is running in a link channel, return the peer agent ID.
-    fn current_link_peer_id(&self) -> Option<String> {
+    fn current_link_counterparty_id(&self) -> Option<String> {
         self.channel_id
             .as_ref()
             .strip_prefix("link:")
@@ -288,6 +323,19 @@ impl SendAgentMessageTool {
                     None
                 }
             })
+    }
+
+    /// If this link conversation was initiated from another link channel,
+    /// return that upstream link's counterparty agent ID.
+    fn upstream_counterparty_id(&self) -> Option<String> {
+        let originating = self.originating_channel.as_deref()?;
+        let rest = originating.strip_prefix("link:")?;
+        let (self_id, counterparty_id) = rest.split_once(':')?;
+        if self_id == self.agent_id.as_ref() {
+            Some(counterparty_id.to_string())
+        } else {
+            None
+        }
     }
 
     /// Resolve an agent target string to an agent ID.
