@@ -38,16 +38,15 @@ impl AgentLink {
             .collect()
     }
 
-    /// Stable identifier for the link channel conversation ID.
-    /// Deterministic from agent IDs so the same link always maps to the same channel.
-    pub fn channel_id(&self) -> String {
-        // Sort agent IDs to ensure the same pair always produces the same channel
-        let (a, b) = if self.from_agent_id <= self.to_agent_id {
-            (&self.from_agent_id, &self.to_agent_id)
+    /// Per-agent link channel conversation ID.
+    /// Each side of the link gets its own channel: `"link:{agent_id}:{peer_id}"`.
+    pub fn channel_id_for(&self, agent_id: &str) -> String {
+        let peer = if self.from_agent_id == agent_id {
+            &self.to_agent_id
         } else {
-            (&self.to_agent_id, &self.from_agent_id)
+            &self.from_agent_id
         };
-        format!("link:{a}:{b}")
+        format!("link:{agent_id}:{peer}")
     }
 }
 

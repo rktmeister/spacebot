@@ -49,6 +49,7 @@ impl ChannelStore {
                  ON CONFLICT(id) DO UPDATE SET \
                      display_name = COALESCE(excluded.display_name, channels.display_name), \
                      platform_meta = COALESCE(excluded.platform_meta, channels.platform_meta), \
+                     is_active = 1, \
                      last_activity_at = CURRENT_TIMESTAMP"
             )
             .bind(&channel_id)
@@ -159,6 +160,24 @@ impl ChannelStore {
             .ok()
             .flatten()
             .and_then(|c| c.display_name)
+    }
+
+    /// Delete a channel and its message history.
+    /// Branch/worker runs are cascade-deleted via FK constraints.
+    pub async fn delete(&self, channel_id: &str) -> crate::error::Result<bool> {
+        sqlx::query("DELETE FROM conversation_messages WHERE channel_id = ?")
+            .bind(channel_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let result = sqlx::query("DELETE FROM channels WHERE id = ?")
+            .bind(channel_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(result.rows_affected() > 0)
     }
 }
 

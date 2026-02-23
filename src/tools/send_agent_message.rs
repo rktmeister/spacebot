@@ -155,13 +155,15 @@ impl Tool for SendAgentMessageTool {
         };
 
         let target_agent_arc: AgentId = Arc::from(receiving_agent_id.as_str());
-        let conversation_id = link.channel_id();
+        // Each agent gets its own side of the link channel
+        let receiver_channel = link.channel_id_for(receiving_agent_id);
+        let sender_channel = link.channel_id_for(sending_agent_id);
 
-        // Construct the internal message
+        // Construct the internal message targeting the receiver's link channel
         let message = InboundMessage {
             id: uuid::Uuid::new_v4().to_string(),
             source: "internal".into(),
-            conversation_id: conversation_id.clone(),
+            conversation_id: receiver_channel.clone(),
             sender_id: sending_agent_id.to_string(),
             agent_id: Some(target_agent_arc),
             content: MessageContent::Text(args.message),
@@ -169,6 +171,8 @@ impl Tool for SendAgentMessageTool {
             metadata: HashMap::from([
                 ("from_agent_id".into(), serde_json::json!(sending_agent_id)),
                 ("link_kind".into(), serde_json::json!(link.kind.as_str())),
+                ("reply_to_agent".into(), serde_json::json!(sending_agent_id)),
+                ("reply_to_channel".into(), serde_json::json!(&sender_channel)),
             ]),
             formatted_author: Some(format!("[{}]", self.agent_name)),
         };
@@ -186,8 +190,8 @@ impl Tool for SendAgentMessageTool {
             .send(ProcessEvent::AgentMessageSent {
                 from_agent_id: self.agent_id.clone(),
                 to_agent_id: Arc::from(receiving_agent_id.as_str()),
-                link_id: conversation_id.clone(),
-                channel_id: Arc::from(conversation_id.as_str()),
+                link_id: receiver_channel.clone(),
+                channel_id: Arc::from(receiver_channel.as_str()),
             })
             .ok();
 
@@ -200,14 +204,15 @@ impl Tool for SendAgentMessageTool {
         tracing::info!(
             from = %self.agent_id,
             to = %receiving_agent_id,
-            channel_id = %conversation_id,
+            receiver_channel = %receiver_channel,
+            sender_channel = %sender_channel,
             "agent message sent"
         );
 
         Ok(SendAgentMessageOutput {
             success: true,
             target_agent: target_display,
-            channel_id: conversation_id,
+            channel_id: sender_channel,
         })
     }
 }

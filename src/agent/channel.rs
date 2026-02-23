@@ -699,14 +699,12 @@ impl Channel {
         // Emit AgentMessageReceived event for internal agent-to-agent messages
         if message.source == "internal" {
             if let Some(from_agent_id) = message.metadata.get("from_agent_id").and_then(|v| v.as_str()) {
-                if let Some(link_id) = message.metadata.get("link_id").and_then(|v| v.as_str()) {
-                    self.deps.event_tx.send(ProcessEvent::AgentMessageReceived {
-                        from_agent_id: Arc::from(from_agent_id),
-                        to_agent_id: self.deps.agent_id.clone(),
-                        link_id: link_id.to_string(),
-                        channel_id: self.id.clone(),
-                    }).ok();
-                }
+                self.deps.event_tx.send(ProcessEvent::AgentMessageReceived {
+                    from_agent_id: Arc::from(from_agent_id),
+                    to_agent_id: self.deps.agent_id.clone(),
+                    link_id: message.conversation_id.clone(),
+                    channel_id: self.id.clone(),
+                }).ok();
             }
         }
 
@@ -756,6 +754,31 @@ impl Channel {
                 prompt_engine
                     .render_conversation_context(&message.source, server_name, channel_name)?,
             );
+        }
+
+        // On link channels, seed conversation history with the original outgoing message
+        // so the agent has context for what it previously said when the reply arrives.
+        if message.source == "internal" {
+            if let Some(original) = message.metadata.get("original_sent_message").and_then(|v| v.as_str()) {
+                let history = self.state.history.read().await;
+                let is_first_message = history.is_empty();
+                drop(history);
+
+                if is_first_message {
+                    let mut history = self.state.history.write().await;
+                    history.push(rig::message::Message::Assistant {
+                        id: None,
+                        content: rig::OneOrMany::one(rig::message::AssistantContent::text(original)),
+                    });
+                    drop(history);
+
+                    // Persist so the message appears in the dashboard timeline
+                    self.state.conversation_logger.log_bot_message(
+                        &self.state.channel_id,
+                        original,
+                    );
+                }
+            }
         }
 
         let system_prompt = self.build_system_prompt().await?;
@@ -908,10 +931,10 @@ impl Channel {
         let agent_id = self.deps.agent_id.as_ref();
         let all_links = self.deps.links.load();
 
-        // Find the link that matches this channel's conversation ID
+        // Find the link that matches this agent's side of the link channel
         let link = all_links
             .iter()
-            .find(|link| link.channel_id() == conversation_id)?;
+            .find(|link| link.channel_id_for(agent_id) == conversation_id)?;
 
         let is_from = link.from_agent_id == agent_id;
         let other_agent_id = if is_from {

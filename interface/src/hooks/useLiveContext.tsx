@@ -47,29 +47,32 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 	const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
 	const markEdgeActive = useCallback((from: string, to: string) => {
-		const edgeId = `${from}->${to}`;
+		// Activate both directions since the topology edge may be defined either way
+		const forward = `${from}->${to}`;
+		const reverse = `${to}->${from}`;
 		setActiveLinks((prev) => {
 			const next = new Set(prev);
-			next.add(edgeId);
+			next.add(forward);
+			next.add(reverse);
 			return next;
 		});
 
-		// Clear existing timer for this edge
-		const existing = timersRef.current.get(edgeId);
-		if (existing) clearTimeout(existing);
+		for (const edgeId of [forward, reverse]) {
+			const existing = timersRef.current.get(edgeId);
+			if (existing) clearTimeout(existing);
 
-		// Set expiry timer
-		timersRef.current.set(
-			edgeId,
-			setTimeout(() => {
-				timersRef.current.delete(edgeId);
-				setActiveLinks((prev) => {
-					const next = new Set(prev);
-					next.delete(edgeId);
-					return next;
-				});
-			}, LINK_ACTIVE_DURATION),
-		);
+			timersRef.current.set(
+				edgeId,
+				setTimeout(() => {
+					timersRef.current.delete(edgeId);
+					setActiveLinks((prev) => {
+						const next = new Set(prev);
+						next.delete(edgeId);
+						return next;
+					});
+				}, LINK_ACTIVE_DURATION),
+			);
+		}
 	}, []);
 
 	const handleAgentMessage = useCallback(

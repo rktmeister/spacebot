@@ -82,7 +82,7 @@ pub async fn start_http_server(
         )
         .route("/mcp/status", get(mcp::mcp_status))
         .route("/agents/overview", get(agents::agent_overview))
-        .route("/channels", get(channels::list_channels))
+        .route("/channels", get(channels::list_channels).delete(channels::delete_channel))
         .route("/channels/messages", get(channels::channel_messages))
         .route("/channels/status", get(channels::channel_status))
         .route("/agents/memories", get(memories::list_memories))

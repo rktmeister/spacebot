@@ -1046,6 +1046,12 @@ export const api = {
 	agentOverview: (agentId: string) =>
 		fetchJson<AgentOverviewResponse>(`/agents/overview?agent_id=${encodeURIComponent(agentId)}`),
 	channels: () => fetchJson<ChannelsResponse>("/channels"),
+	deleteChannel: async (agentId: string, channelId: string) => {
+		const params = new URLSearchParams({ agent_id: agentId, channel_id: channelId });
+		const response = await fetch(`${API_BASE}/channels?${params}`, { method: "DELETE" });
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<{ success: boolean }>;
+	},
 	channelMessages: (channelId: string, limit = 20, before?: string) => {
 		const params = new URLSearchParams({ channel_id: channelId, limit: String(limit) });
 		if (before) params.set("before", before);

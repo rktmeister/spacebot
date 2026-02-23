@@ -927,6 +927,7 @@ async fn run(
                     let api_event_tx = api_state.event_tx.clone();
                     let sse_agent_id = agent_id.to_string();
                     let sse_channel_id = conversation_id.clone();
+                    let outbound_agent_names = agent.deps.agent_names.clone();
                     let outbound_handle = tokio::spawn(async move {
                         while let Some(response) = response_rx.recv().await {
                             // Forward relevant events to SSE clients
@@ -970,6 +971,93 @@ async fn run(
                             }
 
                             let current_message = outbound_message.read().await.clone();
+
+                            // Internal link channels: route replies back to the sender's link channel
+                            if current_message.source == "internal" {
+                                let reply_text = match &response {
+                                    spacebot::OutboundResponse::Text(t) => Some(t.clone()),
+                                    spacebot::OutboundResponse::RichMessage { text, .. } => Some(text.clone()),
+                                    spacebot::OutboundResponse::ThreadReply { text, .. } => Some(text.clone()),
+                                    spacebot::OutboundResponse::Status(_) => None,
+                                    _ => None,
+                                };
+
+                                if let Some(text) = reply_text {
+                                    let reply_to_agent = current_message.metadata
+                                        .get("reply_to_agent")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from);
+                                    let reply_to_channel = current_message.metadata
+                                        .get("reply_to_channel")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from);
+
+                                    if let (Some(target_agent), Some(target_channel)) = (reply_to_agent, reply_to_channel) {
+                                        let agent_display = outbound_agent_names
+                                            .get(&sse_agent_id)
+                                            .cloned()
+                                            .unwrap_or_else(|| sse_agent_id.clone());
+
+                                        // Include the original sent message so the receiving
+                                        // agent's link channel can seed its history with context
+                                        let original_text = match &current_message.content {
+                                            spacebot::MessageContent::Text(t) => Some(t.clone()),
+                                            spacebot::MessageContent::Media { text, .. } => text.clone(),
+                                            _ => None,
+                                        };
+
+                                        let mut metadata = std::collections::HashMap::from([
+                                            ("from_agent_id".into(), serde_json::json!(&sse_agent_id)),
+                                            ("reply_to_agent".into(), serde_json::json!(&sse_agent_id)),
+                                            ("reply_to_channel".into(), serde_json::json!(&outbound_conversation_id)),
+                                        ]);
+                                        if let Some(original) = original_text {
+                                            metadata.insert("original_sent_message".into(), serde_json::json!(original));
+                                        }
+
+                                        let reply_message = spacebot::InboundMessage {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            source: "internal".into(),
+                                            conversation_id: target_channel.clone(),
+                                            sender_id: sse_agent_id.clone(),
+                                            agent_id: Some(Arc::from(target_agent.as_str())),
+                                            content: spacebot::MessageContent::Text(text),
+                                            timestamp: chrono::Utc::now(),
+                                            metadata,
+                                            formatted_author: Some(format!("[{agent_display}]")),
+                                        };
+
+                                        if let Err(error) = messaging_for_outbound
+                                            .inject_message(reply_message)
+                                            .await
+                                        {
+                                            tracing::error!(
+                                                %error,
+                                                from = %sse_agent_id,
+                                                to = %target_agent,
+                                                "failed to route link channel reply"
+                                            );
+                                        } else {
+                                            // Emit SSE event so the dashboard animates the edge
+                                            api_event_tx.send(spacebot::api::ApiEvent::AgentMessageSent {
+                                                from_agent_id: sse_agent_id.clone(),
+                                                to_agent_id: target_agent.clone(),
+                                                link_id: target_channel.clone(),
+                                                channel_id: target_channel.clone(),
+                                            }).ok();
+
+                                            tracing::info!(
+                                                from = %sse_agent_id,
+                                                to = %target_agent,
+                                                channel = %target_channel,
+                                                "routed link channel reply"
+                                            );
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+
                             match response {
                                 spacebot::OutboundResponse::Status(status) => {
                                     if let Err(error) = messaging_for_outbound
