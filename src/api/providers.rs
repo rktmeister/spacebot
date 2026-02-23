@@ -360,12 +360,12 @@ async fn prune_expired_browser_oauth_sessions() {
 }
 
 fn resolve_browser_oauth_redirect_uri(headers: &HeaderMap) -> Option<String> {
-    if let Some(origin) = header_value(headers, axum::http::header::ORIGIN.as_str()) {
-        if let Ok(origin_url) = Url::parse(origin) {
-            let origin = origin_url.origin().ascii_serialization();
-            if origin != "null" {
-                return Some(format!("{origin}{OPENAI_BROWSER_OAUTH_REDIRECT_PATH}"));
-            }
+    if let Some(origin) = header_value(headers, axum::http::header::ORIGIN.as_str())
+        && let Ok(origin_url) = Url::parse(origin)
+    {
+        let origin = origin_url.origin().ascii_serialization();
+        if origin != "null" {
+            return Some(format!("{origin}{OPENAI_BROWSER_OAUTH_REDIRECT_PATH}"));
         }
     }
 
@@ -382,7 +382,11 @@ fn resolve_browser_oauth_redirect_uri(headers: &HeaderMap) -> Option<String> {
 
     if let Some(host) = header_value(headers, "host") {
         let host = normalize_host(host);
-        let scheme = if is_local_host(&host) { "http" } else { "https" };
+        let scheme = if is_local_host(&host) {
+            "http"
+        } else {
+            "https"
+        };
         return Some(format!(
             "{scheme}://{host}{OPENAI_BROWSER_OAUTH_REDIRECT_PATH}"
         ));
@@ -392,7 +396,9 @@ fn resolve_browser_oauth_redirect_uri(headers: &HeaderMap) -> Option<String> {
 }
 
 fn header_value(headers: &HeaderMap, name: impl AsRef<str>) -> Option<&str> {
-    headers.get(name.as_ref()).and_then(|value| value.to_str().ok())
+    headers
+        .get(name.as_ref())
+        .and_then(|value| value.to_str().ok())
 }
 
 fn first_header_value(value: &str) -> &str {
