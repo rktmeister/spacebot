@@ -661,6 +661,7 @@ export interface CronExecutionsParams {
 export interface ProviderStatus {
 	anthropic: boolean;
 	openai: boolean;
+	openai_chatgpt: boolean;
 	openrouter: boolean;
 	zhipu: boolean;
 	groq: boolean;
@@ -669,10 +670,12 @@ export interface ProviderStatus {
 	deepseek: boolean;
 	xai: boolean;
 	mistral: boolean;
+	gemini: boolean;
 	ollama: boolean;
 	opencode_zen: boolean;
 	nvidia: boolean;
 	minimax: boolean;
+	minimax_cn: boolean;
 	moonshot: boolean;
 	zai_coding_plan: boolean;
 }
@@ -693,15 +696,6 @@ export interface ProviderModelTestResponse {
 	provider: string;
 	model: string;
 	sample: string | null;
-}
-
-export interface OpenAiOAuthStartResponse {
-	success: boolean;
-	message: string;
-	device_auth_id: string | null;
-	user_code: string | null;
-	poll_interval_secs: number | null;
-	authorization_url: string | null;
 }
 
 export interface OpenAiOAuthBrowserStartResponse {
@@ -1175,36 +1169,6 @@ export const api = {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<ProviderModelTestResponse>;
-	},
-	startOpenAiOAuth: async () => {
-		const response = await fetch(`${API_BASE}/providers/openai/oauth/start`, {
-			method: "POST",
-		});
-		if (!response.ok) {
-			throw new Error(`API error: ${response.status}`);
-		}
-		return response.json() as Promise<OpenAiOAuthStartResponse>;
-	},
-	completeOpenAiOAuth: async (params: {
-		deviceAuthId: string;
-		userCode: string;
-		pollIntervalSecs: number;
-		model: string;
-	}) => {
-		const response = await fetch(`${API_BASE}/providers/openai/oauth/complete`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				device_auth_id: params.deviceAuthId,
-				user_code: params.userCode,
-				poll_interval_secs: params.pollIntervalSecs,
-				model: params.model,
-			}),
-		});
-		if (!response.ok) {
-			throw new Error(`API error: ${response.status}`);
-		}
-		return response.json() as Promise<ProviderActionResponse>;
 	},
 	startOpenAiOAuthBrowser: async (params: {model: string}) => {
 		const response = await fetch(`${API_BASE}/providers/openai/oauth/browser/start`, {

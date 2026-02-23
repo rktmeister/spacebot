@@ -47,6 +47,7 @@ struct BrowserOAuthCallbackServer {
 pub(super) struct ProviderStatus {
     anthropic: bool,
     openai: bool,
+    openai_chatgpt: bool,
     openrouter: bool,
     zhipu: bool,
     groq: bool,
@@ -98,24 +99,6 @@ pub(super) struct ProviderModelTestResponse {
     provider: String,
     model: String,
     sample: Option<String>,
-}
-
-#[derive(Serialize)]
-pub(super) struct OpenAiOAuthStartResponse {
-    success: bool,
-    message: String,
-    device_auth_id: Option<String>,
-    user_code: Option<String>,
-    poll_interval_secs: Option<u64>,
-    authorization_url: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub(super) struct OpenAiOAuthCompleteRequest {
-    device_auth_id: String,
-    user_code: String,
-    poll_interval_secs: u64,
-    model: String,
 }
 
 #[derive(Deserialize)]
@@ -486,6 +469,7 @@ pub(super) async fn get_providers(
     let (
         anthropic,
         openai,
+        openai_chatgpt,
         openrouter,
         zhipu,
         groq,
@@ -525,7 +509,8 @@ pub(super) async fn get_providers(
 
         (
             has_value("anthropic_key", "ANTHROPIC_API_KEY"),
-            has_value("openai_key", "OPENAI_API_KEY") || openai_oauth_configured,
+            has_value("openai_key", "OPENAI_API_KEY"),
+            openai_oauth_configured,
             has_value("openrouter_key", "OPENROUTER_API_KEY"),
             has_value("zhipu_key", "ZHIPU_API_KEY"),
             has_value("groq_key", "GROQ_API_KEY"),
@@ -547,7 +532,8 @@ pub(super) async fn get_providers(
     } else {
         (
             std::env::var("ANTHROPIC_API_KEY").is_ok(),
-            std::env::var("OPENAI_API_KEY").is_ok() || openai_oauth_configured,
+            std::env::var("OPENAI_API_KEY").is_ok(),
+            openai_oauth_configured,
             std::env::var("OPENROUTER_API_KEY").is_ok(),
             std::env::var("ZHIPU_API_KEY").is_ok(),
             std::env::var("GROQ_API_KEY").is_ok(),
@@ -570,6 +556,7 @@ pub(super) async fn get_providers(
     let providers = ProviderStatus {
         anthropic,
         openai,
+        openai_chatgpt,
         openrouter,
         zhipu,
         groq,
@@ -589,6 +576,7 @@ pub(super) async fn get_providers(
     };
     let has_any = providers.anthropic
         || providers.openai
+        || providers.openai_chatgpt
         || providers.openrouter
         || providers.zhipu
         || providers.groq
@@ -607,124 +595,6 @@ pub(super) async fn get_providers(
         || providers.zai_coding_plan;
 
     Ok(Json(ProvidersResponse { providers, has_any }))
-}
-
-pub(super) async fn start_openai_oauth() -> Result<Json<OpenAiOAuthStartResponse>, StatusCode> {
-    match crate::openai_auth::start_device_authorization().await {
-        Ok(auth) => Ok(Json(OpenAiOAuthStartResponse {
-            success: true,
-            message: "OpenAI device authorization started".to_string(),
-            device_auth_id: Some(auth.device_auth_id),
-            user_code: Some(auth.user_code),
-            poll_interval_secs: Some(auth.poll_interval_secs),
-            authorization_url: Some(auth.authorization_url),
-        })),
-        Err(error) => Ok(Json(OpenAiOAuthStartResponse {
-            success: false,
-            message: format!("Failed to start ChatGPT Plus sign-in: {error}"),
-            device_auth_id: None,
-            user_code: None,
-            poll_interval_secs: None,
-            authorization_url: None,
-        })),
-    }
-}
-
-pub(super) async fn complete_openai_oauth(
-    State(state): State<Arc<ApiState>>,
-    Json(request): Json<OpenAiOAuthCompleteRequest>,
-) -> Result<Json<ProviderUpdateResponse>, StatusCode> {
-    if request.device_auth_id.trim().is_empty() {
-        return Ok(Json(ProviderUpdateResponse {
-            success: false,
-            message: "Missing device_auth_id".to_string(),
-        }));
-    }
-
-    if request.user_code.trim().is_empty() {
-        return Ok(Json(ProviderUpdateResponse {
-            success: false,
-            message: "Missing user_code".to_string(),
-        }));
-    }
-
-    if request.model.trim().is_empty() {
-        return Ok(Json(ProviderUpdateResponse {
-            success: false,
-            message: "Model cannot be empty".to_string(),
-        }));
-    }
-
-    let Some(chatgpt_model) = normalize_openai_chatgpt_model(&request.model) else {
-        return Ok(Json(ProviderUpdateResponse {
-            success: false,
-            message: format!(
-                "Model '{}' must use provider 'openai' or 'openai-chatgpt'.",
-                request.model
-            ),
-        }));
-    };
-
-    let credentials = match crate::openai_auth::complete_device_authorization(
-        &request.device_auth_id,
-        &request.user_code,
-        request.poll_interval_secs,
-    )
-    .await
-    {
-        Ok(credentials) => credentials,
-        Err(error) => {
-            return Ok(Json(ProviderUpdateResponse {
-                success: false,
-                message: format!("Failed to complete ChatGPT Plus sign-in: {error}"),
-            }));
-        }
-    };
-
-    let instance_dir = (**state.instance_dir.load()).clone();
-    if let Err(error) = crate::openai_auth::save_credentials(&instance_dir, &credentials) {
-        return Ok(Json(ProviderUpdateResponse {
-            success: false,
-            message: format!("Failed to save OpenAI OAuth credentials: {error}"),
-        }));
-    }
-
-    if let Some(llm_manager) = state.llm_manager.read().await.as_ref() {
-        llm_manager
-            .set_openai_oauth_credentials(credentials.clone())
-            .await;
-    }
-
-    let config_path = state.config_path.read().await.clone();
-    let content = if config_path.exists() {
-        tokio::fs::read_to_string(&config_path)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    } else {
-        String::new()
-    };
-
-    let mut doc: toml_edit::DocumentMut = content
-        .parse()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    apply_model_routing(&mut doc, &chatgpt_model);
-
-    tokio::fs::write(&config_path, doc.to_string())
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    state
-        .provider_setup_tx
-        .try_send(crate::ProviderSetupEvent::ProvidersConfigured)
-        .ok();
-
-    Ok(Json(ProviderUpdateResponse {
-        success: true,
-        message: format!(
-            "OpenAI configured via ChatGPT Plus OAuth. Model '{}' applied to defaults and the default agent routing.",
-            chatgpt_model
-        ),
-    }))
 }
 
 pub(super) async fn start_openai_browser_oauth(

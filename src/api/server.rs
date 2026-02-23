@@ -124,14 +124,6 @@ pub async fn start_http_server(
             get(providers::get_providers).put(providers::update_provider),
         )
         .route(
-            "/providers/openai/oauth/start",
-            post(providers::start_openai_oauth),
-        )
-        .route(
-            "/providers/openai/oauth/complete",
-            post(providers::complete_openai_oauth),
-        )
-        .route(
             "/providers/openai/oauth/browser/start",
             post(providers::start_openai_browser_oauth),
         )

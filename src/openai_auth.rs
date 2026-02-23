@@ -1,25 +1,17 @@
-//! OpenAI ChatGPT Plus OAuth device flow, token exchange, refresh, and storage.
+//! OpenAI ChatGPT Plus OAuth browser flow, token exchange, refresh, and storage.
 
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::RngCore as _;
-use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
-const DEVICE_CODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
-const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
 const OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-const DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
-const AUTHORIZATION_URL: &str = "https://auth.openai.com/codex/device";
 const BROWSER_SCOPES: &str = "openid profile email offline_access";
-const POLLING_SAFETY_MARGIN_MS: u64 = 3000;
-const DEVICE_FLOW_TIMEOUT_SECS: u64 = 5 * 60;
 
 /// Stored OpenAI OAuth credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,19 +75,6 @@ impl OAuthCredentials {
 }
 
 #[derive(Debug, Deserialize)]
-struct DeviceCodeResponse {
-    device_auth_id: String,
-    user_code: String,
-    interval: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeviceTokenResponse {
-    authorization_code: String,
-    code_verifier: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct TokenResponse {
     access_token: String,
     refresh_token: Option<String>,
@@ -119,15 +98,6 @@ struct TokenOrganization {
 #[derive(Debug, Deserialize)]
 struct TokenOpenAiAuthClaims {
     chatgpt_account_id: Option<String>,
-}
-
-/// Data needed by the UI to finish OpenAI device auth.
-#[derive(Debug, Clone, Serialize)]
-pub struct DeviceAuthorization {
-    pub device_auth_id: String,
-    pub user_code: String,
-    pub poll_interval_secs: u64,
-    pub authorization_url: String,
 }
 
 /// Data needed to complete OpenAI browser OAuth.
@@ -204,149 +174,6 @@ fn extract_account_id(token_response: &TokenResponse) -> Option<String> {
         .and_then(parse_jwt_claims)
         .and_then(from_claims)
         .or_else(|| parse_jwt_claims(&token_response.access_token).and_then(from_claims))
-}
-
-/// Start OpenAI device authorization and return a user code + poll details.
-pub async fn start_device_authorization() -> Result<DeviceAuthorization> {
-    let client = reqwest::Client::new();
-    let response = client
-        .post(DEVICE_CODE_URL)
-        .header("Content-Type", "application/json")
-        .header(
-            "User-Agent",
-            format!("spacebot/{}", env!("CARGO_PKG_VERSION")),
-        )
-        .json(&serde_json::json!({ "client_id": CLIENT_ID }))
-        .send()
-        .await
-        .context("failed to start OpenAI device authorization")?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .context("failed to read OpenAI device authorization response")?;
-
-    if !status.is_success() {
-        anyhow::bail!("OpenAI device authorization failed ({}): {}", status, body);
-    }
-
-    let parsed: DeviceCodeResponse = serde_json::from_str(&body)
-        .context("failed to parse OpenAI device authorization response")?;
-    let poll_interval_secs = parsed.interval.parse::<u64>().unwrap_or(5).max(1);
-
-    Ok(DeviceAuthorization {
-        device_auth_id: parsed.device_auth_id,
-        user_code: parsed.user_code,
-        poll_interval_secs,
-        authorization_url: AUTHORIZATION_URL.to_string(),
-    })
-}
-
-async fn poll_device_authorization(
-    device_auth_id: &str,
-    user_code: &str,
-    poll_interval_secs: u64,
-) -> Result<DeviceTokenResponse> {
-    let client = reqwest::Client::new();
-    let start = tokio::time::Instant::now();
-    let poll_delay =
-        Duration::from_secs(poll_interval_secs) + Duration::from_millis(POLLING_SAFETY_MARGIN_MS);
-
-    loop {
-        if start.elapsed() > Duration::from_secs(DEVICE_FLOW_TIMEOUT_SECS) {
-            anyhow::bail!("OpenAI device authorization timed out");
-        }
-
-        let response = client
-            .post(DEVICE_TOKEN_URL)
-            .header("Content-Type", "application/json")
-            .header(
-                "User-Agent",
-                format!("spacebot/{}", env!("CARGO_PKG_VERSION")),
-            )
-            .json(&serde_json::json!({
-                "device_auth_id": device_auth_id,
-                "user_code": user_code,
-            }))
-            .send()
-            .await
-            .context("failed to poll OpenAI device authorization")?;
-
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .context("failed to read OpenAI device authorization poll response")?;
-
-        if status.is_success() {
-            let parsed: DeviceTokenResponse = serde_json::from_str(&body)
-                .context("failed to parse OpenAI device authorization poll response")?;
-            return Ok(parsed);
-        }
-
-        if status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND {
-            tokio::time::sleep(poll_delay).await;
-            continue;
-        }
-
-        anyhow::bail!(
-            "OpenAI device authorization polling failed ({}): {}",
-            status,
-            body
-        );
-    }
-}
-
-/// Complete OpenAI device authorization by polling and exchanging for OAuth tokens.
-pub async fn complete_device_authorization(
-    device_auth_id: &str,
-    user_code: &str,
-    poll_interval_secs: u64,
-) -> Result<OAuthCredentials> {
-    let device_token = poll_device_authorization(device_auth_id, user_code, poll_interval_secs)
-        .await
-        .context("failed to complete OpenAI device authorization")?;
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post(OAUTH_TOKEN_URL)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", device_token.authorization_code.as_str()),
-            ("redirect_uri", DEVICE_REDIRECT_URI),
-            ("client_id", CLIENT_ID),
-            ("code_verifier", device_token.code_verifier.as_str()),
-        ])
-        .send()
-        .await
-        .context("failed to exchange OpenAI authorization code for tokens")?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .context("failed to read OpenAI token exchange response")?;
-
-    if !status.is_success() {
-        anyhow::bail!("OpenAI token exchange failed ({}): {}", status, body);
-    }
-
-    let token_response: TokenResponse =
-        serde_json::from_str(&body).context("failed to parse OpenAI token exchange response")?;
-    let account_id = extract_account_id(&token_response);
-    let refresh_token = token_response
-        .refresh_token
-        .context("OpenAI token response did not include refresh_token")?;
-
-    Ok(OAuthCredentials {
-        access_token: token_response.access_token,
-        refresh_token,
-        expires_at: chrono::Utc::now().timestamp_millis()
-            + token_response.expires_in.unwrap_or(3600) * 1000,
-        account_id,
-    })
 }
 
 /// Exchange an OAuth authorization code from browser flow for tokens.
