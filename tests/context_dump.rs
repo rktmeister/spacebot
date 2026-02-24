@@ -81,6 +81,7 @@ async fn bootstrap_deps() -> anyhow::Result<(spacebot::AgentDeps, spacebot::conf
         sqlite_pool: db.sqlite.clone(),
         messaging_manager: None,
         links: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
+        agent_names: Arc::new(std::collections::HashMap::new()),
     };
 
     Ok((deps, config))
@@ -205,6 +206,10 @@ async fn dump_channel_context() {
         "test-conversation",
         skip_flag,
         replied_flag,
+        None,
+        None,
+        None,
+        None,
         None,
         None,
     )
@@ -417,6 +422,10 @@ async fn dump_all_contexts() {
         "test",
         skip_flag,
         replied_flag,
+        None,
+        None,
+        None,
+        None,
         None,
         None,
     )

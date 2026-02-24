@@ -165,17 +165,21 @@ impl ChannelStore {
     /// Delete a channel and its message history.
     /// Branch/worker runs are cascade-deleted via FK constraints.
     pub async fn delete(&self, channel_id: &str) -> crate::error::Result<bool> {
+        let mut tx = self.pool.begin().await.map_err(|e| anyhow::anyhow!(e))?;
+
         sqlx::query("DELETE FROM conversation_messages WHERE channel_id = ?")
             .bind(channel_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
         let result = sqlx::query("DELETE FROM channels WHERE id = ?")
             .bind(channel_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
+
+        tx.commit().await.map_err(|e| anyhow::anyhow!(e))?;
 
         Ok(result.rows_affected() > 0)
     }

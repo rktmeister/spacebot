@@ -43,7 +43,15 @@ impl AgentLink {
     pub fn channel_id_for(&self, agent_id: &str) -> String {
         let peer = if self.from_agent_id == agent_id {
             &self.to_agent_id
+        } else if self.to_agent_id == agent_id {
+            &self.from_agent_id
         } else {
+            tracing::warn!(
+                agent_id,
+                from = %self.from_agent_id,
+                to = %self.to_agent_id,
+                "channel_id_for called with agent_id not part of this link"
+            );
             &self.from_agent_id
         };
         format!("link:{agent_id}:{peer}")

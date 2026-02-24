@@ -396,18 +396,17 @@ impl PromptEngine {
         coalesce_hint: Option<String>,
         available_channels: Option<String>,
     ) -> Result<String> {
-        self.render(
-            "channel",
-            context! {
-                identity_context => identity_context,
-                memory_bulletin => memory_bulletin,
-                skills_prompt => skills_prompt,
-                worker_capabilities => worker_capabilities,
-                conversation_context => conversation_context,
-                status_text => status_text,
-                coalesce_hint => coalesce_hint,
-                available_channels => available_channels,
-            },
+        self.render_channel_prompt_with_links(
+            identity_context,
+            memory_bulletin,
+            skills_prompt,
+            worker_capabilities,
+            conversation_context,
+            status_text,
+            coalesce_hint,
+            available_channels,
+            None,
+            None,
         )
     }
 

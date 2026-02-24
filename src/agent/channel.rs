@@ -222,7 +222,10 @@ impl Channel {
             match (&deps.messaging_manager, has_links) {
                 (Some(mm), true) => Some(crate::tools::SendAgentMessageTool::new(
                     deps.agent_id.clone(),
-                    deps.agent_id.to_string(),
+                    deps.agent_names
+                        .get(deps.agent_id.as_ref())
+                        .cloned()
+                        .unwrap_or_else(|| deps.agent_id.to_string()),
                     id.clone(),
                     deps.links.clone(),
                     mm.clone(),
@@ -1087,7 +1090,12 @@ impl Channel {
         };
 
         let link_context = crate::prompts::engine::LinkContext {
-            agent_name: other_agent_id.clone(),
+            agent_name: self
+                .deps
+                .agent_names
+                .get(other_agent_id.as_str())
+                .cloned()
+                .unwrap_or_else(|| other_agent_id.clone()),
             relationship: role.to_string(),
         };
 

@@ -189,9 +189,10 @@ pub async fn create_link(
 
     // Check for duplicate
     let existing = state.agent_links.load();
-    let duplicate = existing
-        .iter()
-        .any(|link| link.from_agent_id == request.from && link.to_agent_id == request.to);
+    let duplicate = existing.iter().any(|link| {
+        (link.from_agent_id == request.from && link.to_agent_id == request.to)
+            || (link.from_agent_id == request.to && link.to_agent_id == request.from)
+    });
     if duplicate {
         return Err(StatusCode::CONFLICT);
     }

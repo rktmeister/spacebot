@@ -248,6 +248,10 @@ impl Tool for SendAgentMessageTool {
                 "originating_channel".into(),
                 serde_json::json!(self.channel_id.as_ref()),
             ),
+            (
+                "original_sent_message".into(),
+                serde_json::json!(&args.message),
+            ),
         ]);
         // Propagate the adapter name from the originating channel so conclusion
         // routing can look up the correct messaging adapter (e.g. "webchat").

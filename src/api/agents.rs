@@ -669,7 +669,12 @@ pub(super) async fn create_agent(
             Arc::new(
                 configs
                     .iter()
-                    .map(|c| (c.id.clone(), c.id.clone()))
+                    .map(|c| {
+                        (
+                            c.id.clone(),
+                            c.display_name.clone().unwrap_or_else(|| c.id.clone()),
+                        )
+                    })
                     .collect(),
             )
         },
