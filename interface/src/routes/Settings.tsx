@@ -324,6 +324,7 @@ export function Settings() {
 	const currentSignature = `${editingProvider ?? ""}|${keyInput.trim()}|${modelInput.trim()}`;
 
 	const oauthAutoStartRef = useRef(false);
+	const oauthAbortRef = useRef<AbortController | null>(null);
 
 	const handleTestModel = async (): Promise<boolean> => {
 		if (!editingProvider || !keyInput.trim() || !modelInput.trim()) return false;
@@ -365,12 +366,14 @@ export function Settings() {
 		});
 	};
 
-	const monitorOpenAiBrowserOAuth = async (stateToken: string) => {
+	const monitorOpenAiBrowserOAuth = async (stateToken: string, signal: AbortSignal) => {
 		setIsPollingOpenAiBrowserOAuth(true);
 		setOpenAiBrowserOAuthMessage(null);
 		try {
 			for (let attempt = 0; attempt < 360; attempt += 1) {
+				if (signal.aborted) return;
 				const status = await api.openAiOAuthBrowserStatus(stateToken);
+				if (signal.aborted) return;
 				if (status.done) {
 					setDeviceCodeInfo(null);
 					setDeviceCodeCopied(false);
@@ -392,8 +395,12 @@ export function Settings() {
 					}
 					return;
 				}
-				await new Promise((resolve) => setTimeout(resolve, 2000));
+				await new Promise((resolve) => {
+					const timer = setTimeout(resolve, 2000);
+					signal.addEventListener("abort", () => { clearTimeout(timer); resolve(undefined); }, { once: true });
+				});
 			}
+			if (signal.aborted) return;
 			setDeviceCodeInfo(null);
 			setDeviceCodeCopied(false);
 			setOpenAiBrowserOAuthMessage({
@@ -401,6 +408,7 @@ export function Settings() {
 				type: "error",
 			});
 		} catch (error: any) {
+			if (signal.aborted) return;
 			setDeviceCodeInfo(null);
 			setDeviceCodeCopied(false);
 			setOpenAiBrowserOAuthMessage({
@@ -428,11 +436,15 @@ export function Settings() {
 				return;
 			}
 
+			oauthAbortRef.current?.abort();
+			const abort = new AbortController();
+			oauthAbortRef.current = abort;
+
 			setDeviceCodeInfo({
 				userCode: result.user_code,
 				verificationUrl: result.verification_url,
 			});
-			void monitorOpenAiBrowserOAuth(result.state);
+			void monitorOpenAiBrowserOAuth(result.state, abort.signal);
 		} catch (error: any) {
 			setOpenAiBrowserOAuthMessage({text: `Failed: ${error.message}`, type: "error"});
 		}
@@ -441,9 +453,12 @@ export function Settings() {
 	useEffect(() => {
 		if (!openAiOAuthDialogOpen) {
 			oauthAutoStartRef.current = false;
+			oauthAbortRef.current?.abort();
+			oauthAbortRef.current = null;
 			setDeviceCodeInfo(null);
 			setDeviceCodeCopied(false);
 			setOpenAiBrowserOAuthMessage(null);
+			setIsPollingOpenAiBrowserOAuth(false);
 			return;
 		}
 
@@ -588,7 +603,7 @@ export function Settings() {
 													onEdit={() => setOpenAiOAuthDialogOpen(true)}
 													onRemove={() => {}}
 													removing={false}
-													actionLabel={isConfigured("openai-chatgpt") ? "Manage" : "Sign in"}
+													actionLabel="Sign in"
 													showRemove={false}
 												/>
 											) : null,
@@ -1713,79 +1728,126 @@ function ChatGptOAuthDialog({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<ProviderIcon provider="openai-chatgpt" size={20} />
-						ChatGPT Plus (OAuth)
+						Sign in with ChatGPT Plus
 					</DialogTitle>
-					<DialogDescription>
-						Device code sign-in starts automatically when this opens.
-					</DialogDescription>
+					{!message && (
+						<DialogDescription>
+							Copy the device code below, then sign in to your OpenAI account to authorize access.
+						</DialogDescription>
+					)}
 				</DialogHeader>
 
-				<div className="mt-4 space-y-3">
-					{isRequesting && !deviceCodeInfo ? (
-						<div className="flex items-center gap-2 text-ink-dull">
+				<div className="space-y-4">
+					{message && !deviceCodeInfo ? (
+						/* Completed state — success or error with no active flow */
+						<div
+							className={`rounded-md border px-3 py-2 text-sm ${message.type === "success"
+								? "border-green-500/20 bg-green-500/10 text-green-400"
+								: "border-red-500/20 bg-red-500/10 text-red-400"
+							}`}
+						>
+							{message.text}
+						</div>
+					) : isRequesting && !deviceCodeInfo ? (
+						<div className="flex items-center gap-2 text-sm text-ink-dull">
 							<div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
 							Requesting device code...
 						</div>
 					) : deviceCodeInfo ? (
-						<div className="rounded-md border border-app-line bg-app p-3">
-							<p className="text-sm text-ink-dull">Step 1: Copy this device code.</p>
-							<div className="mt-2 flex flex-wrap items-center gap-2">
-								<span className="rounded border border-app-line bg-app-darkBox px-2 py-1 font-mono text-sm text-ink">
-									{deviceCodeInfo.userCode}
-								</span>
-								<Button onClick={onCopyDeviceCode} size="sm" variant="outline">
-									Copy code
-								</Button>
+						<div className="space-y-4">
+							<div className="rounded-md border border-app-line p-3">
+								<div className="flex items-center gap-2">
+									<span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">1</span>
+									<p className="text-sm text-ink-dull">Copy this device code</p>
+								</div>
+								<div className="mt-2.5 flex items-center gap-2 pl-7">
+									<code className="rounded border border-app-line bg-app-darkerBox px-3 py-1.5 font-mono text-base tracking-widest text-ink">
+										{deviceCodeInfo.userCode}
+									</code>
+									<Button onClick={onCopyDeviceCode} size="sm" variant={deviceCodeCopied ? "secondary" : "outline"}>
+										{deviceCodeCopied ? "Copied" : "Copy"}
+									</Button>
+								</div>
 							</div>
 
-							<p className="mt-3 text-sm text-ink-dull">
-								Step 2: Open the login window and enter the code.
-							</p>
-							<div className="mt-2 flex flex-wrap items-center gap-2">
-								<Button
-									onClick={onOpenDeviceLogin}
-									disabled={!deviceCodeCopied}
-									size="sm"
-									variant="outline"
-								>
-									Open login window
-								</Button>
-								<span className="text-tiny text-ink-faint">
-									{deviceCodeInfo.verificationUrl}
-								</span>
+							<div className={`rounded-md border border-app-line p-3 ${!deviceCodeCopied ? "opacity-50" : ""}`}>
+								<div className="flex items-center gap-2">
+									<span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">2</span>
+									<p className="text-sm text-ink-dull">Open OpenAI and paste the code</p>
+								</div>
+								<div className="mt-2.5 pl-7">
+									<Button
+										onClick={onOpenDeviceLogin}
+										disabled={!deviceCodeCopied}
+										size="sm"
+										variant="outline"
+									>
+										Open login page
+									</Button>
+								</div>
 							</div>
 
 							{isPolling && !message && (
-								<p className="mt-2 text-tiny text-ink-faint">
-									Waiting for confirmation...
-								</p>
+								<div className="flex items-center gap-2 text-sm text-ink-faint">
+									<div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+									Waiting for sign-in confirmation...
+								</div>
+							)}
+
+							{message && (
+								<div
+									className={`rounded-md border px-3 py-2 text-sm ${message.type === "success"
+										? "border-green-500/20 bg-green-500/10 text-green-400"
+										: "border-red-500/20 bg-red-500/10 text-red-400"
+									}`}
+								>
+									{message.text}
+								</div>
 							)}
 						</div>
-					) : (
-						<div className="rounded-md border border-app-line bg-app p-3">
-							<p className="text-sm text-ink-dull">
-								Waiting for device code...
-							</p>
-						</div>
-					)}
-
-					{message && (
-						<p className={`text-sm ${message.type === "success" ? "text-green-400" : "text-red-400"}`}>
-							{message.text}
-						</p>
-					)}
+					) : null}
 				</div>
 
 				<DialogFooter>
-					<Button
-						onClick={onRestart}
-						disabled={isRequesting}
-						loading={isRequesting}
-						variant="outline"
-						size="sm"
-					>
-						Get new code
-					</Button>
+					{message && !deviceCodeInfo ? (
+						/* Completed — show Done (or Retry for errors) */
+						message.type === "success" ? (
+							<Button onClick={() => onOpenChange(false)} size="sm">
+								Done
+							</Button>
+						) : (
+							<>
+								<Button onClick={() => onOpenChange(false)} variant="ghost" size="sm">
+									Close
+								</Button>
+								<Button
+									onClick={onRestart}
+									disabled={isRequesting}
+									loading={isRequesting}
+									size="sm"
+								>
+									Try again
+								</Button>
+							</>
+						)
+					) : (
+						<>
+							<Button onClick={() => onOpenChange(false)} variant="ghost" size="sm">
+								Cancel
+							</Button>
+							{deviceCodeInfo && (
+								<Button
+									onClick={onRestart}
+									disabled={isRequesting}
+									loading={isRequesting}
+									variant="outline"
+									size="sm"
+								>
+									Get new code
+								</Button>
+							)}
+						</>
+					)}
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
