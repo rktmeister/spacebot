@@ -83,6 +83,7 @@ pub use web_search::{SearchResult, WebSearchArgs, WebSearchError, WebSearchOutpu
 use crate::agent::channel::ChannelState;
 use crate::config::{BrowserConfig, RuntimeConfig};
 use crate::memory::MemorySearch;
+use crate::sandbox::Sandbox;
 use crate::{AgentId, ChannelId, OutboundResponse, ProcessEvent, WorkerId};
 use rig::tool::Tool as _;
 use rig::tool::server::{ToolServer, ToolServerHandle};
@@ -260,8 +261,8 @@ pub fn create_branch_tool_server(
 /// the specific worker's ID so status updates route correctly. The browser tool
 /// is included when browser automation is enabled in the agent config.
 ///
-/// File operations are restricted to `workspace`. Shell and exec commands are
-/// blocked from accessing sensitive files in `instance_dir`.
+/// Shell and exec commands are sandboxed via the `Sandbox` backend.
+/// File operations are restricted to `workspace` via path validation.
 #[allow(clippy::too_many_arguments)]
 pub fn create_worker_tool_server(
     agent_id: AgentId,
@@ -272,14 +273,14 @@ pub fn create_worker_tool_server(
     screenshot_dir: PathBuf,
     brave_search_key: Option<String>,
     workspace: PathBuf,
-    instance_dir: PathBuf,
+    sandbox: Arc<Sandbox>,
     mcp_tools: Vec<McpToolAdapter>,
     runtime_config: Arc<RuntimeConfig>,
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
-        .tool(ShellTool::new(instance_dir.clone(), workspace.clone()))
+        .tool(ShellTool::new(workspace.clone(), sandbox.clone()))
         .tool(FileTool::new(workspace.clone()))
-        .tool(ExecTool::new(instance_dir, workspace))
+        .tool(ExecTool::new(workspace, sandbox))
         .tool(SetStatusTool::new(
             agent_id, worker_id, channel_id, event_tx,
         ))
@@ -324,16 +325,16 @@ pub fn create_cortex_chat_tool_server(
     screenshot_dir: PathBuf,
     brave_search_key: Option<String>,
     workspace: PathBuf,
-    instance_dir: PathBuf,
+    sandbox: Arc<Sandbox>,
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(MemorySaveTool::new(memory_search.clone()))
         .tool(MemoryRecallTool::new(memory_search.clone()))
         .tool(MemoryDeleteTool::new(memory_search))
         .tool(ChannelRecallTool::new(conversation_logger, channel_store))
-        .tool(ShellTool::new(instance_dir.clone(), workspace.clone()))
+        .tool(ShellTool::new(workspace.clone(), sandbox.clone()))
         .tool(FileTool::new(workspace.clone()))
-        .tool(ExecTool::new(instance_dir, workspace));
+        .tool(ExecTool::new(workspace, sandbox));
 
     if browser_config.enabled {
         server = server.tool(BrowserTool::new(browser_config, screenshot_dir));

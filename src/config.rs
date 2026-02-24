@@ -724,6 +724,8 @@ pub struct AgentConfig {
     pub brave_search_key: Option<String>,
     /// Optional timezone override for cron active-hours evaluation.
     pub cron_timezone: Option<String>,
+    /// Sandbox configuration for process containment.
+    pub sandbox: Option<crate::sandbox::SandboxConfig>,
     /// Cron job definitions for this agent.
     pub cron: Vec<CronDef>,
 }
@@ -768,6 +770,8 @@ pub struct ResolvedAgentConfig {
     pub mcp: Vec<McpServerConfig>,
     pub brave_search_key: Option<String>,
     pub cron_timezone: Option<String>,
+    /// Sandbox configuration for process containment.
+    pub sandbox: crate::sandbox::SandboxConfig,
     /// Number of messages to fetch from the platform when a new channel is created.
     pub history_backfill_count: usize,
     pub cron: Vec<CronDef>,
@@ -848,6 +852,7 @@ impl AgentConfig {
                 self.cron_timezone.as_deref(),
                 defaults.cron_timezone.as_deref(),
             ),
+            sandbox: self.sandbox.clone().unwrap_or_default(),
             history_backfill_count: defaults.history_backfill_count,
             cron: self.cron.clone(),
         }
@@ -1770,6 +1775,7 @@ struct TomlAgentConfig {
     mcp: Option<Vec<TomlMcpServerConfig>>,
     brave_search_key: Option<String>,
     cron_timezone: Option<String>,
+    sandbox: Option<crate::sandbox::SandboxConfig>,
     #[serde(default)]
     cron: Vec<TomlCronDef>,
 }
@@ -2448,6 +2454,7 @@ impl Config {
             mcp: None,
             brave_search_key: None,
             cron_timezone: None,
+            sandbox: None,
             cron: Vec::new(),
         }];
 
@@ -3199,6 +3206,7 @@ impl Config {
                     },
                     brave_search_key: a.brave_search_key.as_deref().and_then(resolve_env_value),
                     cron_timezone: a.cron_timezone.as_deref().and_then(resolve_env_value),
+                    sandbox: a.sandbox,
                     cron,
                 })
             })
@@ -3225,6 +3233,7 @@ impl Config {
                 mcp: None,
                 brave_search_key: None,
                 cron_timezone: None,
+                sandbox: None,
                 cron: Vec::new(),
             });
         }
@@ -3466,6 +3475,8 @@ pub struct RuntimeConfig {
     pub cron_scheduler: ArcSwap<Option<Arc<crate::cron::Scheduler>>>,
     /// Settings store for agent-specific configuration.
     pub settings: ArcSwap<Option<Arc<crate::settings::SettingsStore>>>,
+    /// Sandbox configuration for process containment.
+    pub sandbox: ArcSwap<crate::sandbox::SandboxConfig>,
 }
 
 impl RuntimeConfig {
@@ -3516,6 +3527,7 @@ impl RuntimeConfig {
             cron_store: ArcSwap::from_pointee(None),
             cron_scheduler: ArcSwap::from_pointee(None),
             settings: ArcSwap::from_pointee(None),
+            sandbox: ArcSwap::from_pointee(agent_config.sandbox.clone()),
         }
     }
 
@@ -3591,6 +3603,7 @@ impl RuntimeConfig {
         self.cron_timezone.store(Arc::new(resolved.cron_timezone));
         self.cortex.store(Arc::new(resolved.cortex));
         self.warmup.store(Arc::new(resolved.warmup));
+        self.sandbox.store(Arc::new(resolved.sandbox));
 
         mcp_manager.reconcile(&old_mcp, &new_mcp).await;
 
