@@ -11,6 +11,7 @@ pub mod db;
 pub mod error;
 pub mod hooks;
 pub mod identity;
+pub mod links;
 pub mod llm;
 pub mod mcp;
 pub mod memory;
@@ -172,6 +173,18 @@ pub enum ProcessEvent {
         question_id: String,
         questions: Vec<opencode::QuestionInfo>,
     },
+    AgentMessageSent {
+        from_agent_id: AgentId,
+        to_agent_id: AgentId,
+        link_id: String,
+        channel_id: ChannelId,
+    },
+    AgentMessageReceived {
+        from_agent_id: AgentId,
+        to_agent_id: AgentId,
+        link_id: String,
+        channel_id: ChannelId,
+    },
 }
 
 /// Shared dependency bundle for agent processes.
@@ -187,6 +200,9 @@ pub struct AgentDeps {
     pub sqlite_pool: sqlx::SqlitePool,
     pub messaging_manager: Option<Arc<messaging::MessagingManager>>,
     pub sandbox: Arc<sandbox::Sandbox>,
+    pub links: Arc<arc_swap::ArcSwap<Vec<links::AgentLink>>>,
+    /// Map of all agent IDs to display names, for inter-agent message routing.
+    pub agent_names: Arc<std::collections::HashMap<String, String>>,
 }
 
 impl AgentDeps {
