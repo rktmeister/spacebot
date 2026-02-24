@@ -97,8 +97,6 @@ emojis = "0.8"
 
 # TLS (shared crypto backend for slack-morphism, reqwest, teloxide)
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-# slack-morphism enables tokio-tungstenite/rustls-native-certs, but tokio-tungstenite 0.28
-# restructured features — rustls-tls-native-roots is now needed to activate actual TLS.
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 
 # Telegram
