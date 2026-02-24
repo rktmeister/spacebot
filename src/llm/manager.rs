@@ -164,6 +164,7 @@ impl LlmManager {
                 base_url: "https://api.anthropic.com".to_string(),
                 api_key: token,
                 name: None,
+                is_auth_token: false,
             }),
             (None, None) => Err(LlmError::UnknownProvider("anthropic".to_string()).into()),
         }

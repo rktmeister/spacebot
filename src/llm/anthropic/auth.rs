@@ -88,11 +88,18 @@ pub enum AnthropicAuthPath {
     ApiKey,
     /// OAuth token (sk-ant-oat*) — uses Bearer auth with Claude Code identity.
     OAuthToken,
+    /// Auth token from ANTHROPIC_AUTH_TOKEN — uses Bearer auth without Claude Code identity.
+    AuthToken,
 }
 
 /// Detect the auth path from a token's prefix.
-pub fn detect_auth_path(token: &str) -> AnthropicAuthPath {
-    if token.starts_with("sk-ant-oat") {
+///
+/// If `is_auth_token` is true (token came from ANTHROPIC_AUTH_TOKEN env var),
+/// returns `AuthToken` to use Bearer auth without Claude Code identity headers.
+pub fn detect_auth_path(token: &str, is_auth_token: bool) -> AnthropicAuthPath {
+    if is_auth_token {
+        AnthropicAuthPath::AuthToken
+    } else if token.starts_with("sk-ant-oat") {
         AnthropicAuthPath::OAuthToken
     } else {
         AnthropicAuthPath::ApiKey
@@ -107,8 +114,9 @@ pub fn apply_auth_headers(
     builder: RequestBuilder,
     token: &str,
     interleaved_thinking: bool,
+    is_auth_token: bool,
 ) -> (RequestBuilder, AnthropicAuthPath) {
-    let auth_path = detect_auth_path(token);
+    let auth_path = detect_auth_path(token, is_auth_token);
 
     let mut beta_parts: Vec<&str> = Vec::new();
     let builder = match auth_path {
@@ -124,6 +132,10 @@ pub fn apply_auth_headers(
                 .header("Authorization", format!("Bearer {token}"))
                 .header("user-agent", CLAUDE_CODE_USER_AGENT)
                 .header("x-app", "cli")
+        }
+        AnthropicAuthPath::AuthToken => {
+            beta_parts.push(BETA_FINE_GRAINED_STREAMING);
+            builder.header("Authorization", format!("Bearer {token}"))
         }
     };
 
@@ -142,9 +154,17 @@ mod tests {
     use super::*;
 
     fn build_request(token: &str, thinking: bool) -> (reqwest::Request, AnthropicAuthPath) {
+        build_request_with_auth_token(token, thinking, false)
+    }
+
+    fn build_request_with_auth_token(
+        token: &str,
+        thinking: bool,
+        is_auth_token: bool,
+    ) -> (reqwest::Request, AnthropicAuthPath) {
         let client = reqwest::Client::new();
         let builder = client.post("https://api.anthropic.com/v1/messages");
-        let (builder, auth_path) = apply_auth_headers(builder, token, thinking);
+        let (builder, auth_path) = apply_auth_headers(builder, token, thinking, is_auth_token);
         (builder.build().unwrap(), auth_path)
     }
 
@@ -246,5 +266,40 @@ mod tests {
             .to_str()
             .unwrap();
         assert!(!beta.contains(BETA_INTERLEAVED_THINKING));
+    }
+
+    #[test]
+    fn auth_token_uses_bearer_header() {
+        // ANTHROPIC_AUTH_TOKEN should use Bearer auth even without sk-ant-oat prefix
+        let (request, auth_path) = build_request_with_auth_token("my-proxy-token", false, true);
+        assert_eq!(auth_path, AnthropicAuthPath::AuthToken);
+        assert_eq!(
+            request.headers().get("Authorization").unwrap(),
+            "Bearer my-proxy-token"
+        );
+        assert!(request.headers().get("x-api-key").is_none());
+    }
+
+    #[test]
+    fn auth_token_has_no_identity_headers() {
+        // Auth tokens should not include Claude Code identity headers
+        let (request, _) = build_request_with_auth_token("my-proxy-token", false, true);
+        assert!(request.headers().get("user-agent").is_none());
+        assert!(request.headers().get("x-app").is_none());
+    }
+
+    #[test]
+    fn auth_token_has_streaming_beta_but_no_oauth_beta() {
+        // Auth tokens should have fine-grained streaming but not OAuth/Claude Code betas
+        let (request, _) = build_request_with_auth_token("my-proxy-token", false, true);
+        let beta = request
+            .headers()
+            .get("anthropic-beta")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(beta.contains(BETA_FINE_GRAINED_STREAMING));
+        assert!(!beta.contains(BETA_OAUTH));
+        assert!(!beta.contains(BETA_CLAUDE_CODE));
     }
 }

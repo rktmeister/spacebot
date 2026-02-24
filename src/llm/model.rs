@@ -356,10 +356,11 @@ impl SpacebotModel {
             &self.model_name,
             &request,
             effort,
+            provider_config.is_auth_token,
         );
 
-        let is_oauth =
-            anthropic_request.auth_path == crate::llm::anthropic::AnthropicAuthPath::OAuthToken;
+        let is_oauth = anthropic_request.auth_path == crate::llm::anthropic::AnthropicAuthPath::OAuthToken
+            || anthropic_request.auth_path == crate::llm::anthropic::AnthropicAuthPath::AuthToken;
         let original_tools = anthropic_request.original_tools;
 
         let response = anthropic_request

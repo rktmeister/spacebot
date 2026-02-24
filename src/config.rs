@@ -133,6 +133,8 @@ pub struct ProviderConfig {
     pub base_url: String,
     pub api_key: String,
     pub name: Option<String>,
+    /// Whether the token came from ANTHROPIC_AUTH_TOKEN (uses Bearer auth)
+    pub is_auth_token: bool,
 }
 
 /// LLM provider credentials (instance-level).
@@ -1802,6 +1804,10 @@ impl Config {
 
     /// Load from environment variables only (no config file).
     pub fn load_from_env(instance_dir: &Path) -> Result<Self> {
+        // Track whether ANTHROPIC_AUTH_TOKEN is being used (for Bearer auth)
+        let anthropic_is_auth_token = std::env::var("ANTHROPIC_API_KEY").is_err()
+            && std::env::var("ANTHROPIC_AUTH_TOKEN").is_ok();
+
         let mut llm = LlmConfig {
             anthropic_key: std::env::var("ANTHROPIC_API_KEY")
                 .ok()
@@ -1837,6 +1843,7 @@ impl Config {
                     base_url,
                     api_key: anthropic_key,
                     name: None,
+                    is_auth_token: anthropic_is_auth_token,
                 });
         }
 
@@ -1847,6 +1854,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: OPENAI_PROVIDER_BASE_URL.to_string(),
                     api_key: openai_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -1858,6 +1866,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: OPENROUTER_PROVIDER_BASE_URL.to_string(),
                     api_key: openrouter_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -1869,6 +1878,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: ZHIPU_PROVIDER_BASE_URL.to_string(),
                     api_key: zhipu_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -1880,6 +1890,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: ZAI_CODING_PLAN_BASE_URL.to_string(),
                     api_key: zai_coding_plan_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -1891,6 +1902,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: OPENCODE_ZEN_PROVIDER_BASE_URL.to_string(),
                     api_key: opencode_zen_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -1902,6 +1914,7 @@ impl Config {
                     api_type: ApiType::Anthropic,
                     base_url: MINIMAX_PROVIDER_BASE_URL.to_string(),
                     api_key: minimax_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -1913,6 +1926,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: MOONSHOT_PROVIDER_BASE_URL.to_string(),
                     api_key: moonshot_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -1924,6 +1938,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: NVIDIA_PROVIDER_BASE_URL.to_string(),
                     api_key: nvidia_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -1935,6 +1950,7 @@ impl Config {
                     api_type: ApiType::Gemini,
                     base_url: GEMINI_PROVIDER_BASE_URL.to_string(),
                     api_key: gemini_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -1944,6 +1960,7 @@ impl Config {
 
         // Env-only routing: check for env overrides on channel/worker models.
         // SPACEBOT_MODEL overrides all process types at once; specific vars take precedence.
+        // ANTHROPIC_MODEL sets all anthropic/* models to the specified value.
         let mut routing = RoutingConfig::default();
         if let Ok(model) = std::env::var("SPACEBOT_MODEL") {
             routing.channel = model.clone();
@@ -1951,6 +1968,19 @@ impl Config {
             routing.worker = model.clone();
             routing.compactor = model.clone();
             routing.cortex = model;
+        }
+        if let Ok(anthropic_model) = std::env::var("ANTHROPIC_MODEL") {
+            // ANTHROPIC_MODEL sets all anthropic/* routes to the specified model
+            let channel = format!("anthropic/{}", anthropic_model);
+            let branch = format!("anthropic/{}", anthropic_model);
+            let worker = format!("anthropic/{}", anthropic_model);
+            let compactor = format!("anthropic/{}", anthropic_model);
+            let cortex = format!("anthropic/{}", anthropic_model);
+            routing.channel = channel;
+            routing.branch = branch;
+            routing.worker = worker;
+            routing.compactor = compactor;
+            routing.cortex = cortex;
         }
         if let Ok(channel_model) = std::env::var("SPACEBOT_CHANNEL_MODEL") {
             routing.channel = channel_model;
@@ -2044,6 +2074,16 @@ impl Config {
                 .into());
             }
         }
+
+        // Track whether ANTHROPIC_AUTH_TOKEN is being used (for Bearer auth)
+        let anthropic_is_auth_token = toml
+            .llm
+            .anthropic_key
+            .as_deref()
+            .and_then(resolve_env_value)
+            .is_none()
+            && std::env::var("ANTHROPIC_API_KEY").is_err()
+            && std::env::var("ANTHROPIC_AUTH_TOKEN").is_ok();
 
         let mut llm = LlmConfig {
             anthropic_key: toml
@@ -2168,6 +2208,7 @@ impl Config {
                             api_key: resolve_env_value(&config.api_key)
                                 .expect("Failed to resolve API key for provider"),
                             name: config.name,
+                            is_auth_token: false,
                         },
                     )
                 })
@@ -2184,6 +2225,7 @@ impl Config {
                     base_url,
                     api_key: anthropic_key,
                     name: None,
+                    is_auth_token: anthropic_is_auth_token,
                 });
         }
 
@@ -2194,6 +2236,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: OPENAI_PROVIDER_BASE_URL.to_string(),
                     api_key: openai_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -2205,6 +2248,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: OPENROUTER_PROVIDER_BASE_URL.to_string(),
                     api_key: openrouter_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -2216,6 +2260,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: ZHIPU_PROVIDER_BASE_URL.to_string(),
                     api_key: zhipu_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -2227,6 +2272,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: ZAI_CODING_PLAN_BASE_URL.to_string(),
                     api_key: zai_coding_plan_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -2238,6 +2284,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: OPENCODE_ZEN_PROVIDER_BASE_URL.to_string(),
                     api_key: opencode_zen_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -2249,6 +2296,7 @@ impl Config {
                     api_type: ApiType::Anthropic,
                     base_url: MINIMAX_PROVIDER_BASE_URL.to_string(),
                     api_key: minimax_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -2260,6 +2308,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: MOONSHOT_PROVIDER_BASE_URL.to_string(),
                     api_key: moonshot_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -2271,6 +2320,7 @@ impl Config {
                     api_type: ApiType::OpenAiCompletions,
                     base_url: NVIDIA_PROVIDER_BASE_URL.to_string(),
                     api_key: nvidia_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
@@ -2282,6 +2332,7 @@ impl Config {
                     api_type: ApiType::Gemini,
                     base_url: GEMINI_PROVIDER_BASE_URL.to_string(),
                     api_key: gemini_key,
+                    is_auth_token: false,
                     name: None,
                 });
         }
