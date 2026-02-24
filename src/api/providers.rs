@@ -968,6 +968,9 @@ pub(super) async fn delete_provider(
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
+        if let Some(mgr) = state.llm_manager.read().await.as_ref() {
+            mgr.clear_openai_oauth_credentials().await;
+        }
         return Ok(Json(ProviderUpdateResponse {
             success: true,
             message: "ChatGPT Plus OAuth credentials removed".into(),

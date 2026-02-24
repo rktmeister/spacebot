@@ -225,7 +225,7 @@ pub async fn request_device_code() -> Result<DeviceCodeResponse> {
     }
 
     serde_json::from_str::<DeviceCodeResponse>(&text)
-        .with_context(|| format!("failed to parse OpenAI device-code usercode response: {text}"))
+        .context("failed to parse OpenAI device-code usercode response")
 }
 
 /// Step 2: Poll the device token endpoint once.

@@ -396,8 +396,15 @@ export function Settings() {
 					return;
 				}
 				await new Promise((resolve) => {
-					const timer = setTimeout(resolve, 2000);
-					signal.addEventListener("abort", () => { clearTimeout(timer); resolve(undefined); }, { once: true });
+					const onAbort = () => {
+						clearTimeout(timer);
+						resolve(undefined);
+					};
+					const timer = setTimeout(() => {
+						signal.removeEventListener("abort", onAbort);
+						resolve(undefined);
+					}, 2000);
+					signal.addEventListener("abort", onAbort, { once: true });
 				});
 			}
 			if (signal.aborted) return;
