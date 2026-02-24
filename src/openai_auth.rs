@@ -280,6 +280,13 @@ pub async fn poll_device_token(
             if matches!(error_response.error.as_deref(), Some("slow_down")) {
                 return Ok(DeviceTokenPollResult::SlowDown);
             }
+            if let Some(description) = error_response.error_description.as_deref() {
+                anyhow::bail!(
+                    "OpenAI device-code token poll failed ({}): {}",
+                    status,
+                    description
+                );
+            }
         }
     }
 
