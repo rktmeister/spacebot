@@ -1576,9 +1576,16 @@ impl Channel {
                 worker_id,
                 channel_id,
                 task,
+                worker_type,
                 ..
             } => {
-                run_logger.log_worker_started(channel_id.as_ref(), *worker_id, task);
+                run_logger.log_worker_started(
+                    channel_id.as_ref(),
+                    *worker_id,
+                    task,
+                    worker_type,
+                    &self.deps.agent_id,
+                );
             }
             ProcessEvent::WorkerStatus {
                 worker_id, status, ..
@@ -1589,9 +1596,10 @@ impl Channel {
                 worker_id,
                 result,
                 notify,
+                success,
                 ..
             } => {
-                run_logger.log_worker_completed(*worker_id, result);
+                run_logger.log_worker_completed(*worker_id, result, *success);
 
                 let mut workers = self.state.active_workers.write().await;
                 workers.remove(worker_id);
@@ -2033,6 +2041,7 @@ pub async fn spawn_worker_from_state(
             worker_id,
             channel_id: Some(state.channel_id.clone()),
             task: task.clone(),
+            worker_type: "builtin".into(),
         })
         .ok();
 
@@ -2132,6 +2141,7 @@ pub async fn spawn_opencode_worker_from_state(
             worker_id,
             channel_id: Some(state.channel_id.clone()),
             task: opencode_task,
+            worker_type: "opencode".into(),
         })
         .ok();
 
@@ -2166,11 +2176,11 @@ where
             .with_label_values(&[&*agent_id])
             .inc();
 
-        let (result_text, notify) = match future.await {
-            Ok(text) => (text, true),
+        let (result_text, notify, success) = match future.await {
+            Ok(text) => (text, true, true),
             Err(error) => {
                 tracing::error!(worker_id = %worker_id, %error, "worker failed");
-                (format!("Worker failed: {error}"), true)
+                (format!("Worker failed: {error}"), true, false)
             }
         };
         #[cfg(feature = "metrics")]
@@ -2192,6 +2202,7 @@ where
             channel_id,
             result: result_text,
             notify,
+            success,
         });
     })
 }

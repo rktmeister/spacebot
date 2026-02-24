@@ -135,6 +135,7 @@ pub enum ApiEvent {
         channel_id: Option<String>,
         worker_id: String,
         task: String,
+        worker_type: String,
     },
     /// A worker's status changed.
     WorkerStatusUpdate {
@@ -149,6 +150,7 @@ pub enum ApiEvent {
         channel_id: Option<String>,
         worker_id: String,
         result: String,
+        success: bool,
     },
     /// A branch was started.
     BranchStarted {
@@ -171,6 +173,7 @@ pub enum ApiEvent {
         process_type: String,
         process_id: String,
         tool_name: String,
+        args: String,
     },
     /// A tool call completed on a process.
     ToolCompleted {
@@ -179,6 +182,7 @@ pub enum ApiEvent {
         process_type: String,
         process_id: String,
         tool_name: String,
+        result: String,
     },
     /// Configuration was reloaded (skills, identity, etc.).
     ConfigReloaded,
@@ -286,6 +290,7 @@ impl ApiState {
                                 worker_id,
                                 channel_id,
                                 task,
+                                worker_type,
                                 ..
                             } => {
                                 api_tx
@@ -294,6 +299,7 @@ impl ApiState {
                                         channel_id: channel_id.as_deref().map(|s| s.to_string()),
                                         worker_id: worker_id.to_string(),
                                         task: task.clone(),
+                                        worker_type: worker_type.clone(),
                                     })
                                     .ok();
                             }
@@ -331,6 +337,7 @@ impl ApiState {
                                 worker_id,
                                 channel_id,
                                 result,
+                                success,
                                 ..
                             } => {
                                 api_tx
@@ -339,6 +346,7 @@ impl ApiState {
                                         channel_id: channel_id.as_deref().map(|s| s.to_string()),
                                         worker_id: worker_id.to_string(),
                                         result: result.clone(),
+                                        success: *success,
                                     })
                                     .ok();
                             }
@@ -361,6 +369,7 @@ impl ApiState {
                                 process_id,
                                 channel_id,
                                 tool_name,
+                                args,
                                 ..
                             } => {
                                 let (process_type, id_str) = process_id_info(process_id);
@@ -371,6 +380,7 @@ impl ApiState {
                                         process_type,
                                         process_id: id_str,
                                         tool_name: tool_name.clone(),
+                                        args: args.clone(),
                                     })
                                     .ok();
                             }
@@ -378,6 +388,7 @@ impl ApiState {
                                 process_id,
                                 channel_id,
                                 tool_name,
+                                result,
                                 ..
                             } => {
                                 let (process_type, id_str) = process_id_info(process_id);
@@ -388,6 +399,7 @@ impl ApiState {
                                         process_type,
                                         process_id: id_str,
                                         tool_name: tool_name.clone(),
+                                        result: result.clone(),
                                     })
                                     .ok();
                             }

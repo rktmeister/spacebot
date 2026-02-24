@@ -287,6 +287,7 @@ impl Worker {
                     self.state = WorkerState::Failed;
                     self.hook.send_status("cancelled");
                     self.write_failure_log(&history, &format!("cancelled: {reason}"));
+                    self.persist_transcript(&history);
                     tracing::info!(worker_id = %self.id, %reason, "worker cancelled");
                     return Ok(format!("Worker cancelled: {reason}"));
                 }
@@ -296,6 +297,7 @@ impl Worker {
                         self.state = WorkerState::Failed;
                         self.hook.send_status("failed");
                         self.write_failure_log(&history, &format!("context overflow after {MAX_OVERFLOW_RETRIES} compaction attempts: {error}"));
+                        self.persist_transcript(&history);
                         tracing::error!(worker_id = %self.id, %error, "worker context overflow unrecoverable");
                         return Err(crate::error::AgentError::Other(error.into()).into());
                     }
@@ -317,6 +319,7 @@ impl Worker {
                     self.state = WorkerState::Failed;
                     self.hook.send_status("failed");
                     self.write_failure_log(&history, &error.to_string());
+                    self.persist_transcript(&history);
                     tracing::error!(worker_id = %self.id, %error, "worker LLM call failed");
                     return Err(crate::error::AgentError::Other(error.into()).into());
                 }
@@ -393,6 +396,9 @@ impl Worker {
             self.write_success_log(&history);
         }
 
+        // Persist transcript blob (fire-and-forget)
+        self.persist_transcript(&history);
+
         tracing::info!(worker_id = %self.id, "worker completed");
         Ok(result)
     }
@@ -468,6 +474,24 @@ impl Worker {
             usage = %format!("{:.0}%", usage * 100.0),
             "{log_message}"
         );
+    }
+
+    /// Persist the compressed transcript blob to worker_runs. Fire-and-forget.
+    fn persist_transcript(&self, history: &[rig::message::Message]) {
+        let transcript_blob = crate::conversation::worker_transcript::serialize_transcript(history);
+        let pool = self.deps.sqlite_pool.clone();
+        let worker_id = self.id.to_string();
+
+        tokio::spawn(async move {
+            if let Err(error) = sqlx::query("UPDATE worker_runs SET transcript = ? WHERE id = ?")
+                .bind(&transcript_blob)
+                .bind(&worker_id)
+                .execute(&pool)
+                .await
+            {
+                tracing::warn!(%error, worker_id, "failed to persist worker transcript");
+            }
+        });
     }
 
     /// Check if worker is in a terminal state.
