@@ -5,8 +5,8 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use moka::sync::Cache;
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 const REGISTRY_SKILL_DESCRIPTION_CACHE_CAPACITY: u64 = 10_000;
@@ -542,10 +542,7 @@ fn extract_paragraph(lines: &[String]) -> Option<String> {
     }
 
     let mut description = paragraph_lines.join(" ");
-    description = description
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    description = description.split_whitespace().collect::<Vec<_>>().join(" ");
 
     if description.is_empty() {
         return None;
@@ -559,8 +556,7 @@ fn extract_paragraph(lines: &[String]) -> Option<String> {
 }
 
 fn cleaned_description_line(line: &str) -> String {
-    line
-        .trim_start_matches("- ")
+    line.trim_start_matches("- ")
         .trim_start_matches("* ")
         .trim_start_matches("+ ")
         .replace('`', "")
