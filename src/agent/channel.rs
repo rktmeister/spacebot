@@ -943,10 +943,11 @@ impl Channel {
 
     /// Dispatch the LLM result: send fallback text, log errors, clean up typing.
     ///
-    /// On retrigger turns (`is_retrigger = true`), fallback text is suppressed.
-    /// The LLM must explicitly call the `reply` tool to send a message; returning
-    /// plain text on a retrigger is treated as internal acknowledgment, not a
-    /// user-facing response.
+    /// On retrigger turns (`is_retrigger = true`), fallback text is suppressed
+    /// unless the LLM called `skip` — in that case, any text the LLM produced
+    /// is sent as a fallback to ensure worker/branch results reach the user.
+    /// The LLM sometimes incorrectly skips on retrigger turns thinking the
+    /// result was "already processed" when the user hasn't seen it yet.
     async fn handle_agent_result(
         &self,
         result: std::result::Result<String, rig::completion::PromptError>,
@@ -959,7 +960,50 @@ impl Channel {
                 let skipped = skip_flag.load(std::sync::atomic::Ordering::Relaxed);
                 let replied = replied_flag.load(std::sync::atomic::Ordering::Relaxed);
 
-                if skipped {
+                if skipped && is_retrigger {
+                    // The LLM skipped on a retrigger turn. This means a worker
+                    // or branch completed but the LLM decided not to relay the
+                    // result. If the LLM also produced text, send it as a
+                    // fallback since the user hasn't seen the result yet.
+                    let text = response.trim();
+                    if !text.is_empty() {
+                        tracing::info!(
+                            channel_id = %self.id,
+                            response_len = text.len(),
+                            "LLM skipped on retrigger but produced text, sending as fallback"
+                        );
+                        let extracted = extract_reply_from_tool_syntax(text);
+                        let source = self
+                            .conversation_id
+                            .as_deref()
+                            .and_then(|conversation_id| conversation_id.split(':').next())
+                            .unwrap_or("unknown");
+                        let final_text = crate::tools::reply::normalize_discord_mention_tokens(
+                            extracted.as_deref().unwrap_or(text),
+                            source,
+                        );
+                        if !final_text.is_empty() {
+                            if extracted.is_some() {
+                                tracing::warn!(channel_id = %self.id, "extracted reply from malformed tool syntax in retrigger fallback");
+                            }
+                            self.state
+                                .conversation_logger
+                                .log_bot_message(&self.state.channel_id, &final_text);
+                            if let Err(error) = self
+                                .response_tx
+                                .send(OutboundResponse::Text(final_text))
+                                .await
+                            {
+                                tracing::error!(%error, channel_id = %self.id, "failed to send retrigger fallback reply");
+                            }
+                        }
+                    } else {
+                        tracing::warn!(
+                            channel_id = %self.id,
+                            "LLM skipped on retrigger with no text — worker/branch result may not have been relayed"
+                        );
+                    }
+                } else if skipped {
                     tracing::debug!(channel_id = %self.id, "channel turn skipped (no response)");
                 } else if replied {
                     tracing::debug!(channel_id = %self.id, "channel turn replied via tool (fallback suppressed)");
@@ -1281,6 +1325,7 @@ pub async fn spawn_branch_from_state(
         &description,
         &system_prompt,
         &description,
+        "branch",
     )
     .await
 }
@@ -1308,8 +1353,47 @@ async fn spawn_memory_persistence_branch(
         &prompt,
         &system_prompt,
         "persisting memories...",
+        "memory_persistence_branch",
     )
     .await
+}
+
+fn ensure_dispatch_readiness(state: &ChannelState, dispatch_type: &'static str) {
+    let readiness = state.deps.runtime_config.work_readiness();
+    if readiness.ready {
+        return;
+    }
+
+    let reason = readiness
+        .reason
+        .map(|value| value.as_str())
+        .unwrap_or("unknown");
+    tracing::warn!(
+        agent_id = %state.deps.agent_id,
+        channel_id = %state.channel_id,
+        dispatch_type,
+        reason,
+        warmup_state = ?readiness.warmup_state,
+        embedding_ready = readiness.embedding_ready,
+        bulletin_age_secs = ?readiness.bulletin_age_secs,
+        stale_after_secs = readiness.stale_after_secs,
+        "dispatch requested before readiness contract was satisfied"
+    );
+
+    #[cfg(feature = "metrics")]
+    crate::telemetry::Metrics::global()
+        .dispatch_while_cold_count
+        .with_label_values(&[&*state.deps.agent_id, dispatch_type, reason])
+        .inc();
+
+    let warmup_config = **state.deps.runtime_config.warmup.load();
+    let should_trigger = readiness.warmup_state != crate::config::WarmupState::Warming
+        && (readiness.reason != Some(crate::config::WorkReadinessReason::EmbeddingNotReady)
+            || warmup_config.eager_embedding_load);
+
+    if should_trigger {
+        crate::agent::cortex::trigger_forced_warmup(state.deps.clone(), dispatch_type);
+    }
 }
 
 /// Shared branch spawning logic.
@@ -1322,6 +1406,7 @@ async fn spawn_branch(
     prompt: &str,
     system_prompt: &str,
     status_label: &str,
+    dispatch_type: &'static str,
 ) -> std::result::Result<BranchId, AgentError> {
     let max_branches = **state.deps.runtime_config.max_concurrent_branches.load();
     {
@@ -1333,6 +1418,7 @@ async fn spawn_branch(
             });
         }
     }
+    ensure_dispatch_readiness(state, dispatch_type);
 
     let history = {
         let h = state.history.read().await;
@@ -1428,6 +1514,7 @@ pub async fn spawn_worker_from_state(
     suggested_skills: &[&str],
 ) -> std::result::Result<WorkerId, AgentError> {
     check_worker_limit(state).await?;
+    ensure_dispatch_readiness(state, "worker");
     let task = task.into();
 
     let rc = &state.deps.runtime_config;
@@ -1538,6 +1625,7 @@ pub async fn spawn_opencode_worker_from_state(
     interactive: bool,
 ) -> std::result::Result<crate::WorkerId, AgentError> {
     check_worker_limit(state).await?;
+    ensure_dispatch_readiness(state, "opencode_worker");
     let task = task.into();
     let directory = std::path::PathBuf::from(directory);
 

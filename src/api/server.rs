@@ -65,6 +65,10 @@ pub async fn start_http_server(
         .route("/agents/mcp", get(agents::list_agent_mcp))
         .route("/agents/mcp/reconnect", post(agents::reconnect_agent_mcp))
         .route(
+            "/agents/warmup",
+            get(agents::get_warmup_status).post(agents::trigger_warmup),
+        )
+        .route(
             "/mcp/servers",
             get(mcp::list_mcp_servers)
                 .post(mcp::create_mcp_server)
@@ -122,6 +126,18 @@ pub async fn start_http_server(
         .route(
             "/providers",
             get(providers::get_providers).put(providers::update_provider),
+        )
+        .route(
+            "/providers/openai/oauth/browser/start",
+            post(providers::start_openai_browser_oauth),
+        )
+        .route(
+            "/providers/openai/oauth/browser/status",
+            get(providers::openai_browser_oauth_status),
+        )
+        .route(
+            "/providers/openai/oauth/browser/callback",
+            get(providers::openai_browser_oauth_callback),
         )
         .route("/providers/test", post(providers::test_provider_model))
         .route("/providers/{provider}", delete(providers::delete_provider))
