@@ -958,6 +958,22 @@ pub(super) async fn delete_provider(
     State(state): State<Arc<ApiState>>,
     axum::extract::Path(provider): axum::extract::Path<String>,
 ) -> Result<Json<ProviderUpdateResponse>, StatusCode> {
+    // OpenAI ChatGPT OAuth credentials are stored as a separate JSON file,
+    // not in the TOML config, so handle removal separately.
+    if provider == "openai-chatgpt" {
+        let instance_dir = (**state.instance_dir.load()).clone();
+        let cred_path = crate::openai_auth::credentials_path(&instance_dir);
+        if cred_path.exists() {
+            tokio::fs::remove_file(&cred_path)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        return Ok(Json(ProviderUpdateResponse {
+            success: true,
+            message: "ChatGPT Plus OAuth credentials removed".into(),
+        }));
+    }
+
     let Some(key_name) = provider_toml_key(&provider) else {
         return Ok(Json(ProviderUpdateResponse {
             success: false,

@@ -601,10 +601,10 @@ export function Settings() {
 													configured={isConfigured("openai-chatgpt")}
 													defaultModel={CHATGPT_OAUTH_DEFAULT_MODEL}
 													onEdit={() => setOpenAiOAuthDialogOpen(true)}
-													onRemove={() => {}}
-													removing={false}
+													onRemove={() => removeMutation.mutate("openai-chatgpt")}
+													removing={removeMutation.isPending}
 													actionLabel="Sign in"
-													showRemove={false}
+													showRemove={isConfigured("openai-chatgpt")}
 												/>
 											) : null,
 										]
