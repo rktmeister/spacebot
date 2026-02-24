@@ -243,6 +243,12 @@ export function Settings() {
 		text: string;
 		type: "success" | "error";
 	} | null>(null);
+	const [openAiOAuthDialogOpen, setOpenAiOAuthDialogOpen] = useState(false);
+	const [deviceCodeInfo, setDeviceCodeInfo] = useState<{
+		userCode: string;
+		verificationUrl: string;
+	} | null>(null);
+	const [deviceCodeCopied, setDeviceCodeCopied] = useState(false);
 	const [message, setMessage] = useState<{
 		text: string;
 		type: "success" | "error";
@@ -317,6 +323,8 @@ export function Settings() {
 
 	const currentSignature = `${editingProvider ?? ""}|${keyInput.trim()}|${modelInput.trim()}`;
 
+	const oauthAutoStartRef = useRef(false);
+
 	const handleTestModel = async (): Promise<boolean> => {
 		if (!editingProvider || !keyInput.trim() || !modelInput.trim()) return false;
 		setMessage(null);
@@ -357,13 +365,15 @@ export function Settings() {
 		});
 	};
 
-	const monitorOpenAiBrowserOAuth = async (stateToken: string, popup: Window | null) => {
+	const monitorOpenAiBrowserOAuth = async (stateToken: string) => {
 		setIsPollingOpenAiBrowserOAuth(true);
 		setOpenAiBrowserOAuthMessage(null);
 		try {
-			for (let attempt = 0; attempt < 180; attempt += 1) {
+			for (let attempt = 0; attempt < 360; attempt += 1) {
 				const status = await api.openAiOAuthBrowserStatus(stateToken);
 				if (status.done) {
+					setDeviceCodeInfo(null);
+					setDeviceCodeCopied(false);
 					if (status.success) {
 						setOpenAiBrowserOAuthMessage({
 							text: status.message || "ChatGPT OAuth configured.",
@@ -376,7 +386,7 @@ export function Settings() {
 						}, 3000);
 					} else {
 						setOpenAiBrowserOAuthMessage({
-							text: status.message || "Browser sign-in failed.",
+							text: status.message || "Sign-in failed.",
 							type: "error",
 						});
 					}
@@ -384,50 +394,96 @@ export function Settings() {
 				}
 				await new Promise((resolve) => setTimeout(resolve, 2000));
 			}
+			setDeviceCodeInfo(null);
+			setDeviceCodeCopied(false);
 			setOpenAiBrowserOAuthMessage({
-				text: "Browser sign-in timed out. Please try again.",
+				text: "Sign-in timed out. Please try again.",
 				type: "error",
 			});
 		} catch (error: any) {
+			setDeviceCodeInfo(null);
+			setDeviceCodeCopied(false);
 			setOpenAiBrowserOAuthMessage({
-				text: `Failed to verify browser sign-in: ${error.message}`,
+				text: `Failed to verify sign-in: ${error.message}`,
 				type: "error",
 			});
 		} finally {
 			setIsPollingOpenAiBrowserOAuth(false);
-			if (popup && !popup.closed) {
-				popup.close();
-			}
 		}
 	};
 
 	const handleStartChatGptOAuth = async () => {
 		setOpenAiBrowserOAuthMessage(null);
+		setDeviceCodeInfo(null);
+		setDeviceCodeCopied(false);
 		try {
 			const result = await startOpenAiBrowserOAuthMutation.mutateAsync({
 				model: CHATGPT_OAUTH_DEFAULT_MODEL,
 			});
-			if (!result.success || !result.authorization_url || !result.state) {
+			if (!result.success || !result.user_code || !result.verification_url || !result.state) {
 				setOpenAiBrowserOAuthMessage({
-					text: result.message || "Failed to start browser sign-in",
+					text: result.message || "Failed to start device sign-in",
 					type: "error",
 				});
 				return;
 			}
 
-			const popup = window.open(
-				result.authorization_url,
-				"spacebot-openai-oauth",
-				"popup=true,width=560,height=780,noopener,noreferrer",
-			);
-			setOpenAiBrowserOAuthMessage({
-				text: "Complete sign-in in the browser window. Waiting for callback...",
-				type: "success",
+			setDeviceCodeInfo({
+				userCode: result.user_code,
+				verificationUrl: result.verification_url,
 			});
-			void monitorOpenAiBrowserOAuth(result.state, popup);
+			void monitorOpenAiBrowserOAuth(result.state);
 		} catch (error: any) {
 			setOpenAiBrowserOAuthMessage({text: `Failed: ${error.message}`, type: "error"});
 		}
+	};
+
+	useEffect(() => {
+		if (!openAiOAuthDialogOpen) {
+			oauthAutoStartRef.current = false;
+			setDeviceCodeInfo(null);
+			setDeviceCodeCopied(false);
+			setOpenAiBrowserOAuthMessage(null);
+			return;
+		}
+
+		if (oauthAutoStartRef.current) return;
+		oauthAutoStartRef.current = true;
+		void handleStartChatGptOAuth();
+	}, [openAiOAuthDialogOpen]);
+
+	const handleCopyDeviceCode = async () => {
+		if (!deviceCodeInfo) return;
+		try {
+			if (navigator.clipboard?.writeText) {
+				await navigator.clipboard.writeText(deviceCodeInfo.userCode);
+			} else {
+				const textarea = document.createElement("textarea");
+				textarea.value = deviceCodeInfo.userCode;
+				textarea.setAttribute("readonly", "");
+				textarea.style.position = "absolute";
+				textarea.style.left = "-9999px";
+				document.body.appendChild(textarea);
+				textarea.select();
+				document.execCommand("copy");
+				document.body.removeChild(textarea);
+			}
+			setDeviceCodeCopied(true);
+		} catch (error: any) {
+			setOpenAiBrowserOAuthMessage({
+				text: `Failed to copy code: ${error.message}`,
+				type: "error",
+			});
+		}
+	};
+
+	const handleOpenDeviceLogin = () => {
+		if (!deviceCodeInfo || !deviceCodeCopied) return;
+		window.open(
+			deviceCodeInfo.verificationUrl,
+			"spacebot-openai-device",
+			"popup=true,width=780,height=960,noopener,noreferrer",
+		);
 	};
 
 	const handleClose = () => {
@@ -522,13 +578,18 @@ export function Settings() {
 												removing={removeMutation.isPending}
 											/>,
 											provider.id === "openai" ? (
-												<ChatGptOAuthCard
+												<ProviderCard
 													key="openai-chatgpt"
+													provider="openai-chatgpt"
+													name="ChatGPT Plus (OAuth)"
+													description="Sign in with your ChatGPT Plus account using a device code."
 													configured={isConfigured("openai-chatgpt")}
 													defaultModel={CHATGPT_OAUTH_DEFAULT_MODEL}
-													isPolling={isPollingOpenAiBrowserOAuth}
-													message={openAiBrowserOAuthMessage}
-													onSignIn={handleStartChatGptOAuth}
+													onEdit={() => setOpenAiOAuthDialogOpen(true)}
+													onRemove={() => {}}
+													removing={false}
+													actionLabel={isConfigured("openai-chatgpt") ? "Manage" : "Sign in"}
+													showRemove={false}
 												/>
 											) : null,
 										]
@@ -551,6 +612,19 @@ export function Settings() {
 									, etc.).
 								</p>
 							</div>
+
+							<ChatGptOAuthDialog
+								open={openAiOAuthDialogOpen}
+								onOpenChange={setOpenAiOAuthDialogOpen}
+								isRequesting={startOpenAiBrowserOAuthMutation.isPending}
+								isPolling={isPollingOpenAiBrowserOAuth}
+								message={openAiBrowserOAuthMessage}
+								deviceCodeInfo={deviceCodeInfo}
+								deviceCodeCopied={deviceCodeCopied}
+								onCopyDeviceCode={handleCopyDeviceCode}
+								onOpenDeviceLogin={handleOpenDeviceLogin}
+								onRestart={handleStartChatGptOAuth}
+							/>
 						</div>
 					) : activeSection === "channels" ? (
 						<ChannelsSection />
@@ -1556,9 +1630,24 @@ interface ProviderCardProps {
 	onEdit: () => void;
 	onRemove: () => void;
 	removing: boolean;
+	actionLabel?: string;
+	showRemove?: boolean;
 }
 
-function ProviderCard({ provider, name, description, configured, defaultModel, onEdit, onRemove, removing }: ProviderCardProps) {
+function ProviderCard({
+	provider,
+	name,
+	description,
+	configured,
+	defaultModel,
+	onEdit,
+	onRemove,
+	removing,
+	actionLabel,
+	showRemove,
+}: ProviderCardProps) {
+	const primaryLabel = actionLabel ?? (configured ? "Update" : "Add key");
+	const shouldShowRemove = showRemove ?? configured;
 	return (
 		<div className="rounded-lg border border-app-line bg-app-box p-4">
 			<div className="flex items-center gap-3">
@@ -1580,9 +1669,9 @@ function ProviderCard({ provider, name, description, configured, defaultModel, o
 				</div>
 				<div className="flex gap-2">
 					<Button onClick={onEdit} variant="outline" size="sm">
-						{configured ? "Update" : "Add key"}
+						{primaryLabel}
 					</Button>
-					{configured && (
+					{shouldShowRemove && (
 						<Button onClick={onRemove} variant="outline" size="sm" loading={removing}>
 							Remove
 						</Button>
@@ -1593,53 +1682,112 @@ function ProviderCard({ provider, name, description, configured, defaultModel, o
 	);
 }
 
-interface ChatGptOAuthCardProps {
-	configured: boolean;
-	defaultModel: string;
+interface ChatGptOAuthDialogProps {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	isRequesting: boolean;
 	isPolling: boolean;
 	message: { text: string; type: "success" | "error" } | null;
-	onSignIn: () => void;
+	deviceCodeInfo: { userCode: string; verificationUrl: string } | null;
+	deviceCodeCopied: boolean;
+	onCopyDeviceCode: () => void;
+	onOpenDeviceLogin: () => void;
+	onRestart: () => void;
 }
 
-function ChatGptOAuthCard({ configured, defaultModel, isPolling, message, onSignIn }: ChatGptOAuthCardProps) {
+function ChatGptOAuthDialog({
+	open,
+	onOpenChange,
+	isRequesting,
+	isPolling,
+	message,
+	deviceCodeInfo,
+	deviceCodeCopied,
+	onCopyDeviceCode,
+	onOpenDeviceLogin,
+	onRestart,
+}: ChatGptOAuthDialogProps) {
 	return (
-		<div className="rounded-lg border border-app-line bg-app-box p-4">
-			<div className="flex items-center gap-3">
-				<ProviderIcon provider="openai-chatgpt" size={32} />
-				<div className="flex-1">
-					<div className="flex items-center gap-2">
-						<span className="text-sm font-medium text-ink">ChatGPT Plus (OAuth)</span>
-						{configured && (
-							<span className="inline-flex items-center">
-								<span className="h-2 w-2 rounded-full bg-green-400" aria-hidden="true" />
-								<span className="sr-only">Configured</span>
-							</span>
-						)}
-					</div>
-					<p className="mt-0.5 text-sm text-ink-dull">
-						Sign in with your ChatGPT Plus account in the browser.
-					</p>
-					<p className="mt-1 text-tiny text-ink-faint">
-						Default model: <span className="text-ink-dull">{defaultModel}</span>
-					</p>
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="max-w-md">
+				<DialogHeader>
+					<DialogTitle className="flex items-center gap-2">
+						<ProviderIcon provider="openai-chatgpt" size={20} />
+						ChatGPT Plus (OAuth)
+					</DialogTitle>
+					<DialogDescription>
+						Device code sign-in starts automatically when this opens.
+					</DialogDescription>
+				</DialogHeader>
+
+				<div className="mt-4 space-y-3">
+					{isRequesting && !deviceCodeInfo ? (
+						<div className="flex items-center gap-2 text-ink-dull">
+							<div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+							Requesting device code...
+						</div>
+					) : deviceCodeInfo ? (
+						<div className="rounded-md border border-app-line bg-app p-3">
+							<p className="text-sm text-ink-dull">Step 1: Copy this device code.</p>
+							<div className="mt-2 flex flex-wrap items-center gap-2">
+								<span className="rounded border border-app-line bg-app-darkBox px-2 py-1 font-mono text-sm text-ink">
+									{deviceCodeInfo.userCode}
+								</span>
+								<Button onClick={onCopyDeviceCode} size="sm" variant="outline">
+									Copy code
+								</Button>
+							</div>
+
+							<p className="mt-3 text-sm text-ink-dull">
+								Step 2: Open the login window and enter the code.
+							</p>
+							<div className="mt-2 flex flex-wrap items-center gap-2">
+								<Button
+									onClick={onOpenDeviceLogin}
+									disabled={!deviceCodeCopied}
+									size="sm"
+									variant="outline"
+								>
+									Open login window
+								</Button>
+								<span className="text-tiny text-ink-faint">
+									{deviceCodeInfo.verificationUrl}
+								</span>
+							</div>
+
+							{isPolling && !message && (
+								<p className="mt-2 text-tiny text-ink-faint">
+									Waiting for confirmation...
+								</p>
+							)}
+						</div>
+					) : (
+						<div className="rounded-md border border-app-line bg-app p-3">
+							<p className="text-sm text-ink-dull">
+								Waiting for device code...
+							</p>
+						</div>
+					)}
+
 					{message && (
-						<p className={`mt-1 text-tiny ${message.type === "success" ? "text-green-400" : "text-red-400"}`}>
+						<p className={`text-sm ${message.type === "success" ? "text-green-400" : "text-red-400"}`}>
 							{message.text}
 						</p>
 					)}
 				</div>
-				<div className="flex gap-2">
+
+				<DialogFooter>
 					<Button
-						onClick={onSignIn}
-						disabled={isPolling}
-						loading={isPolling}
+						onClick={onRestart}
+						disabled={isRequesting}
+						loading={isRequesting}
 						variant="outline"
 						size="sm"
 					>
-						Sign in with ChatGPT Plus
+						Get new code
 					</Button>
-				</div>
-			</div>
-		</div>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }
