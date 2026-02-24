@@ -374,6 +374,12 @@ function WorkerDetail({
 				<div className="flex items-start justify-between gap-3">
 					<TaskText text={detail.task} />
 					<div className="flex items-center gap-2">
+						{isRunning && detail.channel_id && (
+							<CancelWorkerButton
+								channelId={detail.channel_id}
+								workerId={detail.id}
+							/>
+						)}
 						<Badge
 							variant={workerTypeBadgeVariant(detail.worker_type)}
 							size="sm"
@@ -506,6 +512,29 @@ function TranscriptStepView({step}: {step: TranscriptStep}) {
 	}
 
 	return <ToolResultView step={step} />;
+}
+
+function CancelWorkerButton({
+	channelId,
+	workerId,
+}: {
+	channelId: string;
+	workerId: string;
+}) {
+	const [cancelling, setCancelling] = useState(false);
+
+	return (
+		<button
+			disabled={cancelling}
+			onClick={() => {
+				setCancelling(true);
+				api.cancelProcess(channelId, "worker", workerId).catch(console.warn);
+			}}
+			className="rounded-md border border-red-500/30 px-2 py-0.5 text-tiny font-medium text-red-400 transition-colors hover:bg-red-500/15 disabled:opacity-50"
+		>
+			{cancelling ? "Cancelling..." : "Cancel"}
+		</button>
+	);
 }
 
 function ActionContentView({content}: {content: ActionContent}) {
