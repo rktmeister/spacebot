@@ -500,6 +500,10 @@ pub async fn update_group(
         .position(|g| g.name == group_name)
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    if request.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let mut updated = existing[index].clone();
     let new_name = request.name.as_deref().unwrap_or(&group_name);
 

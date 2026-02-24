@@ -666,17 +666,23 @@ pub(super) async fn create_agent(
         )),
         agent_names: {
             let configs = state.agent_configs.load();
-            Arc::new(
-                configs
-                    .iter()
-                    .map(|c| {
-                        (
-                            c.id.clone(),
-                            c.display_name.clone().unwrap_or_else(|| c.id.clone()),
-                        )
-                    })
-                    .collect(),
-            )
+            let mut names: std::collections::HashMap<String, String> = configs
+                .iter()
+                .map(|c| {
+                    (
+                        c.id.clone(),
+                        c.display_name.clone().unwrap_or_else(|| c.id.clone()),
+                    )
+                })
+                .collect();
+            names.entry(agent_id.clone()).or_insert_with(|| {
+                request
+                    .display_name
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| agent_id.clone())
+            });
+            Arc::new(names)
         },
     };
 
