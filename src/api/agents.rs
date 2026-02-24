@@ -478,15 +478,15 @@ pub(super) async fn create_agent(
 
     let mut new_table = toml_edit::Table::new();
     new_table["id"] = toml_edit::value(&agent_id);
-    if let Some(display_name) = &request.display_name {
-        if !display_name.is_empty() {
-            new_table["display_name"] = toml_edit::value(display_name.as_str());
-        }
+    if let Some(display_name) = &request.display_name
+        && !display_name.is_empty()
+    {
+        new_table["display_name"] = toml_edit::value(display_name.as_str());
     }
-    if let Some(role) = &request.role {
-        if !role.is_empty() {
-            new_table["role"] = toml_edit::value(role.as_str());
-        }
+    if let Some(role) = &request.role
+        && !role.is_empty()
+    {
+        new_table["role"] = toml_edit::value(role.as_str());
     }
     agents_array.push(new_table);
 
@@ -666,12 +666,23 @@ pub(super) async fn create_agent(
         )),
         agent_names: {
             let configs = state.agent_configs.load();
-            Arc::new(
-                configs
-                    .iter()
-                    .map(|c| (c.id.clone(), c.id.clone()))
-                    .collect(),
-            )
+            let mut names: std::collections::HashMap<String, String> = configs
+                .iter()
+                .map(|c| {
+                    (
+                        c.id.clone(),
+                        c.display_name.clone().unwrap_or_else(|| c.id.clone()),
+                    )
+                })
+                .collect();
+            names.entry(agent_id.clone()).or_insert_with(|| {
+                request
+                    .display_name
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| agent_id.clone())
+            });
+            Arc::new(names)
         },
     };
 

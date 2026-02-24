@@ -90,7 +90,9 @@ impl Tool for ConcludeLinkTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         self.flag.store(true, Ordering::Relaxed);
-        *self.summary.write().await = Some(args.summary.clone());
+
+        let summary_len = args.summary.len();
+        *self.summary.write().await = Some(args.summary);
 
         let _ = self
             .response_tx
@@ -98,7 +100,7 @@ impl Tool for ConcludeLinkTool {
             .await;
 
         tracing::info!(
-            summary_len = args.summary.len(),
+            summary_len,
             "conclude_link tool called, ending link conversation"
         );
 

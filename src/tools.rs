@@ -185,6 +185,7 @@ pub fn truncate_output(value: &str, max_bytes: usize) -> String {
 /// Called when a conversation turn begins. These tools hold per-turn state
 /// (response sender, skip flag) that changes between turns. Cleaned up via
 /// `remove_channel_tools()` when the turn ends.
+#[allow(clippy::too_many_arguments)]
 pub async fn add_channel_tools(
     handle: &ToolServerHandle,
     state: ChannelState,
@@ -270,22 +271,22 @@ pub async fn add_channel_tools(
     if let Some(cron) = cron_tool {
         handle.add_tool(cron).await?;
     }
-    if let Some(mut agent_msg) = send_agent_message_tool {
-        if has_other_delegation_targets {
-            // Bind per-turn state so the tool auto-ends the turn after sending and
-            // propagates the correct adapter name for conclusion routing.
-            agent_msg = agent_msg.with_skip_flag(skip_flag.clone());
-            if let Some(originating_channel) = originating_channel_override {
-                agent_msg = agent_msg.with_originating_channel(originating_channel);
-            }
-            // Prefer the upstream originating_source (for multi-hop chains) over
-            // the current message source (which is "internal" on link channels).
-            let effective_source = originating_source_override.or(message_source);
-            if let Some(source) = effective_source {
-                agent_msg = agent_msg.with_originating_source(source);
-            }
-            handle.add_tool(agent_msg).await?;
+    if let Some(mut agent_msg) = send_agent_message_tool
+        && has_other_delegation_targets
+    {
+        // Bind per-turn state so the tool auto-ends the turn after sending and
+        // propagates the correct adapter name for conclusion routing.
+        agent_msg = agent_msg.with_skip_flag(skip_flag.clone());
+        if let Some(originating_channel) = originating_channel_override {
+            agent_msg = agent_msg.with_originating_channel(originating_channel);
         }
+        // Prefer the upstream originating_source (for multi-hop chains) over
+        // the current message source (which is "internal" on link channels).
+        let effective_source = originating_source_override.or(message_source);
+        if let Some(source) = effective_source {
+            agent_msg = agent_msg.with_originating_source(source);
+        }
+        handle.add_tool(agent_msg).await?;
     }
     if let Some((flag, summary)) = conclude_link {
         handle

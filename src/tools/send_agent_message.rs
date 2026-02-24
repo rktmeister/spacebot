@@ -54,6 +54,7 @@ impl std::fmt::Debug for SendAgentMessageTool {
 }
 
 impl SendAgentMessageTool {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agent_id: AgentId,
         agent_name: String,
@@ -247,6 +248,10 @@ impl Tool for SendAgentMessageTool {
             (
                 "originating_channel".into(),
                 serde_json::json!(self.channel_id.as_ref()),
+            ),
+            (
+                "original_sent_message".into(),
+                serde_json::json!(&args.message),
             ),
         ]);
         // Propagate the adapter name from the originating channel so conclusion

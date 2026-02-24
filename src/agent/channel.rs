@@ -222,11 +222,14 @@ impl Channel {
         // Construct the send_agent_message tool if this agent has links and a messaging manager.
         let send_agent_message_tool = {
             let has_links =
-                crate::links::links_for_agent(&deps.links.load(), &deps.agent_id).len() > 0;
+                !crate::links::links_for_agent(&deps.links.load(), &deps.agent_id).is_empty();
             match (&deps.messaging_manager, has_links) {
                 (Some(mm), true) => Some(crate::tools::SendAgentMessageTool::new(
                     deps.agent_id.clone(),
-                    deps.agent_id.to_string(),
+                    deps.agent_names
+                        .get(deps.agent_id.as_ref())
+                        .cloned()
+                        .unwrap_or_else(|| deps.agent_id.to_string()),
                     id.clone(),
                     deps.links.clone(),
                     mm.clone(),
@@ -741,26 +744,25 @@ impl Channel {
         };
 
         // Emit AgentMessageReceived event for internal agent-to-agent messages
-        if message.source == "internal" {
-            if let Some(from_agent_id) = message
+        if message.source == "internal"
+            && let Some(from_agent_id) = message
                 .metadata
                 .get("from_agent_id")
                 .and_then(|v| v.as_str())
-            {
-                self.deps
-                    .event_tx
-                    .send(ProcessEvent::AgentMessageReceived {
-                        from_agent_id: Arc::from(from_agent_id),
-                        to_agent_id: self.deps.agent_id.clone(),
-                        link_id: message.conversation_id.clone(),
-                        channel_id: self.id.clone(),
-                    })
-                    .ok();
-            }
+        {
+            self.deps
+                .event_tx
+                .send(ProcessEvent::AgentMessageReceived {
+                    from_agent_id: Arc::from(from_agent_id),
+                    to_agent_id: self.deps.agent_id.clone(),
+                    link_id: message.conversation_id.clone(),
+                    channel_id: self.id.clone(),
+                })
+                .ok();
         }
 
         // Persist user messages (skip system re-triggers)
-        let is_link_conclusion = message.metadata.get("link_conclusion").is_some();
+        let is_link_conclusion = message.metadata.contains_key("link_conclusion");
         if is_link_conclusion {
             // Link conclusion messages are internal control messages used to
             // retrigger the originating channel. Do not persist them to the
@@ -1091,7 +1093,12 @@ impl Channel {
         };
 
         let link_context = crate::prompts::engine::LinkContext {
-            agent_name: other_agent_id.clone(),
+            agent_name: self
+                .deps
+                .agent_names
+                .get(other_agent_id.as_str())
+                .cloned()
+                .unwrap_or_else(|| other_agent_id.clone()),
             relationship: role.to_string(),
         };
 
@@ -1247,6 +1254,7 @@ impl Channel {
     /// Register per-turn tools, run the LLM agentic loop, and clean up.
     ///
     /// Returns the prompt result and skip flag for the caller to dispatch.
+    #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip(self, user_text, system_prompt, attachment_content, message_source), fields(channel_id = %self.id, agent_id = %self.deps.agent_id))]
     async fn run_agent_turn(
         &self,
