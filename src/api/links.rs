@@ -79,7 +79,10 @@ pub async fn topology(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
         .iter()
         .map(|config| TopologyAgent {
             id: config.id.clone(),
-            name: config.display_name.clone().unwrap_or_else(|| config.id.clone()),
+            name: config
+                .display_name
+                .clone()
+                .unwrap_or_else(|| config.id.clone()),
             display_name: config.display_name.clone(),
             role: config.role.clone(),
         })
@@ -161,10 +164,7 @@ pub async fn create_link(
         .direction
         .parse()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    let kind: LinkKind = request
-        .kind
-        .parse()
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let kind: LinkKind = request.kind.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // Validate node IDs exist (agents or humans)
     let agent_configs = state.agent_configs.load();
@@ -189,9 +189,9 @@ pub async fn create_link(
 
     // Check for duplicate
     let existing = state.agent_links.load();
-    let duplicate = existing.iter().any(|link| {
-        link.from_agent_id == request.from && link.to_agent_id == request.to
-    });
+    let duplicate = existing
+        .iter()
+        .any(|link| link.from_agent_id == request.from && link.to_agent_id == request.to);
     if duplicate {
         return Err(StatusCode::CONFLICT);
     }
@@ -292,7 +292,10 @@ pub async fn update_link(
     })?;
 
     // Find and update the matching [[links]] entry
-    if let Some(links_array) = doc.get_mut("links").and_then(|l| l.as_array_of_tables_mut()) {
+    if let Some(links_array) = doc
+        .get_mut("links")
+        .and_then(|l| l.as_array_of_tables_mut())
+    {
         for table in links_array.iter_mut() {
             let table_from = table.get("from").and_then(|v| v.as_str());
             let table_to = table.get("to").and_then(|v| v.as_str());
@@ -353,7 +356,10 @@ pub async fn delete_link(
     })?;
 
     // Remove the matching [[links]] entry
-    if let Some(links_array) = doc.get_mut("links").and_then(|l| l.as_array_of_tables_mut()) {
+    if let Some(links_array) = doc
+        .get_mut("links")
+        .and_then(|l| l.as_array_of_tables_mut())
+    {
         let mut remove_index = None;
         for (idx, table) in links_array.iter().enumerate() {
             let table_from = table.get("from").and_then(|v| v.as_str());
@@ -475,7 +481,10 @@ pub async fn create_group(
 
     tracing::info!(name = %request.name, "agent group created via API");
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "group": new_group }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "group": new_group })),
+    ))
 }
 
 /// Update a group by name.
@@ -521,7 +530,10 @@ pub async fn update_group(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    if let Some(groups_array) = doc.get_mut("groups").and_then(|g| g.as_array_of_tables_mut()) {
+    if let Some(groups_array) = doc
+        .get_mut("groups")
+        .and_then(|g| g.as_array_of_tables_mut())
+    {
         for table in groups_array.iter_mut() {
             let table_name = table.get("name").and_then(|v| v.as_str());
             if table_name == Some(&group_name) {
@@ -581,7 +593,10 @@ pub async fn delete_group(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    if let Some(groups_array) = doc.get_mut("groups").and_then(|g| g.as_array_of_tables_mut()) {
+    if let Some(groups_array) = doc
+        .get_mut("groups")
+        .and_then(|g| g.as_array_of_tables_mut())
+    {
         let mut remove_index = None;
         for (idx, table) in groups_array.iter().enumerate() {
             let table_name = table.get("name").and_then(|v| v.as_str());
@@ -715,7 +730,10 @@ pub async fn create_human(
 
     tracing::info!(id = %id, "human created via API");
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "human": new_human }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "human": new_human })),
+    ))
 }
 
 /// Update a human by ID.
@@ -739,10 +757,18 @@ pub async fn update_human(
         };
     }
     if let Some(role) = &request.role {
-        updated.role = if role.is_empty() { None } else { Some(role.clone()) };
+        updated.role = if role.is_empty() {
+            None
+        } else {
+            Some(role.clone())
+        };
     }
     if let Some(bio) = &request.bio {
-        updated.bio = if bio.is_empty() { None } else { Some(bio.clone()) };
+        updated.bio = if bio.is_empty() {
+            None
+        } else {
+            Some(bio.clone())
+        };
     }
 
     let config_path = state.config_path.read().await.clone();
@@ -757,7 +783,10 @@ pub async fn update_human(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    if let Some(humans_array) = doc.get_mut("humans").and_then(|h| h.as_array_of_tables_mut()) {
+    if let Some(humans_array) = doc
+        .get_mut("humans")
+        .and_then(|h| h.as_array_of_tables_mut())
+    {
         for table in humans_array.iter_mut() {
             let table_id = table.get("id").and_then(|v| v.as_str());
             if table_id == Some(&human_id) {
@@ -820,7 +849,10 @@ pub async fn delete_human(
     })?;
 
     // Remove the human entry
-    if let Some(humans_array) = doc.get_mut("humans").and_then(|h| h.as_array_of_tables_mut()) {
+    if let Some(humans_array) = doc
+        .get_mut("humans")
+        .and_then(|h| h.as_array_of_tables_mut())
+    {
         let mut remove_index = None;
         for (idx, table) in humans_array.iter().enumerate() {
             if table.get("id").and_then(|v| v.as_str()) == Some(&human_id) {
@@ -834,7 +866,10 @@ pub async fn delete_human(
     }
 
     // Remove any links involving this human
-    if let Some(links_array) = doc.get_mut("links").and_then(|l| l.as_array_of_tables_mut()) {
+    if let Some(links_array) = doc
+        .get_mut("links")
+        .and_then(|l| l.as_array_of_tables_mut())
+    {
         let mut indices_to_remove = Vec::new();
         for (idx, table) in links_array.iter().enumerate() {
             let from = table.get("from").and_then(|v| v.as_str());

@@ -163,13 +163,10 @@ pub(super) async fn delete_channel(
     let pool = pools.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
     let store = ChannelStore::new(pool.clone());
 
-    let deleted = store
-        .delete(&query.channel_id)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "failed to delete channel");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let deleted = store.delete(&query.channel_id).await.map_err(|error| {
+        tracing::error!(%error, "failed to delete channel");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     if !deleted {
         return Err(StatusCode::NOT_FOUND);

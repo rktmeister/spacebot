@@ -149,14 +149,14 @@ pub fn init_background_tracing(
             const MAX_MESSAGE_CHARS: usize = 280;
             let (truncated, was_truncated) = truncate_for_log(&formatted, MAX_MESSAGE_CHARS);
             if was_truncated {
-                write!(writer, "{}={}", field_name, truncated)?;
-                write!(writer, "...")
+                write!(writer, "{}={}...", field_name, truncated)
             } else {
                 write!(writer, "{}={formatted}", field_name)
             }
         } else {
             write!(writer, "{}={value:?}", field_name)
         }
+        Ok(())
     });
 
     // Leak the guard so the non-blocking writer lives for the entire process.
@@ -211,10 +211,11 @@ pub fn init_foreground_tracing(
             let (truncated, was_truncated) = truncate_for_log(&formatted, MAX_MESSAGE_CHARS);
             if was_truncated {
                 write!(writer, "{}={}", field_name, truncated)?;
-                write!(writer, "...")
+                write!(writer, "...")?;
             } else {
-                write!(writer, "{}={formatted}", field_name)
+                write!(writer, "{}={formatted}", field_name)?;
             }
+            Ok(())
         } else {
             write!(writer, "{}={value:?}", field_name)
         }

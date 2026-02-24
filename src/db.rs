@@ -66,5 +66,3 @@ impl Db {
         // LanceDB and redb close automatically when dropped
     }
 }
-
-

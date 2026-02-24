@@ -34,6 +34,7 @@ pub mod memory_delete;
 pub mod memory_recall;
 pub mod memory_save;
 pub mod react;
+pub mod read_skill;
 pub mod reply;
 pub mod route;
 pub mod send_agent_message;
@@ -72,6 +73,7 @@ pub use memory_save::{
     AssociationInput, MemorySaveArgs, MemorySaveError, MemorySaveOutput, MemorySaveTool,
 };
 pub use react::{ReactArgs, ReactError, ReactOutput, ReactTool};
+pub use read_skill::{ReadSkillArgs, ReadSkillError, ReadSkillOutput, ReadSkillTool};
 pub use reply::{RepliedFlag, ReplyArgs, ReplyError, ReplyOutput, ReplyTool, new_replied_flag};
 pub use route::{RouteArgs, RouteError, RouteOutput, RouteTool};
 pub use send_agent_message::{
@@ -88,7 +90,7 @@ pub use spawn_worker::{SpawnWorkerArgs, SpawnWorkerError, SpawnWorkerOutput, Spa
 pub use web_search::{SearchResult, WebSearchArgs, WebSearchError, WebSearchOutput, WebSearchTool};
 
 use crate::agent::channel::ChannelState;
-use crate::config::BrowserConfig;
+use crate::config::{BrowserConfig, RuntimeConfig};
 use crate::memory::MemorySearch;
 use crate::{AgentId, ChannelId, OutboundResponse, ProcessEvent, WorkerId};
 use rig::tool::Tool as _;
@@ -201,31 +203,34 @@ pub async fn add_channel_tools(
     // can initiate to at least one other linked agent (not the current peer).
     // This avoids LLM loops where agents try to delegate back to the same peer
     // or hallucinate unrelated targets instead of using `reply`.
-    let has_other_delegation_targets = if let Some(counterparty_id) = current_link_counterparty.as_deref() {
-        let agent_id = state.deps.agent_id.as_ref();
-        let links = state.deps.links.load();
+    let has_other_delegation_targets =
+        if let Some(counterparty_id) = current_link_counterparty.as_deref() {
+            let agent_id = state.deps.agent_id.as_ref();
+            let links = state.deps.links.load();
 
-        links.iter().any(|link| {
-            let (target_id, can_initiate) = if link.from_agent_id == agent_id {
-                (&link.to_agent_id, true)
-            } else if link.to_agent_id == agent_id {
-                (
-                    &link.from_agent_id,
-                    link.direction == crate::links::LinkDirection::TwoWay,
-                )
-            } else {
-                return false;
-            };
+            links.iter().any(|link| {
+                let (target_id, can_initiate) = if link.from_agent_id == agent_id {
+                    (&link.to_agent_id, true)
+                } else if link.to_agent_id == agent_id {
+                    (
+                        &link.from_agent_id,
+                        link.direction == crate::links::LinkDirection::TwoWay,
+                    )
+                } else {
+                    return false;
+                };
 
-            can_initiate
-                && target_id != counterparty_id
-                && state.deps.agent_names.contains_key(target_id)
-        })
-    } else {
-        true
-    };
+                can_initiate
+                    && target_id != counterparty_id
+                    && state.deps.agent_names.contains_key(target_id)
+            })
+        } else {
+            true
+        };
 
-    let agent_display_name = state.deps.agent_names
+    let agent_display_name = state
+        .deps
+        .agent_names
         .get(state.deps.agent_id.as_ref())
         .cloned()
         .unwrap_or_else(|| state.deps.agent_id.to_string());
@@ -357,6 +362,7 @@ pub fn create_worker_tool_server(
     workspace: PathBuf,
     instance_dir: PathBuf,
     mcp_tools: Vec<McpToolAdapter>,
+    runtime_config: Arc<RuntimeConfig>,
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(ShellTool::new(instance_dir.clone(), workspace.clone()))
@@ -364,7 +370,8 @@ pub fn create_worker_tool_server(
         .tool(ExecTool::new(instance_dir, workspace))
         .tool(SetStatusTool::new(
             agent_id, worker_id, channel_id, event_tx,
-        ));
+        ))
+        .tool(ReadSkillTool::new(runtime_config));
 
     if browser_config.enabled {
         server = server.tool(BrowserTool::new(browser_config, screenshot_dir));

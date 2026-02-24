@@ -354,8 +354,11 @@ impl Tool for ReplyTool {
         )
         .await;
 
-        self.conversation_logger
-            .log_bot_message_with_name(&self.channel_id, &converted_content, Some(&self.agent_display_name));
+        self.conversation_logger.log_bot_message_with_name(
+            &self.channel_id,
+            &converted_content,
+            Some(&self.agent_display_name),
+        );
 
         let response = if let Some(ref name) = args.thread_name {
             // Cap thread names at 100 characters (Discord limit)

@@ -663,6 +663,7 @@ export interface CronExecutionsParams {
 export interface ProviderStatus {
 	anthropic: boolean;
 	openai: boolean;
+	openai_chatgpt: boolean;
 	openrouter: boolean;
 	zhipu: boolean;
 	groq: boolean;
@@ -671,10 +672,12 @@ export interface ProviderStatus {
 	deepseek: boolean;
 	xai: boolean;
 	mistral: boolean;
+	gemini: boolean;
 	ollama: boolean;
 	opencode_zen: boolean;
 	nvidia: boolean;
 	minimax: boolean;
+	minimax_cn: boolean;
 	moonshot: boolean;
 	zai_coding_plan: boolean;
 }
@@ -695,6 +698,20 @@ export interface ProviderModelTestResponse {
 	provider: string;
 	model: string;
 	sample: string | null;
+}
+
+export interface OpenAiOAuthBrowserStartResponse {
+	success: boolean;
+	message: string;
+	authorization_url: string | null;
+	state: string | null;
+}
+
+export interface OpenAiOAuthBrowserStatusResponse {
+	found: boolean;
+	done: boolean;
+	success: boolean;
+	message: string | null;
 }
 
 // -- Model Types --
@@ -1266,6 +1283,28 @@ export const api = {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<ProviderModelTestResponse>;
+	},
+	startOpenAiOAuthBrowser: async (params: {model: string}) => {
+		const response = await fetch(`${API_BASE}/providers/openai/oauth/browser/start`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				model: params.model,
+			}),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<OpenAiOAuthBrowserStartResponse>;
+	},
+	openAiOAuthBrowserStatus: async (state: string) => {
+		const response = await fetch(
+			`${API_BASE}/providers/openai/oauth/browser/status?state=${encodeURIComponent(state)}`,
+		);
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<OpenAiOAuthBrowserStatusResponse>;
 	},
 	removeProvider: async (provider: string) => {
 		const response = await fetch(`${API_BASE}/providers/${encodeURIComponent(provider)}`, {

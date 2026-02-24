@@ -1,9 +1,9 @@
 //! Send message to another agent through the communication graph.
 
+use crate::conversation::ChannelStore;
 use crate::links::AgentLink;
 use crate::messaging::MessagingManager;
 use crate::tools::SkipFlag;
-use crate::conversation::ChannelStore;
 use crate::{AgentId, InboundMessage, MessageContent, ProcessEvent};
 
 use arc_swap::ArcSwap;
@@ -240,8 +240,14 @@ impl Tool for SendAgentMessageTool {
             ("from_agent_id".into(), serde_json::json!(sending_agent_id)),
             ("link_kind".into(), serde_json::json!(link.kind.as_str())),
             ("reply_to_agent".into(), serde_json::json!(sending_agent_id)),
-            ("reply_to_channel".into(), serde_json::json!(&sender_channel)),
-            ("originating_channel".into(), serde_json::json!(self.channel_id.as_ref())),
+            (
+                "reply_to_channel".into(),
+                serde_json::json!(&sender_channel),
+            ),
+            (
+                "originating_channel".into(),
+                serde_json::json!(self.channel_id.as_ref()),
+            ),
         ]);
         // Propagate the adapter name from the originating channel so conclusion
         // routing can look up the correct messaging adapter (e.g. "webchat").
