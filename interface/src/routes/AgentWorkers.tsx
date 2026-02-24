@@ -292,6 +292,7 @@ function WorkerCard({
 				<Badge
 					variant={statusBadgeVariant(isRunning ? "running" : worker.status)}
 					size="sm"
+					className={!isRunning && worker.status === "done" ? "hover:border-app-line hover:text-ink-dull" : undefined}
 				>
 					{isRunning && (
 						<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />

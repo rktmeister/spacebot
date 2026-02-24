@@ -1639,7 +1639,7 @@ impl Channel {
 
                 if *notify {
                     let mut history = self.state.history.write().await;
-                    let worker_message = format!("[Worker completed]: {result}");
+                    let worker_message = format!("[Worker {worker_id} completed]: {result}");
                     history.push(rig::message::Message::from(worker_message));
                     should_retrigger = true;
                 }
