@@ -156,7 +156,6 @@ pub fn init_background_tracing(
         } else {
             write!(writer, "{}={value:?}", field_name)
         }
-        Ok(())
     });
 
     // Leak the guard so the non-blocking writer lives for the entire process.

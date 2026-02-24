@@ -403,6 +403,8 @@ pub(super) async fn trigger_warmup(
                 event_tx,
                 sqlite_pool: sqlite_pool.clone(),
                 messaging_manager: None,
+                links: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
+                agent_names: Arc::new(std::collections::HashMap::new()),
             };
             let logger = CortexLogger::new(sqlite_pool);
             crate::agent::cortex::run_warmup_once(&deps, &logger, "api_trigger", force).await;
