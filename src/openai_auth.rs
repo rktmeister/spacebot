@@ -267,26 +267,25 @@ pub async fn poll_device_token(
         }));
     }
 
-    if status == reqwest::StatusCode::BAD_REQUEST
-        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+    if (status == reqwest::StatusCode::BAD_REQUEST
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS)
+        && let Ok(error_response) = serde_json::from_str::<DeviceTokenErrorResponse>(&body)
     {
-        if let Ok(error_response) = serde_json::from_str::<DeviceTokenErrorResponse>(&body) {
-            if matches!(
-                error_response.error.as_deref(),
-                Some("authorization_pending")
-            ) {
-                return Ok(DeviceTokenPollResult::Pending);
-            }
-            if matches!(error_response.error.as_deref(), Some("slow_down")) {
-                return Ok(DeviceTokenPollResult::SlowDown);
-            }
-            if let Some(description) = error_response.error_description.as_deref() {
-                anyhow::bail!(
-                    "OpenAI device-code token poll failed ({}): {}",
-                    status,
-                    description
-                );
-            }
+        if matches!(
+            error_response.error.as_deref(),
+            Some("authorization_pending")
+        ) {
+            return Ok(DeviceTokenPollResult::Pending);
+        }
+        if matches!(error_response.error.as_deref(), Some("slow_down")) {
+            return Ok(DeviceTokenPollResult::SlowDown);
+        }
+        if let Some(description) = error_response.error_description.as_deref() {
+            anyhow::bail!(
+                "OpenAI device-code token poll failed ({}): {}",
+                status,
+                description
+            );
         }
     }
 
