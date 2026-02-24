@@ -274,10 +274,13 @@ async fn dump_branch_context() {
     let conversation_logger =
         spacebot::conversation::ConversationLogger::new(deps.sqlite_pool.clone());
     let channel_store = spacebot::conversation::ChannelStore::new(deps.sqlite_pool.clone());
+    let run_logger = spacebot::conversation::ProcessRunLogger::new(deps.sqlite_pool.clone());
     let branch_tool_server = spacebot::tools::create_branch_tool_server(
         deps.memory_search.clone(),
         conversation_logger,
         channel_store,
+        run_logger,
+        "test-agent",
     );
 
     let tool_defs = branch_tool_server
@@ -459,10 +462,13 @@ async fn dump_all_contexts() {
     let branch_prompt = prompt_engine
         .render_branch_prompt(&instance_dir, &workspace_dir)
         .expect("failed to render branch prompt");
+    let run_logger = spacebot::conversation::ProcessRunLogger::new(deps.sqlite_pool.clone());
     let branch_tool_server = spacebot::tools::create_branch_tool_server(
         deps.memory_search.clone(),
         conversation_logger,
         channel_store,
+        run_logger,
+        "test-agent",
     );
     let branch_tool_defs = branch_tool_server.get_tool_defs(None).await.unwrap();
     let branch_tools_text = format_tool_defs(&branch_tool_defs);

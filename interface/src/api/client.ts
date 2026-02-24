@@ -53,6 +53,7 @@ export interface WorkerStartedEvent {
 	channel_id: string | null;
 	worker_id: string;
 	task: string;
+	worker_type?: string;
 }
 
 export interface WorkerStatusEvent {
@@ -69,6 +70,7 @@ export interface WorkerCompletedEvent {
 	channel_id: string | null;
 	worker_id: string;
 	result: string;
+	success?: boolean;
 }
 
 export interface BranchStartedEvent {
@@ -94,6 +96,7 @@ export interface ToolStartedEvent {
 	process_type: ProcessType;
 	process_id: string;
 	tool_name: string;
+	args: string;
 }
 
 export interface ToolCompletedEvent {
@@ -103,6 +106,7 @@ export interface ToolCompletedEvent {
 	process_type: ProcessType;
 	process_id: string;
 	tool_name: string;
+	result: string;
 }
 
 export type ApiEvent =
@@ -192,6 +196,49 @@ export interface StatusBlockSnapshot {
 
 /** channel_id -> StatusBlockSnapshot */
 export type ChannelStatusResponse = Record<string, StatusBlockSnapshot>;
+
+// --- Workers API types ---
+
+export type ActionContent =
+	| { type: "text"; text: string }
+	| { type: "tool_call"; id: string; name: string; args: string };
+
+export type TranscriptStep =
+	| { type: "action"; content: ActionContent[] }
+	| { type: "tool_result"; call_id: string; name: string; text: string };
+
+export interface WorkerRunInfo {
+	id: string;
+	task: string;
+	status: string;
+	worker_type: string;
+	channel_id: string | null;
+	channel_name: string | null;
+	started_at: string;
+	completed_at: string | null;
+	has_transcript: boolean;
+	live_status: string | null;
+	tool_calls: number;
+}
+
+export interface WorkerDetailResponse {
+	id: string;
+	task: string;
+	result: string | null;
+	status: string;
+	worker_type: string;
+	channel_id: string | null;
+	channel_name: string | null;
+	started_at: string;
+	completed_at: string | null;
+	transcript: TranscriptStep[] | null;
+	tool_calls: number;
+}
+
+export interface WorkerListResponse {
+	workers: WorkerRunInfo[];
+	total: number;
+}
 
 export interface AgentInfo {
 	id: string;
@@ -1076,6 +1123,15 @@ export const api = {
 		return fetchJson<MessagesResponse>(`/channels/messages?${params}`);
 	},
 	channelStatus: () => fetchJson<ChannelStatusResponse>("/channels/status"),
+	workersList: (agentId: string, params: { limit?: number; offset?: number; status?: string } = {}) => {
+		const search = new URLSearchParams({ agent_id: agentId });
+		if (params.limit) search.set("limit", String(params.limit));
+		if (params.offset) search.set("offset", String(params.offset));
+		if (params.status) search.set("status", params.status);
+		return fetchJson<WorkerListResponse>(`/agents/workers?${search}`);
+	},
+	workerDetail: (agentId: string, workerId: string) =>
+		fetchJson<WorkerDetailResponse>(`/agents/workers/detail?agent_id=${encodeURIComponent(agentId)}&worker_id=${encodeURIComponent(workerId)}`),
 	agentMemories: (agentId: string, params: MemoriesListParams = {}) => {
 		const search = new URLSearchParams({ agent_id: agentId });
 		if (params.limit) search.set("limit", String(params.limit));

@@ -23,6 +23,7 @@ mod skills;
 mod state;
 mod system;
 mod webchat;
+mod workers;
 
 pub use server::start_http_server;
 pub use state::{AgentInfo, ApiEvent, ApiState};

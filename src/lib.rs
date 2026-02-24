@@ -116,6 +116,7 @@ pub enum ProcessEvent {
         worker_id: WorkerId,
         channel_id: Option<ChannelId>,
         task: String,
+        worker_type: String,
     },
     WorkerStatus {
         agent_id: AgentId,
@@ -129,12 +130,14 @@ pub enum ProcessEvent {
         channel_id: Option<ChannelId>,
         result: String,
         notify: bool,
+        success: bool,
     },
     ToolStarted {
         agent_id: AgentId,
         process_id: ProcessId,
         channel_id: Option<ChannelId>,
         tool_name: String,
+        args: String,
     },
     ToolCompleted {
         agent_id: AgentId,

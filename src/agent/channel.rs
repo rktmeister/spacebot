@@ -74,9 +74,13 @@ impl ChannelState {
 
         if let Some(handle) = handle {
             handle.abort();
+            // Mark the DB row as cancelled since the abort prevents WorkerComplete from firing
+            self.process_run_logger
+                .log_worker_completed(worker_id, "Worker cancelled", false);
             Ok(())
         } else if removed {
-            // Worker was in active_workers but had no handle (shouldn't happen, but handle gracefully)
+            self.process_run_logger
+                .log_worker_completed(worker_id, "Worker cancelled", false);
             Ok(())
         } else {
             Err(format!("Worker {worker_id} not found"))
@@ -1442,15 +1446,44 @@ impl Channel {
                 } else if replied {
                     tracing::debug!(channel_id = %self.id, "channel turn replied via tool (fallback suppressed)");
                 } else if is_retrigger {
-                    // On retrigger turns, suppress fallback text. The LLM should
-                    // use the reply tool explicitly if it has something to say, or
-                    // the skip tool if not. Raw text output from retriggers is
-                    // almost always internal acknowledgment, not a real response.
-                    tracing::debug!(
-                        channel_id = %self.id,
-                        response_len = response.len(),
-                        "retrigger turn fallback suppressed (LLM did not use reply/skip tool)"
-                    );
+                    // On retrigger turns the LLM should use the reply tool, but
+                    // some models return the result as raw text instead. Send it
+                    // as a fallback so the user still gets the worker/branch output.
+                    let text = response.trim();
+                    if !text.is_empty() {
+                        tracing::info!(
+                            channel_id = %self.id,
+                            response_len = text.len(),
+                            "retrigger produced text without reply tool, sending as fallback"
+                        );
+                        let extracted = extract_reply_from_tool_syntax(text);
+                        let source = self
+                            .conversation_id
+                            .as_deref()
+                            .and_then(|conversation_id| conversation_id.split(':').next())
+                            .unwrap_or("unknown");
+                        let final_text = crate::tools::reply::normalize_discord_mention_tokens(
+                            extracted.as_deref().unwrap_or(text),
+                            source,
+                        );
+                        if !final_text.is_empty() {
+                            self.state
+                                .conversation_logger
+                                .log_bot_message(&self.state.channel_id, &final_text);
+                            if let Err(error) = self
+                                .response_tx
+                                .send(OutboundResponse::Text(final_text))
+                                .await
+                            {
+                                tracing::error!(%error, channel_id = %self.id, "failed to send retrigger fallback reply");
+                            }
+                        }
+                    } else {
+                        tracing::debug!(
+                            channel_id = %self.id,
+                            "retrigger turn produced no text and no reply tool call"
+                        );
+                    }
                 } else {
                     // If the LLM returned text without using the reply tool, send it
                     // directly. Some models respond with text instead of tool calls.
@@ -1584,9 +1617,16 @@ impl Channel {
                 worker_id,
                 channel_id,
                 task,
+                worker_type,
                 ..
             } => {
-                run_logger.log_worker_started(channel_id.as_ref(), *worker_id, task);
+                run_logger.log_worker_started(
+                    channel_id.as_ref(),
+                    *worker_id,
+                    task,
+                    worker_type,
+                    &self.deps.agent_id,
+                );
             }
             ProcessEvent::WorkerStatus {
                 worker_id, status, ..
@@ -1597,9 +1637,10 @@ impl Channel {
                 worker_id,
                 result,
                 notify,
+                success,
                 ..
             } => {
-                run_logger.log_worker_completed(*worker_id, result);
+                run_logger.log_worker_completed(*worker_id, result, *success);
 
                 let mut workers = self.state.active_workers.write().await;
                 workers.remove(worker_id);
@@ -1610,7 +1651,7 @@ impl Channel {
 
                 if *notify {
                     let mut history = self.state.history.write().await;
-                    let worker_message = format!("[Worker completed]: {result}");
+                    let worker_message = format!("[Worker {worker_id} completed]: {result}");
                     history.push(rig::message::Message::from(worker_message));
                     should_retrigger = true;
                 }
@@ -1865,6 +1906,8 @@ async fn spawn_branch(
         state.deps.memory_search.clone(),
         state.conversation_logger.clone(),
         state.channel_store.clone(),
+        crate::conversation::ProcessRunLogger::new(state.deps.sqlite_pool.clone()),
+        &state.deps.agent_id,
     );
     let branch_max_turns = **state.deps.runtime_config.branch_max_turns.load();
 
@@ -2041,6 +2084,7 @@ pub async fn spawn_worker_from_state(
             worker_id,
             channel_id: Some(state.channel_id.clone()),
             task: task.clone(),
+            worker_type: "builtin".into(),
         })
         .ok();
 
@@ -2140,6 +2184,7 @@ pub async fn spawn_opencode_worker_from_state(
             worker_id,
             channel_id: Some(state.channel_id.clone()),
             task: opencode_task,
+            worker_type: "opencode".into(),
         })
         .ok();
 
@@ -2174,11 +2219,11 @@ where
             .with_label_values(&[&*agent_id])
             .inc();
 
-        let (result_text, notify) = match future.await {
-            Ok(text) => (text, true),
+        let (result_text, notify, success) = match future.await {
+            Ok(text) => (text, true, true),
             Err(error) => {
                 tracing::error!(worker_id = %worker_id, %error, "worker failed");
-                (format!("Worker failed: {error}"), true)
+                (format!("Worker failed: {error}"), true, false)
             }
         };
         #[cfg(feature = "metrics")]
@@ -2200,6 +2245,7 @@ where
             channel_id,
             result: result_text,
             notify,
+            success,
         });
     })
 }
