@@ -69,6 +69,8 @@ pub struct ApiState {
     pub runtime_configs: ArcSwap<HashMap<String, Arc<RuntimeConfig>>>,
     /// Per-agent MCP managers for status and reconnect APIs.
     pub mcp_managers: ArcSwap<HashMap<String, Arc<McpManager>>>,
+    /// Per-agent sandbox instances for process containment.
+    pub sandboxes: ArcSwap<HashMap<String, Arc<crate::sandbox::Sandbox>>>,
     /// Shared reference to the Discord permissions ArcSwap (same instance used by the adapter and file watcher).
     pub discord_permissions: RwLock<Option<Arc<ArcSwap<DiscordPermissions>>>>,
     /// Shared reference to the Slack permissions ArcSwap (same instance used by the adapter and file watcher).
@@ -225,6 +227,7 @@ impl ApiState {
             cron_schedulers: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             runtime_configs: ArcSwap::from_pointee(HashMap::new()),
             mcp_managers: ArcSwap::from_pointee(HashMap::new()),
+            sandboxes: ArcSwap::from_pointee(HashMap::new()),
             discord_permissions: RwLock::new(None),
             slack_permissions: RwLock::new(None),
             bindings: RwLock::new(None),
@@ -496,6 +499,11 @@ impl ApiState {
     /// Set the MCP managers for all agents.
     pub fn set_mcp_managers(&self, managers: HashMap<String, Arc<McpManager>>) {
         self.mcp_managers.store(Arc::new(managers));
+    }
+
+    /// Set the sandbox instances for all agents.
+    pub fn set_sandboxes(&self, sandboxes: HashMap<String, Arc<crate::sandbox::Sandbox>>) {
+        self.sandboxes.store(Arc::new(sandboxes));
     }
 
     /// Share the Discord permissions ArcSwap with the API so reads get hot-reloaded values.

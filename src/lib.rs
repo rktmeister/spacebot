@@ -19,6 +19,7 @@ pub mod messaging;
 pub mod openai_auth;
 pub mod opencode;
 pub mod prompts;
+pub mod sandbox;
 pub mod secrets;
 pub mod settings;
 pub mod skills;
@@ -201,6 +202,7 @@ pub struct AgentDeps {
     pub event_tx: tokio::sync::broadcast::Sender<ProcessEvent>,
     pub sqlite_pool: sqlx::SqlitePool,
     pub messaging_manager: Option<Arc<messaging::MessagingManager>>,
+    pub sandbox: Arc<sandbox::Sandbox>,
     pub links: Arc<arc_swap::ArcSwap<Vec<links::AgentLink>>>,
     /// Map of all agent IDs to display names, for inter-agent message routing.
     pub agent_names: Arc<std::collections::HashMap<String, String>>,

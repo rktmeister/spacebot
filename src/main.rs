@@ -1449,6 +1449,16 @@ async fn initialize_agents(
             mcp_manager.clone(),
         ));
 
+        let sandbox = std::sync::Arc::new(
+            spacebot::sandbox::Sandbox::new(
+                &agent_config.sandbox,
+                agent_config.workspace.clone(),
+                &config.instance_dir,
+                agent_config.data_dir.clone(),
+            )
+            .await,
+        );
+
         let deps = spacebot::AgentDeps {
             agent_id: agent_id.clone(),
             memory_search,
@@ -1459,6 +1469,7 @@ async fn initialize_agents(
             event_tx,
             sqlite_pool: db.sqlite.clone(),
             messaging_manager: None,
+            sandbox,
             links: agent_links.clone(),
             agent_names: agent_name_map.clone(),
         };
@@ -1484,6 +1495,7 @@ async fn initialize_agents(
         let mut mcp_managers = std::collections::HashMap::new();
         let mut agent_workspaces = std::collections::HashMap::new();
         let mut runtime_configs = std::collections::HashMap::new();
+        let mut sandboxes = std::collections::HashMap::new();
         for (agent_id, agent) in agents.iter() {
             let event_rx = agent.deps.event_tx.subscribe();
             api_state.register_agent_events(agent_id.to_string(), event_rx);
@@ -1492,6 +1504,7 @@ async fn initialize_agents(
             mcp_managers.insert(agent_id.to_string(), agent.deps.mcp_manager.clone());
             agent_workspaces.insert(agent_id.to_string(), agent.config.workspace.clone());
             runtime_configs.insert(agent_id.to_string(), agent.deps.runtime_config.clone());
+            sandboxes.insert(agent_id.to_string(), agent.deps.sandbox.clone());
             agent_configs.push(spacebot::api::AgentInfo {
                 id: agent.config.id.clone(),
                 display_name: agent.config.display_name.clone(),
@@ -1509,6 +1522,7 @@ async fn initialize_agents(
         api_state.set_mcp_managers(mcp_managers);
         api_state.set_runtime_configs(runtime_configs);
         api_state.set_agent_workspaces(agent_workspaces);
+        api_state.set_sandboxes(sandboxes);
         api_state.set_instance_dir(config.instance_dir.clone());
     }
 
@@ -1770,7 +1784,7 @@ async fn initialize_agents(
                 agent.config.screenshot_dir(),
                 brave_search_key,
                 agent.deps.runtime_config.workspace_dir.clone(),
-                agent.deps.runtime_config.instance_dir.clone(),
+                agent.deps.sandbox.clone(),
             );
             let store = spacebot::agent::cortex_chat::CortexChatStore::new(agent.db.sqlite.clone());
             let session = spacebot::agent::cortex_chat::CortexChatSession::new(
