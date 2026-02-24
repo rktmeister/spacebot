@@ -472,10 +472,12 @@ fn extract_skill_description(markdown: &str) -> Option<String> {
 
     for (index, line) in lines.iter().enumerate() {
         let heading = line.trim().to_ascii_lowercase();
-        if heading.starts_with('#') && heading.contains("description")
-            && let Some(description) = extract_paragraph(&lines[(index + 1)..]) {
-                return Some(description);
-            }
+        if heading.starts_with('#')
+            && heading.contains("description")
+            && let Some(description) = extract_paragraph(&lines[(index + 1)..])
+        {
+            return Some(description);
+        }
     }
 
     extract_paragraph(&lines)
