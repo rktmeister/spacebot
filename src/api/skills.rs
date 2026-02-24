@@ -366,8 +366,8 @@ fn spawn_registry_description_enrichment(client: reqwest::Client, skills: Vec<Re
 async fn enrich_registry_descriptions(client: &reqwest::Client, skills: &mut [RegistrySkill]) {
     let mut join_set = tokio::task::JoinSet::new();
 
-    for index in 0..skills.len() {
-        if skills[index]
+    for (index, skill) in skills.iter_mut().enumerate() {
+        if skill
             .description
             .as_ref()
             .is_some_and(|description| !description.trim().is_empty())
@@ -375,12 +375,12 @@ async fn enrich_registry_descriptions(client: &reqwest::Client, skills: &mut [Re
             continue;
         }
 
-        let source = skills[index].source.clone();
-        let skill_id = skills[index].skill_id.clone();
+        let source = skill.source.clone();
+        let skill_id = skill.skill_id.clone();
         let cache_key = registry_skill_key(&source, &skill_id);
 
         if let Some(cached_description) = REGISTRY_SKILL_DESCRIPTION_CACHE.get(&cache_key) {
-            skills[index].description = cached_description;
+            skill.description = cached_description;
             continue;
         }
 
@@ -472,11 +472,10 @@ fn extract_skill_description(markdown: &str) -> Option<String> {
 
     for (index, line) in lines.iter().enumerate() {
         let heading = line.trim().to_ascii_lowercase();
-        if heading.starts_with('#') && heading.contains("description") {
-            if let Some(description) = extract_paragraph(&lines[(index + 1)..]) {
+        if heading.starts_with('#') && heading.contains("description")
+            && let Some(description) = extract_paragraph(&lines[(index + 1)..]) {
                 return Some(description);
             }
-        }
     }
 
     extract_paragraph(&lines)
