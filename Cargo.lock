@@ -8268,6 +8268,7 @@ dependencies = [
  "libc",
  "mime_guess",
  "minijinja",
+ "moka",
  "notify",
  "open",
  "opentelemetry",

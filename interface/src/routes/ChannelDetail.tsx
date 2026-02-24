@@ -318,17 +318,17 @@ export function ChannelDetail({ agentId, channelId, channel, liveState, onLoadMo
 								<span className="ml-1 text-tiny text-ink-faint">typing</span>
 							</div>
 						)}
-					<div className="flex overflow-hidden rounded-md border border-app-line bg-app-darkBox">
-						<Button
-							onClick={() => setCortexOpen(!cortexOpen)}
-							variant={cortexOpen ? "secondary" : "ghost"}
-							size="icon"
-							className={cortexOpen ? "bg-app-selected text-ink" : ""}
-							title="Toggle cortex chat"
-						>
-							<HugeiconsIcon icon={IdeaIcon} className="h-4 w-4" />
-						</Button>
-					</div>
+						<div className="flex overflow-hidden rounded-md border border-app-line bg-app-darkBox">
+							<Button
+								onClick={() => setCortexOpen(!cortexOpen)}
+								variant={cortexOpen ? "secondary" : "ghost"}
+								size="icon"
+								className={cortexOpen ? "bg-app-selected text-ink" : ""}
+								title="Toggle cortex chat"
+							>
+								<HugeiconsIcon icon={IdeaIcon} className="h-4 w-4" />
+							</Button>
+						</div>
 					</div>
 				</div>
 

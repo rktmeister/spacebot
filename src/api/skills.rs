@@ -3,14 +3,22 @@ use super::state::{ApiEvent, ApiState};
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
+use moka::sync::Cache;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::Arc;
 use std::time::Duration;
 
-static REGISTRY_SKILL_DESCRIPTION_CACHE: LazyLock<tokio::sync::RwLock<HashMap<String, String>>> =
-    LazyLock::new(|| tokio::sync::RwLock::new(HashMap::new()));
+const REGISTRY_SKILL_DESCRIPTION_CACHE_CAPACITY: u64 = 10_000;
+const REGISTRY_SKILL_DESCRIPTION_CACHE_TTL: Duration = Duration::from_secs(60 * 60 * 6);
+
+static REGISTRY_SKILL_DESCRIPTION_CACHE: LazyLock<Cache<String, Option<String>>> =
+    LazyLock::new(|| {
+        Cache::builder()
+            .max_capacity(REGISTRY_SKILL_DESCRIPTION_CACHE_CAPACITY)
+            .time_to_live(REGISTRY_SKILL_DESCRIPTION_CACHE_TTL)
+            .build()
+    });
 
 #[derive(Serialize)]
 pub(super) struct SkillInfo {
@@ -225,7 +233,7 @@ pub(super) async fn registry_browse(
     let client = reqwest::Client::new();
     let response = client
         .get(&url)
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(Duration::from_secs(10))
         .send()
         .await
         .map_err(|error| {
@@ -254,7 +262,8 @@ pub(super) async fn registry_browse(
     })?;
 
     let mut skills = body.skills;
-    enrich_registry_descriptions(&client, &mut skills).await;
+    apply_cached_registry_descriptions(&mut skills);
+    spawn_registry_description_enrichment(client, skills.clone());
 
     Ok(Json(RegistryBrowseResponse {
         skills,
@@ -278,7 +287,7 @@ pub(super) async fn registry_search(
             ("q", &query.q),
             ("limit", &query.limit.min(100).to_string()),
         ])
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(Duration::from_secs(10))
         .send()
         .await
         .map_err(|error| {
@@ -304,13 +313,54 @@ pub(super) async fn registry_search(
     })?;
 
     let mut skills = body.skills;
-    enrich_registry_descriptions(&client, &mut skills).await;
+    apply_cached_registry_descriptions(&mut skills);
+    spawn_registry_description_enrichment(client, skills.clone());
 
     Ok(Json(RegistrySearchResponse {
         skills,
         query: body.query,
         count: body.count,
     }))
+}
+
+fn apply_cached_registry_descriptions(skills: &mut [RegistrySkill]) {
+    for skill in skills {
+        if skill
+            .description
+            .as_ref()
+            .is_some_and(|description| !description.trim().is_empty())
+        {
+            continue;
+        }
+
+        let cache_key = registry_skill_key(&skill.source, &skill.skill_id);
+        if let Some(cached_description) = REGISTRY_SKILL_DESCRIPTION_CACHE.get(&cache_key) {
+            skill.description = cached_description;
+        }
+    }
+}
+
+fn spawn_registry_description_enrichment(client: reqwest::Client, skills: Vec<RegistrySkill>) {
+    let should_enrich = skills.iter().any(|skill| {
+        if skill
+            .description
+            .as_ref()
+            .is_some_and(|description| !description.trim().is_empty())
+        {
+            return false;
+        }
+
+        let cache_key = registry_skill_key(&skill.source, &skill.skill_id);
+        REGISTRY_SKILL_DESCRIPTION_CACHE.get(&cache_key).is_none()
+    });
+    if !should_enrich {
+        return;
+    }
+
+    tokio::spawn(async move {
+        let mut enrichment_skills = skills;
+        enrich_registry_descriptions(&client, &mut enrichment_skills).await;
+    });
 }
 
 async fn enrich_registry_descriptions(client: &reqwest::Client, skills: &mut [RegistrySkill]) {
@@ -329,13 +379,8 @@ async fn enrich_registry_descriptions(client: &reqwest::Client, skills: &mut [Re
         let skill_id = skills[index].skill_id.clone();
         let cache_key = registry_skill_key(&source, &skill_id);
 
-        let cached = {
-            let cache = REGISTRY_SKILL_DESCRIPTION_CACHE.read().await;
-            cache.get(&cache_key).cloned()
-        };
-
-        if let Some(description) = cached {
-            skills[index].description = Some(description);
+        if let Some(cached_description) = REGISTRY_SKILL_DESCRIPTION_CACHE.get(&cache_key) {
+            skills[index].description = cached_description;
             continue;
         }
 
@@ -350,16 +395,13 @@ async fn enrich_registry_descriptions(client: &reqwest::Client, skills: &mut [Re
         let Ok((index, cache_key, description)) = result else {
             continue;
         };
-        let Some(description) = description else {
-            continue;
-        };
+        let description = description.filter(|candidate| !candidate.trim().is_empty());
 
         if let Some(skill) = skills.get_mut(index) {
-            skill.description = Some(description.clone());
+            skill.description = description.clone();
         }
 
-        let mut cache = REGISTRY_SKILL_DESCRIPTION_CACHE.write().await;
-        cache.insert(cache_key, description);
+        REGISTRY_SKILL_DESCRIPTION_CACHE.insert(cache_key, description);
     }
 }
 
@@ -391,29 +433,31 @@ async fn fetch_registry_skill_description(
     };
 
     for path in candidate_paths.drain(..) {
-        let url = format!("https://raw.githubusercontent.com/{source}/main/{path}");
-        let response = match client
-            .get(&url)
-            .header(reqwest::header::USER_AGENT, "spacebot-registry-client")
-            .timeout(Duration::from_secs(3))
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(_) => continue,
-        };
+        for branch in ["HEAD", "main", "master"] {
+            let url = format!("https://raw.githubusercontent.com/{source}/{branch}/{path}");
+            let response = match client
+                .get(&url)
+                .header(reqwest::header::USER_AGENT, "spacebot-registry-client")
+                .timeout(Duration::from_secs(3))
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(_) => continue,
+            };
 
-        if !response.status().is_success() {
-            continue;
-        }
+            if !response.status().is_success() {
+                continue;
+            }
 
-        let markdown = match response.text().await {
-            Ok(markdown) => markdown,
-            Err(_) => continue,
-        };
+            let markdown = match response.text().await {
+                Ok(markdown) => markdown,
+                Err(_) => continue,
+            };
 
-        if let Some(description) = extract_skill_description(&markdown) {
-            return Some(description);
+            if let Some(description) = extract_skill_description(&markdown) {
+                return Some(description);
+            }
         }
     }
 

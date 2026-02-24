@@ -242,6 +242,18 @@ export function AgentSkills({ agentId }: AgentSkillsProps) {
 		},
 	});
 
+	const githubInstallMutation = useMutation({
+		mutationFn: (spec: string) =>
+			api.installSkill({
+				agent_id: agentId,
+				spec,
+				instance: false,
+			}),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["skills", agentId] });
+		},
+	});
+
 	const removeMutation = useMutation({
 		mutationFn: (name: string) =>
 			api.removeSkill({
@@ -363,7 +375,7 @@ export function AgentSkills({ agentId }: AgentSkillsProps) {
 										const formData = new FormData(e.currentTarget);
 										const spec = formData.get("spec") as string;
 										if (spec) {
-											installMutation.mutate(spec);
+											githubInstallMutation.mutate(spec);
 											e.currentTarget.reset();
 										}
 									}}
@@ -379,9 +391,9 @@ export function AgentSkills({ agentId }: AgentSkillsProps) {
 										type="submit"
 										variant="default"
 										size="default"
-										disabled={installMutation.isPending}
+										disabled={githubInstallMutation.isPending}
 									>
-										{installMutation.isPending ? (
+										{githubInstallMutation.isPending ? (
 											<>
 												<FontAwesomeIcon
 													icon={faSpinner}
@@ -397,15 +409,15 @@ export function AgentSkills({ agentId }: AgentSkillsProps) {
 										)}
 									</Button>
 								</form>
-								{installMutation.isError && (
+								{githubInstallMutation.isError && (
 									<p className="mt-2 text-xs text-red-400">
 										Failed to install skill. Check the repository format.
 									</p>
 								)}
-								{installMutation.isSuccess && (
+								{githubInstallMutation.isSuccess && (
 									<p className="mt-2 text-xs text-green-400">
-										Installed {installMutation.data.installed.length} skill(s):{" "}
-										{installMutation.data.installed.join(", ")}
+										Installed {githubInstallMutation.data.installed.length} skill(s):{" "}
+										{githubInstallMutation.data.installed.join(", ")}
 									</p>
 								)}
 							</div>
