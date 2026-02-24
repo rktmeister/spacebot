@@ -1,6 +1,7 @@
 import {useState, useMemo, useEffect, useCallback, useRef} from "react";
 import {useQuery, useQueryClient} from "@tanstack/react-query";
 import {useNavigate, useSearch} from "@tanstack/react-router";
+import {AnimatePresence, motion} from "framer-motion";
 import {
 	api,
 	type WorkerRunInfo,
@@ -76,12 +77,14 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 		refetchInterval: 10_000,
 	});
 
-	// Detail query (only when a worker is selected)
+	// Detail query (only when a worker is selected).
+	// Returns null instead of throwing on 404 — the worker may not be in the DB
+	// yet while it's still visible via SSE state.
 	const {data: detailData} = useQuery({
 		queryKey: ["worker-detail", agentId, selectedWorkerId],
 		queryFn: () =>
 			selectedWorkerId
-				? api.workerDetail(agentId, selectedWorkerId)
+				? api.workerDetail(agentId, selectedWorkerId).catch(() => null)
 				: Promise.resolve(null),
 		enabled: !!selectedWorkerId,
 	});
@@ -134,14 +137,31 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 		return mergedWorkers.filter((w) => w.task.toLowerCase().includes(term));
 	}, [mergedWorkers, search]);
 
-	// Merge live state onto the detail response too
+	// Build detail view: prefer DB data, fall back to synthesized live state.
+	// Running workers that haven't hit the DB yet still get a full detail view
+	// from SSE state + live transcript.
 	const mergedDetail: WorkerDetailResponse | null = useMemo(() => {
-		if (!detailData) return null;
 		const live = selectedWorkerId ? activeWorkers[selectedWorkerId] : null;
-		if (!live) return detailData;
+
+		if (detailData) {
+			// DB data exists — overlay live status if worker is still running
+			if (!live) return detailData;
+			return { ...detailData, status: "running" };
+		}
+
+		// No DB data yet — synthesize from SSE state
+		if (!live) return null;
 		return {
-			...detailData,
+			id: live.id,
+			task: live.task,
+			result: null,
 			status: "running",
+			worker_type: "builtin",
+			channel_id: live.channelId ?? null,
+			channel_name: null,
+			started_at: new Date(live.startedAt).toISOString(),
+			completed_at: null,
+			transcript: null,
 		};
 	}, [detailData, activeWorkers, selectedWorkerId]);
 
@@ -421,15 +441,40 @@ function WorkerDetail({
 							{isRunning ? "Live Transcript" : "Transcript"}
 						</h3>
 						<div className="flex flex-col gap-3">
-							{transcript.map((step, index) => (
-								<TranscriptStepView key={index} step={step} />
-							))}
-							{isRunning && currentTool && (
-								<div className="flex items-center gap-2 py-2 text-tiny text-accent">
-									<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-									Running {currentTool}...
-								</div>
-							)}
+							<AnimatePresence initial={false}>
+								{transcript.map((step, index) => (
+									<motion.div
+										key={`${step.type}-${index}`}
+										initial={{opacity: 0, y: 12}}
+										animate={{opacity: 1, y: 0}}
+										transition={{
+											type: "spring",
+											stiffness: 500,
+											damping: 35,
+										}}
+										layout
+									>
+										<TranscriptStepView step={step} />
+									</motion.div>
+								))}
+								{isRunning && currentTool && (
+									<motion.div
+										key="running-tool"
+										initial={{opacity: 0, y: 8}}
+										animate={{opacity: 1, y: 0}}
+										exit={{opacity: 0, y: -8}}
+										transition={{
+											type: "spring",
+											stiffness: 500,
+											damping: 35,
+										}}
+										className="flex items-center gap-2 py-2 text-tiny text-accent"
+									>
+										<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+										Running {currentTool}...
+									</motion.div>
+								)}
+							</AnimatePresence>
 						</div>
 					</div>
 				) : isRunning ? (

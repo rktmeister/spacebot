@@ -1434,15 +1434,44 @@ impl Channel {
                 } else if replied {
                     tracing::debug!(channel_id = %self.id, "channel turn replied via tool (fallback suppressed)");
                 } else if is_retrigger {
-                    // On retrigger turns, suppress fallback text. The LLM should
-                    // use the reply tool explicitly if it has something to say, or
-                    // the skip tool if not. Raw text output from retriggers is
-                    // almost always internal acknowledgment, not a real response.
-                    tracing::debug!(
-                        channel_id = %self.id,
-                        response_len = response.len(),
-                        "retrigger turn fallback suppressed (LLM did not use reply/skip tool)"
-                    );
+                    // On retrigger turns the LLM should use the reply tool, but
+                    // some models return the result as raw text instead. Send it
+                    // as a fallback so the user still gets the worker/branch output.
+                    let text = response.trim();
+                    if !text.is_empty() {
+                        tracing::info!(
+                            channel_id = %self.id,
+                            response_len = text.len(),
+                            "retrigger produced text without reply tool, sending as fallback"
+                        );
+                        let extracted = extract_reply_from_tool_syntax(text);
+                        let source = self
+                            .conversation_id
+                            .as_deref()
+                            .and_then(|conversation_id| conversation_id.split(':').next())
+                            .unwrap_or("unknown");
+                        let final_text = crate::tools::reply::normalize_discord_mention_tokens(
+                            extracted.as_deref().unwrap_or(text),
+                            source,
+                        );
+                        if !final_text.is_empty() {
+                            self.state
+                                .conversation_logger
+                                .log_bot_message(&self.state.channel_id, &final_text);
+                            if let Err(error) = self
+                                .response_tx
+                                .send(OutboundResponse::Text(final_text))
+                                .await
+                            {
+                                tracing::error!(%error, channel_id = %self.id, "failed to send retrigger fallback reply");
+                            }
+                        }
+                    } else {
+                        tracing::debug!(
+                            channel_id = %self.id,
+                            "retrigger turn produced no text and no reply tool call"
+                        );
+                    }
                 } else {
                     // If the LLM returned text without using the reply tool, send it
                     // directly. Some models respond with text instead of tool calls.
