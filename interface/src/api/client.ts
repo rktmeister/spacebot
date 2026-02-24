@@ -232,6 +232,7 @@ export interface WorkerDetailResponse {
 	started_at: string;
 	completed_at: string | null;
 	transcript: TranscriptStep[] | null;
+	tool_calls: number;
 }
 
 export interface WorkerListResponse {

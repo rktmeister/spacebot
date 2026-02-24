@@ -44,8 +44,8 @@ pub(super) struct WorkerListItem {
     has_transcript: bool,
     /// Live status text from StatusBlock (running workers only).
     live_status: Option<String>,
-    /// Tool call count from StatusBlock (running workers only).
-    tool_calls: usize,
+    /// Total tool calls. From DB for completed workers, from StatusBlock for running.
+    tool_calls: i64,
 }
 
 #[derive(Deserialize)]
@@ -66,6 +66,7 @@ pub(super) struct WorkerDetailResponse {
     started_at: String,
     completed_at: Option<String>,
     transcript: Option<Vec<worker_transcript::TranscriptStep>>,
+    tool_calls: i64,
 }
 
 /// List worker runs for an agent, with live status merged from StatusBlocks.
@@ -110,10 +111,17 @@ pub(super) async fn list_workers(
     let workers = rows
         .into_iter()
         .map(|row| {
-            let (live_status, tool_calls) = live_statuses
+            let (live_status, live_tool_calls) = live_statuses
                 .get(&row.id)
-                .map(|(status, calls)| (Some(status.clone()), *calls))
+                .map(|(status, calls)| (Some(status.clone()), *calls as i64))
                 .unwrap_or((None, 0));
+
+            // Use live tool call count for running workers, DB count for completed
+            let tool_calls = if row.status == "running" && live_tool_calls > 0 {
+                live_tool_calls
+            } else {
+                row.tool_calls
+            };
 
             WorkerListItem {
                 id: row.id,
@@ -171,5 +179,6 @@ pub(super) async fn worker_detail(
         started_at: detail.started_at,
         completed_at: detail.completed_at,
         transcript,
+        tool_calls: detail.tool_calls,
     }))
 }

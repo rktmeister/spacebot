@@ -467,7 +467,7 @@ impl ProcessRunLogger {
         let list_query = format!(
             "SELECT w.id, w.task, w.status, w.worker_type, w.channel_id, w.started_at, \
                     w.completed_at, w.transcript IS NOT NULL as has_transcript, \
-                    c.display_name as channel_name \
+                    w.tool_calls, c.display_name as channel_name \
              FROM worker_runs w \
              LEFT JOIN channels c ON w.channel_id = c.id \
              {where_clause} \
@@ -518,6 +518,7 @@ impl ProcessRunLogger {
                     .ok()
                     .map(|t| t.to_rfc3339()),
                 has_transcript: row.try_get::<bool, _>("has_transcript").unwrap_or(false),
+                tool_calls: row.try_get::<i64, _>("tool_calls").unwrap_or(0),
             })
             .collect();
 
@@ -531,7 +532,7 @@ impl ProcessRunLogger {
     ) -> crate::error::Result<Option<WorkerDetailRow>> {
         let row = sqlx::query(
             "SELECT w.id, w.task, w.result, w.status, w.worker_type, w.channel_id, \
-                    w.started_at, w.completed_at, w.transcript, \
+                    w.started_at, w.completed_at, w.transcript, w.tool_calls, \
                     c.display_name as channel_name \
              FROM worker_runs w \
              LEFT JOIN channels c ON w.channel_id = c.id \
@@ -561,6 +562,7 @@ impl ProcessRunLogger {
                 .ok()
                 .map(|t| t.to_rfc3339()),
             transcript_blob: row.try_get("transcript").ok(),
+            tool_calls: row.try_get::<i64, _>("tool_calls").unwrap_or(0),
         }))
     }
 }
@@ -577,6 +579,7 @@ pub struct WorkerRunRow {
     pub started_at: String,
     pub completed_at: Option<String>,
     pub has_transcript: bool,
+    pub tool_calls: i64,
 }
 
 /// A worker run row with full detail including the transcript blob.
@@ -592,4 +595,5 @@ pub struct WorkerDetailRow {
     pub started_at: String,
     pub completed_at: Option<String>,
     pub transcript_blob: Option<Vec<u8>>,
+    pub tool_calls: i64,
 }

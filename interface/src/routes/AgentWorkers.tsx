@@ -1,7 +1,8 @@
 import {useState, useMemo, useEffect, useCallback, useRef} from "react";
 import {useQuery, useQueryClient} from "@tanstack/react-query";
 import {useNavigate, useSearch} from "@tanstack/react-router";
-import {AnimatePresence, motion} from "framer-motion";
+import {motion} from "framer-motion";
+import {Markdown} from "@/components/Markdown";
 import {
 	api,
 	type WorkerRunInfo,
@@ -23,7 +24,7 @@ function statusBadgeVariant(status: string) {
 		case "running":
 			return "amber" as const;
 		case "done":
-			return "green" as const;
+			return "outline" as const;
 		case "failed":
 			return "red" as const;
 		default:
@@ -162,6 +163,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 			started_at: new Date(live.startedAt).toISOString(),
 			completed_at: null,
 			transcript: null,
+			tool_calls: live.toolCalls,
 		};
 	}, [detailData, activeWorkers, selectedWorkerId]);
 
@@ -280,11 +282,11 @@ function WorkerCard({
 			onClick={onClick}
 			className={cx(
 				"flex w-full flex-col gap-1 border-b border-app-line/30 px-4 py-3 text-left transition-colors",
-				selected ? "bg-app-selected" : "hover:bg-app-hover",
+				selected ? "bg-app-selected/50" : "",
 			)}
 		>
 			<div className="flex items-start justify-between gap-2">
-				<p className="line-clamp-2 flex-1 text-xs font-medium text-ink">
+				<p className={cx("line-clamp-2 flex-1 text-xs font-medium", selected ? "text-ink" : "text-ink-dull")}>
 					{worker.task}
 				</p>
 				<Badge
@@ -321,16 +323,6 @@ function WorkerCard({
 					</>
 				)}
 			</div>
-			{isRunning && currentTool && (
-				<p className="mt-0.5 truncate text-tiny text-accent/80">
-					{currentTool}
-				</p>
-			)}
-			{isRunning && !currentTool && displayStatus && (
-				<p className="mt-0.5 truncate text-tiny text-amber-500/80">
-					{displayStatus}
-				</p>
-			)}
 		</button>
 	);
 }
@@ -348,9 +340,23 @@ function WorkerDetail({
 	const duration = durationBetween(detail.started_at, detail.completed_at);
 	const displayStatus = liveWorker?.status;
 	const currentTool = liveWorker?.currentTool;
-	const toolCalls = liveWorker?.toolCalls ?? 0;
-	// Use persisted transcript if available, otherwise fall back to live SSE transcript
-	const transcript = detail.transcript ?? (isRunning ? liveTranscript : null);
+	const toolCalls = liveWorker?.toolCalls ?? detail.tool_calls ?? 0;
+	// Use persisted transcript if available, otherwise fall back to live SSE transcript.
+	// Strip the final action step if it duplicates the result text shown above.
+	const rawTranscript = detail.transcript ?? (isRunning ? liveTranscript : null);
+	const transcript = useMemo(() => {
+		if (!rawTranscript || !detail.result) return rawTranscript;
+		const last = rawTranscript[rawTranscript.length - 1];
+		if (
+			last?.type === "action" &&
+			last.content.length === 1 &&
+			last.content[0].type === "text" &&
+			last.content[0].text.trim() === detail.result.trim()
+		) {
+			return rawTranscript.slice(0, -1);
+		}
+		return rawTranscript;
+	}, [rawTranscript, detail.result]);
 	const transcriptRef = useRef<HTMLDivElement>(null);
 
 	// Auto-scroll to latest transcript step for running workers
@@ -365,7 +371,7 @@ function WorkerDetail({
 			{/* Header */}
 			<div className="flex flex-col gap-2 border-b border-app-line/50 bg-app-darkBox/20 px-6 py-4">
 				<div className="flex items-start justify-between gap-3">
-					<h2 className="text-sm font-medium text-ink">{detail.task}</h2>
+					<TaskText text={detail.task} />
 					<div className="flex items-center gap-2">
 						<Badge
 							variant={workerTypeBadgeVariant(detail.worker_type)}
@@ -402,7 +408,7 @@ function WorkerDetail({
 						duration && <span>{duration}</span>
 					)}
 					{!isRunning && <span>{formatTimeAgo(detail.started_at)}</span>}
-					{isRunning && toolCalls > 0 && (
+					{toolCalls > 0 && (
 						<span>{toolCalls} tool calls</span>
 					)}
 				</div>
@@ -428,8 +434,8 @@ function WorkerDetail({
 						<h3 className="mb-2 text-tiny font-medium uppercase tracking-wider text-ink-faint">
 							Result
 						</h3>
-						<div className="markdown whitespace-pre-wrap text-xs text-ink">
-							{detail.result}
+						<div className="text-xs text-ink">
+							<Markdown>{detail.result}</Markdown>
 						</div>
 					</div>
 				)}
@@ -441,40 +447,22 @@ function WorkerDetail({
 							{isRunning ? "Live Transcript" : "Transcript"}
 						</h3>
 						<div className="flex flex-col gap-3">
-							<AnimatePresence initial={false}>
-								{transcript.map((step, index) => (
-									<motion.div
-										key={`${step.type}-${index}`}
-										initial={{opacity: 0, y: 12}}
-										animate={{opacity: 1, y: 0}}
-										transition={{
-											type: "spring",
-											stiffness: 500,
-											damping: 35,
-										}}
-										layout
-									>
-										<TranscriptStepView step={step} />
-									</motion.div>
-								))}
-								{isRunning && currentTool && (
-									<motion.div
-										key="running-tool"
-										initial={{opacity: 0, y: 8}}
-										animate={{opacity: 1, y: 0}}
-										exit={{opacity: 0, y: -8}}
-										transition={{
-											type: "spring",
-											stiffness: 500,
-											damping: 35,
-										}}
-										className="flex items-center gap-2 py-2 text-tiny text-accent"
-									>
-										<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-										Running {currentTool}...
-									</motion.div>
-								)}
-							</AnimatePresence>
+							{transcript.map((step, index) => (
+								<motion.div
+									key={`${step.type}-${index}`}
+									initial={{opacity: 0, y: 6}}
+									animate={{opacity: 1, y: 0}}
+									transition={{duration: 0.2, ease: "easeOut"}}
+								>
+									<TranscriptStepView step={step} />
+								</motion.div>
+							))}
+							{isRunning && currentTool && (
+								<div className="flex items-center gap-2 py-2 text-tiny text-accent">
+									<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+									Running {currentTool}...
+								</div>
+							)}
 						</div>
 					</div>
 				) : isRunning ? (
@@ -489,6 +477,19 @@ function WorkerDetail({
 				)}
 			</div>
 		</div>
+	);
+}
+
+function TaskText({text}: {text: string}) {
+	const [expanded, setExpanded] = useState(false);
+
+	return (
+		<button
+			onClick={() => setExpanded((v) => !v)}
+			className="text-left text-sm font-medium text-ink-dull"
+		>
+			<p className={expanded ? undefined : "line-clamp-3"}>{text}</p>
+		</button>
 	);
 }
 
@@ -509,8 +510,8 @@ function TranscriptStepView({step}: {step: TranscriptStep}) {
 function ActionContentView({content}: {content: ActionContent}) {
 	if (content.type === "text") {
 		return (
-			<div className="markdown whitespace-pre-wrap text-xs text-ink">
-				{content.text}
+			<div className="text-xs text-ink">
+				<Markdown>{content.text}</Markdown>
 			</div>
 		);
 	}

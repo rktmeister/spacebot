@@ -482,12 +482,28 @@ impl Worker {
         let pool = self.deps.sqlite_pool.clone();
         let worker_id = self.id.to_string();
 
+        // Count tool calls from the Rig history (each ToolCall in an Assistant message)
+        let tool_calls: i64 = history
+            .iter()
+            .filter_map(|message| match message {
+                rig::message::Message::Assistant { content, .. } => Some(
+                    content
+                        .iter()
+                        .filter(|c| matches!(c, rig::message::AssistantContent::ToolCall(_)))
+                        .count() as i64,
+                ),
+                _ => None,
+            })
+            .sum();
+
         tokio::spawn(async move {
-            if let Err(error) = sqlx::query("UPDATE worker_runs SET transcript = ? WHERE id = ?")
-                .bind(&transcript_blob)
-                .bind(&worker_id)
-                .execute(&pool)
-                .await
+            if let Err(error) =
+                sqlx::query("UPDATE worker_runs SET transcript = ?, tool_calls = ? WHERE id = ?")
+                    .bind(&transcript_blob)
+                    .bind(tool_calls)
+                    .bind(&worker_id)
+                    .execute(&pool)
+                    .await
             {
                 tracing::warn!(%error, worker_id, "failed to persist worker transcript");
             }
@@ -696,7 +712,8 @@ fn build_worker_recap(messages: &[rig::message::Message]) -> String {
             rig::message::Message::Assistant { content, .. } => {
                 for item in content.iter() {
                     if let rig::message::AssistantContent::ToolCall(tc) = item {
-                        let args = tc.function.arguments.to_string();
+                        let args =
+                            crate::tools::truncate_output(&tc.function.arguments.to_string(), 200);
                         recap.push_str(&format!("- Called `{}` ({args})\n", tc.function.name));
                     }
                     if let rig::message::AssistantContent::Text(t) = item
@@ -711,7 +728,8 @@ fn build_worker_recap(messages: &[rig::message::Message]) -> String {
                     if let rig::message::UserContent::ToolResult(tr) = item {
                         for c in tr.content.iter() {
                             if let rig::message::ToolResultContent::Text(t) = c {
-                                recap.push_str(&format!("  Result: {}\n", t.text));
+                                let truncated = crate::tools::truncate_output(&t.text, 200);
+                                recap.push_str(&format!("  Result: {truncated}\n"));
                             }
                         }
                     }

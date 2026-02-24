@@ -129,7 +129,8 @@ fn convert_history(history: &[rig::message::Message]) -> Vec<TranscriptStep> {
                             });
                         }
                         rig::message::UserContent::Text(text) => {
-                            if !text.text.is_empty() {
+                            // Skip compaction markers and system-injected messages
+                            if !text.text.is_empty() && !text.text.starts_with("[System:") {
                                 steps.push(TranscriptStep::Action {
                                     content: vec![ActionContent::Text {
                                         text: text.text.clone(),
