@@ -478,15 +478,15 @@ pub(super) async fn create_agent(
 
     let mut new_table = toml_edit::Table::new();
     new_table["id"] = toml_edit::value(&agent_id);
-    if let Some(display_name) = &request.display_name {
-        if !display_name.is_empty() {
-            new_table["display_name"] = toml_edit::value(display_name.as_str());
-        }
+    if let Some(display_name) = &request.display_name
+        && !display_name.is_empty()
+    {
+        new_table["display_name"] = toml_edit::value(display_name.as_str());
     }
-    if let Some(role) = &request.role {
-        if !role.is_empty() {
-            new_table["role"] = toml_edit::value(role.as_str());
-        }
+    if let Some(role) = &request.role
+        && !role.is_empty()
+    {
+        new_table["role"] = toml_edit::value(role.as_str());
     }
     agents_array.push(new_table);
 

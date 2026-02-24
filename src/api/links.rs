@@ -695,20 +695,20 @@ pub async fn create_human(
 
     let mut table = toml_edit::Table::new();
     table["id"] = toml_edit::value(&id);
-    if let Some(display_name) = &request.display_name {
-        if !display_name.is_empty() {
-            table["display_name"] = toml_edit::value(display_name.as_str());
-        }
+    if let Some(display_name) = &request.display_name
+        && !display_name.is_empty()
+    {
+        table["display_name"] = toml_edit::value(display_name.as_str());
     }
-    if let Some(role) = &request.role {
-        if !role.is_empty() {
-            table["role"] = toml_edit::value(role.as_str());
-        }
+    if let Some(role) = &request.role
+        && !role.is_empty()
+    {
+        table["role"] = toml_edit::value(role.as_str());
     }
-    if let Some(bio) = &request.bio {
-        if !bio.is_empty() {
-            table["bio"] = toml_edit::value(bio.as_str());
-        }
+    if let Some(bio) = &request.bio
+        && !bio.is_empty()
+    {
+        table["bio"] = toml_edit::value(bio.as_str());
     }
     humans_array.push(table);
 

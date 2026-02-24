@@ -54,6 +54,7 @@ impl std::fmt::Debug for SendAgentMessageTool {
 }
 
 impl SendAgentMessageTool {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agent_id: AgentId,
         agent_name: String,
