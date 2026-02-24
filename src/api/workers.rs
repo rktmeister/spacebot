@@ -78,14 +78,10 @@ pub(super) async fn list_workers(
     let pool = pools.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
     let logger = ProcessRunLogger::new(pool.clone());
 
-    let limit = query.limit.min(200);
+    let limit = query.limit.clamp(1, 200);
+    let offset = query.offset.max(0);
     let (rows, total) = logger
-        .list_worker_runs(
-            &query.agent_id,
-            limit,
-            query.offset,
-            query.status.as_deref(),
-        )
+        .list_worker_runs(&query.agent_id, limit, offset, query.status.as_deref())
         .await
         .map_err(|error| {
             tracing::warn!(%error, "failed to list worker runs");
@@ -152,7 +148,7 @@ pub(super) async fn worker_detail(
     let logger = ProcessRunLogger::new(pool.clone());
 
     let detail = logger
-        .get_worker_detail(&query.worker_id)
+        .get_worker_detail(&query.agent_id, &query.worker_id)
         .await
         .map_err(|error| {
             tracing::warn!(%error, worker_id = %query.worker_id, "failed to load worker detail");

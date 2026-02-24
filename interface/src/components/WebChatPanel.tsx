@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from "react";
+import {useEffect, useMemo, useRef, useState} from "react";
 import {
 	useWebChat,
 	getPortalChatSessionId,
@@ -214,7 +214,11 @@ export function WebChatPanel({agentId}: WebChatPanelProps) {
 		if (isStreaming) setSseMessages([]);
 	}, [isStreaming]);
 
-	const allMessages = [...messages, ...sseMessages];
+	const allMessages = useMemo(() => {
+		const messageIds = new Set(messages.map((message) => message.id));
+		const dedupedSse = sseMessages.filter((message) => !messageIds.has(message.id));
+		return [...messages, ...dedupedSse];
+	}, [messages, sseMessages]);
 
 	useEffect(() => {
 		messagesEndRef.current?.scrollIntoView({behavior: "smooth"});

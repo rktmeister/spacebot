@@ -13,7 +13,7 @@ interface LiveContextValue {
 	/** Set of edge IDs ("from->to") with recent message activity */
 	activeLinks: Set<string>;
 	/** Flat map of all active workers across all channels, keyed by worker_id. */
-	activeWorkers: Record<string, ActiveWorker & { channelId?: string }>;
+	activeWorkers: Record<string, ActiveWorker & { channelId?: string; agentId: string }>;
 	/** Monotonically increasing counter, bumped on every worker lifecycle SSE event. */
 	workerEventVersion: number;
 	/** Live transcript steps for running workers, keyed by worker_id. Built from SSE tool events. */
@@ -62,15 +62,20 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 	const [liveTranscripts, setLiveTranscripts] = useState<Record<string, TranscriptStep[]>>({});
 
 	// Derive flat active workers from channel live states
+	const pendingToolCallIdsRef = useRef<Record<string, Record<string, string[]>>>({});
+
 	const activeWorkers = useMemo(() => {
-		const map: Record<string, ActiveWorker & { channelId?: string }> = {};
+		const channelAgentIds = new Map(channels.map((channel) => [channel.id, channel.agent_id]));
+		const map: Record<string, ActiveWorker & { channelId?: string; agentId: string }> = {};
 		for (const [channelId, state] of Object.entries(liveStates)) {
+			const channelAgentId = channelAgentIds.get(channelId);
+			if (!channelAgentId) continue;
 			for (const [workerId, worker] of Object.entries(state.workers)) {
-				map[workerId] = { ...worker, channelId };
+				map[workerId] = { ...worker, channelId, agentId: channelAgentId };
 			}
 		}
 		return map;
-	}, [liveStates]);
+	}, [liveStates, channels]);
 
 	// Track recently active link edges
 	const [activeLinks, setActiveLinks] = useState<Set<string>>(new Set());
@@ -119,6 +124,9 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 	// and accumulate live transcript steps from SSE events.
 	const wrappedWorkerStarted = useCallback((data: unknown) => {
 		channelHandlers.worker_started(data);
+		const event = data as { worker_id: string };
+		setLiveTranscripts((prev) => ({ ...prev, [event.worker_id]: [] }));
+		delete pendingToolCallIdsRef.current[event.worker_id];
 		bumpWorkerVersion();
 	}, [channelHandlers, bumpWorkerVersion]);
 
@@ -141,13 +149,8 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 
 	const wrappedWorkerCompleted = useCallback((data: unknown) => {
 		channelHandlers.worker_completed(data);
-		// Clear the live transcript on completion (persisted transcript takes over)
 		const event = data as { worker_id: string };
-		setLiveTranscripts((prev) => {
-			if (!prev[event.worker_id]) return prev;
-			const { [event.worker_id]: _, ...rest } = prev;
-			return rest;
-		});
+		delete pendingToolCallIdsRef.current[event.worker_id];
 		bumpWorkerVersion();
 	}, [channelHandlers, bumpWorkerVersion]);
 
@@ -155,13 +158,18 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 		channelHandlers.tool_started(data);
 		const event = data as ToolStartedEvent;
 		if (event.process_type === "worker") {
+			const callId = crypto.randomUUID();
+			const pendingByTool = pendingToolCallIdsRef.current[event.process_id] ?? {};
+			const queue = pendingByTool[event.tool_name] ?? [];
+			pendingByTool[event.tool_name] = [...queue, callId];
+			pendingToolCallIdsRef.current[event.process_id] = pendingByTool;
 			setLiveTranscripts((prev) => {
 				const steps = prev[event.process_id] ?? [];
 				const step: TranscriptStep = {
 					type: "action",
 					content: [{
 						type: "tool_call",
-						id: `${event.tool_name}:${steps.length}`,
+						id: callId,
 						name: event.tool_name,
 						args: event.args || "",
 					}],
@@ -176,11 +184,24 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 		channelHandlers.tool_completed(data);
 		const event = data as ToolCompletedEvent;
 		if (event.process_type === "worker") {
+			const pendingByTool = pendingToolCallIdsRef.current[event.process_id];
+			const queue = pendingByTool?.[event.tool_name] ?? [];
+			const [callId, ...rest] = queue;
+			if (pendingByTool) {
+				if (rest.length > 0) {
+					pendingByTool[event.tool_name] = rest;
+				} else {
+					delete pendingByTool[event.tool_name];
+				}
+				if (Object.keys(pendingByTool).length === 0) {
+					delete pendingToolCallIdsRef.current[event.process_id];
+				}
+			}
 			setLiveTranscripts((prev) => {
 				const steps = prev[event.process_id] ?? [];
 				const step: TranscriptStep = {
 					type: "tool_result",
-					call_id: `${event.tool_name}:${steps.length}`,
+					call_id: callId ?? `${event.process_id}:${event.tool_name}:${steps.length}`,
 					name: event.tool_name,
 					text: event.result || "",
 				};

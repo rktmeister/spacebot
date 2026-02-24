@@ -450,20 +450,26 @@ impl ProcessRunLogger {
         offset: i64,
         status_filter: Option<&str>,
     ) -> crate::error::Result<(Vec<WorkerRunRow>, i64)> {
-        let (where_clause, has_status_filter) = if status_filter.is_some() {
-            ("WHERE w.agent_id = ?1 AND w.status = ?4", true)
+        let (count_where_clause, list_where_clause, has_status_filter) = if status_filter.is_some()
+        {
+            (
+                "WHERE w.agent_id = ?1 AND w.status = ?2",
+                "WHERE w.agent_id = ?1 AND w.status = ?4",
+                true,
+            )
         } else {
-            ("WHERE w.agent_id = ?1", false)
+            ("WHERE w.agent_id = ?1", "WHERE w.agent_id = ?1", false)
         };
 
-        let count_query = format!("SELECT COUNT(*) as total FROM worker_runs w {where_clause}");
+        let count_query =
+            format!("SELECT COUNT(*) as total FROM worker_runs w {count_where_clause}");
         let list_query = format!(
             "SELECT w.id, w.task, w.status, w.worker_type, w.channel_id, w.started_at, \
                     w.completed_at, w.transcript IS NOT NULL as has_transcript, \
                     w.tool_calls, c.display_name as channel_name \
              FROM worker_runs w \
              LEFT JOIN channels c ON w.channel_id = c.id \
-             {where_clause} \
+             {list_where_clause} \
              ORDER BY w.started_at DESC \
              LIMIT ?2 OFFSET ?3"
         );
@@ -521,6 +527,7 @@ impl ProcessRunLogger {
     /// Get full detail for a single worker run, including the compressed transcript blob.
     pub async fn get_worker_detail(
         &self,
+        agent_id: &str,
         worker_id: &str,
     ) -> crate::error::Result<Option<WorkerDetailRow>> {
         let row = sqlx::query(
@@ -529,8 +536,9 @@ impl ProcessRunLogger {
                     c.display_name as channel_name \
              FROM worker_runs w \
              LEFT JOIN channels c ON w.channel_id = c.id \
-             WHERE w.id = ?",
+             WHERE w.agent_id = ? AND w.id = ?",
         )
+        .bind(agent_id)
         .bind(worker_id)
         .fetch_optional(&self.pool)
         .await

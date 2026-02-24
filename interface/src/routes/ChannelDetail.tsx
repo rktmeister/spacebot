@@ -77,16 +77,18 @@ function LiveWorkerRunItem({ item, live, channelId, agentId }: { item: TimelineW
 				{formatTimestamp(new Date(item.started_at).getTime())}
 			</span>
 			<div className="min-w-0 flex-1">
-				<Link
-					to="/agents/$agentId/workers"
-					params={{ agentId }}
-					search={{ worker: item.id }}
-					className="block rounded-md bg-amber-500/10 px-3 py-2 transition-colors hover:bg-amber-500/15"
-				>
+				<div className="rounded-md bg-amber-500/10 px-3 py-2 transition-colors hover:bg-amber-500/15">
 					<div className="flex min-w-0 items-center gap-2 overflow-hidden">
 						<div className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
 						<span className="text-sm font-medium text-amber-300">Worker</span>
-						<span className="min-w-0 flex-1 truncate text-sm text-ink-dull">{item.task}</span>
+						<Link
+							to="/agents/$agentId/workers"
+							params={{ agentId }}
+							search={{ worker: item.id }}
+							className="min-w-0 flex-1 truncate text-sm text-ink-dull hover:text-ink"
+						>
+							{item.task}
+						</Link>
 						<CancelButton onClick={() => { api.cancelProcess(channelId, "worker", item.id).catch(console.warn); }} />
 					</div>
 					<div className="mt-1 flex min-w-0 items-center gap-3 overflow-hidden pl-4 text-tiny text-ink-faint">
@@ -98,7 +100,7 @@ function LiveWorkerRunItem({ item, live, channelId, agentId }: { item: TimelineW
 							<span>{live.toolCalls} tool calls</span>
 						)}
 					</div>
-				</Link>
+				</div>
 			</div>
 		</div>
 	);

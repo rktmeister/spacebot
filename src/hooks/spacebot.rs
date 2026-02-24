@@ -40,7 +40,7 @@ impl SpacebotHook {
             process_id: self.process_id.clone(),
             status: status.into(),
         };
-        let _ = self.event_tx.send(event);
+        self.event_tx.send(event).ok();
     }
 
     /// Check a string against the leak pattern set.
@@ -201,7 +201,7 @@ where
             tool_name: tool_name.to_string(),
             args: capped_args,
         };
-        let _ = self.event_tx.send(event);
+        self.event_tx.send(event).ok();
 
         tracing::debug!(
             process_id = %self.process_id,
@@ -253,7 +253,7 @@ where
             tool_name: tool_name.to_string(),
             result: capped_result,
         };
-        let _ = self.event_tx.send(event);
+        self.event_tx.send(event).ok();
 
         tracing::debug!(
             process_id = %self.process_id,

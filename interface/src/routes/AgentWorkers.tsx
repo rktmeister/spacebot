@@ -99,6 +99,12 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 
 	const workers = listData?.workers ?? [];
 	const total = listData?.total ?? 0;
+	const scopedActiveWorkers = useMemo(() => {
+		const entries = Object.entries(activeWorkers).filter(
+			([, worker]) => worker.agentId === agentId,
+		);
+		return Object.fromEntries(entries);
+	}, [activeWorkers, agentId]);
 
 	// Merge live SSE state onto the API-returned list.
 	// Workers that exist in SSE state but haven't hit the DB yet
@@ -108,7 +114,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 
 		// Overlay live state onto existing DB rows
 		const merged = workers.map((worker) => {
-			const live = activeWorkers[worker.id];
+			const live = scopedActiveWorkers[worker.id];
 			if (!live) return worker;
 			return {
 				...worker,
@@ -119,7 +125,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 		});
 
 		// Synthesize entries for workers only known via SSE (not in DB yet)
-		const synthetic: WorkerRunInfo[] = Object.values(activeWorkers)
+		const synthetic: WorkerRunInfo[] = Object.values(scopedActiveWorkers)
 			.filter((w) => !dbIds.has(w.id))
 			.map((live) => ({
 				id: live.id,
@@ -136,7 +142,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 			}));
 
 		return [...synthetic, ...merged];
-	}, [workers, activeWorkers]);
+	}, [workers, scopedActiveWorkers]);
 
 	// Client-side task text search filter
 	const filteredWorkers = useMemo(() => {
@@ -149,7 +155,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 	// Running workers that haven't hit the DB yet still get a full detail view
 	// from SSE state + live transcript.
 	const mergedDetail: WorkerDetailResponse | null = useMemo(() => {
-		const live = selectedWorkerId ? activeWorkers[selectedWorkerId] : null;
+		const live = selectedWorkerId ? scopedActiveWorkers[selectedWorkerId] : null;
 
 		if (detailData) {
 			// DB data exists — overlay live status if worker is still running
@@ -172,7 +178,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 			transcript: null,
 			tool_calls: live.toolCalls,
 		};
-	}, [detailData, activeWorkers, selectedWorkerId]);
+	}, [detailData, scopedActiveWorkers, selectedWorkerId]);
 
 	const selectWorker = useCallback(
 		(workerId: string | null) => {
@@ -230,7 +236,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 							<WorkerCard
 								key={worker.id}
 								worker={worker}
-								liveWorker={activeWorkers[worker.id]}
+								liveWorker={scopedActiveWorkers[worker.id]}
 								selected={worker.id === selectedWorkerId}
 								onClick={() => selectWorker(worker.id)}
 							/>
@@ -244,7 +250,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 				{selectedWorkerId && mergedDetail ? (
 					<WorkerDetail
 						detail={mergedDetail}
-						liveWorker={activeWorkers[selectedWorkerId]}
+						liveWorker={scopedActiveWorkers[selectedWorkerId]}
 						liveTranscript={liveTranscripts[selectedWorkerId]}
 					/>
 				) : (
@@ -280,9 +286,7 @@ function WorkerCard({
 	onClick: () => void;
 }) {
 	const isRunning = worker.status === "running" || !!liveWorker;
-	const displayStatus = liveWorker?.status ?? worker.live_status;
 	const toolCalls = liveWorker?.toolCalls ?? worker.tool_calls;
-	const currentTool = liveWorker?.currentTool;
 
 	return (
 		<button
@@ -535,7 +539,10 @@ function CancelWorkerButton({
 			disabled={cancelling}
 			onClick={() => {
 				setCancelling(true);
-				api.cancelProcess(channelId, "worker", workerId).catch(console.warn);
+				api
+					.cancelProcess(channelId, "worker", workerId)
+					.catch(console.warn)
+					.finally(() => setCancelling(false));
 			}}
 			className="rounded-md border border-app-line px-2 py-0.5 text-tiny font-medium text-ink-dull transition-colors hover:border-ink-faint hover:text-ink disabled:opacity-50"
 		>

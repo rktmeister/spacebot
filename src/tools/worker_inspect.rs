@@ -27,6 +27,15 @@ impl WorkerInspectTool {
     }
 }
 
+fn truncate_utf8(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+
+    let boundary = text.floor_char_boundary(max_bytes);
+    format!("{}...", &text[..boundary])
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("Worker inspect failed: {0}")]
 pub struct WorkerInspectError(String);
@@ -88,7 +97,7 @@ impl Tool for WorkerInspectTool {
 
         let detail = self
             .run_logger
-            .get_worker_detail(&worker_id)
+            .get_worker_detail(&self.agent_id, &worker_id)
             .await
             .map_err(|e| WorkerInspectError(format!("Failed to query worker: {e}")))?
             .ok_or_else(|| WorkerInspectError(format!("No worker found with ID {worker_id}")))?;
@@ -136,8 +145,8 @@ impl Tool for WorkerInspectTool {
                                 let label = if name.is_empty() { "tool" } else { name };
                                 let display = if text.len() > 500 {
                                     format!(
-                                        "{}...\n[truncated, {} bytes total]",
-                                        &text[..500],
+                                        "{}\n[truncated, {} bytes total]",
+                                        truncate_utf8(text, 500),
                                         text.len()
                                     )
                                 } else {
