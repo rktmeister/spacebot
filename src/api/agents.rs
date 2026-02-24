@@ -702,10 +702,13 @@ pub(super) async fn create_agent(
     let conversation_logger =
         crate::conversation::history::ConversationLogger::new(db.sqlite.clone());
     let channel_store = crate::conversation::ChannelStore::new(db.sqlite.clone());
+    let run_logger = crate::conversation::ProcessRunLogger::new(db.sqlite.clone());
     let cortex_tool_server = crate::tools::create_cortex_chat_tool_server(
         memory_search.clone(),
         conversation_logger,
         channel_store,
+        run_logger,
+        &deps.agent_id,
         browser_config,
         agent_config.screenshot_dir(),
         brave_search_key,

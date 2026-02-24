@@ -45,6 +45,7 @@ pub mod shell;
 pub mod skip;
 pub mod spawn_worker;
 pub mod web_search;
+pub mod worker_inspect;
 
 pub use branch_tool::{BranchArgs, BranchError, BranchOutput, BranchTool};
 pub use browser::{
@@ -88,6 +89,9 @@ pub use shell::{ShellArgs, ShellError, ShellOutput, ShellResult, ShellTool};
 pub use skip::{SkipArgs, SkipError, SkipFlag, SkipOutput, SkipTool, new_skip_flag};
 pub use spawn_worker::{SpawnWorkerArgs, SpawnWorkerError, SpawnWorkerOutput, SpawnWorkerTool};
 pub use web_search::{SearchResult, WebSearchArgs, WebSearchError, WebSearchOutput, WebSearchTool};
+pub use worker_inspect::{
+    WorkerInspectArgs, WorkerInspectError, WorkerInspectOutput, WorkerInspectTool,
+};
 
 use crate::agent::channel::ChannelState;
 use crate::config::{BrowserConfig, RuntimeConfig};
@@ -333,12 +337,15 @@ pub fn create_branch_tool_server(
     memory_search: Arc<MemorySearch>,
     conversation_logger: crate::conversation::history::ConversationLogger,
     channel_store: crate::conversation::ChannelStore,
+    run_logger: crate::conversation::history::ProcessRunLogger,
+    agent_id: &str,
 ) -> ToolServerHandle {
     ToolServer::new()
         .tool(MemorySaveTool::new(memory_search.clone()))
         .tool(MemoryRecallTool::new(memory_search.clone()))
         .tool(MemoryDeleteTool::new(memory_search))
         .tool(ChannelRecallTool::new(conversation_logger, channel_store))
+        .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
         .run()
 }
 
@@ -408,6 +415,8 @@ pub fn create_cortex_chat_tool_server(
     memory_search: Arc<MemorySearch>,
     conversation_logger: crate::conversation::history::ConversationLogger,
     channel_store: crate::conversation::ChannelStore,
+    run_logger: crate::conversation::history::ProcessRunLogger,
+    agent_id: &str,
     browser_config: BrowserConfig,
     screenshot_dir: PathBuf,
     brave_search_key: Option<String>,
@@ -419,6 +428,7 @@ pub fn create_cortex_chat_tool_server(
         .tool(MemoryRecallTool::new(memory_search.clone()))
         .tool(MemoryDeleteTool::new(memory_search))
         .tool(ChannelRecallTool::new(conversation_logger, channel_store))
+        .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
         .tool(ShellTool::new(instance_dir.clone(), workspace.clone()))
         .tool(FileTool::new(workspace.clone()))
         .tool(ExecTool::new(instance_dir, workspace));

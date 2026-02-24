@@ -1759,10 +1759,13 @@ async fn initialize_agents(
             let conversation_logger =
                 spacebot::conversation::history::ConversationLogger::new(agent.db.sqlite.clone());
             let channel_store = spacebot::conversation::ChannelStore::new(agent.db.sqlite.clone());
+            let run_logger = spacebot::conversation::ProcessRunLogger::new(agent.db.sqlite.clone());
             let tool_server = spacebot::tools::create_cortex_chat_tool_server(
                 agent.deps.memory_search.clone(),
                 conversation_logger,
                 channel_store,
+                run_logger,
+                &agent.deps.agent_id,
                 browser_config,
                 agent.config.screenshot_dir(),
                 brave_search_key,

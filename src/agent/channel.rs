@@ -1894,6 +1894,8 @@ async fn spawn_branch(
         state.deps.memory_search.clone(),
         state.conversation_logger.clone(),
         state.channel_store.clone(),
+        crate::conversation::ProcessRunLogger::new(state.deps.sqlite_pool.clone()),
+        &state.deps.agent_id,
     );
     let branch_max_turns = **state.deps.runtime_config.branch_max_turns.load();
 
