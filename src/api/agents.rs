@@ -360,6 +360,7 @@ pub(super) async fn trigger_warmup(
     let memory_searches = state.memory_searches.load();
     let mcp_managers = state.mcp_managers.load();
     let pools = state.agent_pools.load();
+    let sandboxes = state.sandboxes.load();
 
     let runtime_config_ids = runtime_configs.keys().cloned().collect::<HashSet<_>>();
     let memory_search_ids = memory_searches.keys().cloned().collect::<HashSet<_>>();
@@ -387,6 +388,9 @@ pub(super) async fn trigger_warmup(
         let Some(sqlite_pool) = pools.get(agent_id).cloned() else {
             continue;
         };
+        let Some(sandbox) = sandboxes.get(agent_id).cloned() else {
+            continue;
+        };
 
         let llm_manager = llm_manager.clone();
         let force = request.force;
@@ -403,6 +407,7 @@ pub(super) async fn trigger_warmup(
                 event_tx,
                 sqlite_pool: sqlite_pool.clone(),
                 messaging_manager: None,
+                sandbox,
                 links: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
                 agent_names: Arc::new(std::collections::HashMap::new()),
             };
@@ -525,6 +530,7 @@ pub(super) async fn create_agent(
         mcp: None,
         brave_search_key: None,
         cron_timezone: None,
+        sandbox: None,
         cron: Vec::new(),
     };
     let agent_config = raw_config.resolve(&instance_dir, defaults);
@@ -648,6 +654,16 @@ pub(super) async fn create_agent(
     let mcp_manager = std::sync::Arc::new(crate::mcp::McpManager::new(agent_config.mcp.clone()));
     mcp_manager.connect_all().await;
 
+    let sandbox = std::sync::Arc::new(
+        crate::sandbox::Sandbox::new(
+            &agent_config.sandbox,
+            agent_config.workspace.clone(),
+            &instance_dir,
+            agent_config.data_dir.clone(),
+        )
+        .await,
+    );
+
     let deps = crate::AgentDeps {
         agent_id: arc_agent_id.clone(),
         memory_search: memory_search.clone(),
@@ -661,6 +677,7 @@ pub(super) async fn create_agent(
             let guard = state.messaging_manager.read().await;
             guard.as_ref().cloned()
         },
+        sandbox: sandbox.clone(),
         links: Arc::new(arc_swap::ArcSwap::from_pointee(
             (**state.agent_links.load()).clone(),
         )),
@@ -713,6 +730,7 @@ pub(super) async fn create_agent(
     let conversation_logger =
         crate::conversation::history::ConversationLogger::new(db.sqlite.clone());
     let channel_store = crate::conversation::ChannelStore::new(db.sqlite.clone());
+
     let cortex_tool_server = crate::tools::create_cortex_chat_tool_server(
         memory_search.clone(),
         conversation_logger,
@@ -721,7 +739,7 @@ pub(super) async fn create_agent(
         agent_config.screenshot_dir(),
         brave_search_key,
         runtime_config.workspace_dir.clone(),
-        runtime_config.instance_dir.clone(),
+        sandbox.clone(),
     );
     let cortex_store = crate::agent::cortex_chat::CortexChatStore::new(db.sqlite.clone());
     let cortex_session = crate::agent::cortex_chat::CortexChatSession::new(
@@ -777,6 +795,10 @@ pub(super) async fn create_agent(
         let mut mcp_managers = (**state.mcp_managers.load()).clone();
         mcp_managers.insert(agent_id.clone(), mcp_manager);
         state.mcp_managers.store(std::sync::Arc::new(mcp_managers));
+
+        let mut sandboxes = (**state.sandboxes.load()).clone();
+        sandboxes.insert(agent_id.clone(), sandbox);
+        state.sandboxes.store(std::sync::Arc::new(sandboxes));
 
         let mut agent_infos = (**state.agent_configs.load()).clone();
         agent_infos.push(AgentInfo {
@@ -1006,6 +1028,10 @@ pub(super) async fn delete_agent(
         let mut configs = (**state.runtime_configs.load()).clone();
         configs.remove(&agent_id);
         state.runtime_configs.store(std::sync::Arc::new(configs));
+
+        let mut sandboxes = (**state.sandboxes.load()).clone();
+        sandboxes.remove(&agent_id);
+        state.sandboxes.store(std::sync::Arc::new(sandboxes));
 
         let mut agent_infos = (**state.agent_configs.load()).clone();
         agent_infos.retain(|a| a.id != agent_id);
