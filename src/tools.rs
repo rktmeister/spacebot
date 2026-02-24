@@ -257,12 +257,15 @@ pub async fn add_channel_tools(
             ))
             .await?;
     }
+    handle
+        .add_tool(SendFileTool::new(
+            response_tx.clone(),
+            state.deps.runtime_config.workspace_dir.clone(),
+        ))
+        .await?;
     handle.add_tool(CancelTool::new(state)).await?;
     handle
         .add_tool(SkipTool::new(skip_flag.clone(), response_tx.clone()))
-        .await?;
-    handle
-        .add_tool(SendFileTool::new(response_tx.clone()))
         .await?;
     handle.add_tool(ReactTool::new(response_tx.clone())).await?;
     if let Some(cron) = cron_tool {

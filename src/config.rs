@@ -3759,7 +3759,9 @@ impl RuntimeConfig {
         self.cron_timezone.store(Arc::new(resolved.cron_timezone));
         self.cortex.store(Arc::new(resolved.cortex));
         self.warmup.store(Arc::new(resolved.warmup));
-        self.sandbox.store(Arc::new(resolved.sandbox));
+        // sandbox config is not hot-reloaded here because the Sandbox instance
+        // is constructed once at startup and shared via Arc. Changing sandbox
+        // settings requires an agent restart.
 
         mcp_manager.reconcile(&old_mcp, &new_mcp).await;
 

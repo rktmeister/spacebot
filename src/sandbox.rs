@@ -100,12 +100,31 @@ impl Sandbox {
             }
         }
 
+        // Canonicalize paths at construction to resolve symlinks and validate existence.
+        let workspace = canonicalize_or_self(&workspace);
+        let data_dir = canonicalize_or_self(&data_dir);
+        let writable_paths: Vec<PathBuf> = config
+            .writable_paths
+            .iter()
+            .filter_map(|path| match path.canonicalize() {
+                Ok(canonical) => Some(canonical),
+                Err(error) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        %error,
+                        "dropping writable_path entry (does not exist or is unresolvable)"
+                    );
+                    None
+                }
+            })
+            .collect();
+
         Self {
             mode: config.mode,
             workspace,
             data_dir,
             tools_bin,
-            writable_paths: config.writable_paths.clone(),
+            writable_paths,
             backend,
         }
     }
@@ -117,9 +136,16 @@ impl Sandbox {
     /// to set stdout/stderr/timeout after this call.
     pub fn wrap(&self, program: &str, args: &[&str], working_dir: &Path) -> Command {
         // Prepend tools/bin to PATH for all commands
-        let path_env = match std::env::var("PATH") {
-            Ok(current) => format!("{}:{current}", self.tools_bin.display()),
-            Err(_) => self.tools_bin.display().to_string(),
+        let path_env = match std::env::var_os("PATH") {
+            Some(current) => {
+                let mut paths = std::env::split_paths(&current).collect::<Vec<_>>();
+                paths.insert(0, self.tools_bin.clone());
+                std::env::join_paths(paths)
+                    .unwrap_or(current)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+            None => self.tools_bin.to_string_lossy().into_owned(),
         };
 
         match self.backend {
@@ -266,6 +292,13 @@ impl Sandbox {
                 canonical.display()
             ));
         }
+
+        // Protect data_dir even if it falls under the workspace subtree
+        let data_dir = canonicalize_or_self(&self.data_dir);
+        profile.push_str(&format!(
+            "\n; data dir read-only\n(deny file-write* (subpath \"{}\"))\n",
+            data_dir.display()
+        ));
 
         // /tmp writable
         let tmp = canonicalize_or_self(Path::new("/tmp"));

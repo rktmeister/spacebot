@@ -17,32 +17,20 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone)]
 pub struct SendFileTool {
     response_tx: mpsc::Sender<OutboundResponse>,
-    workspace: Option<PathBuf>,
+    workspace: PathBuf,
 }
 
 impl SendFileTool {
-    pub fn new(response_tx: mpsc::Sender<OutboundResponse>) -> Self {
+    pub fn new(response_tx: mpsc::Sender<OutboundResponse>, workspace: PathBuf) -> Self {
         Self {
             response_tx,
-            workspace: None,
-        }
-    }
-
-    /// Create a new send_file tool with workspace path validation.
-    pub fn with_workspace(response_tx: mpsc::Sender<OutboundResponse>, workspace: PathBuf) -> Self {
-        Self {
-            response_tx,
-            workspace: Some(workspace),
+            workspace,
         }
     }
 
     /// Validate that a path falls within the workspace boundary.
     fn validate_workspace_path(&self, path: &std::path::Path) -> Result<PathBuf, SendFileError> {
-        let Some(ref workspace) = self.workspace else {
-            // No workspace set — allow any path (backward compat for channel tools
-            // that don't have a workspace reference yet).
-            return Ok(path.to_path_buf());
-        };
+        let workspace = &self.workspace;
 
         let canonical = path.canonicalize().map_err(|error| {
             SendFileError(format!("can't resolve path '{}': {error}", path.display()))
