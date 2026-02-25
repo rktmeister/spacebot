@@ -247,9 +247,18 @@ pub(super) async fn disconnect_platform(
         let instance_dir = state.instance_dir.load();
         let token_path = instance_dir.join("twitch_token.json");
         match tokio::fs::remove_file(&token_path).await {
-            Ok(()) => tracing::info!(path = %token_path.display(), "twitch token file deleted"),
+            Ok(()) => {
+                tracing::info!(path = %token_path.display(), "twitch token file deleted");
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => tracing::warn!(%error, path = %token_path.display(), "failed to delete twitch token file"),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    path = %token_path.display(),
+                    "failed to delete twitch token file"
+                );
+            }
+        }
         }
     }
 
