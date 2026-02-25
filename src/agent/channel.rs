@@ -2345,7 +2345,12 @@ fn extract_reply_from_tool_syntax(text: &str) -> Option<String> {
 /// System-generated messages (re-triggers) are passed through as-is.
 fn format_user_message(raw_text: &str, message: &InboundMessage) -> String {
     if message.source == "system" {
-        return raw_text.to_string();
+        // System messages should never be empty, but guard against it
+        return if raw_text.trim().is_empty() {
+            "[system event]".to_string()
+        } else {
+            raw_text.to_string()
+        };
     }
 
     // Use platform-formatted author if available, fall back to metadata
@@ -2390,7 +2395,15 @@ fn format_user_message(raw_text: &str, message: &InboundMessage) -> String {
         })
         .unwrap_or_default();
 
-    format!("{display_name}{bot_tag}{reply_context}: {raw_text}")
+    // If raw_text is empty or just whitespace, use a placeholder to avoid
+    // sending empty text content blocks to the LLM API.
+    let text_content = if raw_text.trim().is_empty() {
+        "[attachment or empty message]"
+    } else {
+        raw_text
+    };
+
+    format!("{display_name}{bot_tag}{reply_context}: {text_content}")
 }
 
 fn extract_discord_message_id(message: &InboundMessage) -> Option<u64> {
@@ -3067,6 +3080,74 @@ mod tests {
         assert!(
             !has_dangling,
             "no dangling tool-call messages in history after rollback"
+        );
+    }
+
+    #[test]
+    fn format_user_message_handles_empty_text() {
+        use super::format_user_message;
+        use crate::{Arc, InboundMessage};
+        use chrono::Utc;
+        use std::collections::HashMap;
+
+        // Test empty text with user message
+        let message = InboundMessage {
+            id: "test".to_string(),
+            agent_id: Some(Arc::from("test_agent")),
+            sender_id: "user123".to_string(),
+            conversation_id: "conv".to_string(),
+            content: crate::MessageContent::Text("".to_string()),
+            source: "discord".to_string(),
+            metadata: HashMap::new(),
+            formatted_author: Some("TestUser".to_string()),
+            timestamp: Utc::now(),
+        };
+
+        let formatted = format_user_message("", &message);
+        assert!(
+            !formatted.trim().is_empty(),
+            "formatted message should not be empty"
+        );
+        assert!(
+            formatted.contains("[attachment or empty message]"),
+            "should use placeholder for empty text"
+        );
+
+        // Test whitespace-only text
+        let formatted_ws = format_user_message("   ", &message);
+        assert!(
+            formatted_ws.contains("[attachment or empty message]"),
+            "should use placeholder for whitespace-only text"
+        );
+
+        // Test empty system message
+        let system_message = InboundMessage {
+            id: "test".to_string(),
+            agent_id: Some(Arc::from("test_agent")),
+            sender_id: "system".to_string(),
+            conversation_id: "conv".to_string(),
+            content: crate::MessageContent::Text("".to_string()),
+            source: "system".to_string(),
+            metadata: HashMap::new(),
+            formatted_author: None,
+            timestamp: Utc::now(),
+        };
+
+        let formatted_sys = format_user_message("", &system_message);
+        assert_eq!(
+            formatted_sys, "[system event]",
+            "system messages should use [system event] placeholder"
+        );
+
+        // Test normal message with text
+        let formatted_normal = format_user_message("hello", &message);
+        assert!(
+            formatted_normal.contains("hello"),
+            "normal messages should preserve text"
+        );
+        assert!(
+            !formatted_normal.contains("[attachment or empty message]"),
+            "normal messages should not use placeholder"
         );
     }
 }
