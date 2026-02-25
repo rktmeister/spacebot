@@ -450,6 +450,7 @@ impl SpacebotModel {
             &self.model_name,
             &request,
             effort,
+            provider_config.use_bearer_auth,
         );
 
         let is_oauth =
