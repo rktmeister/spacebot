@@ -185,8 +185,17 @@ impl CronTool {
             .ok_or_else(|| CronError("'interval_secs' is required for create".into()))?;
         let delivery_target = args
             .delivery_target
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
             .or_else(|| self.default_delivery_target.clone())
-            .ok_or_else(|| CronError("'delivery_target' is required for create".into()))?;
+            .ok_or_else(|| {
+                CronError(
+                    "'delivery_target' is required for create when no conversation default is available"
+                        .into(),
+                )
+            })?;
 
         // Validate cron job ID: alphanumeric, hyphens, underscores only
         if id.is_empty()

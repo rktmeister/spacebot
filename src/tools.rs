@@ -341,29 +341,11 @@ pub async fn add_channel_tools(
 }
 
 fn default_delivery_target_for_conversation(conversation_id: &str) -> Option<String> {
-    let (adapter, remaining) = conversation_id.split_once(':')?;
-    if adapter != "discord" {
+    let parsed = crate::messaging::target::parse_delivery_target(conversation_id)?;
+    if parsed.adapter != "discord" {
         return None;
     }
-
-    if let Some(user_id) = remaining.strip_prefix("dm:") {
-        if !user_id.is_empty() && user_id.chars().all(|character| character.is_ascii_digit()) {
-            return Some(format!("discord:dm:{user_id}"));
-        }
-        return None;
-    }
-
-    if let Some(channel_id) = remaining.split_once(':').map(|(_, channel_id)| channel_id) {
-        if !channel_id.is_empty() && channel_id.chars().all(|character| character.is_ascii_digit()) {
-            Some(format!("discord:{channel_id}"))
-        } else {
-            None
-        }
-    } else if !remaining.is_empty() && remaining.chars().all(|character| character.is_ascii_digit()) {
-        Some(format!("discord:{remaining}"))
-    } else {
-        None
-    }
+    Some(parsed.to_string())
 }
 
 fn link_counterparty_for_agent(conversation_id: &str, agent_id: &str) -> Option<String> {
