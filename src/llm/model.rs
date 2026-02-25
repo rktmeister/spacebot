@@ -1585,5 +1585,9 @@ mod tests {
             remap_model_name_for_api("openai", "gpt-4o-mini"),
             "gpt-4o-mini"
         );
+        assert_eq!(
+            remap_model_name_for_api("openai", "zai/glm-5"),
+            "zai/glm-5"
+        );
     }
 }
