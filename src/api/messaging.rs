@@ -259,7 +259,6 @@ pub(super) async fn disconnect_platform(
                 );
             }
         }
-        }
     }
 
     tracing::info!(platform = %platform, "platform disconnected via API");
