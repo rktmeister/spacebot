@@ -19,11 +19,24 @@ const MAX_CRON_PROMPT_LENGTH: usize = 10_000;
 pub struct CronTool {
     store: Arc<CronStore>,
     scheduler: Arc<Scheduler>,
+    default_delivery_target: Option<String>,
 }
 
 impl CronTool {
     pub fn new(store: Arc<CronStore>, scheduler: Arc<Scheduler>) -> Self {
-        Self { store, scheduler }
+        Self {
+            store,
+            scheduler,
+            default_delivery_target: None,
+        }
+    }
+
+    pub fn with_default_delivery_target(
+        mut self,
+        default_delivery_target: Option<String>,
+    ) -> Self {
+        self.default_delivery_target = default_delivery_target;
+        self
     }
 }
 
@@ -44,7 +57,7 @@ pub struct CronArgs {
     /// Required for "create": interval in seconds between runs.
     #[serde(default)]
     pub interval_secs: Option<u64>,
-    /// Required for "create": where to deliver results, in "adapter:target" format (e.g. "discord:123456789").
+    /// Optional for "create": where to deliver results, in "adapter:target" format (e.g. "discord:123456789"). If omitted, defaults to the current conversation.
     #[serde(default)]
     pub delivery_target: Option<String>,
     /// Optional for "create": hour (0-23) when the job becomes active.
@@ -117,7 +130,7 @@ impl Tool for CronTool {
                     },
                     "delivery_target": {
                         "type": "string",
-                        "description": "For 'create': where to send results, format 'adapter:target' (e.g. 'discord:123456789')."
+                        "description": "For 'create': where to send results, format 'adapter:target' (e.g. 'discord:dm:123456789' for DM, 'discord:channel_id' for server). If omitted, defaults to the current conversation."
                     },
                     "active_start_hour": {
                         "type": "integer",
@@ -172,6 +185,7 @@ impl CronTool {
             .ok_or_else(|| CronError("'interval_secs' is required for create".into()))?;
         let delivery_target = args
             .delivery_target
+            .or_else(|| self.default_delivery_target.clone())
             .ok_or_else(|| CronError("'delivery_target' is required for create".into()))?;
 
         // Validate cron job ID: alphanumeric, hyphens, underscores only
