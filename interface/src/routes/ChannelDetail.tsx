@@ -167,14 +167,9 @@ function WorkerRunItem({ item, agentId }: { item: TimelineWorkerRun; agentId: st
 						<div className="h-2 w-2 rounded-full bg-amber-400/50" />
 						<span className="text-sm font-medium text-amber-300">Worker</span>
 						<span className="min-w-0 flex-1 truncate text-sm text-ink-dull">{item.task}</span>
-						{item.result && (
-							<span className="flex-shrink-0 self-start text-tiny leading-5 text-ink-faint">
-								{expanded ? "▾" : "▸"}
-							</span>
-						)}
 					</div>
-				</button>
-				{expanded && item.result && (
+				</Link>
+				{item.result && (
 					<div className="mt-1 rounded-md border border-amber-500/10 bg-amber-500/5 px-3 py-2">
 						<div className="text-sm text-ink-dull">
 							<Markdown className="whitespace-pre-wrap break-words">{item.result}</Markdown>
