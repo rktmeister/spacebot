@@ -2530,6 +2530,7 @@ impl Config {
 
         // Env-only routing: check for env overrides on channel/worker models.
         // SPACEBOT_MODEL overrides all process types at once; specific vars take precedence.
+        // ANTHROPIC_MODEL sets all anthropic/* models to the specified value.
         let mut routing = RoutingConfig::default();
         if let Ok(model) = std::env::var("SPACEBOT_MODEL") {
             routing.channel = model.clone();
@@ -2537,6 +2538,19 @@ impl Config {
             routing.worker = model.clone();
             routing.compactor = model.clone();
             routing.cortex = model;
+        }
+        if let Ok(anthropic_model) = std::env::var("ANTHROPIC_MODEL") {
+            // ANTHROPIC_MODEL sets all anthropic/* routes to the specified model
+            let channel = format!("anthropic/{}", anthropic_model);
+            let branch = format!("anthropic/{}", anthropic_model);
+            let worker = format!("anthropic/{}", anthropic_model);
+            let compactor = format!("anthropic/{}", anthropic_model);
+            let cortex = format!("anthropic/{}", anthropic_model);
+            routing.channel = channel;
+            routing.branch = branch;
+            routing.worker = worker;
+            routing.compactor = compactor;
+            routing.cortex = cortex;
         }
         if let Ok(channel_model) = std::env::var("SPACEBOT_CHANNEL_MODEL") {
             routing.channel = channel_model;

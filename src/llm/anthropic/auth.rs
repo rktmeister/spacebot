@@ -283,8 +283,7 @@ mod tests {
 
     #[test]
     fn proxy_bearer_uses_bearer_header() {
-        let (request, auth_path) =
-            build_request_with_bearer("my-proxy-token", false, true);
+        let (request, auth_path) = build_request_with_bearer("my-proxy-token", false, true);
         assert_eq!(auth_path, AnthropicAuthPath::ProxyBearer);
         assert_eq!(
             request.headers().get("Authorization").unwrap(),
@@ -298,7 +297,10 @@ mod tests {
         let (request, _) = build_request_with_bearer("my-proxy-token", false, true);
         assert!(request.headers().get("x-app").is_none());
         // Should not have Claude Code user-agent
-        let ua = request.headers().get("user-agent").map(|v| v.to_str().unwrap().to_string());
+        let ua = request
+            .headers()
+            .get("user-agent")
+            .map(|v| v.to_str().unwrap().to_string());
         assert!(ua.is_none() || !ua.unwrap().contains("claude-code"));
     }
 

@@ -185,7 +185,7 @@ impl LlmManager {
                 base_url: "https://api.anthropic.com".to_string(),
                 api_key: token,
                 name: None,
-            use_bearer_auth: false,
+                use_bearer_auth: false,
             }),
             (None, None) => Err(LlmError::UnknownProvider("anthropic".to_string()).into()),
         }
@@ -254,7 +254,7 @@ impl LlmManager {
                 base_url: "https://chatgpt.com/backend-api/codex".to_string(),
                 api_key: token,
                 name: None,
-            use_bearer_auth: false,
+                use_bearer_auth: false,
             }),
             None => Err(LlmError::UnknownProvider("openai-chatgpt".to_string()).into()),
         }
