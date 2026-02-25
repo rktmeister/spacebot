@@ -582,7 +582,7 @@ fn resolve_target_image(
     let last_colon = image_without_digest.rfind(':');
 
     let (base, tag) = match last_colon {
-        Some(colon) if last_slash.map_or(true, |slash| colon > slash) => (
+        Some(colon) if last_slash.is_none_or(|slash| colon > slash) => (
             &image_without_digest[..colon],
             &image_without_digest[colon + 1..],
         ),
