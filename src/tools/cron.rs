@@ -57,7 +57,7 @@ pub struct CronArgs {
     /// Required for "create": interval in seconds between runs.
     #[serde(default)]
     pub interval_secs: Option<u64>,
-    /// Optional for "create": where to deliver results, in "adapter:target" format (e.g. "discord:123456789"). If omitted, defaults to the current conversation.
+    /// Optional for "create": where to deliver results, in "adapter:target" format (e.g. "discord:123456789"). If omitted, defaults to the current conversation when available.
     #[serde(default)]
     pub delivery_target: Option<String>,
     /// Optional for "create": hour (0-23) when the job becomes active.
