@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
+use tracing_subscriber::fmt::format;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
@@ -51,6 +52,13 @@ impl DaemonPaths {
 
     pub fn from_default() -> Self {
         Self::new(&Config::default_instance_dir())
+    }
+}
+
+fn truncate_for_log(message: &str, max_chars: usize) -> (&str, bool) {
+    match message.char_indices().nth(max_chars) {
+        Some((byte_index, _character)) => (&message[..byte_index], true),
+        None => (message, false),
     }
 }
 
@@ -128,6 +136,27 @@ pub fn init_background_tracing(
 ) -> Option<SdkTracerProvider> {
     let file_appender = tracing_appender::rolling::daily(&paths.log_dir, "spacebot.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    let field_formatter = format::debug_fn(|writer, field, value| {
+        let field_name = field.name();
+
+        if field_name == "gen_ai.system_instructions"
+            || field_name == "gen_ai.tool.call.arguments"
+            || field_name == "gen_ai.tool.call.result"
+        {
+            Ok(())
+        } else if field_name == "message" {
+            let formatted = format!("{value:?}");
+            const MAX_MESSAGE_CHARS: usize = 280;
+            let (truncated, was_truncated) = truncate_for_log(&formatted, MAX_MESSAGE_CHARS);
+            if was_truncated {
+                write!(writer, "{}={}...", field_name, truncated)
+            } else {
+                write!(writer, "{}={formatted}", field_name)
+            }
+        } else {
+            write!(writer, "{}={value:?}", field_name)
+        }
+    });
 
     // Leak the guard so the non-blocking writer lives for the entire process.
     // The process owns this — it's cleaned up on exit.
@@ -136,7 +165,9 @@ pub fn init_background_tracing(
     let filter = build_env_filter(debug);
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
-        .with_ansi(false);
+        .with_ansi(false)
+        .fmt_fields(field_formatter)
+        .compact();
 
     match build_otlp_provider(telemetry) {
         Some(provider) => {
@@ -165,8 +196,33 @@ pub fn init_foreground_tracing(
     debug: bool,
     telemetry: &TelemetryConfig,
 ) -> Option<SdkTracerProvider> {
+    let field_formatter = format::debug_fn(|writer, field, value| {
+        let field_name = field.name();
+
+        if field_name == "gen_ai.system_instructions"
+            || field_name == "gen_ai.tool.call.arguments"
+            || field_name == "gen_ai.tool.call.result"
+        {
+            Ok(())
+        } else if field_name == "message" {
+            let formatted = format!("{value:?}");
+            const MAX_MESSAGE_CHARS: usize = 280;
+            let (truncated, was_truncated) = truncate_for_log(&formatted, MAX_MESSAGE_CHARS);
+            if was_truncated {
+                write!(writer, "{}={}", field_name, truncated)?;
+                write!(writer, "...")?;
+            } else {
+                write!(writer, "{}={formatted}", field_name)?;
+            }
+            Ok(())
+        } else {
+            write!(writer, "{}={value:?}", field_name)
+        }
+    });
     let filter = build_env_filter(debug);
-    let fmt_layer = tracing_subscriber::fmt::layer();
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .fmt_fields(field_formatter)
+        .compact();
 
     match build_otlp_provider(telemetry) {
         Some(provider) => {
@@ -375,15 +431,15 @@ pub async fn send_command(paths: &DaemonPaths, command: IpcCommand) -> anyhow::R
 
 /// Clean up PID and socket files on shutdown.
 pub fn cleanup(paths: &DaemonPaths) {
-    if let Err(error) = std::fs::remove_file(&paths.pid_file) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(%error, "failed to remove PID file");
-        }
+    if let Err(error) = std::fs::remove_file(&paths.pid_file)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(%error, "failed to remove PID file");
     }
-    if let Err(error) = std::fs::remove_file(&paths.socket) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(%error, "failed to remove socket file");
-        }
+    if let Err(error) = std::fs::remove_file(&paths.socket)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(%error, "failed to remove socket file");
     }
 }
 
@@ -412,4 +468,27 @@ pub fn wait_for_exit(pid: u32) -> bool {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_for_log_handles_multibyte_characters() {
+        let message = "abc→def";
+        let (truncated, was_truncated) = truncate_for_log(message, 4);
+
+        assert!(was_truncated);
+        assert_eq!(truncated, "abc→");
+    }
+
+    #[test]
+    fn truncate_for_log_returns_original_when_within_limit() {
+        let message = "hello";
+        let (truncated, was_truncated) = truncate_for_log(message, 10);
+
+        assert!(!was_truncated);
+        assert_eq!(truncated, "hello");
+    }
 }

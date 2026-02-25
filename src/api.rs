@@ -11,6 +11,8 @@ mod config;
 mod cortex;
 mod cron;
 mod ingest;
+mod links;
+mod mcp;
 mod memories;
 mod messaging;
 mod models;
@@ -21,6 +23,7 @@ mod skills;
 mod state;
 mod system;
 mod webchat;
+mod workers;
 
 pub use server::start_http_server;
 pub use state::{AgentInfo, ApiEvent, ApiState};

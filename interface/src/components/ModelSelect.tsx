@@ -9,21 +9,26 @@ interface ModelSelectProps {
   value: string;
   onChange: (value: string) => void;
   provider?: string;
+  capability?: "input_audio" | "voice_transcription";
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   openrouter: "OpenRouter",
   openai: "OpenAI",
+  "openai-chatgpt": "ChatGPT Plus (OAuth)",
   deepseek: "DeepSeek",
   xai: "xAI",
   mistral: "Mistral",
+  gemini: "Google Gemini",
   groq: "Groq",
   together: "Together AI",
   fireworks: "Fireworks AI",
   zhipu: "Z.ai (GLM)",
   ollama: "Ollama",
   "opencode-zen": "OpenCode Zen",
+  minimax: "MiniMax",
+  "minimax-cn": "MiniMax CN",
 };
 
 function formatContextWindow(tokens: number | null): string {
@@ -38,6 +43,7 @@ export function ModelSelect({
   value,
   onChange,
   provider,
+  capability,
 }: ModelSelectProps) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -45,8 +51,8 @@ export function ModelSelect({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const { data } = useQuery({
-    queryKey: ["models", provider ?? "configured"],
-    queryFn: () => api.models(provider),
+    queryKey: ["models", provider ?? "configured", capability ?? "all"],
+    queryFn: () => api.models(provider, capability),
     staleTime: 60_000,
   });
 
@@ -124,15 +130,19 @@ export function ModelSelect({
     "openrouter",
     "anthropic",
     "openai",
+    "openai-chatgpt",
     "ollama",
     "deepseek",
     "xai",
     "mistral",
+    "gemini",
     "groq",
     "together",
     "fireworks",
     "zhipu",
     "opencode-zen",
+    "minimax",
+    "minimax-cn",
   ];
   const sortedProviders = Object.keys(grouped).sort(
     (a, b) =>

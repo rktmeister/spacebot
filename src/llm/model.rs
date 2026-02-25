@@ -46,6 +46,8 @@ pub struct SpacebotModel {
     provider: String,
     full_model_name: String,
     routing: Option<RoutingConfig>,
+    agent_id: Option<String>,
+    process_type: Option<String>,
 }
 
 impl SpacebotModel {
@@ -65,6 +67,17 @@ impl SpacebotModel {
         self
     }
 
+    /// Attach agent context for per-agent metric labels.
+    pub fn with_context(
+        mut self,
+        agent_id: impl Into<String>,
+        process_type: impl Into<String>,
+    ) -> Self {
+        self.agent_id = Some(agent_id.into());
+        self.process_type = Some(process_type.into());
+        self
+    }
+
     /// Direct call to the provider (no fallback logic).
     async fn attempt_completion(
         &self,
@@ -76,17 +89,27 @@ impl SpacebotModel {
             .map(|(provider, _)| provider)
             .unwrap_or("anthropic");
 
-        let mut provider_config = self
-            .llm_manager
-            .get_provider(provider_id)
-            .map_err(|e| CompletionError::ProviderError(e.to_string()))?;
-
-        // For Anthropic, prefer OAuth token from auth.json over static config key
-        if provider_id == "anthropic" {
-            if let Ok(Some(token)) = self.llm_manager.get_anthropic_token().await {
-                provider_config.api_key = token;
-            }
-        }
+        let provider_config = match provider_id {
+            "anthropic" => self
+                .llm_manager
+                .get_anthropic_provider()
+                .await
+                .map_err(|e| CompletionError::ProviderError(e.to_string()))?,
+            "openai" => self
+                .llm_manager
+                .get_openai_provider()
+                .await
+                .map_err(|e| CompletionError::ProviderError(e.to_string()))?,
+            "openai-chatgpt" => self
+                .llm_manager
+                .get_openai_chatgpt_provider()
+                .await
+                .map_err(|e| CompletionError::ProviderError(e.to_string()))?,
+            _ => self
+                .llm_manager
+                .get_provider(provider_id)
+                .map_err(|e| CompletionError::ProviderError(e.to_string()))?,
+        };
 
         if provider_id == "zai-coding-plan" || provider_id == "zhipu" {
             let display_name = if provider_id == "zhipu" {
@@ -112,6 +135,10 @@ impl SpacebotModel {
             ApiType::Anthropic => self.call_anthropic(request, &provider_config).await,
             ApiType::OpenAiCompletions => self.call_openai(request, &provider_config).await,
             ApiType::OpenAiResponses => self.call_openai_responses(request, &provider_config).await,
+            ApiType::Gemini => {
+                self.call_openai_compatible(request, "Google Gemini", &provider_config)
+                    .await
+            }
         }
     }
 
@@ -201,6 +228,8 @@ impl CompletionModel for SpacebotModel {
             provider,
             full_model_name,
             routing: None,
+            agent_id: None,
+            process_type: None,
         }
     }
 
@@ -306,18 +335,86 @@ impl CompletionModel for SpacebotModel {
         #[cfg(feature = "metrics")]
         {
             let elapsed = start.elapsed().as_secs_f64();
+            let agent_label = self.agent_id.as_deref().unwrap_or("unknown");
+            let tier_label = self.process_type.as_deref().unwrap_or("unknown");
             let metrics = crate::telemetry::Metrics::global();
-            // TODO: agent_id and tier are "unknown" because SpacebotModel doesn't
-            // carry process context. Thread agent_id/ProcessType through to get
-            // per-agent, per-tier breakdowns.
             metrics
                 .llm_requests_total
-                .with_label_values(&["unknown", &self.full_model_name, "unknown"])
+                .with_label_values(&[agent_label, &self.full_model_name, tier_label])
                 .inc();
             metrics
                 .llm_request_duration_seconds
-                .with_label_values(&["unknown", &self.full_model_name, "unknown"])
+                .with_label_values(&[agent_label, &self.full_model_name, tier_label])
                 .observe(elapsed);
+
+            if let Ok(ref response) = result {
+                let usage = &response.usage;
+                if usage.input_tokens > 0 || usage.output_tokens > 0 {
+                    metrics
+                        .llm_tokens_total
+                        .with_label_values(&[
+                            agent_label,
+                            &self.full_model_name,
+                            tier_label,
+                            "input",
+                        ])
+                        .inc_by(usage.input_tokens);
+                    metrics
+                        .llm_tokens_total
+                        .with_label_values(&[
+                            agent_label,
+                            &self.full_model_name,
+                            tier_label,
+                            "output",
+                        ])
+                        .inc_by(usage.output_tokens);
+                    if usage.cached_input_tokens > 0 {
+                        metrics
+                            .llm_tokens_total
+                            .with_label_values(&[
+                                agent_label,
+                                &self.full_model_name,
+                                tier_label,
+                                "cached_input",
+                            ])
+                            .inc_by(usage.cached_input_tokens);
+                    }
+
+                    let cost = crate::llm::pricing::estimate_cost(
+                        &self.full_model_name,
+                        usage.input_tokens,
+                        usage.output_tokens,
+                        usage.cached_input_tokens,
+                    );
+                    if cost > 0.0 {
+                        metrics
+                            .llm_estimated_cost_dollars
+                            .with_label_values(&[agent_label, &self.full_model_name, tier_label])
+                            .inc_by(cost);
+                    }
+                }
+            }
+
+            if let Err(ref error) = result {
+                let error_type = match error {
+                    rig::completion::CompletionError::ProviderError(msg) => {
+                        if msg.contains("rate") || msg.contains("429") {
+                            "rate_limit"
+                        } else if msg.contains("timeout") {
+                            "timeout"
+                        } else if msg.contains("context") || msg.contains("too long") {
+                            "context_overflow"
+                        } else {
+                            "provider_error"
+                        }
+                    }
+                    _ => "other",
+                };
+                metrics
+                    .process_errors_total
+                    .with_label_values(&[agent_label, tier_label, error_type])
+                    .inc();
+            }
         }
 
         result
@@ -348,7 +445,8 @@ impl SpacebotModel {
             .unwrap_or("auto");
         let anthropic_request = crate::llm::anthropic::build_anthropic_request(
             self.llm_manager.http_client(),
-            &api_key,
+            api_key,
+            &provider_config.base_url,
             &self.model_name,
             &request,
             effort,
@@ -449,6 +547,11 @@ impl SpacebotModel {
             "{}/v1/chat/completions",
             provider_config.base_url.trim_end_matches('/')
         );
+        let openai_account_id = if self.provider == "openai-chatgpt" {
+            self.llm_manager.get_openai_account_id().await
+        } else {
+            None
+        };
 
         let mut request_builder = self
             .llm_manager
@@ -456,6 +559,9 @@ impl SpacebotModel {
             .post(&chat_completions_url)
             .header("authorization", format!("Bearer {api_key}"))
             .header("content-type", "application/json");
+        if let Some(account_id) = openai_account_id {
+            request_builder = request_builder.header("chatgpt-account-id", account_id);
+        }
 
         // Kimi endpoints require a specific user-agent header.
         if chat_completions_url.contains("kimi.com") || chat_completions_url.contains("moonshot.ai")
@@ -500,7 +606,12 @@ impl SpacebotModel {
         provider_config: &ProviderConfig,
     ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
         let base_url = provider_config.base_url.trim_end_matches('/');
-        let responses_url = format!("{base_url}/v1/responses");
+        let is_chatgpt_codex = self.provider == "openai-chatgpt";
+        let responses_url = if is_chatgpt_codex {
+            format!("{base_url}/responses")
+        } else {
+            format!("{base_url}/v1/responses")
+        };
         let api_key = provider_config.api_key.as_str();
 
         let input = convert_messages_to_openai_responses(&request.chat_history);
@@ -512,14 +623,23 @@ impl SpacebotModel {
 
         if let Some(preamble) = &request.preamble {
             body["instructions"] = serde_json::json!(preamble);
+        } else if is_chatgpt_codex {
+            body["instructions"] = serde_json::json!(
+                "You are Spacebot. Follow instructions exactly and respond concisely."
+            );
         }
 
-        if let Some(max_tokens) = request.max_tokens {
+        if !is_chatgpt_codex && let Some(max_tokens) = request.max_tokens {
             body["max_output_tokens"] = serde_json::json!(max_tokens);
         }
 
-        if let Some(temperature) = request.temperature {
+        if !is_chatgpt_codex && let Some(temperature) = request.temperature {
             body["temperature"] = serde_json::json!(temperature);
+        }
+
+        if is_chatgpt_codex {
+            body["store"] = serde_json::json!(false);
+            body["stream"] = serde_json::json!(true);
         }
 
         if !request.tools.is_empty() {
@@ -538,12 +658,35 @@ impl SpacebotModel {
             body["tools"] = serde_json::json!(tools);
         }
 
-        let response = self
+        let openai_account_id = if self.provider == "openai-chatgpt" {
+            self.llm_manager.get_openai_account_id().await
+        } else {
+            None
+        };
+
+        let mut request_builder = self
             .llm_manager
             .http_client()
             .post(&responses_url)
             .header("authorization", format!("Bearer {api_key}"))
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        if let Some(account_id) = openai_account_id {
+            request_builder = request_builder.header("ChatGPT-Account-Id", account_id);
+        }
+        if is_chatgpt_codex {
+            request_builder = request_builder
+                .header("originator", "opencode")
+                .header(
+                    "session_id",
+                    format!("spacebot-{}", chrono::Utc::now().timestamp()),
+                )
+                .header(
+                    "user-agent",
+                    format!("spacebot/{}", env!("CARGO_PKG_VERSION")),
+                );
+        }
+
+        let response = request_builder
             .json(&body)
             .send()
             .await
@@ -554,28 +697,31 @@ impl SpacebotModel {
             CompletionError::ProviderError(format!("failed to read response body: {e}"))
         })?;
 
-        let response_body: serde_json::Value =
+        if !status.is_success() {
+            let message = parse_openai_error_message(&response_text)
+                .unwrap_or_else(|| "unknown error".to_string());
+            return Err(CompletionError::ProviderError(format!(
+                "OpenAI Responses API error ({status}): {message}"
+            )));
+        }
+
+        let response_body: serde_json::Value = if is_chatgpt_codex {
+            parse_openai_responses_sse_response(&response_text)?
+        } else {
             serde_json::from_str(&response_text).map_err(|e| {
                 CompletionError::ProviderError(format!(
                     "OpenAI Responses API response ({status}) is not valid JSON: {e}\nBody: {}",
                     truncate_body(&response_text)
                 ))
-            })?;
-
-        if !status.is_success() {
-            let message = response_body["error"]["message"]
-                .as_str()
-                .unwrap_or("unknown error");
-            return Err(CompletionError::ProviderError(format!(
-                "OpenAI Responses API error ({status}): {message}"
-            )));
-        }
+            })?
+        };
 
         parse_openai_responses_response(response_body)
     }
 
     /// Generic OpenAI-compatible API call.
     /// Used by providers that implement the OpenAI chat completions format.
+    #[allow(dead_code)]
     async fn call_openai_compatible(
         &self,
         request: CompletionRequest,
@@ -585,6 +731,7 @@ impl SpacebotModel {
         let base_url = provider_config.base_url.trim_end_matches('/');
         let endpoint_path = match provider_config.api_type {
             ApiType::OpenAiCompletions | ApiType::OpenAiResponses => "/v1/chat/completions",
+            ApiType::Gemini => "/chat/completions",
             ApiType::Anthropic => {
                 return Err(CompletionError::ProviderError(format!(
                     "{provider_display_name} is configured with anthropic API type, but this call expects an OpenAI-compatible API"
@@ -763,22 +910,6 @@ impl SpacebotModel {
     }
 }
 // --- Helpers ---
-
-fn normalize_ollama_base_url(configured: Option<String>) -> String {
-    let mut base_url = configured
-        .unwrap_or_else(|| "http://localhost:11434".to_string())
-        .trim()
-        .trim_end_matches('/')
-        .to_string();
-
-    if base_url.ends_with("/api") {
-        base_url.truncate(base_url.len() - "/api".len());
-    } else if base_url.ends_with("/v1") {
-        base_url.truncate(base_url.len() - "/v1".len());
-    }
-
-    base_url
-}
 
 /// Reverse-map Claude Code canonical tool names back to the original names
 /// from the request's tool definitions.
@@ -1163,15 +1294,21 @@ fn parse_anthropic_response(
         }
     }
 
-    let choice = OneOrMany::many(assistant_content).map_err(|_| {
+    let choice = OneOrMany::many(assistant_content).unwrap_or_else(|_| {
+        // Anthropic returns an empty content array when stop_reason is end_turn
+        // and the model has nothing further to say (e.g. after a side-effect-only
+        // tool call like react/skip). Treat this as a clean empty response rather
+        // than an error so the agentic loop terminates gracefully.
+        let stop_reason = body["stop_reason"].as_str().unwrap_or("unknown");
         tracing::debug!(
-            stop_reason = body["stop_reason"].as_str().unwrap_or("unknown"),
+            stop_reason,
             content_blocks = content_blocks.len(),
-            raw_content = %body["content"],
-            "empty assistant_content after parsing Anthropic response"
+            "empty assistant_content from Anthropic — returning synthetic empty text"
         );
-        CompletionError::ResponseError("empty response from Anthropic".into())
-    })?;
+        OneOrMany::one(AssistantContent::Text(Text {
+            text: String::new(),
+        }))
+    });
 
     let input_tokens = body["usage"]["input_tokens"].as_u64().unwrap_or(0);
     let output_tokens = body["usage"]["output_tokens"].as_u64().unwrap_or(0);
@@ -1199,27 +1336,26 @@ fn parse_openai_response(
 
     let mut assistant_content = Vec::new();
 
-    if let Some(text) = choice["content"].as_str() {
-        if !text.is_empty() {
-            assistant_content.push(AssistantContent::Text(Text {
-                text: text.to_string(),
-            }));
-        }
+    if let Some(text) = choice["content"].as_str()
+        && !text.is_empty()
+    {
+        assistant_content.push(AssistantContent::Text(Text {
+            text: text.to_string(),
+        }));
     }
 
     // Some reasoning models (e.g., NVIDIA kimi-k2.5) return reasoning in a separate field
-    if assistant_content.is_empty() {
-        if let Some(reasoning) = choice["reasoning_content"].as_str() {
-            if !reasoning.is_empty() {
-                tracing::debug!(
-                    provider = %provider_label,
-                    "extracted reasoning_content as main content"
-                );
-                assistant_content.push(AssistantContent::Text(Text {
-                    text: reasoning.to_string(),
-                }));
-            }
-        }
+    if assistant_content.is_empty()
+        && let Some(reasoning) = choice["reasoning_content"].as_str()
+        && !reasoning.is_empty()
+    {
+        tracing::debug!(
+            provider = %provider_label,
+            "extracted reasoning_content as main content"
+        );
+        assistant_content.push(AssistantContent::Text(Text {
+            text: reasoning.to_string(),
+        }));
     }
 
     if let Some(tool_calls) = choice["tool_calls"].as_array() {
@@ -1281,14 +1417,13 @@ fn parse_openai_responses_response(
             Some("message") => {
                 if let Some(content_items) = output_item["content"].as_array() {
                     for content_item in content_items {
-                        if content_item["type"].as_str() == Some("output_text") {
-                            if let Some(text) = content_item["text"].as_str() {
-                                if !text.is_empty() {
-                                    assistant_content.push(AssistantContent::Text(Text {
-                                        text: text.to_string(),
-                                    }));
-                                }
-                            }
+                        if content_item["type"].as_str() == Some("output_text")
+                            && let Some(text) = content_item["text"].as_str()
+                            && !text.is_empty()
+                        {
+                            assistant_content.push(AssistantContent::Text(Text {
+                                text: text.to_string(),
+                            }));
                         }
                     }
                 }
@@ -1333,6 +1468,44 @@ fn parse_openai_responses_response(
         },
         raw_response: RawResponse { body },
     })
+}
+
+fn parse_openai_responses_sse_response(
+    response_text: &str,
+) -> Result<serde_json::Value, CompletionError> {
+    for line in response_text.lines() {
+        let Some(data) = line.strip_prefix("data: ") else {
+            continue;
+        };
+
+        if data.trim().is_empty() || data.trim() == "[DONE]" {
+            continue;
+        }
+
+        let Ok(event_body) = serde_json::from_str::<serde_json::Value>(data) else {
+            continue;
+        };
+
+        if event_body["type"].as_str() == Some("response.completed")
+            && let Some(response) = event_body.get("response")
+        {
+            return Ok(response.clone());
+        }
+    }
+
+    Err(CompletionError::ProviderError(format!(
+        "OpenAI Responses SSE stream missing response.completed event.\nBody: {}",
+        truncate_body(response_text)
+    )))
+}
+
+fn parse_openai_error_message(response_text: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<serde_json::Value>(response_text).ok()?;
+    parsed["error"]["message"]
+        .as_str()
+        .or(parsed["detail"].as_str())
+        .or(parsed["message"].as_str())
+        .map(ToOwned::to_owned)
 }
 
 #[cfg(test)]

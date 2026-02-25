@@ -2,16 +2,21 @@
 
 use super::state::ApiState;
 use super::{
-    agents, bindings, channels, config, cortex, cron, ingest, memories, messaging, models,
-    providers, settings, skills, system, webchat,
+    agents, bindings, channels, config, cortex, cron, ingest, links, mcp, memories, messaging,
+    models, providers, settings, skills, system, webchat, workers,
 };
 
+use axum::Json;
+
 use axum::Router;
+use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{StatusCode, Uri, header};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use rust_embed::Embed;
-use tower_http::cors::{Any, CorsLayer};
+use serde_json::json;
+use tower_http::cors::CorsLayer;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -32,9 +37,15 @@ pub async fn start_http_server(
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(tower_http::cors::AllowOrigin::mirror_request())
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
+        ])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT]);
 
     let api_routes = Router::new()
         .route("/health", get(system::health))
@@ -49,12 +60,36 @@ pub async fn start_http_server(
             "/agents",
             get(agents::list_agents)
                 .post(agents::create_agent)
+                .put(agents::update_agent)
                 .delete(agents::delete_agent),
         )
+        .route("/agents/mcp", get(agents::list_agent_mcp))
+        .route("/agents/mcp/reconnect", post(agents::reconnect_agent_mcp))
+        .route(
+            "/agents/warmup",
+            get(agents::get_warmup_status).post(agents::trigger_warmup),
+        )
+        .route(
+            "/mcp/servers",
+            get(mcp::list_mcp_servers)
+                .post(mcp::create_mcp_server)
+                .put(mcp::update_mcp_server),
+        )
+        .route("/mcp/servers/{name}", delete(mcp::delete_mcp_server))
+        .route(
+            "/mcp/servers/{name}/reconnect",
+            post(mcp::reconnect_mcp_server),
+        )
+        .route("/mcp/status", get(mcp::mcp_status))
         .route("/agents/overview", get(agents::agent_overview))
-        .route("/channels", get(channels::list_channels))
+        .route(
+            "/channels",
+            get(channels::list_channels).delete(channels::delete_channel),
+        )
         .route("/channels/messages", get(channels::channel_messages))
         .route("/channels/status", get(channels::channel_status))
+        .route("/agents/workers", get(workers::list_workers))
+        .route("/agents/workers/detail", get(workers::worker_detail))
         .route("/agents/memories", get(memories::list_memories))
         .route("/agents/memories/search", get(memories::search_memories))
         .route("/agents/memories/graph", get(memories::memory_graph))
@@ -98,6 +133,14 @@ pub async fn start_http_server(
             "/providers",
             get(providers::get_providers).put(providers::update_provider),
         )
+        .route(
+            "/providers/openai/oauth/browser/start",
+            post(providers::start_openai_browser_oauth),
+        )
+        .route(
+            "/providers/openai/oauth/browser/status",
+            get(providers::openai_browser_oauth_status),
+        )
         .route("/providers/test", post(providers::test_provider_model))
         .route("/providers/{provider}", delete(providers::delete_provider))
         .route("/models", get(models::get_models))
@@ -129,12 +172,35 @@ pub async fn start_http_server(
         )
         .route("/update/apply", post(settings::update_apply))
         .route("/webchat/send", post(webchat::webchat_send))
-        .route("/webchat/history", get(webchat::webchat_history));
+        .route("/webchat/history", get(webchat::webchat_history))
+        .route("/links", get(links::list_links).post(links::create_link))
+        .route(
+            "/links/{from}/{to}",
+            put(links::update_link).delete(links::delete_link),
+        )
+        .route("/agents/{id}/links", get(links::agent_links))
+        .route("/topology", get(links::topology))
+        .route("/groups", get(links::list_groups).post(links::create_group))
+        .route(
+            "/groups/{name}",
+            put(links::update_group).delete(links::delete_group),
+        )
+        .route("/humans", get(links::list_humans).post(links::create_human))
+        .route(
+            "/humans/{id}",
+            put(links::update_human).delete(links::delete_human),
+        )
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            api_auth_middleware,
+        ));
 
     let app = Router::new()
         .nest("/api", api_routes)
         .fallback(static_handler)
         .layer(cors)
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MiB
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
@@ -153,6 +219,38 @@ pub async fn start_http_server(
     });
 
     Ok(handle)
+}
+
+async fn api_auth_middleware(
+    State(state): State<Arc<ApiState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(expected_token) = state.auth_token.as_deref() else {
+        return next.run(request).await;
+    };
+
+    let path = request.uri().path();
+    if path == "/api/health" || path == "/health" {
+        return next.run(request).await;
+    }
+
+    let is_authorized = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token == expected_token);
+
+    if is_authorized {
+        next.run(request).await
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        )
+            .into_response()
+    }
 }
 
 async fn static_handler(uri: Uri) -> Response {

@@ -9,8 +9,10 @@ use crate::agent::channel::Channel;
 use crate::cron::store::CronStore;
 use crate::error::Result;
 use crate::messaging::MessagingManager;
+use crate::messaging::target::{BroadcastTarget, parse_delivery_target};
 use crate::{AgentDeps, InboundMessage, MessageContent, OutboundResponse};
 use chrono::Timelike;
+use chrono_tz::Tz;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -22,7 +24,7 @@ pub struct CronJob {
     pub id: String,
     pub prompt: String,
     pub interval_secs: u64,
-    pub delivery_target: DeliveryTarget,
+    pub delivery_target: BroadcastTarget,
     pub active_hours: Option<(u8, u8)>,
     pub enabled: bool,
     pub run_once: bool,
@@ -30,35 +32,6 @@ pub struct CronJob {
     /// Maximum wall-clock seconds to wait for the job to complete.
     /// `None` uses the default of 120 seconds.
     pub timeout_secs: Option<u64>,
-}
-
-/// Where to send cron job results.
-#[derive(Debug, Clone)]
-pub struct DeliveryTarget {
-    /// Messaging adapter name (e.g. "discord").
-    pub adapter: String,
-    /// Platform-specific target (e.g. a Discord channel ID).
-    pub target: String,
-}
-
-impl DeliveryTarget {
-    /// Parse a delivery target string in the format "adapter:target".
-    pub fn parse(raw: &str) -> Option<Self> {
-        let (adapter, target) = raw.split_once(':')?;
-        if adapter.is_empty() || target.is_empty() {
-            return None;
-        }
-        Some(Self {
-            adapter: adapter.to_string(),
-            target: target.to_string(),
-        })
-    }
-}
-
-impl std::fmt::Display for DeliveryTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.adapter, self.target)
-    }
 }
 
 /// Serializable cron job config (for storage and TOML parsing).
@@ -103,6 +76,7 @@ pub struct CronContext {
 }
 
 const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+const SYSTEM_TIMEZONE_LABEL: &str = "system";
 
 /// Scheduler that manages cron job timers and execution.
 pub struct Scheduler {
@@ -126,15 +100,18 @@ impl Scheduler {
         }
     }
 
+    pub fn cron_timezone_label(&self) -> String {
+        cron_timezone_label(&self.context)
+    }
+
     /// Register and start a cron job from config.
     pub async fn register(&self, config: CronConfig) -> Result<()> {
-        let delivery_target =
-            normalize_delivery_target(&config.delivery_target).ok_or_else(|| {
-                crate::error::Error::Other(anyhow::anyhow!(
-                    "invalid delivery target '{}': expected format 'adapter:target'",
-                    config.delivery_target
-                ))
-            })?;
+        let delivery_target = parse_delivery_target(&config.delivery_target).ok_or_else(|| {
+            crate::error::Error::Other(anyhow::anyhow!(
+                "invalid delivery target '{}': expected format 'adapter:target'",
+                config.delivery_target
+            ))
+        })?;
 
         let job = CronJob {
             id: config.id.clone(),
@@ -240,16 +217,12 @@ impl Scheduler {
 
                 // Check active hours window
                 if let Some((start, end)) = job.active_hours {
-                    let current_hour = chrono::Local::now().hour() as u8;
-                    let in_window = if start <= end {
-                        current_hour >= start && current_hour < end
-                    } else {
-                        // Wraps midnight (e.g. 22:00 - 06:00)
-                        current_hour >= start || current_hour < end
-                    };
+                    let (current_hour, timezone) = current_hour_and_timezone(&context, &job_id);
+                    let in_window = hour_in_active_window(current_hour, start, end);
                     if !in_window {
                         tracing::debug!(
                             cron_id = %job_id,
+                            cron_timezone = %timezone,
                             current_hour,
                             start,
                             end,
@@ -435,7 +408,7 @@ impl Scheduler {
                 })?;
 
             let delivery_target =
-                normalize_delivery_target(&config.delivery_target).ok_or_else(|| {
+                parse_delivery_target(&config.delivery_target).ok_or_else(|| {
                     crate::error::Error::Other(anyhow::anyhow!(
                         "invalid delivery target '{}': expected format 'adapter:target'",
                         config.delivery_target
@@ -501,9 +474,93 @@ impl Scheduler {
     }
 }
 
+fn cron_timezone_label(context: &CronContext) -> String {
+    let timezone = context.deps.runtime_config.cron_timezone.load();
+    match timezone.as_deref() {
+        Some(name) if name.parse::<Tz>().is_ok() => name.to_string(),
+        _ => SYSTEM_TIMEZONE_LABEL.to_string(),
+    }
+}
+
+fn current_hour_and_timezone(context: &CronContext, cron_id: &str) -> (u8, String) {
+    let timezone = context.deps.runtime_config.cron_timezone.load();
+    match timezone.as_deref() {
+        Some(name) => match name.parse::<Tz>() {
+            Ok(timezone) => (
+                chrono::Utc::now().with_timezone(&timezone).hour() as u8,
+                name.into(),
+            ),
+            Err(error) => {
+                tracing::warn!(
+                    agent_id = %context.deps.agent_id,
+                    cron_id,
+                    cron_timezone = %name,
+                    %error,
+                    "invalid cron timezone in runtime config, falling back to system timezone"
+                );
+                (
+                    chrono::Local::now().hour() as u8,
+                    SYSTEM_TIMEZONE_LABEL.into(),
+                )
+            }
+        },
+        None => (
+            chrono::Local::now().hour() as u8,
+            SYSTEM_TIMEZONE_LABEL.into(),
+        ),
+    }
+}
+
+fn hour_in_active_window(current_hour: u8, start_hour: u8, end_hour: u8) -> bool {
+    if start_hour <= end_hour {
+        current_hour >= start_hour && current_hour < end_hour
+    } else {
+        current_hour >= start_hour || current_hour < end_hour
+    }
+}
+
+fn ensure_cron_dispatch_readiness(context: &CronContext, cron_id: &str) {
+    let readiness = context.deps.runtime_config.work_readiness();
+    if readiness.ready {
+        return;
+    }
+
+    let reason = readiness
+        .reason
+        .map(|value| value.as_str())
+        .unwrap_or("unknown");
+    tracing::warn!(
+        agent_id = %context.deps.agent_id,
+        cron_id,
+        dispatch_type = "cron",
+        reason,
+        warmup_state = ?readiness.warmup_state,
+        embedding_ready = readiness.embedding_ready,
+        bulletin_age_secs = ?readiness.bulletin_age_secs,
+        stale_after_secs = readiness.stale_after_secs,
+        "cron dispatch requested before readiness contract was satisfied"
+    );
+
+    #[cfg(feature = "metrics")]
+    crate::telemetry::Metrics::global()
+        .dispatch_while_cold_count
+        .with_label_values(&[&*context.deps.agent_id, "cron", reason])
+        .inc();
+
+    let warmup_config = **context.deps.runtime_config.warmup.load();
+    let should_trigger = readiness.warmup_state != crate::config::WarmupState::Warming
+        && (readiness.reason != Some(crate::config::WorkReadinessReason::EmbeddingNotReady)
+            || warmup_config.eager_embedding_load);
+
+    if should_trigger {
+        crate::agent::cortex::trigger_forced_warmup(context.deps.clone(), "cron");
+    }
+}
+
 /// Execute a single cron job: create a fresh channel, run the prompt, deliver the result.
 #[tracing::instrument(skip(context), fields(cron_id = %job.id, agent_id = %context.deps.agent_id))]
 async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
+    ensure_cron_dispatch_readiness(context, &job.id);
     let channel_id: crate::ChannelId = Arc::from(format!("cron:{}", job.id).as_str());
 
     // Create the outbound response channel to collect whatever the channel produces
@@ -633,44 +690,22 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
     Ok(())
 }
 
-fn normalize_delivery_target(raw: &str) -> Option<DeliveryTarget> {
-    let (adapter, target) = raw.split_once(':')?;
-    if adapter.is_empty() || target.is_empty() {
-        return None;
+#[cfg(test)]
+mod tests {
+    use super::hour_in_active_window;
+
+    #[test]
+    fn test_hour_in_active_window_non_wrapping() {
+        assert!(hour_in_active_window(9, 9, 17));
+        assert!(hour_in_active_window(16, 9, 17));
+        assert!(!hour_in_active_window(8, 9, 17));
+        assert!(!hour_in_active_window(17, 9, 17));
     }
 
-    if adapter == "discord" {
-        // DM targets pass through as `dm:{user_id}`
-        if let Some(user_id) = target.strip_prefix("dm:") {
-            if !user_id.is_empty() && user_id.chars().all(|c| c.is_ascii_digit()) {
-                return Some(DeliveryTarget {
-                    adapter: adapter.to_string(),
-                    target: target.to_string(),
-                });
-            }
-            return None;
-        }
-
-        // Accept legacy `discord:{guild_id}:{channel_id}` by normalizing to `{channel_id}`.
-        if let Some((_, channel_id)) = target.split_once(':') {
-            if !channel_id.is_empty() && channel_id.chars().all(|c| c.is_ascii_digit()) {
-                return Some(DeliveryTarget {
-                    adapter: adapter.to_string(),
-                    target: channel_id.to_string(),
-                });
-            }
-            return None;
-        }
-
-        if target.chars().all(|c| c.is_ascii_digit()) {
-            return Some(DeliveryTarget {
-                adapter: adapter.to_string(),
-                target: target.to_string(),
-            });
-        }
-
-        return None;
+    #[test]
+    fn test_hour_in_active_window_midnight_wrapping() {
+        assert!(hour_in_active_window(22, 22, 6));
+        assert!(hour_in_active_window(3, 22, 6));
+        assert!(!hour_in_active_window(12, 22, 6));
     }
-
-    DeliveryTarget::parse(raw)
 }

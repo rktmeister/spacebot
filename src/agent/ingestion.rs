@@ -90,10 +90,10 @@ async fn scan_ingest_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
         if !path.is_file() {
             continue;
         }
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.') {
-                continue;
-            }
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && name.starts_with('.')
+        {
+            continue;
         }
 
         // Only process files that look ingestible.
@@ -460,14 +460,13 @@ async fn process_chunk(
     deps: &AgentDeps,
 ) -> anyhow::Result<()> {
     let prompt_engine = deps.runtime_config.prompts.load();
-    let ingestion_prompt = prompt_engine
-        .render_static("ingestion")
-        .expect("failed to render ingestion prompt");
+    let ingestion_prompt = prompt_engine.render_static("ingestion")?;
 
     let routing = deps.runtime_config.routing.load();
     let model_name = routing.resolve(ProcessType::Branch, None).to_string();
-    let model =
-        SpacebotModel::make(&deps.llm_manager, &model_name).with_routing((**routing).clone());
+    let model = SpacebotModel::make(&deps.llm_manager, &model_name)
+        .with_context(&*deps.agent_id, "branch")
+        .with_routing((**routing).clone());
 
     let conversation_logger =
         crate::conversation::history::ConversationLogger::new(deps.sqlite_pool.clone());
@@ -476,6 +475,8 @@ async fn process_chunk(
         deps.memory_search.clone(),
         conversation_logger,
         channel_store,
+        crate::conversation::ProcessRunLogger::new(deps.sqlite_pool.clone()),
+        &deps.agent_id,
     );
 
     let agent = AgentBuilder::new(model)
@@ -484,9 +485,8 @@ async fn process_chunk(
         .tool_server_handle(tool_server)
         .build();
 
-    let user_prompt = prompt_engine
-        .render_system_ingestion_chunk(filename, chunk_number, total_chunks, chunk)
-        .expect("failed to render ingestion chunk prompt");
+    let user_prompt =
+        prompt_engine.render_system_ingestion_chunk(filename, chunk_number, total_chunks, chunk)?;
 
     let mut history = Vec::new();
     match agent.prompt(&user_prompt).with_history(&mut history).await {

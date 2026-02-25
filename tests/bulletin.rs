@@ -68,16 +68,31 @@ async fn bootstrap_deps() -> anyhow::Result<spacebot::AgentDeps> {
     let (event_tx, _) = tokio::sync::broadcast::channel(16);
 
     let agent_id: spacebot::AgentId = Arc::from(agent_config.id.as_str());
+    let mcp_manager = Arc::new(spacebot::mcp::McpManager::new(agent_config.mcp.clone()));
+
+    let sandbox = Arc::new(
+        spacebot::sandbox::Sandbox::new(
+            &agent_config.sandbox,
+            agent_config.workspace.clone(),
+            &config.instance_dir,
+            agent_config.data_dir.clone(),
+        )
+        .await,
+    );
 
     Ok(spacebot::AgentDeps {
         agent_id,
         memory_search,
         llm_manager,
+        mcp_manager,
         cron_tool: None,
         runtime_config,
         event_tx,
         sqlite_pool: db.sqlite.clone(),
         messaging_manager: None,
+        sandbox,
+        links: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
+        agent_names: Arc::new(std::collections::HashMap::new()),
     })
 }
 
