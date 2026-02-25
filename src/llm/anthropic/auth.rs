@@ -88,17 +88,18 @@ pub enum AnthropicAuthPath {
     ApiKey,
     /// OAuth token (sk-ant-oat*) — uses Bearer auth with Claude Code identity.
     OAuthToken,
-    /// Auth token from ANTHROPIC_AUTH_TOKEN — uses Bearer auth without Claude Code identity.
-    AuthToken,
+    /// Proxy bearer token — uses `Authorization: Bearer` without Claude Code
+    /// identity headers. Used when key originates from `ANTHROPIC_AUTH_TOKEN`.
+    ProxyBearer,
 }
 
 /// Detect the auth path from a token's prefix.
 ///
-/// If `is_auth_token` is true (token came from ANTHROPIC_AUTH_TOKEN env var),
-/// returns `AuthToken` to use Bearer auth without Claude Code identity headers.
-pub fn detect_auth_path(token: &str, is_auth_token: bool) -> AnthropicAuthPath {
-    if is_auth_token {
-        AnthropicAuthPath::AuthToken
+/// If `force_bearer` is true (key came from `ANTHROPIC_AUTH_TOKEN`),
+/// returns `ProxyBearer` regardless of prefix.
+pub fn detect_auth_path(token: &str, force_bearer: bool) -> AnthropicAuthPath {
+    if force_bearer {
+        AnthropicAuthPath::ProxyBearer
     } else if token.starts_with("sk-ant-oat") {
         AnthropicAuthPath::OAuthToken
     } else {
@@ -114,9 +115,9 @@ pub fn apply_auth_headers(
     builder: RequestBuilder,
     token: &str,
     interleaved_thinking: bool,
-    is_auth_token: bool,
+    force_bearer: bool,
 ) -> (RequestBuilder, AnthropicAuthPath) {
-    let auth_path = detect_auth_path(token, is_auth_token);
+    let auth_path = detect_auth_path(token, force_bearer);
 
     let mut beta_parts: Vec<&str> = Vec::new();
     let builder = match auth_path {
@@ -133,7 +134,7 @@ pub fn apply_auth_headers(
                 .header("user-agent", CLAUDE_CODE_USER_AGENT)
                 .header("x-app", "cli")
         }
-        AnthropicAuthPath::AuthToken => {
+        AnthropicAuthPath::ProxyBearer => {
             beta_parts.push(BETA_FINE_GRAINED_STREAMING);
             builder.header("Authorization", format!("Bearer {token}"))
         }
@@ -154,24 +155,24 @@ mod tests {
     use super::*;
 
     fn build_request(token: &str, thinking: bool) -> (reqwest::Request, AnthropicAuthPath) {
-        build_request_with_auth_token(token, thinking, false)
+        build_request_with_bearer(token, thinking, false)
     }
 
-    fn build_request_with_auth_token(
+    fn build_request_with_bearer(
         token: &str,
         thinking: bool,
-        is_auth_token: bool,
+        force_bearer: bool,
     ) -> (reqwest::Request, AnthropicAuthPath) {
         let client = reqwest::Client::new();
         let builder = client.post("https://api.anthropic.com/v1/messages");
-        let (builder, auth_path) = apply_auth_headers(builder, token, thinking, is_auth_token);
+        let (builder, auth_path) = apply_auth_headers(builder, token, thinking, force_bearer);
         (builder.build().unwrap(), auth_path)
     }
 
     #[test]
     fn oauth_token_detected_correctly() {
         assert_eq!(
-            detect_auth_path("sk-ant-oat01-abc123"),
+            detect_auth_path("sk-ant-oat01-abc123", false),
             AnthropicAuthPath::OAuthToken
         );
     }
@@ -179,7 +180,7 @@ mod tests {
     #[test]
     fn api_key_detected_correctly() {
         assert_eq!(
-            detect_auth_path("sk-ant-api03-xyz789"),
+            detect_auth_path("sk-ant-api03-xyz789", false),
             AnthropicAuthPath::ApiKey
         );
     }
@@ -187,8 +188,20 @@ mod tests {
     #[test]
     fn unknown_prefix_defaults_to_api_key() {
         assert_eq!(
-            detect_auth_path("some-random-key"),
+            detect_auth_path("some-random-key", false),
             AnthropicAuthPath::ApiKey
+        );
+    }
+
+    #[test]
+    fn force_bearer_overrides_prefix() {
+        assert_eq!(
+            detect_auth_path("sk-ant-api03-xyz789", true),
+            AnthropicAuthPath::ProxyBearer
+        );
+        assert_eq!(
+            detect_auth_path("some-proxy-token", true),
+            AnthropicAuthPath::ProxyBearer
         );
     }
 
@@ -269,10 +282,9 @@ mod tests {
     }
 
     #[test]
-    fn auth_token_uses_bearer_header() {
-        // ANTHROPIC_AUTH_TOKEN should use Bearer auth even without sk-ant-oat prefix
-        let (request, auth_path) = build_request_with_auth_token("my-proxy-token", false, true);
-        assert_eq!(auth_path, AnthropicAuthPath::AuthToken);
+    fn proxy_bearer_uses_bearer_header() {
+        let (request, auth_path) = build_request_with_bearer("my-proxy-token", false, true);
+        assert_eq!(auth_path, AnthropicAuthPath::ProxyBearer);
         assert_eq!(
             request.headers().get("Authorization").unwrap(),
             "Bearer my-proxy-token"
@@ -281,17 +293,20 @@ mod tests {
     }
 
     #[test]
-    fn auth_token_has_no_identity_headers() {
-        // Auth tokens should not include Claude Code identity headers
-        let (request, _) = build_request_with_auth_token("my-proxy-token", false, true);
-        assert!(request.headers().get("user-agent").is_none());
+    fn proxy_bearer_has_no_identity_headers() {
+        let (request, _) = build_request_with_bearer("my-proxy-token", false, true);
         assert!(request.headers().get("x-app").is_none());
+        // Should not have Claude Code user-agent
+        let ua = request
+            .headers()
+            .get("user-agent")
+            .map(|v| v.to_str().unwrap().to_string());
+        assert!(ua.is_none() || !ua.unwrap().contains("claude-code"));
     }
 
     #[test]
-    fn auth_token_has_streaming_beta_but_no_oauth_beta() {
-        // Auth tokens should have fine-grained streaming but not OAuth/Claude Code betas
-        let (request, _) = build_request_with_auth_token("my-proxy-token", false, true);
+    fn proxy_bearer_has_streaming_beta_but_not_oauth() {
+        let (request, _) = build_request_with_bearer("my-proxy-token", false, true);
         let beta = request
             .headers()
             .get("anthropic-beta")
