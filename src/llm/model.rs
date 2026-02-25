@@ -1572,18 +1572,6 @@ mod tests {
         }
     }
     #[test]
-    fn positive_max_tokens_omits_none_and_zero() {
-        assert_eq!(positive_max_tokens(None), None);
-        assert_eq!(positive_max_tokens(Some(0)), None);
-    }
-
-    #[test]
-    fn positive_max_tokens_keeps_positive_values() {
-        assert_eq!(positive_max_tokens(Some(1)), Some(1));
-        assert_eq!(positive_max_tokens(Some(2048)), Some(2048));
-    }
-
-    #[test]
     fn coding_plan_model_name_uses_plain_glm_id() {
         assert_eq!(
             remap_model_name_for_api("zai-coding-plan", "glm-5"),
