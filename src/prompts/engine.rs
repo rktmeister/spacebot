@@ -94,10 +94,6 @@ impl PromptEngine {
             "fragments/org_context",
             crate::prompts::text::get("fragments/org_context"),
         )?;
-        env.add_template(
-            "fragments/link_context",
-            crate::prompts::text::get("fragments/link_context"),
-        )?;
 
         // System message fragments
         env.add_template(
