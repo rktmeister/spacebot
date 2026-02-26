@@ -57,7 +57,8 @@ resolve_migration_diff_range() {
 	local head_sha=""
 	head_sha="$(git rev-parse HEAD)"
 
-	if [[ -n "${GITHUB_EVENT_BEFORE:-}" && "${GITHUB_EVENT_BEFORE}" != "0000000000000000000000000000000000000000" ]] \
+	if $is_ci \
+		&& [[ -n "${GITHUB_EVENT_BEFORE:-}" && "${GITHUB_EVENT_BEFORE}" != "0000000000000000000000000000000000000000" ]] \
 		&& git rev-parse --verify --quiet "${GITHUB_EVENT_BEFORE}^{commit}" >/dev/null 2>&1; then
 		echo "${GITHUB_EVENT_BEFORE}..HEAD"
 		return
@@ -98,7 +99,11 @@ check_migration_safety() {
 		log "migration diff range: working tree only (no base ref available)"
 	fi
 
-	mapfile -t migration_changes < <(
+	local -a migration_changes=()
+	local migration_change=""
+	while IFS= read -r migration_change; do
+		migration_changes+=("$migration_change")
+	done < <(
 		{
 			if [[ -n "$diff_range" ]]; then
 				git diff --name-status "$diff_range" -- migrations
