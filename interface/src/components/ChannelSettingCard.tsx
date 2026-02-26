@@ -217,32 +217,46 @@ export function ChannelSettingCard({
 			if (
 				!credentialInputs.email_imap_host?.trim() ||
 				!credentialInputs.email_imap_username?.trim() ||
-				!credentialInputs.email_imap_password?.trim() ||
+				!credentialInputs.email_imap_password ||
 				!credentialInputs.email_smtp_host?.trim() ||
 				!credentialInputs.email_smtp_username?.trim() ||
-				!credentialInputs.email_smtp_password?.trim() ||
+				!credentialInputs.email_smtp_password ||
 				!credentialInputs.email_from_address?.trim()
 			)
 				return;
 
-			const parsedImapPort = Number.parseInt(
-				credentialInputs.email_imap_port?.trim() ?? "",
-				10,
-			);
-			const parsedSmtpPort = Number.parseInt(
-				credentialInputs.email_smtp_port?.trim() ?? "",
-				10,
-			);
+			const parsePort = (rawPort?: string): number | undefined => {
+				const value = rawPort?.trim();
+				if (!value) return undefined;
+				if (!/^\d+$/.test(value)) return Number.NaN;
+
+				const port = Number(value);
+				if (!Number.isInteger(port) || port < 1 || port > 65535)
+					return Number.NaN;
+
+				return port;
+			};
+
+			const parsedImapPort = parsePort(credentialInputs.email_imap_port);
+			const parsedSmtpPort = parsePort(credentialInputs.email_smtp_port);
+
+			if (Number.isNaN(parsedImapPort) || Number.isNaN(parsedSmtpPort)) {
+				setMessage({
+					text: "Ports must be integers between 1 and 65535.",
+					type: "error",
+				});
+				return;
+			}
 
 			request.platform_credentials = {
 				email_imap_host: credentialInputs.email_imap_host.trim(),
-				email_imap_port: Number.isFinite(parsedImapPort) && parsedImapPort > 0 ? parsedImapPort : undefined,
+				email_imap_port: parsedImapPort,
 				email_imap_username: credentialInputs.email_imap_username.trim(),
-				email_imap_password: credentialInputs.email_imap_password.trim(),
+				email_imap_password: credentialInputs.email_imap_password,
 				email_smtp_host: credentialInputs.email_smtp_host.trim(),
-				email_smtp_port: Number.isFinite(parsedSmtpPort) && parsedSmtpPort > 0 ? parsedSmtpPort : undefined,
+				email_smtp_port: parsedSmtpPort,
 				email_smtp_username: credentialInputs.email_smtp_username.trim(),
-				email_smtp_password: credentialInputs.email_smtp_password.trim(),
+				email_smtp_password: credentialInputs.email_smtp_password,
 				email_from_address: credentialInputs.email_from_address.trim(),
 				email_from_name: credentialInputs.email_from_name?.trim() || undefined,
 			};

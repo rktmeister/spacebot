@@ -71,18 +71,18 @@ impl std::fmt::Debug for EmailAdapter {
         f.debug_struct("EmailAdapter")
             .field("imap_host", &self.imap_host)
             .field("imap_port", &self.imap_port)
-            .field("imap_username", &self.imap_username)
+            .field("imap_username", &"[REDACTED]")
             .field("imap_password", &"[REDACTED]")
             .field("imap_use_tls", &self.imap_use_tls)
             .field("smtp_host", &self.smtp_host)
             .field("smtp_port", &self.smtp_port)
-            .field("smtp_username", &self.smtp_username)
+            .field("smtp_username", &"[REDACTED]")
             .field("smtp_use_starttls", &self.smtp_use_starttls)
-            .field("from_address", &self.from_address)
+            .field("from_address", &"[REDACTED]")
             .field("from_name", &self.from_name)
             .field("folders", &self.folders)
             .field("poll_interval", &self.poll_interval)
-            .field("allowed_senders", &self.allowed_senders)
+            .field("allowed_senders", &"[REDACTED]")
             .field("max_body_bytes", &self.max_body_bytes)
             .field("max_attachment_bytes", &self.max_attachment_bytes)
             .finish()
@@ -185,6 +185,15 @@ impl EmailAdapter {
         }
 
         let message = if let Some((filename, data, mime_type)) = attachment {
+            if data.len() > self.max_attachment_bytes {
+                return Err(anyhow::anyhow!(
+                    "attachment '{filename}' exceeds max_attachment_bytes ({} > {})",
+                    data.len(),
+                    self.max_attachment_bytes
+                )
+                .into());
+            }
+
             let content_type = ContentType::parse(&mime_type).unwrap_or(ContentType::TEXT_PLAIN);
             let attachment = EmailAttachment::new(filename).body(data, content_type);
             let multipart = MultiPart::mixed()
@@ -366,7 +375,13 @@ impl Messaging for EmailAdapter {
                 )
                 .await?;
             }
-            OutboundResponse::ScheduledMessage { text, .. } => {
+            OutboundResponse::ScheduledMessage { text, post_at } => {
+                tracing::warn!(
+                    post_at,
+                    recipient = %context.recipient,
+                    subject = %context.subject,
+                    "email adapter does not support scheduled delivery; sending immediately"
+                );
                 self.send_email(
                     &context.recipient,
                     &context.subject,
@@ -416,8 +431,16 @@ impl Messaging for EmailAdapter {
                 .await?;
             }
             OutboundResponse::ThreadReply { text, .. }
-            | OutboundResponse::Ephemeral { text, .. }
-            | OutboundResponse::ScheduledMessage { text, .. } => {
+            | OutboundResponse::Ephemeral { text, .. } => {
+                self.send_email(&recipient, "Spacebot message", text, None, Vec::new(), None)
+                    .await?;
+            }
+            OutboundResponse::ScheduledMessage { text, post_at } => {
+                tracing::warn!(
+                    post_at,
+                    recipient = %recipient,
+                    "email adapter does not support scheduled delivery; sending immediately"
+                );
                 self.send_email(&recipient, "Spacebot message", text, None, Vec::new(), None)
                     .await?;
             }
@@ -520,7 +543,7 @@ impl Messaging for EmailAdapter {
 
     async fn shutdown(&self) -> crate::Result<()> {
         if let Some(shutdown_tx) = self.shutdown_tx.write().await.take() {
-            let _ = shutdown_tx.send(true);
+            shutdown_tx.send(true).ok();
         }
 
         if let Some(poll_task) = self.poll_task.write().await.take()
@@ -541,7 +564,8 @@ fn build_smtp_transport(config: &EmailConfig) -> crate::Result<AsyncSmtpTranspor
         AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.smtp_host)
             .with_context(|| format!("invalid SMTP host '{}'", config.smtp_host))?
     } else {
-        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.smtp_host)
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp_host)
+            .with_context(|| format!("invalid SMTP host '{}'", config.smtp_host))?
     };
 
     Ok(builder
@@ -578,23 +602,36 @@ fn poll_inbox_once(config: &EmailPollConfig) -> anyhow::Result<Vec<InboundMessag
                 }
             };
 
+            let mut should_mark_seen = !fetches.is_empty();
+
             for fetch in &fetches {
+                let current_uid = fetch.uid.unwrap_or(uid);
                 let Some(raw_email) = fetch.body() else {
+                    should_mark_seen = false;
+                    tracing::warn!(
+                        folder,
+                        uid = current_uid,
+                        "email fetch body missing; leaving message unseen for retry"
+                    );
                     continue;
                 };
 
-                let current_uid = fetch.uid.unwrap_or(uid);
                 match parse_inbound_email(raw_email, folder, current_uid, config) {
                     Ok(Some(inbound_message)) => inbound_messages.push(inbound_message),
                     Ok(None) => {}
                     Err(error) => {
+                        should_mark_seen = false;
                         tracing::warn!(folder, uid = current_uid, %error, "failed to parse inbound email");
                     }
                 }
             }
 
-            if let Err(error) = session.uid_store(&uid_sequence, "+FLAGS (\\Seen)") {
-                tracing::warn!(folder, uid, %error, "failed to mark email as seen");
+            if should_mark_seen {
+                if let Err(error) = session.uid_store(&uid_sequence, "+FLAGS (\\Seen)") {
+                    tracing::warn!(folder, uid, %error, "failed to mark email as seen");
+                }
+            } else {
+                tracing::debug!(folder, uid, "leaving email unseen for retry");
             }
         }
     }
@@ -857,12 +894,14 @@ fn fetch_history_from_imap(
                 break;
             }
 
-            let search_id = format_message_id_for_header(message_id);
-            if search_id.is_empty() {
+            let Some(criterion) = build_message_id_search_criterion(message_id) else {
+                tracing::debug!(
+                    message_id,
+                    "skipping unsafe message id for IMAP history search"
+                );
                 continue;
-            }
+            };
 
-            let criterion = format!("HEADER Message-ID \"{search_id}\"");
             let uids = match session.uid_search(&criterion) {
                 Ok(uids) => uids,
                 Err(error) => {
@@ -1174,6 +1213,20 @@ fn format_message_id_for_header(message_id: &str) -> String {
     } else {
         format!("<{message_id}>")
     }
+}
+
+fn build_message_id_search_criterion(message_id: &str) -> Option<String> {
+    let search_id = format_message_id_for_header(message_id);
+    if search_id.is_empty()
+        || search_id
+            .chars()
+            .any(|character| character == '\r' || character == '\n')
+    {
+        return None;
+    }
+
+    let escaped = search_id.replace('\\', "\\\\").replace('"', "\\\"");
+    Some(format!("HEADER Message-ID \"{escaped}\""))
 }
 
 fn derive_thread_key(

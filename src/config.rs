@@ -1530,19 +1530,19 @@ impl std::fmt::Debug for EmailConfig {
             .field("enabled", &self.enabled)
             .field("imap_host", &self.imap_host)
             .field("imap_port", &self.imap_port)
-            .field("imap_username", &self.imap_username)
+            .field("imap_username", &"[REDACTED]")
             .field("imap_password", &"[REDACTED]")
             .field("imap_use_tls", &self.imap_use_tls)
             .field("smtp_host", &self.smtp_host)
             .field("smtp_port", &self.smtp_port)
-            .field("smtp_username", &self.smtp_username)
+            .field("smtp_username", &"[REDACTED]")
             .field("smtp_password", &"[REDACTED]")
             .field("smtp_use_starttls", &self.smtp_use_starttls)
-            .field("from_address", &self.from_address)
+            .field("from_address", &"[REDACTED]")
             .field("from_name", &self.from_name)
             .field("poll_interval_secs", &self.poll_interval_secs)
             .field("folders", &self.folders)
-            .field("allowed_senders", &self.allowed_senders)
+            .field("allowed_senders", &"[REDACTED]")
             .field("max_body_bytes", &self.max_body_bytes)
             .field("max_attachment_bytes", &self.max_attachment_bytes)
             .finish()
@@ -3906,51 +3906,35 @@ impl Config {
                 })
             }),
             email: toml.messaging.email.and_then(|email| {
-                let imap_host = email
-                    .imap_host
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("EMAIL_IMAP_HOST").ok())?;
-                let imap_username = email
-                    .imap_username
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("EMAIL_IMAP_USERNAME").ok())?;
-                let imap_password = email
-                    .imap_password
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("EMAIL_IMAP_PASSWORD").ok())?;
+                let imap_host = std::env::var("EMAIL_IMAP_HOST")
+                    .ok()
+                    .or_else(|| email.imap_host.as_deref().and_then(resolve_env_value))?;
+                let imap_username = std::env::var("EMAIL_IMAP_USERNAME")
+                    .ok()
+                    .or_else(|| email.imap_username.as_deref().and_then(resolve_env_value))?;
+                let imap_password = std::env::var("EMAIL_IMAP_PASSWORD")
+                    .ok()
+                    .or_else(|| email.imap_password.as_deref().and_then(resolve_env_value))?;
 
-                let smtp_host = email
-                    .smtp_host
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("EMAIL_SMTP_HOST").ok())?;
-                let smtp_username = email
-                    .smtp_username
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("EMAIL_SMTP_USERNAME").ok())
+                let smtp_host = std::env::var("EMAIL_SMTP_HOST")
+                    .ok()
+                    .or_else(|| email.smtp_host.as_deref().and_then(resolve_env_value))?;
+                let smtp_username = std::env::var("EMAIL_SMTP_USERNAME")
+                    .ok()
+                    .or_else(|| email.smtp_username.as_deref().and_then(resolve_env_value))
                     .unwrap_or_else(|| imap_username.clone());
-                let smtp_password = email
-                    .smtp_password
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("EMAIL_SMTP_PASSWORD").ok())
+                let smtp_password = std::env::var("EMAIL_SMTP_PASSWORD")
+                    .ok()
+                    .or_else(|| email.smtp_password.as_deref().and_then(resolve_env_value))
                     .unwrap_or_else(|| imap_password.clone());
 
-                let from_address = email
-                    .from_address
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("EMAIL_FROM_ADDRESS").ok())
+                let from_address = std::env::var("EMAIL_FROM_ADDRESS")
+                    .ok()
+                    .or_else(|| email.from_address.as_deref().and_then(resolve_env_value))
                     .unwrap_or_else(|| smtp_username.clone());
-                let from_name = email
-                    .from_name
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("EMAIL_FROM_NAME").ok());
+                let from_name = std::env::var("EMAIL_FROM_NAME")
+                    .ok()
+                    .or_else(|| email.from_name.as_deref().and_then(resolve_env_value));
 
                 Some(EmailConfig {
                     enabled: email.enabled,

@@ -128,26 +128,9 @@ pub(super) async fn messaging_status(
                     .get("smtp_host")
                     .and_then(|v| v.as_str())
                     .is_some_and(|s| !s.is_empty());
-                let has_smtp_username = email
-                    .get("smtp_username")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|s| !s.is_empty());
-                let has_smtp_password = email
-                    .get("smtp_password")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|s| !s.is_empty());
-                let has_from_address = email
-                    .get("from_address")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|s| !s.is_empty());
 
-                let configured = has_imap_host
-                    && has_imap_username
-                    && has_imap_password
-                    && has_smtp_host
-                    && has_smtp_username
-                    && has_smtp_password
-                    && has_from_address;
+                let configured =
+                    has_imap_host && has_imap_username && has_imap_password && has_smtp_host;
 
                 let enabled = email
                     .get("enabled")

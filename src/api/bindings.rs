@@ -293,7 +293,6 @@ pub(super) async fn create_binding(
             .email_imap_password
             .as_deref()
             .unwrap_or("")
-            .trim()
             .to_string();
         let email_smtp_host = credentials
             .email_smtp_host
@@ -311,7 +310,6 @@ pub(super) async fn create_binding(
             .email_smtp_password
             .as_deref()
             .unwrap_or("")
-            .trim()
             .to_string();
         let email_from_address = credentials
             .email_from_address

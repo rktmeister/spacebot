@@ -113,7 +113,10 @@ pub fn resolve_broadcast_target(channel: &ChannelInfo) -> Option<BroadcastTarget
                 .and_then(|meta| meta.get("email_from"))
                 .and_then(json_value_to_string);
 
-            reply_to.or(from)?
+            reply_to
+                .as_deref()
+                .and_then(normalize_email_target)
+                .or_else(|| from.as_deref().and_then(normalize_email_target))?
         }
         _ => return None,
     };
@@ -339,6 +342,25 @@ mod tests {
             Some(super::BroadcastTarget {
                 adapter: "email".to_string(),
                 target: "alice@example.com".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_email_target_falls_back_when_reply_to_invalid() {
+        let mut channel = test_channel_info("email:acct:thread", "email");
+        channel.platform_meta = Some(serde_json::json!({
+            "email_reply_to": "not-an-email",
+            "email_from": "valid@example.com"
+        }));
+
+        let resolved = resolve_broadcast_target(&channel);
+
+        assert_eq!(
+            resolved,
+            Some(super::BroadcastTarget {
+                adapter: "email".to_string(),
+                target: "valid@example.com".to_string(),
             })
         );
     }
