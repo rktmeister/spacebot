@@ -2479,7 +2479,9 @@ async fn download_attachment_bytes(
     }
 }
 
-/// Slack-specific download: manually follows redirects to preserve the auth header.
+/// Slack-specific download: manually follows redirects, only forwarding the
+/// Authorization header when the redirect target shares the same host as the
+/// original URL. This prevents credential leakage on cross-origin redirects.
 async fn download_attachment_bytes_with_auth(
     attachment: &crate::Attachment,
 ) -> std::result::Result<Vec<u8>, String> {
@@ -2490,23 +2492,36 @@ async fn download_attachment_bytes_with_auth(
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
     let auth = attachment.auth_header.as_deref().unwrap_or_default();
-    let mut url = attachment.url.clone();
+    let original_url =
+        reqwest::Url::parse(&attachment.url).map_err(|e| format!("invalid attachment URL: {e}"))?;
+    let original_host = original_url.host_str().unwrap_or_default().to_owned();
+    let mut current_url = original_url;
 
-    for _ in 0..5 {
-        let response = client
-            .get(&url)
-            .header(reqwest::header::AUTHORIZATION, auth)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+    for hop in 0..5 {
+        let same_host = current_url.host_str().unwrap_or_default() == original_host;
+
+        let mut request = client.get(current_url.clone());
+        if same_host {
+            request = request.header(reqwest::header::AUTHORIZATION, auth);
+        }
+
+        tracing::debug!(hop, url = %current_url, same_host, "following attachment redirect");
+
+        let response = request.send().await.map_err(|e| e.to_string())?;
         let status = response.status();
 
         if status.is_redirection() {
-            if let Some(location) = response.headers().get(reqwest::header::LOCATION) {
-                url = location.to_str().unwrap_or_default().to_string();
-                continue;
-            }
-            return Err(format!("redirect without Location header ({})", status));
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .ok_or_else(|| format!("redirect without Location header ({status})"))?;
+            let location_str = location
+                .to_str()
+                .map_err(|e| format!("invalid Location header: {e}"))?;
+            current_url = current_url
+                .join(location_str)
+                .map_err(|e| format!("invalid redirect URL: {e}"))?;
+            continue;
         }
 
         if !status.is_success() {

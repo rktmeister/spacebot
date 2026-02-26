@@ -312,7 +312,8 @@ pub struct Attachment {
     pub url: String,
     pub size_bytes: Option<u64>,
     /// Optional auth header value for private URLs (e.g. Slack's `url_private`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Excluded from serialization to prevent credential leakage.
+    #[serde(skip)]
     pub auth_header: Option<String>,
 }
 
