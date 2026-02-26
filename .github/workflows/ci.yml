@@ -11,52 +11,26 @@ env:
   RUSTFLAGS: "-Dwarnings"
 
 jobs:
-  check:
-    name: Check & Clippy
+  gate-pr:
+    name: PR Gate
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
+
+      - uses: taiki-e/install-action@just
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo check
-        run: cargo check --all-targets
-
-      - name: cargo clippy
-        run: cargo clippy --all-targets
-
-  fmt:
-    name: Format
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
-
-  test:
-    name: Test
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: cargo test (lib)
-        run: cargo test --lib
+      - name: Run gate-pr (CI)
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+        run: just gate-pr-ci
