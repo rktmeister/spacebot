@@ -473,13 +473,13 @@ pub async fn apply_docker_update(status: &SharedUpdateStatus) -> anyhow::Result<
 
     tracing::info!(new_id = %new_container.id, "new container created");
 
-    // Stop the current container (this process will be killed)
-    // The rename + start happens from a brief window where we stop ourselves.
-    // To handle this, we rename the old container first, then start the new one,
-    // then stop ourselves. The new container takes over.
-
     // Rename current container out of the way
-    let old_name = format!("{}-old", container_name);
+    let old_suffix = container_id
+        .char_indices()
+        .nth(12)
+        .map(|(index, _)| &container_id[..index])
+        .unwrap_or(container_id.as_str());
+    let old_name = format!("{}-old-{}", container_name, old_suffix);
     docker
         .rename_container(
             &container_id,
@@ -488,7 +488,7 @@ pub async fn apply_docker_update(status: &SharedUpdateStatus) -> anyhow::Result<
         .await
         .map_err(|e| anyhow::anyhow!("failed to rename old container: {}", e))?;
 
-    // Rename new container to the original name
+    // Rename new container to the original name.
     docker
         .rename_container(
             &new_container.id,
@@ -499,11 +499,53 @@ pub async fn apply_docker_update(status: &SharedUpdateStatus) -> anyhow::Result<
         .await
         .map_err(|e| anyhow::anyhow!("failed to rename new container: {}", e))?;
 
-    // Start the new container
-    docker
+    // Start the new container. If this fails (for example because host ports
+    // are already allocated), roll back container names so the running
+    // instance keeps its original identity.
+    if let Err(error) = docker
         .start_container::<String>(&new_container.id, None)
         .await
-        .map_err(|e| anyhow::anyhow!("failed to start new container: {}", e))?;
+    {
+        let error_text = error.to_string();
+        tracing::error!(%error, "failed to start replacement container, rolling back");
+
+        let _ = docker
+            .rename_container(
+                &new_container.id,
+                bollard::container::RenameContainerOptions { name: &temp_name },
+            )
+            .await;
+        let _ = docker
+            .rename_container(
+                &container_id,
+                bollard::container::RenameContainerOptions {
+                    name: &container_name,
+                },
+            )
+            .await;
+        let _ = docker
+            .remove_container(
+                &new_container.id,
+                Some(bollard::container::RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await;
+
+        if error_text.contains("port is already allocated")
+            || error_text.contains("port has already been allocated")
+            || error_text.contains("address already in use")
+        {
+            anyhow::bail!(
+                "failed to start replacement container because host ports are already allocated by the running container (rolled back). use manual update commands: `docker compose pull spacebot && docker compose up -d --force-recreate spacebot`"
+            );
+        }
+
+        anyhow::bail!(
+            "failed to start replacement container: {error} (rolled back to original container)"
+        );
+    }
 
     tracing::info!("new container started, stopping old container");
 
