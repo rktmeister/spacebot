@@ -173,6 +173,16 @@ pub(super) async fn create_task(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    state
+        .event_tx
+        .send(super::state::ApiEvent::TaskUpdated {
+            agent_id: task.agent_id.clone(),
+            task_number: task.task_number,
+            status: task.status.to_string(),
+            action: "created".to_string(),
+        })
+        .ok();
+
     Ok(Json(TaskResponse { task }))
 }
 
@@ -217,6 +227,16 @@ pub(super) async fn update_task(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    state
+        .event_tx
+        .send(super::state::ApiEvent::TaskUpdated {
+            agent_id: task.agent_id.clone(),
+            task_number: task.task_number,
+            status: task.status.to_string(),
+            action: "updated".to_string(),
+        })
+        .ok();
+
     Ok(Json(TaskResponse { task }))
 }
 
@@ -239,6 +259,16 @@ pub(super) async fn delete_task(
     if !deleted {
         return Err(StatusCode::NOT_FOUND);
     }
+
+    state
+        .event_tx
+        .send(super::state::ApiEvent::TaskUpdated {
+            agent_id: query.agent_id.clone(),
+            task_number: number,
+            status: "deleted".to_string(),
+            action: "deleted".to_string(),
+        })
+        .ok();
 
     Ok(Json(TaskActionResponse {
         success: true,
@@ -271,9 +301,21 @@ pub(super) async fn approve_task(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    state
+        .event_tx
+        .send(super::state::ApiEvent::TaskUpdated {
+            agent_id: task.agent_id.clone(),
+            task_number: task.task_number,
+            status: task.status.to_string(),
+            action: "updated".to_string(),
+        })
+        .ok();
+
     Ok(Json(TaskResponse { task }))
 }
 
+/// Move a task to `ready` so the cortex ready-task loop picks it up and spawns
+/// a worker. Tasks already in `ready` or `in_progress` are returned as-is.
 pub(super) async fn execute_task(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
@@ -282,12 +324,31 @@ pub(super) async fn execute_task(
     let stores = state.task_stores.load();
     let store = stores.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
+    // Fetch current task to check if transition is needed.
+    let current = store
+        .get_by_number(&request.agent_id, number)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, agent_id = %request.agent_id, task_number = number, "failed to get task for execution");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // If already ready or in-progress, return as-is — cortex will handle it.
+    if matches!(
+        current.status,
+        crate::tasks::TaskStatus::Ready | crate::tasks::TaskStatus::InProgress
+    ) {
+        return Ok(Json(TaskResponse { task: current }));
+    }
+
     let task = store
         .update(
             &request.agent_id,
             number,
             crate::tasks::UpdateTaskInput {
-                status: Some(crate::tasks::TaskStatus::InProgress),
+                status: Some(crate::tasks::TaskStatus::Ready),
+                approved_by: request.approved_by,
                 ..Default::default()
             },
         )
@@ -297,6 +358,16 @@ pub(super) async fn execute_task(
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
+
+    state
+        .event_tx
+        .send(super::state::ApiEvent::TaskUpdated {
+            agent_id: task.agent_id.clone(),
+            task_number: task.task_number,
+            status: task.status.to_string(),
+            action: "updated".to_string(),
+        })
+        .ok();
 
     Ok(Json(TaskResponse { task }))
 }

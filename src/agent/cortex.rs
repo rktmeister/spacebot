@@ -589,7 +589,56 @@ async fn gather_bulletin_sections(deps: &AgentDeps) -> String {
         output.push('\n');
     }
 
+    // Append active tasks (non-done) from the task store.
+    match gather_active_tasks(deps).await {
+        Ok(section) if !section.is_empty() => output.push_str(&section),
+        Err(error) => {
+            tracing::warn!(%error, "failed to gather active tasks for bulletin");
+        }
+        _ => {}
+    }
+
     output
+}
+
+/// Query the task store for non-done tasks and format them as a bulletin section.
+async fn gather_active_tasks(deps: &AgentDeps) -> anyhow::Result<String> {
+    use crate::tasks::TaskStatus;
+
+    let mut all_tasks = Vec::new();
+    for status in &[
+        TaskStatus::InProgress,
+        TaskStatus::Ready,
+        TaskStatus::Backlog,
+        TaskStatus::PendingApproval,
+    ] {
+        let tasks = deps
+            .task_store
+            .list(&deps.agent_id, Some(*status), None, 20)
+            .await?;
+        all_tasks.extend(tasks);
+    }
+
+    if all_tasks.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut output = String::from("### Active Tasks\n\n");
+    for task in &all_tasks {
+        let subtask_progress = if task.subtasks.is_empty() {
+            String::new()
+        } else {
+            let done = task.subtasks.iter().filter(|s| s.completed).count();
+            format!(" [{}/{}]", done, task.subtasks.len())
+        };
+        output.push_str(&format!(
+            "- #{} [{}] ({}) {}{}\n",
+            task.task_number, task.status, task.priority, task.title, subtask_progress,
+        ));
+    }
+    output.push('\n');
+
+    Ok(output)
 }
 
 /// Generate a memory bulletin and store it in RuntimeConfig.
@@ -953,7 +1002,7 @@ async fn run_ready_task_loop(deps: &AgentDeps, logger: &CortexLogger) -> anyhow:
     tokio::time::sleep(Duration::from_secs(10)).await;
 
     loop {
-        let interval = (**deps.runtime_config.cortex.load()).tick_interval_secs;
+        let interval = deps.runtime_config.cortex.load().tick_interval_secs;
         tokio::time::sleep(Duration::from_secs(interval.max(5))).await;
 
         if let Err(error) = pickup_one_ready_task(deps, logger).await {
@@ -1035,13 +1084,27 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         )
         .await?;
 
+    let _ = deps.event_tx.send(ProcessEvent::TaskUpdated {
+        agent_id: deps.agent_id.clone(),
+        task_number: task.task_number,
+        status: "in_progress".to_string(),
+        action: "updated".to_string(),
+    });
+
+    let task_description = format!("task #{}: {}", task.task_number, task.title);
+
     let _ = deps.event_tx.send(ProcessEvent::WorkerStarted {
         agent_id: deps.agent_id.clone(),
         worker_id,
         channel_id: None,
-        task: format!("task #{}: {}", task.task_number, task.title),
+        task: task_description.clone(),
         worker_type: "task".to_string(),
     });
+
+    // Log to worker_runs directly — task workers have no parent channel, so the
+    // channel event handler won't persist them.
+    let run_logger = crate::conversation::history::ProcessRunLogger::new(deps.sqlite_pool.clone());
+    run_logger.log_worker_started(None, worker_id, &task_description, "task", &deps.agent_id);
 
     let task_store = deps.task_store.clone();
     let agent_id = deps.agent_id.to_string();
@@ -1064,6 +1127,15 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                     tracing::warn!(%error, task_number = task.task_number, "failed to mark picked-up task done");
                 }
 
+                run_logger.log_worker_completed(worker_id, &result_text, true);
+
+                let _ = event_tx.send(ProcessEvent::TaskUpdated {
+                    agent_id: Arc::from(agent_id.as_str()),
+                    task_number: task.task_number,
+                    status: "done".to_string(),
+                    action: "updated".to_string(),
+                });
+
                 logger.log(
                     "task_pickup_completed",
                     &format!("Completed picked-up task #{}", task.task_number),
@@ -1083,6 +1155,9 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                 });
             }
             Err(error) => {
+                let error_message = format!("Worker failed: {error}");
+                run_logger.log_worker_completed(worker_id, &error_message, false);
+
                 if let Err(update_error) = task_store
                     .update(
                         &agent_id,
@@ -1097,6 +1172,13 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                 {
                     tracing::warn!(%update_error, task_number = task.task_number, "failed to return task to ready after failure");
                 }
+
+                let _ = event_tx.send(ProcessEvent::TaskUpdated {
+                    agent_id: Arc::from(agent_id.as_str()),
+                    task_number: task.task_number,
+                    status: "ready".to_string(),
+                    action: "updated".to_string(),
+                });
 
                 logger.log(
                     "task_pickup_failed",

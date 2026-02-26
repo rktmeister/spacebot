@@ -205,6 +205,14 @@ pub enum ApiEvent {
         link_id: String,
         channel_id: String,
     },
+    /// A task was created, updated, or deleted.
+    TaskUpdated {
+        agent_id: String,
+        task_number: i64,
+        status: String,
+        /// "created", "updated", or "deleted".
+        action: String,
+    },
 }
 
 impl ApiState {
@@ -439,6 +447,21 @@ impl ApiState {
                                         to_agent_id: to_agent_id.to_string(),
                                         link_id: link_id.clone(),
                                         channel_id: channel_id.to_string(),
+                                    })
+                                    .ok();
+                            }
+                            ProcessEvent::TaskUpdated {
+                                task_number,
+                                status,
+                                action,
+                                ..
+                            } => {
+                                api_tx
+                                    .send(ApiEvent::TaskUpdated {
+                                        agent_id: agent_id.clone(),
+                                        task_number: *task_number,
+                                        status: status.clone(),
+                                        action: action.clone(),
                                     })
                                     .ok();
                             }

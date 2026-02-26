@@ -189,6 +189,13 @@ pub enum ProcessEvent {
         link_id: String,
         channel_id: ChannelId,
     },
+    TaskUpdated {
+        agent_id: AgentId,
+        task_number: i64,
+        status: String,
+        /// "created", "updated", or "deleted".
+        action: String,
+    },
 }
 
 /// Shared dependency bundle for agent processes.

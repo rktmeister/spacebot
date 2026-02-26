@@ -73,10 +73,33 @@ impl Tool for TaskUpdateTool {
     type Output = TaskUpdateOutput;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: crate::prompts::text::get("tools/task_update").to_string(),
-            parameters: serde_json::json!({
+        let is_worker = matches!(self.scope, TaskUpdateScope::Worker(_));
+
+        // Workers only see subtask/metadata fields; branches/cortex see everything.
+        let parameters = if is_worker {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_number": { "type": "integer", "description": "Task number reference (#N)" },
+                    "subtasks": {
+                        "type": "array",
+                        "description": "Optional full replacement of subtask list",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": { "type": "string" },
+                                "completed": { "type": "boolean" }
+                            },
+                            "required": ["title", "completed"]
+                        }
+                    },
+                    "metadata": { "type": "object", "description": "Metadata object merged with current metadata" },
+                    "complete_subtask": { "type": "integer", "description": "Subtask index to mark complete" }
+                },
+                "required": ["task_number"]
+            })
+        } else {
+            serde_json::json!({
                 "type": "object",
                 "properties": {
                     "task_number": { "type": "integer", "description": "Task number reference (#N)" },
@@ -110,14 +133,20 @@ impl Tool for TaskUpdateTool {
                     "approved_by": { "type": "string", "description": "Optional approver identifier" }
                 },
                 "required": ["task_number"]
-            }),
+            })
+        };
+
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: crate::prompts::text::get("tools/task_update").to_string(),
+            parameters,
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let task_number = i64::from(args.task_number);
 
-        if let TaskUpdateScope::Worker(worker_id) = self.scope {
+        if let TaskUpdateScope::Worker(ref worker_id) = self.scope {
             let current = self
                 .task_store
                 .get_by_worker_id(&worker_id.to_string())
@@ -135,6 +164,20 @@ impl Tool for TaskUpdateTool {
                     "worker {} can only update task #{}",
                     worker_id, task.task_number
                 )));
+            }
+
+            // Workers can only update subtasks and metadata — not status, priority,
+            // title, description, worker binding, or approval.
+            if args.title.is_some()
+                || args.description.is_some()
+                || args.status.is_some()
+                || args.priority.is_some()
+                || args.worker_id.is_some()
+                || args.approved_by.is_some()
+            {
+                return Err(TaskUpdateError(
+                    "workers can only update subtasks and metadata".to_string(),
+                ));
             }
         }
 

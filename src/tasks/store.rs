@@ -241,7 +241,7 @@ impl TaskStore {
         if let Some(priority) = priority {
             sql = sql.bind(priority.as_str());
         }
-        sql = sql.bind(limit.max(1).min(500));
+        sql = sql.bind(limit.clamp(1, 500));
 
         let rows = sql
             .fetch_all(&self.pool)
@@ -279,21 +279,21 @@ impl TaskStore {
             return Ok(None);
         };
 
-        if let Some(next_status) = input.status {
-            if !can_transition(current.status, next_status) {
-                return Err(crate::error::Error::Other(anyhow::anyhow!(
-                    "invalid task status transition: {} -> {}",
-                    current.status,
-                    next_status
-                )));
-            }
+        if let Some(next_status) = input.status
+            && !can_transition(current.status, next_status)
+        {
+            return Err(crate::error::Error::Other(anyhow::anyhow!(
+                "invalid task status transition: {} -> {}",
+                current.status,
+                next_status
+            )));
         }
 
         let mut subtasks = input.subtasks.unwrap_or(current.subtasks);
-        if let Some(index) = input.complete_subtask {
-            if let Some(subtask) = subtasks.get_mut(index) {
-                subtask.completed = true;
-            }
+        if let Some(index) = input.complete_subtask
+            && let Some(subtask) = subtasks.get_mut(index)
+        {
+            subtask.completed = true;
         }
 
         let next_status = input.status.unwrap_or(current.status);
@@ -379,7 +379,15 @@ impl TaskStore {
 
     pub async fn claim_next_ready(&self, agent_id: &str) -> Result<Option<Task>> {
         let row = sqlx::query(
-            "SELECT task_number FROM tasks WHERE agent_id = ? AND status = 'ready' ORDER BY task_number ASC LIMIT 1",
+            "SELECT task_number FROM tasks WHERE agent_id = ? AND status = 'ready' \
+             ORDER BY CASE priority \
+               WHEN 'critical' THEN 0 \
+               WHEN 'high' THEN 1 \
+               WHEN 'medium' THEN 2 \
+               WHEN 'low' THEN 3 \
+               ELSE 4 END ASC, \
+             task_number ASC \
+             LIMIT 1",
         )
         .bind(agent_id)
         .fetch_optional(&self.pool)
