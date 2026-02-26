@@ -2248,28 +2248,34 @@ fn resolve_user_timezone(
     default_timezone: Option<&str>,
     fallback_timezone: Option<&str>,
 ) -> Option<String> {
-    let timezone = agent_timezone
-        .and_then(normalize_timezone)
-        .or_else(|| default_timezone.and_then(normalize_timezone))
-        .or_else(|| {
-            std::env::var(USER_TIMEZONE_ENV_VAR)
-                .ok()
-                .and_then(|value| normalize_timezone(&value))
-        })
-        .or_else(|| fallback_timezone.and_then(normalize_timezone));
+    let env_timezone = std::env::var(USER_TIMEZONE_ENV_VAR)
+        .ok()
+        .and_then(|value| normalize_timezone(&value));
 
-    let timezone = timezone?;
-
-    if timezone.parse::<Tz>().is_err() {
+    for (source, timezone) in [
+        ("agent", agent_timezone.and_then(normalize_timezone)),
+        ("defaults", default_timezone.and_then(normalize_timezone)),
+        ("env", env_timezone),
+        (
+            "cron_or_system",
+            fallback_timezone.and_then(normalize_timezone),
+        ),
+    ] {
+        let Some(timezone) = timezone else {
+            continue;
+        };
+        if timezone.parse::<Tz>().is_ok() {
+            return Some(timezone);
+        }
         tracing::warn!(
             agent_id,
             user_timezone = %timezone,
-            "invalid user timezone configured, falling back to cron/system timezone"
+            user_timezone_source = source,
+            "invalid user timezone configured, trying next fallback"
         );
-        return fallback_timezone.and_then(normalize_timezone);
     }
 
-    Some(timezone)
+    None
 }
 
 fn parse_otlp_headers(value: Option<String>) -> Result<HashMap<String, String>> {
@@ -5612,6 +5618,32 @@ id = "main"
             resolved.user_timezone.as_deref(),
             Some("America/Los_Angeles")
         );
+    }
+
+    #[test]
+    fn test_user_timezone_invalid_config_uses_env_fallback() {
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        unsafe {
+            std::env::set_var(USER_TIMEZONE_ENV_VAR, "Asia/Tokyo");
+        }
+
+        let toml = r#"
+[defaults]
+cron_timezone = "America/Los_Angeles"
+user_timezone = "Not/A-Real-Tz"
+
+[[agents]]
+id = "main"
+"#;
+
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+        let resolved = config.agents[0].resolve(&config.instance_dir, &config.defaults);
+        assert_eq!(resolved.user_timezone.as_deref(), Some("Asia/Tokyo"));
     }
 
     #[test]

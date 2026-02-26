@@ -562,15 +562,17 @@ impl Channel {
     #[tracing::instrument(skip(self, messages), fields(channel_id = %self.id, agent_id = %self.deps.agent_id, message_count = messages.len()))]
     async fn handle_message_batch(&mut self, messages: Vec<InboundMessage>) -> Result<()> {
         let message_count = messages.len();
-        let first_timestamp = messages
-            .first()
-            .map(|m| m.timestamp)
+        let batch_start_timestamp = messages
+            .iter()
+            .map(|message| message.timestamp)
+            .min()
             .unwrap_or_else(chrono::Utc::now);
-        let last_timestamp = messages
-            .last()
-            .map(|m| m.timestamp)
-            .unwrap_or(first_timestamp);
-        let elapsed = last_timestamp.signed_duration_since(first_timestamp);
+        let batch_tail_timestamp = messages
+            .iter()
+            .map(|message| message.timestamp)
+            .max()
+            .unwrap_or(batch_start_timestamp);
+        let elapsed = batch_tail_timestamp.signed_duration_since(batch_start_timestamp);
         let elapsed_secs = elapsed.num_milliseconds() as f64 / 1000.0;
 
         tracing::info!(
@@ -662,7 +664,7 @@ impl Channel {
                 conversation_id = message.conversation_id.clone();
 
                 // Include both absolute and relative time context.
-                let relative_secs = last_timestamp
+                let relative_secs = batch_tail_timestamp
                     .signed_duration_since(message.timestamp)
                     .num_seconds()
                     .max(0);
@@ -2381,7 +2383,12 @@ fn format_batched_user_message(
     relative_text: &str,
     raw_text: &str,
 ) -> String {
-    format!("[{display_name}] ({absolute_timestamp}; {relative_text}): {raw_text}")
+    let text_content = if raw_text.trim().is_empty() {
+        "[attachment or empty message]"
+    } else {
+        raw_text
+    };
+    format!("[{display_name}] ({absolute_timestamp}; {relative_text}): {text_content}")
 }
 
 fn extract_discord_message_id(message: &InboundMessage) -> Option<u64> {
@@ -3355,6 +3362,20 @@ mod tests {
         assert!(
             formatted.contains("ship it"),
             "batched formatting should include original message text"
+        );
+    }
+
+    #[test]
+    fn format_batched_message_uses_placeholder_for_empty_text() {
+        let formatted = super::format_batched_user_message(
+            "alice",
+            "2026-02-26 15:04:05 PST (America/Los_Angeles, UTC-08:00)",
+            "just now",
+            "   ",
+        );
+        assert!(
+            formatted.contains("[attachment or empty message]"),
+            "batched formatting should use placeholder for empty/whitespace text"
         );
     }
 }
