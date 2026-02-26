@@ -141,6 +141,10 @@ impl PromptEngine {
             crate::prompts::text::get("fragments/system/tool_syntax_correction"),
         )?;
         env.add_template(
+            "fragments/system/worker_time_context",
+            crate::prompts::text::get("fragments/system/worker_time_context"),
+        )?;
+        env.add_template(
             "fragments/coalesce_hint",
             crate::prompts::text::get("fragments/coalesce_hint"),
         )?;
@@ -296,6 +300,21 @@ impl PromptEngine {
     /// Correction message when the LLM outputs tool call syntax as plain text.
     pub fn render_system_tool_syntax_correction(&self) -> Result<String> {
         self.render_static("fragments/system/tool_syntax_correction")
+    }
+
+    /// Render worker task time-context preamble.
+    pub fn render_system_worker_time_context(
+        &self,
+        current_local_datetime: &str,
+        current_utc_datetime: &str,
+    ) -> Result<String> {
+        self.render(
+            "fragments/system/worker_time_context",
+            context! {
+                current_local_datetime => current_local_datetime,
+                current_utc_datetime => current_utc_datetime,
+            },
+        )
     }
 
     /// Convenience method for rendering truncation marker.

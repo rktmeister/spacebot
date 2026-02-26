@@ -49,23 +49,26 @@ struct TemporalContext {
 
 impl TemporalContext {
     fn from_runtime(runtime_config: &crate::config::RuntimeConfig) -> Self {
-        let configured_timezone = runtime_config
-            .user_timezone
-            .load()
-            .as_ref()
-            .clone()
-            .or_else(|| runtime_config.cron_timezone.load().as_ref().clone());
         let now_utc = Utc::now();
+        let user_timezone = runtime_config.user_timezone.load().as_ref().clone();
+        let cron_timezone = runtime_config.cron_timezone.load().as_ref().clone();
 
-        if let Some(timezone_name) = configured_timezone {
+        Self {
+            now_utc,
+            timezone: Self::resolve_timezone_from_names(user_timezone, cron_timezone),
+        }
+    }
+
+    fn resolve_timezone_from_names(
+        user_timezone: Option<String>,
+        cron_timezone: Option<String>,
+    ) -> TemporalTimezone {
+        if let Some(timezone_name) = user_timezone {
             match timezone_name.parse::<Tz>() {
                 Ok(timezone) => {
-                    return Self {
-                        now_utc,
-                        timezone: TemporalTimezone::Named {
-                            timezone_name,
-                            timezone,
-                        },
+                    return TemporalTimezone::Named {
+                        timezone_name,
+                        timezone,
                     };
                 }
                 Err(_) => {
@@ -77,10 +80,16 @@ impl TemporalContext {
             }
         }
 
-        Self {
-            now_utc,
-            timezone: TemporalTimezone::SystemLocal,
+        if let Some(timezone_name) = cron_timezone
+            && let Ok(timezone) = timezone_name.parse::<Tz>()
+        {
+            return TemporalTimezone::Named {
+                timezone_name,
+                timezone,
+            };
         }
+
+        TemporalTimezone::SystemLocal
     }
 
     fn format_timestamp(&self, timestamp: DateTime<Utc>) -> String {
@@ -116,20 +125,20 @@ impl TemporalContext {
         )
     }
 
-    fn worker_task_preamble(&self) -> String {
-        format!(
-            "## Time Context\n- Current local date/time: {}\n- Current UTC date/time: {}\n- Use this context for relative dates (today/tomorrow/yesterday/now) and include absolute dates when timing matters.",
-            self.format_timestamp(self.now_utc),
-            self.now_utc.format("%Y-%m-%d %H:%M:%S UTC")
-        )
+    fn worker_task_preamble(&self, prompt_engine: &crate::prompts::PromptEngine) -> Result<String> {
+        let local_time = self.format_timestamp(self.now_utc);
+        let utc_time = self.now_utc.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+        prompt_engine.render_system_worker_time_context(&local_time, &utc_time)
     }
 }
 
 fn build_worker_task_with_temporal_context(
     task: &str,
     temporal_context: &TemporalContext,
-) -> String {
-    format!("{}\n\n{}", temporal_context.worker_task_preamble(), task)
+    prompt_engine: &crate::prompts::PromptEngine,
+) -> Result<String> {
+    let preamble = temporal_context.worker_task_preamble(prompt_engine)?;
+    Ok(format!("{preamble}\n\n{task}"))
 }
 
 /// A background process result waiting to be relayed to the user via retrigger.
@@ -1998,9 +2007,11 @@ pub async fn spawn_worker_from_state(
     let task = task.into();
 
     let rc = &state.deps.runtime_config;
-    let temporal_context = TemporalContext::from_runtime(rc.as_ref());
-    let worker_task = build_worker_task_with_temporal_context(&task, &temporal_context);
     let prompt_engine = rc.prompts.load();
+    let temporal_context = TemporalContext::from_runtime(rc.as_ref());
+    let worker_task =
+        build_worker_task_with_temporal_context(&task, &temporal_context, &prompt_engine)
+            .map_err(|error| AgentError::Other(anyhow::anyhow!("{error}")))?;
     let worker_system_prompt = prompt_engine
         .render_worker_prompt(
             &rc.instance_dir.display().to_string(),
@@ -2113,8 +2124,11 @@ pub async fn spawn_opencode_worker_from_state(
     let directory = std::path::PathBuf::from(directory);
 
     let rc = &state.deps.runtime_config;
+    let prompt_engine = rc.prompts.load();
     let temporal_context = TemporalContext::from_runtime(rc.as_ref());
-    let worker_task = build_worker_task_with_temporal_context(&task, &temporal_context);
+    let worker_task =
+        build_worker_task_with_temporal_context(&task, &temporal_context, &prompt_engine)
+            .map_err(|error| AgentError::Other(anyhow::anyhow!("{error}")))?;
     let opencode_config = rc.opencode.load();
 
     if !opencode_config.enabled {
@@ -3313,6 +3327,8 @@ mod tests {
 
     #[test]
     fn worker_task_temporal_context_preamble_includes_absolute_dates() {
+        let prompt_engine =
+            crate::prompts::PromptEngine::new("en").expect("prompt engine should initialize");
         let temporal_context = super::TemporalContext {
             now_utc: chrono::DateTime::parse_from_rfc3339("2026-02-26T20:30:00Z")
                 .expect("valid RFC3339 timestamp")
@@ -3328,7 +3344,9 @@ mod tests {
         let worker_task = super::build_worker_task_with_temporal_context(
             "Run the migration checks",
             &temporal_context,
-        );
+            &prompt_engine,
+        )
+        .expect("worker task preamble should render");
         assert!(
             worker_task.contains("Current local date/time:"),
             "worker task should include local time context"
@@ -3341,6 +3359,22 @@ mod tests {
             worker_task.contains("Run the migration checks"),
             "worker task should preserve the original task body"
         );
+    }
+
+    #[test]
+    fn temporal_context_uses_cron_timezone_when_user_timezone_is_invalid() {
+        let resolved = super::TemporalContext::resolve_timezone_from_names(
+            Some("Not/A-Real-Tz".to_string()),
+            Some("America/Los_Angeles".to_string()),
+        );
+        match resolved {
+            super::TemporalTimezone::Named { timezone_name, .. } => {
+                assert_eq!(timezone_name, "America/Los_Angeles");
+            }
+            super::TemporalTimezone::SystemLocal => {
+                panic!("expected cron timezone fallback, got system local")
+            }
+        }
     }
 
     #[test]
