@@ -749,12 +749,16 @@ impl SpacebotModel {
         let base_url = provider_config.base_url.trim_end_matches('/');
         let endpoint_path = match provider_config.api_type {
             ApiType::OpenAiCompletions | ApiType::OpenAiResponses => "/v1/chat/completions",
-            ApiType::OpenAiChatCompletions | ApiType::Gemini | ApiType::KiloGateway => {
-                "/chat/completions"
-            }
+            ApiType::OpenAiChatCompletions | ApiType::Gemini => "/chat/completions",
             ApiType::Anthropic => {
                 return Err(CompletionError::ProviderError(format!(
                     "{provider_display_name} is configured with anthropic API type, but this call expects an OpenAI-compatible API"
+                )));
+            }
+            _ => {
+                return Err(CompletionError::ProviderError(format!(
+                    "{provider_display_name} uses API type {:?} which does not support OpenAI-compatible calls",
+                    provider_config.api_type
                 )));
             }
         };

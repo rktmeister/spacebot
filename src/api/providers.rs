@@ -785,6 +785,7 @@ pub(super) async fn test_provider_model(
     Json(request): Json<ProviderModelTestRequest>,
 ) -> Result<Json<ProviderModelTestResponse>, StatusCode> {
     let normalized_provider = request.provider.trim().to_lowercase();
+    let normalized_model = request.model.trim().to_string();
     if provider_toml_key(&normalized_provider).is_none() {
         return Ok(Json(ProviderModelTestResponse {
             success: false,
@@ -805,7 +806,7 @@ pub(super) async fn test_provider_model(
         }));
     }
 
-    if request.model.trim().is_empty() {
+    if normalized_model.is_empty() {
         return Ok(Json(ProviderModelTestResponse {
             success: false,
             message: "Model cannot be empty".to_string(),
@@ -815,12 +816,12 @@ pub(super) async fn test_provider_model(
         }));
     }
 
-    if !model_matches_provider(&normalized_provider, &request.model) {
+    if !model_matches_provider(&normalized_provider, &normalized_model) {
         return Ok(Json(ProviderModelTestResponse {
             success: false,
             message: format!(
                 "Model '{}' does not match provider '{}'.",
-                request.model, request.provider
+                normalized_model, request.provider
             ),
             provider: request.provider,
             model: request.model,
@@ -842,7 +843,7 @@ pub(super) async fn test_provider_model(
         }
     };
 
-    let model = crate::llm::SpacebotModel::make(&llm_manager, request.model.clone());
+    let model = crate::llm::SpacebotModel::make(&llm_manager, normalized_model);
     let agent = AgentBuilder::new(model)
         .preamble("You are running a provider connectivity check. Reply with exactly: OK")
         .build();

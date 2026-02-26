@@ -2516,6 +2516,90 @@ impl Config {
                 });
         }
 
+        if let Some(openrouter_key) = llm.openrouter_key.clone() {
+            llm.providers
+                .entry("openrouter".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::OpenAiCompletions,
+                    base_url: OPENROUTER_PROVIDER_BASE_URL.to_string(),
+                    api_key: openrouter_key,
+                    name: None,
+                    use_bearer_auth: false,
+                });
+        }
+
+        add_shorthand_provider(
+            &mut llm.providers,
+            "kilo",
+            llm.kilo_key.clone(),
+            ApiType::KiloGateway,
+            KILO_PROVIDER_BASE_URL,
+            Some("Kilo Gateway"),
+            false,
+        );
+        add_shorthand_provider(
+            &mut llm.providers,
+            "zhipu",
+            llm.zhipu_key.clone(),
+            ApiType::OpenAiChatCompletions,
+            ZHIPU_PROVIDER_BASE_URL,
+            Some("Z.AI (GLM)"),
+            false,
+        );
+        add_shorthand_provider(
+            &mut llm.providers,
+            "zai-coding-plan",
+            llm.zai_coding_plan_key.clone(),
+            ApiType::OpenAiChatCompletions,
+            ZAI_CODING_PLAN_BASE_URL,
+            Some("Z.AI Coding Plan"),
+            false,
+        );
+
+        add_shorthand_provider(
+            &mut llm.providers,
+            "opencode-zen",
+            llm.opencode_zen_key.clone(),
+            ApiType::OpenAiCompletions,
+            OPENCODE_ZEN_PROVIDER_BASE_URL,
+            None,
+            false,
+        );
+
+        add_shorthand_provider(
+            &mut llm.providers,
+            "opencode-go",
+            llm.opencode_go_key.clone(),
+            ApiType::OpenAiCompletions,
+            OPENCODE_GO_PROVIDER_BASE_URL,
+            None,
+            false,
+        );
+
+        if let Some(minimax_key) = llm.minimax_key.clone() {
+            llm.providers
+                .entry("minimax".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::Anthropic,
+                    base_url: MINIMAX_PROVIDER_BASE_URL.to_string(),
+                    api_key: minimax_key,
+                    name: None,
+                    use_bearer_auth: false,
+                });
+        }
+
+        if let Some(minimax_cn_key) = llm.minimax_cn_key.clone() {
+            llm.providers
+                .entry("minimax-cn".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    api_type: ApiType::Anthropic,
+                    base_url: MINIMAX_CN_PROVIDER_BASE_URL.to_string(),
+                    api_key: minimax_cn_key,
+                    name: None,
+                    use_bearer_auth: false,
+                });
+        }
+
         if let Some(openai_key) = llm.openai_key.clone() {
             llm.providers
                 .entry("openai".to_string())
@@ -3100,29 +3184,25 @@ impl Config {
             false,
         );
 
-        if let Some(opencode_zen_key) = llm.opencode_zen_key.clone() {
-            llm.providers
-                .entry("opencode-zen".to_string())
-                .or_insert_with(|| ProviderConfig {
-                    api_type: ApiType::OpenAiCompletions,
-                    base_url: OPENCODE_ZEN_PROVIDER_BASE_URL.to_string(),
-                    api_key: opencode_zen_key,
-                    name: None,
-                    use_bearer_auth: false,
-                });
-        }
+        add_shorthand_provider(
+            &mut llm.providers,
+            "opencode-zen",
+            llm.opencode_zen_key.clone(),
+            ApiType::OpenAiCompletions,
+            OPENCODE_ZEN_PROVIDER_BASE_URL,
+            None,
+            false,
+        );
 
-        if let Some(opencode_go_key) = llm.opencode_go_key.clone() {
-            llm.providers
-                .entry("opencode-go".to_string())
-                .or_insert_with(|| ProviderConfig {
-                    api_type: ApiType::OpenAiCompletions,
-                    base_url: OPENCODE_GO_PROVIDER_BASE_URL.to_string(),
-                    api_key: opencode_go_key,
-                    name: None,
-                    use_bearer_auth: false,
-                });
-        }
+        add_shorthand_provider(
+            &mut llm.providers,
+            "opencode-go",
+            llm.opencode_go_key.clone(),
+            ApiType::OpenAiCompletions,
+            OPENCODE_GO_PROVIDER_BASE_URL,
+            None,
+            false,
+        );
 
         if let Some(minimax_key) = llm.minimax_key.clone() {
             llm.providers
