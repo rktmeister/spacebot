@@ -73,8 +73,11 @@ export function AgentTasks({ agentId }: { agentId: string }) {
 
 	// Create task dialog
 	const [createOpen, setCreateOpen] = useState(false);
-	// Detail dialog
-	const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
+	// Detail dialog — store task number and derive from live list to stay current.
+	const [selectedTaskNumber, setSelectedTaskNumber] = useState<number | null>(null);
+	const selectedTask = selectedTaskNumber !== null
+		? tasks.find((t) => t.task_number === selectedTaskNumber) ?? null
+		: null;
 
 	const createMutation = useMutation({
 		mutationFn: (request: CreateTaskRequest) => api.createTask(agentId, request),
@@ -110,7 +113,7 @@ export function AgentTasks({ agentId }: { agentId: string }) {
 		mutationFn: (taskNumber: number) => api.deleteTask(agentId, taskNumber),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["tasks", agentId] });
-			setSelectedTask(null);
+			setSelectedTaskNumber(null);
 		},
 	});
 
@@ -169,7 +172,7 @@ export function AgentTasks({ agentId }: { agentId: string }) {
 						status={status}
 						label={label}
 						tasks={tasksByStatus[status]}
-						onSelect={setSelectedTask}
+						onSelect={(task) => setSelectedTaskNumber(task.task_number)}
 						onApprove={(task) => approveMutation.mutate(task.task_number)}
 						onExecute={(task) => executeMutation.mutate(task.task_number)}
 						onStatusChange={(task, newStatus) =>
@@ -191,7 +194,7 @@ export function AgentTasks({ agentId }: { agentId: string }) {
 			{selectedTask && (
 				<TaskDetailDialog
 					task={selectedTask}
-					onClose={() => setSelectedTask(null)}
+					onClose={() => setSelectedTaskNumber(null)}
 					onApprove={() => approveMutation.mutate(selectedTask.task_number)}
 					onExecute={() => executeMutation.mutate(selectedTask.task_number)}
 					onDelete={() => deleteMutation.mutate(selectedTask.task_number)}

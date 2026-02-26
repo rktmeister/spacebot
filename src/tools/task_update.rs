@@ -181,11 +181,27 @@ impl Tool for TaskUpdateTool {
             }
         }
 
-        let status = args.status.as_deref().and_then(TaskStatus::parse);
-        let priority = args.priority.as_deref().and_then(TaskPriority::parse);
-        let complete_subtask = args
-            .complete_subtask
-            .and_then(|value| usize::try_from(value).ok());
+        let status = match args.status.as_deref() {
+            None => None,
+            Some(value) => Some(
+                TaskStatus::parse(value)
+                    .ok_or_else(|| TaskUpdateError(format!("invalid status: {value}")))?,
+            ),
+        };
+        let priority = match args.priority.as_deref() {
+            None => None,
+            Some(value) => Some(
+                TaskPriority::parse(value)
+                    .ok_or_else(|| TaskUpdateError(format!("invalid priority: {value}")))?,
+            ),
+        };
+        let complete_subtask = match args.complete_subtask {
+            None => None,
+            Some(value) => Some(
+                usize::try_from(value)
+                    .map_err(|_| TaskUpdateError(format!("invalid subtask index: {value}")))?,
+            ),
+        };
 
         let updated = self
             .task_store

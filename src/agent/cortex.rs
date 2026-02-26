@@ -1031,7 +1031,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
             &deps.runtime_config.instance_dir.display().to_string(),
             &deps.runtime_config.workspace_dir.display().to_string(),
         )
-        .expect("failed to render worker prompt");
+        .map_err(|error| anyhow::anyhow!("failed to render worker prompt: {error}"))?;
 
     let mut task_prompt = format!("Execute task #{}: {}", task.task_number, task.title);
     if let Some(description) = &task.description {
@@ -1056,8 +1056,12 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         .workspace_dir
         .join(".spacebot")
         .join("logs");
-    let _ = std::fs::create_dir_all(&screenshot_dir);
-    let _ = std::fs::create_dir_all(&logs_dir);
+    if let Err(error) = std::fs::create_dir_all(&screenshot_dir) {
+        tracing::warn!(%error, path = %screenshot_dir.display(), "failed to create screenshot directory");
+    }
+    if let Err(error) = std::fs::create_dir_all(&logs_dir) {
+        tracing::warn!(%error, path = %logs_dir.display(), "failed to create logs directory");
+    }
 
     let browser_config = (**deps.runtime_config.browser_config.load()).clone();
     let brave_search_key = (**deps.runtime_config.brave_search_key.load()).clone();
@@ -1113,7 +1117,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
     tokio::spawn(async move {
         match worker.run().await {
             Ok(result_text) => {
-                if let Err(error) = task_store
+                let db_updated = task_store
                     .update(
                         &agent_id,
                         task.task_number,
@@ -1122,19 +1126,23 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                             ..Default::default()
                         },
                     )
-                    .await
-                {
+                    .await;
+
+                if let Err(ref error) = db_updated {
                     tracing::warn!(%error, task_number = task.task_number, "failed to mark picked-up task done");
                 }
 
                 run_logger.log_worker_completed(worker_id, &result_text, true);
 
-                let _ = event_tx.send(ProcessEvent::TaskUpdated {
-                    agent_id: Arc::from(agent_id.as_str()),
-                    task_number: task.task_number,
-                    status: "done".to_string(),
-                    action: "updated".to_string(),
-                });
+                // Only emit task SSE event if the DB write succeeded.
+                if db_updated.is_ok() {
+                    let _ = event_tx.send(ProcessEvent::TaskUpdated {
+                        agent_id: Arc::from(agent_id.as_str()),
+                        task_number: task.task_number,
+                        status: "done".to_string(),
+                        action: "updated".to_string(),
+                    });
+                }
 
                 logger.log(
                     "task_pickup_completed",
@@ -1158,7 +1166,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                 let error_message = format!("Worker failed: {error}");
                 run_logger.log_worker_completed(worker_id, &error_message, false);
 
-                if let Err(update_error) = task_store
+                let requeue_result = task_store
                     .update(
                         &agent_id,
                         task.task_number,
@@ -1168,17 +1176,21 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                             ..Default::default()
                         },
                     )
-                    .await
-                {
+                    .await;
+
+                if let Err(ref update_error) = requeue_result {
                     tracing::warn!(%update_error, task_number = task.task_number, "failed to return task to ready after failure");
                 }
 
-                let _ = event_tx.send(ProcessEvent::TaskUpdated {
-                    agent_id: Arc::from(agent_id.as_str()),
-                    task_number: task.task_number,
-                    status: "ready".to_string(),
-                    action: "updated".to_string(),
-                });
+                // Only emit task SSE event if the DB write succeeded.
+                if requeue_result.is_ok() {
+                    let _ = event_tx.send(ProcessEvent::TaskUpdated {
+                        agent_id: Arc::from(agent_id.as_str()),
+                        task_number: task.task_number,
+                        status: "ready".to_string(),
+                        action: "updated".to_string(),
+                    });
+                }
 
                 logger.log(
                     "task_pickup_failed",

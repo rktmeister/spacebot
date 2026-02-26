@@ -97,17 +97,19 @@ pub(super) async fn list_tasks(
     let stores = state.task_stores.load();
     let store = stores.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
-    let status = query
-        .status
-        .as_deref()
-        .and_then(crate::tasks::TaskStatus::parse);
-    let priority = query
-        .priority
-        .as_deref()
-        .and_then(crate::tasks::TaskPriority::parse);
+    let status = match query.status.as_deref() {
+        None => None,
+        Some(value) => Some(crate::tasks::TaskStatus::parse(value).ok_or(StatusCode::BAD_REQUEST)?),
+    };
+    let priority = match query.priority.as_deref() {
+        None => None,
+        Some(value) => {
+            Some(crate::tasks::TaskPriority::parse(value).ok_or(StatusCode::BAD_REQUEST)?)
+        }
+    };
 
     let tasks = store
-        .list(&query.agent_id, status, priority, query.limit)
+        .list(&query.agent_id, status, priority, query.limit.clamp(1, 500))
         .await
         .map_err(|error| {
             tracing::warn!(%error, agent_id = %query.agent_id, "failed to list tasks");
@@ -144,16 +146,14 @@ pub(super) async fn create_task(
     let stores = state.task_stores.load();
     let store = stores.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
-    let status = request
-        .status
-        .as_deref()
-        .and_then(crate::tasks::TaskStatus::parse)
-        .unwrap_or(crate::tasks::TaskStatus::Backlog);
-    let priority = request
-        .priority
-        .as_deref()
-        .and_then(crate::tasks::TaskPriority::parse)
-        .unwrap_or(crate::tasks::TaskPriority::Medium);
+    let status = match request.status.as_deref() {
+        None => crate::tasks::TaskStatus::Backlog,
+        Some(value) => crate::tasks::TaskStatus::parse(value).ok_or(StatusCode::BAD_REQUEST)?,
+    };
+    let priority = match request.priority.as_deref() {
+        None => crate::tasks::TaskPriority::Medium,
+        Some(value) => crate::tasks::TaskPriority::parse(value).ok_or(StatusCode::BAD_REQUEST)?,
+    };
 
     let task = store
         .create(crate::tasks::CreateTaskInput {
@@ -194,14 +194,16 @@ pub(super) async fn update_task(
     let stores = state.task_stores.load();
     let store = stores.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
-    let status = request
-        .status
-        .as_deref()
-        .and_then(crate::tasks::TaskStatus::parse);
-    let priority = request
-        .priority
-        .as_deref()
-        .and_then(crate::tasks::TaskPriority::parse);
+    let status = match request.status.as_deref() {
+        None => None,
+        Some(value) => Some(crate::tasks::TaskStatus::parse(value).ok_or(StatusCode::BAD_REQUEST)?),
+    };
+    let priority = match request.priority.as_deref() {
+        None => None,
+        Some(value) => {
+            Some(crate::tasks::TaskPriority::parse(value).ok_or(StatusCode::BAD_REQUEST)?)
+        }
+    };
 
     let task = store
         .update(

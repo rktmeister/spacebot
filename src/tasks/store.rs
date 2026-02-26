@@ -161,58 +161,92 @@ impl TaskStore {
         Self { pool }
     }
 
+    /// Maximum number of retries when a concurrent create races on the same
+    /// `(agent_id, task_number)` UNIQUE constraint.
+    const MAX_CREATE_RETRIES: usize = 3;
+
     pub async fn create(&self, input: CreateTaskInput) -> Result<Task> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("failed to open task create transaction")?;
-
-        let task_number: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE agent_id = ?",
-        )
-        .bind(&input.agent_id)
-        .fetch_one(&mut *tx)
-        .await
-        .context("failed to allocate next task number")?;
-
-        let task_id = uuid::Uuid::new_v4().to_string();
         let subtasks_json =
             serde_json::to_string(&input.subtasks).context("failed to serialize subtasks")?;
         let metadata_json = input.metadata.to_string();
 
-        sqlx::query(
-            r#"
-            INSERT INTO tasks (
-                id, agent_id, task_number, title, description, status, priority,
-                subtasks, metadata, source_memory_id, created_by
+        for attempt in 0..Self::MAX_CREATE_RETRIES {
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .context("failed to open task create transaction")?;
+
+            let task_number: i64 = sqlx::query_scalar(
+                "SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE agent_id = ?",
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&task_id)
-        .bind(&input.agent_id)
-        .bind(task_number)
-        .bind(&input.title)
-        .bind(&input.description)
-        .bind(input.status.as_str())
-        .bind(input.priority.as_str())
-        .bind(subtasks_json)
-        .bind(metadata_json)
-        .bind(&input.source_memory_id)
-        .bind(&input.created_by)
-        .execute(&mut *tx)
-        .await
-        .context("failed to insert task")?;
-
-        tx.commit()
+            .bind(&input.agent_id)
+            .fetch_one(&mut *tx)
             .await
-            .context("failed to commit task create transaction")?;
+            .context("failed to allocate next task number")?;
 
-        self.get_by_number(&input.agent_id, task_number)
-            .await?
-            .context("task inserted but not found")
-            .map_err(Into::into)
+            let task_id = uuid::Uuid::new_v4().to_string();
+
+            let insert_result = sqlx::query(
+                r#"
+                INSERT INTO tasks (
+                    id, agent_id, task_number, title, description, status, priority,
+                    subtasks, metadata, source_memory_id, created_by
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&task_id)
+            .bind(&input.agent_id)
+            .bind(task_number)
+            .bind(&input.title)
+            .bind(&input.description)
+            .bind(input.status.as_str())
+            .bind(input.priority.as_str())
+            .bind(&subtasks_json)
+            .bind(&metadata_json)
+            .bind(&input.source_memory_id)
+            .bind(&input.created_by)
+            .execute(&mut *tx)
+            .await;
+
+            match insert_result {
+                Ok(_) => {
+                    tx.commit()
+                        .await
+                        .context("failed to commit task create transaction")?;
+
+                    return self
+                        .get_by_number(&input.agent_id, task_number)
+                        .await?
+                        .context("task inserted but not found")
+                        .map_err(Into::into);
+                }
+                Err(sqlx::Error::Database(ref db_error))
+                    if db_error.code().as_deref() == Some("2067") =>
+                {
+                    // UNIQUE constraint violation — another concurrent create won the
+                    // race for this task_number. Roll back and retry.
+                    tracing::debug!(
+                        attempt,
+                        task_number,
+                        agent_id = %input.agent_id,
+                        "task_number collision, retrying"
+                    );
+                    // tx is dropped here which rolls back automatically.
+                    continue;
+                }
+                Err(error) => {
+                    return Err(anyhow::anyhow!("failed to insert task: {error}").into());
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "failed to create task after {} retries due to concurrent task_number collisions",
+            Self::MAX_CREATE_RETRIES
+        )
+        .into())
     }
 
     pub async fn list(
@@ -398,7 +432,9 @@ impl TaskStore {
             return Ok(None);
         };
 
-        let task_number: i64 = row.try_get("task_number").unwrap_or(0);
+        let task_number: i64 = row
+            .try_get("task_number")
+            .context("failed to read task_number from ready task row")?;
         let result = sqlx::query(
             "UPDATE tasks SET status = 'in_progress', updated_at = datetime('now') WHERE agent_id = ? AND task_number = ? AND status = 'ready'",
         )
@@ -605,10 +641,10 @@ fn parse_metadata(value: &str) -> Value {
 fn task_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Task> {
     let status_value: String = row
         .try_get("status")
-        .unwrap_or_else(|_| "backlog".to_string());
+        .context("failed to read task status")?;
     let priority_value: String = row
         .try_get("priority")
-        .unwrap_or_else(|_| "medium".to_string());
+        .context("failed to read task priority")?;
     let subtasks_value: String = row.try_get("subtasks").unwrap_or_else(|_| "[]".to_string());
     let metadata_value: String = row.try_get("metadata").unwrap_or_else(|_| "{}".to_string());
 
@@ -618,10 +654,14 @@ fn task_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Task> {
         .with_context(|| format!("invalid task priority in database: {priority_value}"))?;
 
     Ok(Task {
-        id: row.try_get("id").unwrap_or_default(),
-        agent_id: row.try_get("agent_id").unwrap_or_default(),
-        task_number: row.try_get("task_number").unwrap_or(0),
-        title: row.try_get("title").unwrap_or_default(),
+        id: row.try_get("id").context("failed to read task id")?,
+        agent_id: row
+            .try_get("agent_id")
+            .context("failed to read task agent_id")?,
+        task_number: row
+            .try_get("task_number")
+            .context("failed to read task_number")?,
+        title: row.try_get("title").context("failed to read task title")?,
         description: row.try_get("description").ok(),
         status,
         priority,
@@ -633,17 +673,23 @@ fn task_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Task> {
             .ok()
             .flatten()
             .and_then(|value| if value.is_empty() { None } else { Some(value) }),
-        created_by: row.try_get("created_by").unwrap_or_default(),
-        approved_at: row.try_get("approved_at").ok(),
+        created_by: row
+            .try_get("created_by")
+            .context("failed to read task created_by")?,
+        approved_at: row
+            .try_get::<Option<chrono::NaiveDateTime>, _>("approved_at")
+            .ok()
+            .flatten()
+            .map(|v| v.and_utc().to_rfc3339()),
         approved_by: row.try_get("approved_by").ok(),
         created_at: row
             .try_get::<chrono::NaiveDateTime, _>("created_at")
             .map(|v| v.and_utc().to_rfc3339())
-            .unwrap_or_default(),
+            .context("failed to read task created_at")?,
         updated_at: row
             .try_get::<chrono::NaiveDateTime, _>("updated_at")
             .map(|v| v.and_utc().to_rfc3339())
-            .unwrap_or_default(),
+            .context("failed to read task updated_at")?,
         completed_at: row
             .try_get::<chrono::NaiveDateTime, _>("completed_at")
             .ok()
