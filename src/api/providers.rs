@@ -43,6 +43,7 @@ pub(super) struct ProviderStatus {
     openai: bool,
     openai_chatgpt: bool,
     openrouter: bool,
+    kilo: bool,
     zhipu: bool,
     groq: bool,
     together: bool,
@@ -53,6 +54,7 @@ pub(super) struct ProviderStatus {
     gemini: bool,
     ollama: bool,
     opencode_zen: bool,
+    opencode_go: bool,
     nvidia: bool,
     minimax: bool,
     minimax_cn: bool,
@@ -127,6 +129,7 @@ fn provider_toml_key(provider: &str) -> Option<&'static str> {
         "anthropic" => Some("anthropic_key"),
         "openai" => Some("openai_key"),
         "openrouter" => Some("openrouter_key"),
+        "kilo" => Some("kilo_key"),
         "zhipu" => Some("zhipu_key"),
         "groq" => Some("groq_key"),
         "together" => Some("together_key"),
@@ -137,6 +140,7 @@ fn provider_toml_key(provider: &str) -> Option<&'static str> {
         "gemini" => Some("gemini_key"),
         "ollama" => Some("ollama_base_url"),
         "opencode-zen" => Some("opencode_zen_key"),
+        "opencode-go" => Some("opencode_go_key"),
         "nvidia" => Some("nvidia_key"),
         "minimax" => Some("minimax_key"),
         "minimax-cn" => Some("minimax_cn_key"),
@@ -165,133 +169,8 @@ fn normalize_openai_chatgpt_model(model: &str) -> Option<String> {
 }
 
 fn build_test_llm_config(provider: &str, credential: &str) -> crate::config::LlmConfig {
-    use crate::config::{ApiType, ProviderConfig};
-
     let mut providers = HashMap::new();
-    let provider_config = match provider {
-        "anthropic" => Some(ProviderConfig {
-            api_type: ApiType::Anthropic,
-            base_url: "https://api.anthropic.com".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "openai" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://api.openai.com".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "openrouter" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://openrouter.ai/api".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "zhipu" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://api.z.ai/api/paas/v4".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "groq" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://api.groq.com/openai".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "together" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://api.together.xyz".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "fireworks" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://api.fireworks.ai/inference".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "deepseek" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://api.deepseek.com".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "xai" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://api.x.ai".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "mistral" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://api.mistral.ai".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "gemini" => Some(ProviderConfig {
-            api_type: ApiType::Gemini,
-            base_url: crate::config::GEMINI_PROVIDER_BASE_URL.to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "opencode-zen" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://opencode.ai/zen".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "nvidia" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://integrate.api.nvidia.com".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "minimax" => Some(ProviderConfig {
-            api_type: ApiType::Anthropic,
-            base_url: "https://api.minimax.io/anthropic".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "minimax-cn" => Some(ProviderConfig {
-            api_type: ApiType::Anthropic,
-            base_url: "https://api.minimaxi.com/anthropic".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "moonshot" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://api.moonshot.ai".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        "zai-coding-plan" => Some(ProviderConfig {
-            api_type: ApiType::OpenAiCompletions,
-            base_url: "https://api.z.ai/api/coding/paas/v4".to_string(),
-            api_key: credential.to_string(),
-            name: None,
-            use_bearer_auth: false,
-        }),
-        _ => None,
-    };
-
-    if let Some(provider_config) = provider_config {
+    if let Some(provider_config) = crate::config::default_provider_config(provider, credential) {
         providers.insert(provider.to_string(), provider_config);
     }
 
@@ -299,6 +178,7 @@ fn build_test_llm_config(provider: &str, credential: &str) -> crate::config::Llm
         anthropic_key: (provider == "anthropic").then(|| credential.to_string()),
         openai_key: (provider == "openai").then(|| credential.to_string()),
         openrouter_key: (provider == "openrouter").then(|| credential.to_string()),
+        kilo_key: (provider == "kilo").then(|| credential.to_string()),
         zhipu_key: (provider == "zhipu").then(|| credential.to_string()),
         groq_key: (provider == "groq").then(|| credential.to_string()),
         together_key: (provider == "together").then(|| credential.to_string()),
@@ -310,6 +190,7 @@ fn build_test_llm_config(provider: &str, credential: &str) -> crate::config::Llm
         ollama_key: None,
         ollama_base_url: (provider == "ollama").then(|| credential.to_string()),
         opencode_zen_key: (provider == "opencode-zen").then(|| credential.to_string()),
+        opencode_go_key: (provider == "opencode-go").then(|| credential.to_string()),
         nvidia_key: (provider == "nvidia").then(|| credential.to_string()),
         minimax_key: (provider == "minimax").then(|| credential.to_string()),
         minimax_cn_key: (provider == "minimax-cn").then(|| credential.to_string()),
@@ -450,6 +331,7 @@ pub(super) async fn get_providers(
         openai,
         openai_chatgpt,
         openrouter,
+        kilo,
         zhipu,
         groq,
         together,
@@ -460,6 +342,7 @@ pub(super) async fn get_providers(
         gemini,
         ollama,
         opencode_zen,
+        opencode_go,
         nvidia,
         minimax,
         minimax_cn,
@@ -491,6 +374,7 @@ pub(super) async fn get_providers(
             has_value("openai_key", "OPENAI_API_KEY"),
             openai_oauth_configured,
             has_value("openrouter_key", "OPENROUTER_API_KEY"),
+            has_value("kilo_key", "KILO_API_KEY"),
             has_value("zhipu_key", "ZHIPU_API_KEY"),
             has_value("groq_key", "GROQ_API_KEY"),
             has_value("together_key", "TOGETHER_API_KEY"),
@@ -502,6 +386,7 @@ pub(super) async fn get_providers(
             has_value("ollama_base_url", "OLLAMA_BASE_URL")
                 || has_value("ollama_key", "OLLAMA_API_KEY"),
             has_value("opencode_zen_key", "OPENCODE_ZEN_API_KEY"),
+            has_value("opencode_go_key", "OPENCODE_GO_API_KEY"),
             has_value("nvidia_key", "NVIDIA_API_KEY"),
             has_value("minimax_key", "MINIMAX_API_KEY"),
             has_value("minimax_cn_key", "MINIMAX_CN_API_KEY"),
@@ -514,6 +399,7 @@ pub(super) async fn get_providers(
             std::env::var("OPENAI_API_KEY").is_ok(),
             openai_oauth_configured,
             std::env::var("OPENROUTER_API_KEY").is_ok(),
+            std::env::var("KILO_API_KEY").is_ok(),
             std::env::var("ZHIPU_API_KEY").is_ok(),
             std::env::var("GROQ_API_KEY").is_ok(),
             std::env::var("TOGETHER_API_KEY").is_ok(),
@@ -524,6 +410,7 @@ pub(super) async fn get_providers(
             std::env::var("GEMINI_API_KEY").is_ok(),
             std::env::var("OLLAMA_BASE_URL").is_ok() || std::env::var("OLLAMA_API_KEY").is_ok(),
             std::env::var("OPENCODE_ZEN_API_KEY").is_ok(),
+            std::env::var("OPENCODE_GO_API_KEY").is_ok(),
             std::env::var("NVIDIA_API_KEY").is_ok(),
             std::env::var("MINIMAX_API_KEY").is_ok(),
             std::env::var("MINIMAX_CN_API_KEY").is_ok(),
@@ -537,6 +424,7 @@ pub(super) async fn get_providers(
         openai,
         openai_chatgpt,
         openrouter,
+        kilo,
         zhipu,
         groq,
         together,
@@ -547,6 +435,7 @@ pub(super) async fn get_providers(
         gemini,
         ollama,
         opencode_zen,
+        opencode_go,
         nvidia,
         minimax,
         minimax_cn,
@@ -557,6 +446,7 @@ pub(super) async fn get_providers(
         || providers.openai
         || providers.openai_chatgpt
         || providers.openrouter
+        || providers.kilo
         || providers.zhipu
         || providers.groq
         || providers.together
@@ -567,6 +457,7 @@ pub(super) async fn get_providers(
         || providers.gemini
         || providers.ollama
         || providers.opencode_zen
+        || providers.opencode_go
         || providers.nvidia
         || providers.minimax
         || providers.minimax_cn
@@ -818,7 +709,9 @@ pub(super) async fn update_provider(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<ProviderUpdateRequest>,
 ) -> Result<Json<ProviderUpdateResponse>, StatusCode> {
-    let Some(key_name) = provider_toml_key(&request.provider) else {
+    let normalized_provider = request.provider.trim().to_lowercase();
+    let normalized_model = request.model.trim();
+    let Some(key_name) = provider_toml_key(&normalized_provider) else {
         return Ok(Json(ProviderUpdateResponse {
             success: false,
             message: format!("Unknown provider: {}", request.provider),
@@ -839,7 +732,7 @@ pub(super) async fn update_provider(
         }));
     }
 
-    if !model_matches_provider(&request.provider, &request.model) {
+    if !model_matches_provider(&normalized_provider, normalized_model) {
         return Ok(Json(ProviderUpdateResponse {
             success: false,
             message: format!(
@@ -868,7 +761,7 @@ pub(super) async fn update_provider(
     }
 
     doc["llm"][key_name] = toml_edit::value(request.api_key);
-    apply_model_routing(&mut doc, request.model.as_str());
+    apply_model_routing(&mut doc, normalized_model);
 
     tokio::fs::write(&config_path, doc.to_string())
         .await
@@ -891,7 +784,8 @@ pub(super) async fn update_provider(
 pub(super) async fn test_provider_model(
     Json(request): Json<ProviderModelTestRequest>,
 ) -> Result<Json<ProviderModelTestResponse>, StatusCode> {
-    if provider_toml_key(&request.provider).is_none() {
+    let normalized_provider = request.provider.trim().to_lowercase();
+    if provider_toml_key(&normalized_provider).is_none() {
         return Ok(Json(ProviderModelTestResponse {
             success: false,
             message: format!("Unknown provider: {}", request.provider),
@@ -921,7 +815,7 @@ pub(super) async fn test_provider_model(
         }));
     }
 
-    if !model_matches_provider(&request.provider, &request.model) {
+    if !model_matches_provider(&normalized_provider, &request.model) {
         return Ok(Json(ProviderModelTestResponse {
             success: false,
             message: format!(
@@ -934,7 +828,7 @@ pub(super) async fn test_provider_model(
         }));
     }
 
-    let llm_config = build_test_llm_config(&request.provider, request.api_key.trim());
+    let llm_config = build_test_llm_config(&normalized_provider, request.api_key.trim());
     let llm_manager = match crate::llm::LlmManager::new(llm_config).await {
         Ok(manager) => Arc::new(manager),
         Err(error) => {
@@ -975,6 +869,7 @@ pub(super) async fn delete_provider(
     State(state): State<Arc<ApiState>>,
     axum::extract::Path(provider): axum::extract::Path<String>,
 ) -> Result<Json<ProviderUpdateResponse>, StatusCode> {
+    let provider = provider.trim().to_lowercase();
     // OpenAI ChatGPT OAuth credentials are stored as a separate JSON file,
     // not in the TOML config, so handle removal separately.
     if provider == "openai-chatgpt" {

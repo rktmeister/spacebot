@@ -111,29 +111,44 @@ impl SpacebotModel {
                 .map_err(|e| CompletionError::ProviderError(e.to_string()))?,
         };
 
-        if provider_id == "zai-coding-plan" || provider_id == "zhipu" {
-            let display_name = if provider_id == "zhipu" {
-                "Z.AI (GLM)"
-            } else {
-                "Z.AI Coding Plan"
-            };
-            let endpoint = format!(
-                "{}/chat/completions",
-                provider_config.base_url.trim_end_matches('/')
-            );
-            return self
-                .call_openai_compatible_with_optional_auth(
+        match provider_config.api_type {
+            ApiType::Anthropic => self.call_anthropic(request, &provider_config).await,
+            ApiType::OpenAiCompletions => self.call_openai(request, &provider_config).await,
+            ApiType::OpenAiChatCompletions => {
+                let endpoint = format!(
+                    "{}/chat/completions",
+                    provider_config.base_url.trim_end_matches('/')
+                );
+                let display_name = provider_config
+                    .name
+                    .as_deref()
+                    .unwrap_or("OpenAI-compatible provider");
+                self.call_openai_compatible_with_optional_auth(
                     request,
                     display_name,
                     &endpoint,
                     Some(provider_config.api_key.clone()),
+                    &[],
                 )
-                .await;
-        }
-
-        match provider_config.api_type {
-            ApiType::Anthropic => self.call_anthropic(request, &provider_config).await,
-            ApiType::OpenAiCompletions => self.call_openai(request, &provider_config).await,
+                .await
+            }
+            ApiType::KiloGateway => {
+                let endpoint = format!(
+                    "{}/chat/completions",
+                    provider_config.base_url.trim_end_matches('/')
+                );
+                self.call_openai_compatible_with_optional_auth(
+                    request,
+                    "Kilo Gateway",
+                    &endpoint,
+                    Some(provider_config.api_key.clone()),
+                    &[
+                        ("HTTP-Referer", "https://github.com/spacedriveapp/spacebot"),
+                        ("X-Title", "spacebot"),
+                    ],
+                )
+                .await
+            }
             ApiType::OpenAiResponses => self.call_openai_responses(request, &provider_config).await,
             ApiType::Gemini => {
                 self.call_openai_compatible(request, "Google Gemini", &provider_config)
@@ -734,7 +749,9 @@ impl SpacebotModel {
         let base_url = provider_config.base_url.trim_end_matches('/');
         let endpoint_path = match provider_config.api_type {
             ApiType::OpenAiCompletions | ApiType::OpenAiResponses => "/v1/chat/completions",
-            ApiType::Gemini => "/chat/completions",
+            ApiType::OpenAiChatCompletions | ApiType::Gemini | ApiType::KiloGateway => {
+                "/chat/completions"
+            }
             ApiType::Anthropic => {
                 return Err(CompletionError::ProviderError(format!(
                     "{provider_display_name} is configured with anthropic API type, but this call expects an OpenAI-compatible API"
@@ -843,6 +860,7 @@ impl SpacebotModel {
         provider_display_name: &str,
         endpoint: &str,
         api_key: Option<String>,
+        extra_headers: &[(&str, &str)],
     ) -> Result<completion::CompletionResponse<RawResponse>, CompletionError> {
         let mut messages = Vec::new();
 
@@ -887,15 +905,17 @@ impl SpacebotModel {
             body["tools"] = serde_json::json!(tools);
         }
 
-        let response = self.llm_manager.http_client().post(endpoint);
+        let mut request_builder = self.llm_manager.http_client().post(endpoint);
 
-        let response = if let Some(api_key) = api_key {
-            response.header("authorization", format!("Bearer {api_key}"))
-        } else {
-            response
-        };
+        for (header_name, header_value) in extra_headers {
+            request_builder = request_builder.header(*header_name, *header_value);
+        }
 
-        let response = response
+        if let Some(api_key) = api_key {
+            request_builder = request_builder.header("authorization", format!("Bearer {api_key}"));
+        }
+
+        let response = request_builder
             .header("content-type", "application/json")
             .json(&body)
             .send()

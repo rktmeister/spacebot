@@ -714,6 +714,7 @@ export interface ProviderStatus {
 	openai: boolean;
 	openai_chatgpt: boolean;
 	openrouter: boolean;
+	kilo: boolean;
 	zhipu: boolean;
 	groq: boolean;
 	together: boolean;
@@ -724,6 +725,7 @@ export interface ProviderStatus {
 	gemini: boolean;
 	ollama: boolean;
 	opencode_zen: boolean;
+	opencode_go: boolean;
 	nvidia: boolean;
 	minimax: boolean;
 	minimax_cn: boolean;
