@@ -550,7 +550,7 @@ function TaskDetailDialog({
 
           {/* Description */}
           {task.description && (
-            <div className="overflow-auto">
+            <div>
               <label className="mb-1 block text-xs text-ink-dull">
                 Description
               </label>
