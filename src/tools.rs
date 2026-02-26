@@ -279,14 +279,25 @@ pub async fn add_channel_tools(
         .add_tool(SkipTool::new(skip_flag.clone(), response_tx.clone()))
         .await?;
     handle.add_tool(ReactTool::new(response_tx.clone())).await?;
-    if let Some(cron) = cron_tool {
-        handle.add_tool(cron).await?;
+    if let Some(cron_tool) = cron_tool {
+        let cron_tool = cron_tool.with_default_delivery_target(
+            default_delivery_target_for_conversation(&conversation_id),
+        );
+        handle.add_tool(cron_tool).await?;
     }
     if let Some(mut agent_msg) = send_agent_message_tool {
         agent_msg = agent_msg.with_skip_flag(skip_flag.clone());
         handle.add_tool(agent_msg).await?;
     }
     Ok(())
+}
+
+fn default_delivery_target_for_conversation(conversation_id: &str) -> Option<String> {
+    let parsed = crate::messaging::target::parse_delivery_target(conversation_id)?;
+    if parsed.adapter != "discord" {
+        return None;
+    }
+    Some(parsed.to_string())
 }
 
 /// Remove per-channel tools from a running ToolServer.
