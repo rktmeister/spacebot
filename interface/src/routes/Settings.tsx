@@ -79,12 +79,28 @@ const PROVIDERS = [
 		defaultModel: "openrouter/anthropic/claude-sonnet-4",
 	},
 	{
+		id: "kilo",
+		name: "Kilo Gateway",
+		description: "OpenAI-compatible multi-provider gateway",
+		placeholder: "sk-...",
+		envVar: "KILO_API_KEY",
+		defaultModel: "kilo/anthropic/claude-sonnet-4.5",
+	},
+	{
 		id: "opencode-zen",
 		name: "OpenCode Zen",
 		description: "Multi-format gateway (Kimi, GLM, MiniMax, Qwen)",
 		placeholder: "...",
 		envVar: "OPENCODE_ZEN_API_KEY",
 		defaultModel: "opencode-zen/kimi-k2.5",
+	},
+	{
+		id: "opencode-go",
+		name: "OpenCode Go",
+		description: "Lite OpenCode model catalog and limits",
+		placeholder: "...",
+		envVar: "OPENCODE_GO_API_KEY",
+		defaultModel: "opencode-go/kimi-k2.5",
 	},
 	{
 		id: "anthropic",
@@ -529,9 +545,9 @@ export function Settings() {
 	};
 
 	return (
-		<div className="flex h-full">
+		<div className="flex h-full min-h-0 overflow-hidden">
 			{/* Sidebar */}
-			<div className="flex w-52 flex-shrink-0 flex-col border-r border-app-line/50 bg-app-darkBox/20 overflow-y-auto">
+			<div className="flex min-h-0 w-52 flex-shrink-0 flex-col overflow-y-auto border-r border-app-line/50 bg-app-darkBox/20">
 				<div className="px-3 pb-1 pt-4">
 					<span className="text-tiny font-medium uppercase tracking-wider text-ink-faint">
 						Settings
@@ -551,13 +567,13 @@ export function Settings() {
 			</div>
 
 			{/* Content */}
-			<div className="flex flex-1 flex-col overflow-hidden">
+			<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 				<header className="flex h-12 items-center border-b border-app-line bg-app-darkBox/50 px-6">
 					<h1 className="font-plex text-sm font-medium text-ink">
 						{SECTIONS.find((s) => s.id === activeSection)?.label}
 					</h1>
 				</header>
-				<div className="flex-1 overflow-y-auto">
+				<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
 					{activeSection === "providers" ? (
 						<div className="mx-auto max-w-2xl px-6 py-6">
 							{/* Section header */}
