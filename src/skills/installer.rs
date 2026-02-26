@@ -65,9 +65,13 @@ pub async fn install_from_github(spec: &str, target_dir: &Path) -> Result<Vec<St
     // Extract and install
     let mut source_repo = format!("{owner}/{repo}");
     source_repo.retain(|ch| ch != '\n' && ch != '\r');
-    let installed =
-        extract_and_install(&zip_path, target_dir, skill_path.as_deref(), Some(&source_repo))
-            .await?;
+    let installed = extract_and_install(
+        &zip_path,
+        target_dir,
+        skill_path.as_deref(),
+        Some(&source_repo),
+    )
+    .await?;
 
     tracing::info!(
         installed = ?installed,
@@ -245,10 +249,7 @@ fn inject_source_repo(content: &str, repo: &str) -> String {
     // Remove any existing source_repo line
     let filtered: Vec<&str> = fm_block
         .lines()
-        .filter(|l| {
-            !l.trim_start()
-                .starts_with("source_repo:")
-        })
+        .filter(|l| !l.trim_start().starts_with("source_repo:"))
         .collect();
 
     let mut new_fm = filtered.join("\n");
@@ -387,8 +388,8 @@ mod tests {
         assert!(result.contains("name: weather"));
         assert!(result.contains("# Weather"));
         // source_repo should be inside the frontmatter delimiters
-        let after_first = result.splitn(2, "---").nth(1).unwrap();
-        let fm = after_first.splitn(2, "\n---").next().unwrap();
+        let after_first = result.split_once("---").unwrap().1;
+        let fm = after_first.split("\n---").next().unwrap();
         assert!(fm.contains("source_repo: anthropics/skills"));
     }
 
@@ -432,7 +433,10 @@ mod tests {
         let content = "---\nname: weather\ndescription: Get weather\n---\n\n# Weather\n";
         let patched = inject_source_repo(content, "anthropics/skills");
         let (fm, body) = parse_frontmatter(&patched).unwrap();
-        assert_eq!(fm.get("source_repo").unwrap(), &"anthropics/skills".to_string());
+        assert_eq!(
+            fm.get("source_repo").unwrap(),
+            &"anthropics/skills".to_string()
+        );
         assert_eq!(fm.get("name").unwrap(), &"weather".to_string());
         assert!(body.contains("# Weather"));
     }
