@@ -72,21 +72,33 @@ impl TemporalContext {
                     };
                 }
                 Err(_) => {
+                    let cron_timezone_candidate =
+                        cron_timezone.as_deref().unwrap_or("none configured");
                     tracing::warn!(
                         timezone = %timezone_name,
-                        "invalid runtime timezone for channel temporal context, falling back to system local"
+                        cron_timezone = %cron_timezone_candidate,
+                        "invalid runtime timezone for channel temporal context, will try cron_timezone then fall back to system local"
                     );
                 }
             }
         }
 
-        if let Some(timezone_name) = cron_timezone
-            && let Ok(timezone) = timezone_name.parse::<Tz>()
-        {
-            return TemporalTimezone::Named {
-                timezone_name,
-                timezone,
-            };
+        if let Some(timezone_name) = cron_timezone {
+            match timezone_name.parse::<Tz>() {
+                Ok(timezone) => {
+                    return TemporalTimezone::Named {
+                        timezone_name,
+                        timezone,
+                    };
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        timezone = %timezone_name,
+                        error = %error,
+                        "invalid cron_timezone for channel temporal context, falling back to system local"
+                    );
+                }
+            }
         }
 
         TemporalTimezone::SystemLocal

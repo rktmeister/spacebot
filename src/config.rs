@@ -2219,27 +2219,31 @@ fn resolve_cron_timezone(
     agent_timezone: Option<&str>,
     default_timezone: Option<&str>,
 ) -> Option<String> {
-    let timezone = agent_timezone
-        .and_then(normalize_timezone)
-        .or_else(|| default_timezone.and_then(normalize_timezone))
-        .or_else(|| {
-            std::env::var(CRON_TIMEZONE_ENV_VAR)
-                .ok()
-                .and_then(|value| normalize_timezone(&value))
-        });
+    let env_timezone = std::env::var(CRON_TIMEZONE_ENV_VAR)
+        .ok()
+        .and_then(|value| normalize_timezone(&value));
 
-    let timezone = timezone?;
+    for timezone in [
+        agent_timezone.and_then(normalize_timezone),
+        default_timezone.and_then(normalize_timezone),
+        env_timezone,
+    ] {
+        let Some(timezone) = timezone else {
+            continue;
+        };
 
-    if timezone.parse::<Tz>().is_err() {
+        if timezone.parse::<Tz>().is_ok() {
+            return Some(timezone);
+        }
+
         tracing::warn!(
             agent_id,
             cron_timezone = %timezone,
             "invalid cron timezone configured, falling back to system local timezone"
         );
-        return None;
     }
 
-    Some(timezone)
+    None
 }
 
 fn resolve_user_timezone(
@@ -5516,6 +5520,31 @@ id = "main"
         let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
         let resolved = config.agents[0].resolve(&config.instance_dir, &config.defaults);
         assert_eq!(resolved.cron_timezone, None);
+    }
+
+    #[test]
+    fn test_cron_timezone_invalid_default_uses_env_fallback() {
+        let _lock = env_test_lock()
+            .lock()
+            .expect("failed to lock env test mutex");
+        let _env = EnvGuard::new();
+
+        unsafe {
+            std::env::set_var(CRON_TIMEZONE_ENV_VAR, "Asia/Tokyo");
+        }
+
+        let toml = r#"
+[defaults]
+cron_timezone = "Not/A-Real-Tz"
+
+[[agents]]
+id = "main"
+"#;
+
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+        let resolved = config.agents[0].resolve(&config.instance_dir, &config.defaults);
+        assert_eq!(resolved.cron_timezone.as_deref(), Some("Asia/Tokyo"));
     }
 
     #[test]
