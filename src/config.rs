@@ -2968,9 +2968,12 @@ impl Config {
                 .as_deref()
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("OPENCODE_ZEN_API_KEY").ok()),
-            opencode_go_key: std::env::var("OPENCODE_GO_API_KEY")
-                .ok()
-                .or_else(|| toml.llm.opencode_go_key.as_deref().and_then(resolve_env_value)),
+            opencode_go_key: std::env::var("OPENCODE_GO_API_KEY").ok().or_else(|| {
+                toml.llm
+                    .opencode_go_key
+                    .as_deref()
+                    .and_then(resolve_env_value)
+            }),
             nvidia_key: toml
                 .llm
                 .nvidia_key
