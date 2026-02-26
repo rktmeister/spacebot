@@ -483,6 +483,87 @@ fn can_transition(current: TaskStatus, next: TaskStatus) -> bool {
     )
 }
 
+fn merge_json_object(current: Value, patch: Option<Value>) -> Value {
+    let Some(patch) = patch else {
+        return current;
+    };
+
+    let mut merged = current.as_object().cloned().unwrap_or_default();
+    if let Some(patch_object) = patch.as_object() {
+        for (key, value) in patch_object {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(merged)
+}
+
+fn parse_subtasks(value: &str) -> Vec<TaskSubtask> {
+    serde_json::from_str(value).unwrap_or_default()
+}
+
+fn parse_metadata(value: &str) -> Value {
+    serde_json::from_str(value).unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+}
+
+fn task_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Task> {
+    let status_value: String = row
+        .try_get("status")
+        .context("failed to read task status")?;
+    let priority_value: String = row
+        .try_get("priority")
+        .context("failed to read task priority")?;
+    let subtasks_value: String = row.try_get("subtasks").unwrap_or_else(|_| "[]".to_string());
+    let metadata_value: String = row.try_get("metadata").unwrap_or_else(|_| "{}".to_string());
+
+    let status = TaskStatus::parse(&status_value)
+        .with_context(|| format!("invalid task status in database: {status_value}"))?;
+    let priority = TaskPriority::parse(&priority_value)
+        .with_context(|| format!("invalid task priority in database: {priority_value}"))?;
+
+    Ok(Task {
+        id: row.try_get("id").context("failed to read task id")?,
+        agent_id: row
+            .try_get("agent_id")
+            .context("failed to read task agent_id")?,
+        task_number: row
+            .try_get("task_number")
+            .context("failed to read task_number")?,
+        title: row.try_get("title").context("failed to read task title")?,
+        description: row.try_get("description").ok(),
+        status,
+        priority,
+        subtasks: parse_subtasks(&subtasks_value),
+        metadata: parse_metadata(&metadata_value),
+        source_memory_id: row.try_get("source_memory_id").ok(),
+        worker_id: row
+            .try_get::<Option<String>, _>("worker_id")
+            .ok()
+            .flatten()
+            .and_then(|value| if value.is_empty() { None } else { Some(value) }),
+        created_by: row
+            .try_get("created_by")
+            .context("failed to read task created_by")?,
+        approved_at: row
+            .try_get::<Option<chrono::NaiveDateTime>, _>("approved_at")
+            .ok()
+            .flatten()
+            .map(|v| v.and_utc().to_rfc3339()),
+        approved_by: row.try_get("approved_by").ok(),
+        created_at: row
+            .try_get::<chrono::NaiveDateTime, _>("created_at")
+            .map(|v| v.and_utc().to_rfc3339())
+            .context("failed to read task created_at")?,
+        updated_at: row
+            .try_get::<chrono::NaiveDateTime, _>("updated_at")
+            .map(|v| v.and_utc().to_rfc3339())
+            .context("failed to read task updated_at")?,
+        completed_at: row
+            .try_get::<chrono::NaiveDateTime, _>("completed_at")
+            .ok()
+            .map(|v| v.and_utc().to_rfc3339()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -614,85 +695,4 @@ mod tests {
             requeued.worker_id
         );
     }
-}
-
-fn merge_json_object(current: Value, patch: Option<Value>) -> Value {
-    let Some(patch) = patch else {
-        return current;
-    };
-
-    let mut merged = current.as_object().cloned().unwrap_or_default();
-    if let Some(patch_object) = patch.as_object() {
-        for (key, value) in patch_object {
-            merged.insert(key.clone(), value.clone());
-        }
-    }
-    Value::Object(merged)
-}
-
-fn parse_subtasks(value: &str) -> Vec<TaskSubtask> {
-    serde_json::from_str(value).unwrap_or_default()
-}
-
-fn parse_metadata(value: &str) -> Value {
-    serde_json::from_str(value).unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
-}
-
-fn task_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Task> {
-    let status_value: String = row
-        .try_get("status")
-        .context("failed to read task status")?;
-    let priority_value: String = row
-        .try_get("priority")
-        .context("failed to read task priority")?;
-    let subtasks_value: String = row.try_get("subtasks").unwrap_or_else(|_| "[]".to_string());
-    let metadata_value: String = row.try_get("metadata").unwrap_or_else(|_| "{}".to_string());
-
-    let status = TaskStatus::parse(&status_value)
-        .with_context(|| format!("invalid task status in database: {status_value}"))?;
-    let priority = TaskPriority::parse(&priority_value)
-        .with_context(|| format!("invalid task priority in database: {priority_value}"))?;
-
-    Ok(Task {
-        id: row.try_get("id").context("failed to read task id")?,
-        agent_id: row
-            .try_get("agent_id")
-            .context("failed to read task agent_id")?,
-        task_number: row
-            .try_get("task_number")
-            .context("failed to read task_number")?,
-        title: row.try_get("title").context("failed to read task title")?,
-        description: row.try_get("description").ok(),
-        status,
-        priority,
-        subtasks: parse_subtasks(&subtasks_value),
-        metadata: parse_metadata(&metadata_value),
-        source_memory_id: row.try_get("source_memory_id").ok(),
-        worker_id: row
-            .try_get::<Option<String>, _>("worker_id")
-            .ok()
-            .flatten()
-            .and_then(|value| if value.is_empty() { None } else { Some(value) }),
-        created_by: row
-            .try_get("created_by")
-            .context("failed to read task created_by")?,
-        approved_at: row
-            .try_get::<Option<chrono::NaiveDateTime>, _>("approved_at")
-            .ok()
-            .flatten()
-            .map(|v| v.and_utc().to_rfc3339()),
-        approved_by: row.try_get("approved_by").ok(),
-        created_at: row
-            .try_get::<chrono::NaiveDateTime, _>("created_at")
-            .map(|v| v.and_utc().to_rfc3339())
-            .context("failed to read task created_at")?,
-        updated_at: row
-            .try_get::<chrono::NaiveDateTime, _>("updated_at")
-            .map(|v| v.and_utc().to_rfc3339())
-            .context("failed to read task updated_at")?,
-        completed_at: row
-            .try_get::<chrono::NaiveDateTime, _>("completed_at")
-            .ok()
-            .map(|v| v.and_utc().to_rfc3339()),
-    })
 }
