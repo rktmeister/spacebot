@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from "react";
+import {useEffect, useMemo, useRef, useState} from "react";
 import {
 	useWebChat,
 	getPortalChatSessionId,
@@ -10,6 +10,42 @@ import {Markdown} from "@/components/Markdown";
 
 interface WebChatPanelProps {
 	agentId: string;
+}
+
+const ASSISTANT_DUPLICATE_WINDOW_MS = 12_000;
+const ASSISTANT_FINGERPRINT_TTL_MS = 30_000;
+
+function normalizeAssistantContent(content: string) {
+	return content.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function rememberAssistantContent(
+	fingerprints: Map<string, number>,
+	content: string,
+	now: number,
+) {
+	const fingerprint = normalizeAssistantContent(content);
+	if (!fingerprint) return;
+	fingerprints.set(fingerprint, now);
+}
+
+function isRecentAssistantDuplicate(
+	fingerprints: Map<string, number>,
+	content: string,
+	now: number,
+) {
+	const fingerprint = normalizeAssistantContent(content);
+	if (!fingerprint) return false;
+	const seenAt = fingerprints.get(fingerprint);
+	return seenAt !== undefined && now - seenAt < ASSISTANT_DUPLICATE_WINDOW_MS;
+}
+
+function pruneAssistantFingerprints(fingerprints: Map<string, number>, now: number) {
+	for (const [fingerprint, seenAt] of fingerprints.entries()) {
+		if (now - seenAt > ASSISTANT_FINGERPRINT_TTL_MS) {
+			fingerprints.delete(fingerprint);
+		}
+	}
 }
 
 function ToolActivityIndicator({activity}: {activity: ToolActivity[]}) {
@@ -174,14 +210,71 @@ export function WebChatPanel({agentId}: WebChatPanelProps) {
 		useWebChat(agentId);
 	const {liveStates} = useLiveContext();
 	const [input, setInput] = useState("");
+	const [sseMessages, setSseMessages] = useState<{id: string; role: "assistant"; content: string}[]>([]);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const sessionId = getPortalChatSessionId(agentId);
 	const activeWorkers = Object.values(liveStates[sessionId]?.workers ?? {});
 	const hasActiveWorkers = activeWorkers.length > 0;
+	const recentAssistantFingerprintsRef = useRef(new Map<string, number>());
+	const fingerprintedMessageIdsRef = useRef(new Set<string>());
+
+	// Pick up assistant messages from the global SSE stream that arrived
+	// after the webchat request SSE closed (e.g. worker completion retriggers).
+	const timeline = liveStates[sessionId]?.timeline;
+	const seenIdsRef = useRef(new Set<string>());
+	useEffect(() => {
+		if (!timeline) return;
+		const now = Date.now();
+		pruneAssistantFingerprints(recentAssistantFingerprintsRef.current, now);
+
+		// Seed seen IDs from webchat messages so we don't duplicate
+		for (const m of messages) {
+			seenIdsRef.current.add(m.id);
+			if (m.role === "assistant" && !fingerprintedMessageIdsRef.current.has(m.id)) {
+				fingerprintedMessageIdsRef.current.add(m.id);
+				rememberAssistantContent(recentAssistantFingerprintsRef.current, m.content, now);
+			}
+		}
+
+		const newMessages: {id: string; role: "assistant"; content: string}[] = [];
+		for (const item of timeline) {
+			if (
+				item.type === "message" &&
+				item.role === "assistant" &&
+				!seenIdsRef.current.has(item.id)
+			) {
+				seenIdsRef.current.add(item.id);
+				if (isRecentAssistantDuplicate(recentAssistantFingerprintsRef.current, item.content, now)) {
+					continue;
+				}
+				fingerprintedMessageIdsRef.current.add(item.id);
+				rememberAssistantContent(recentAssistantFingerprintsRef.current, item.content, now);
+				newMessages.push({
+					id: item.id,
+					role: "assistant",
+					content: item.content,
+				});
+			}
+		}
+		if (newMessages.length > 0) {
+			setSseMessages((prev) => [...prev, ...newMessages]);
+		}
+	}, [timeline, messages]);
+
+	// Clear SSE messages when a new webchat send starts (they'll be in history on next load)
+	useEffect(() => {
+		if (isStreaming) setSseMessages([]);
+	}, [isStreaming]);
+
+	const allMessages = useMemo(() => {
+		const messageIds = new Set(messages.map((message) => message.id));
+		const dedupedSse = sseMessages.filter((message) => !messageIds.has(message.id));
+		return [...messages, ...dedupedSse];
+	}, [messages, sseMessages]);
 
 	useEffect(() => {
 		messagesEndRef.current?.scrollIntoView({behavior: "smooth"});
-	}, [messages.length, isStreaming, toolActivity.length, activeWorkers.length]);
+	}, [allMessages.length, isStreaming, toolActivity.length, activeWorkers.length]);
 
 	const handleSubmit = () => {
 		const trimmed = input.trim();
@@ -201,7 +294,7 @@ export function WebChatPanel({agentId}: WebChatPanelProps) {
 						</div>
 					)}
 
-					{messages.length === 0 && !isStreaming && (
+					{allMessages.length === 0 && !isStreaming && (
 						<div className="flex flex-col items-center justify-center py-24">
 							<p className="text-sm text-ink-faint">
 								Start a conversation with {agentId}
@@ -209,7 +302,7 @@ export function WebChatPanel({agentId}: WebChatPanelProps) {
 						</div>
 					)}
 
-					{messages.map((message) => (
+					{allMessages.map((message) => (
 						<div key={message.id}>
 							{message.role === "user" ? (
 								<div className="flex justify-end">
@@ -225,18 +318,18 @@ export function WebChatPanel({agentId}: WebChatPanelProps) {
 						</div>
 					))}
 
-					{/* Streaming state */}
-					{isStreaming &&
-						messages[messages.length - 1]?.role !== "assistant" && (
+				{/* Streaming state */}
+				{isStreaming &&
+						allMessages[allMessages.length - 1]?.role !== "assistant" && (
 							<div>
 								<ToolActivityIndicator activity={toolActivity} />
 								{toolActivity.length === 0 && <ThinkingIndicator />}
 							</div>
 						)}
 
-					{/* Inline tool activity during streaming assistant message */}
-					{isStreaming &&
-						messages[messages.length - 1]?.role === "assistant" &&
+				{/* Inline tool activity during streaming assistant message */}
+				{isStreaming &&
+						allMessages[allMessages.length - 1]?.role === "assistant" &&
 						toolActivity.length > 0 && (
 							<ToolActivityIndicator activity={toolActivity} />
 						)}

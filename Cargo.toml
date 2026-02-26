@@ -35,6 +35,9 @@ fastembed = "4"
 base64 = "0.22"
 hex = "0.4"
 
+# Compression
+flate2 = "1"
+
 # Logging and tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -142,6 +145,7 @@ prometheus = { version = "0.13", optional = true }
 pdf-extract = "0.10.0"
 open = "5.3.3"
 urlencoding = "2.1.3"
+moka = "0.12.13"
 
 [features]
 metrics = ["dep:prometheus"]
