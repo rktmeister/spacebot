@@ -238,7 +238,10 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 		queryClient.invalidateQueries({ queryKey: ["channels"] });
 		queryClient.invalidateQueries({ queryKey: ["status"] });
 		queryClient.invalidateQueries({ queryKey: ["agents"] });
-	}, [syncStatusSnapshot, queryClient]);
+		queryClient.invalidateQueries({ queryKey: ["tasks"] });
+		// Bump task version so any mounted task views refetch immediately.
+		bumpTaskVersion();
+	}, [syncStatusSnapshot, queryClient, bumpTaskVersion]);
 
 	const { connectionState } = useEventSource(api.eventsUrl, {
 		handlers,

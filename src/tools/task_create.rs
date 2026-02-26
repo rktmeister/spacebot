@@ -100,12 +100,13 @@ impl Tool for TaskCreateTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let priority = TaskPriority::parse(&args.priority).unwrap_or(TaskPriority::Medium);
-        let status = args
-            .status
-            .as_deref()
-            .and_then(TaskStatus::parse)
-            .unwrap_or(TaskStatus::Backlog);
+        let priority = TaskPriority::parse(&args.priority)
+            .ok_or_else(|| TaskCreateError(format!("invalid priority: {}", args.priority)))?;
+        let status = match args.status.as_deref() {
+            None => TaskStatus::Backlog,
+            Some(value) => TaskStatus::parse(value)
+                .ok_or_else(|| TaskCreateError(format!("invalid status: {value}")))?,
+        };
 
         let subtasks = args
             .subtasks

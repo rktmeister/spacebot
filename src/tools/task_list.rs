@@ -79,11 +79,24 @@ impl Tool for TaskListTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let status = args.status.as_deref().and_then(TaskStatus::parse);
-        let priority = args.priority.as_deref().and_then(TaskPriority::parse);
+        let status = match args.status.as_deref() {
+            None => None,
+            Some(value) => Some(
+                TaskStatus::parse(value)
+                    .ok_or_else(|| TaskListError(format!("invalid status filter: {value}")))?,
+            ),
+        };
+        let priority = match args.priority.as_deref() {
+            None => None,
+            Some(value) => Some(
+                TaskPriority::parse(value)
+                    .ok_or_else(|| TaskListError(format!("invalid priority filter: {value}")))?,
+            ),
+        };
+        let limit = i64::from(args.limit).clamp(1, 500);
         let tasks = self
             .task_store
-            .list(&self.agent_id, status, priority, i64::from(args.limit))
+            .list(&self.agent_id, status, priority, limit)
             .await
             .map_err(|error| TaskListError(format!("{error}")))?;
 
