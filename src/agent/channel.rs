@@ -13,6 +13,8 @@ use crate::{
     AgentDeps, BranchId, ChannelId, InboundMessage, OutboundResponse, ProcessEvent, ProcessId,
     ProcessType, WorkerId,
 };
+use chrono::{DateTime, Local, Utc};
+use chrono_tz::Tz;
 use rig::agent::AgentBuilder;
 use rig::completion::{CompletionModel, Prompt};
 use rig::message::{ImageMediaType, MimeType, UserContent};
@@ -32,6 +34,103 @@ const RETRIGGER_DEBOUNCE_MS: u64 = 500;
 /// Maximum retriggers allowed since the last real user message. Prevents
 /// infinite retrigger cascades where each retrigger spawns more work.
 const MAX_RETRIGGERS_PER_TURN: usize = 3;
+
+#[derive(Debug, Clone)]
+enum TemporalTimezone {
+    Named { timezone_name: String, timezone: Tz },
+    SystemLocal,
+}
+
+#[derive(Debug, Clone)]
+struct TemporalContext {
+    now_utc: DateTime<Utc>,
+    timezone: TemporalTimezone,
+}
+
+impl TemporalContext {
+    fn from_runtime(runtime_config: &crate::config::RuntimeConfig) -> Self {
+        let configured_timezone = runtime_config
+            .user_timezone
+            .load()
+            .as_ref()
+            .clone()
+            .or_else(|| runtime_config.cron_timezone.load().as_ref().clone());
+        let now_utc = Utc::now();
+
+        if let Some(timezone_name) = configured_timezone {
+            match timezone_name.parse::<Tz>() {
+                Ok(timezone) => {
+                    return Self {
+                        now_utc,
+                        timezone: TemporalTimezone::Named {
+                            timezone_name,
+                            timezone,
+                        },
+                    };
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        timezone = %timezone_name,
+                        "invalid runtime timezone for channel temporal context, falling back to system local"
+                    );
+                }
+            }
+        }
+
+        Self {
+            now_utc,
+            timezone: TemporalTimezone::SystemLocal,
+        }
+    }
+
+    fn format_timestamp(&self, timestamp: DateTime<Utc>) -> String {
+        match &self.timezone {
+            TemporalTimezone::Named {
+                timezone_name,
+                timezone,
+            } => {
+                let local_timestamp = timestamp.with_timezone(timezone);
+                format!(
+                    "{} ({}, UTC{})",
+                    local_timestamp.format("%Y-%m-%d %H:%M:%S %Z"),
+                    timezone_name,
+                    local_timestamp.format("%:z")
+                )
+            }
+            TemporalTimezone::SystemLocal => {
+                let local_timestamp = timestamp.with_timezone(&Local);
+                format!(
+                    "{} (system local, UTC{})",
+                    local_timestamp.format("%Y-%m-%d %H:%M:%S %Z"),
+                    local_timestamp.format("%:z")
+                )
+            }
+        }
+    }
+
+    fn current_time_line(&self) -> String {
+        format!(
+            "{}; UTC {}",
+            self.format_timestamp(self.now_utc),
+            self.now_utc.format("%Y-%m-%d %H:%M:%S UTC")
+        )
+    }
+
+    fn worker_task_preamble(&self) -> String {
+        format!(
+            "## Time Context\n- Current local date/time: {}\n- Current UTC date/time: {}\n- Use this context for relative dates (today/tomorrow/yesterday/now) and include absolute dates when timing matters.",
+            self.format_timestamp(self.now_utc),
+            self.now_utc.format("%Y-%m-%d %H:%M:%S UTC")
+        )
+    }
+}
+
+fn build_worker_task_with_temporal_context(
+    task: &str,
+    temporal_context: &TemporalContext,
+) -> String {
+    format!("{}\n\n{}", temporal_context.worker_task_preamble(), task)
+}
 
 /// A background process result waiting to be relayed to the user via retrigger.
 ///
@@ -528,6 +627,7 @@ impl Channel {
         // Persist each message to conversation log (individual audit trail)
         let mut user_contents: Vec<UserContent> = Vec::new();
         let mut conversation_id = String::new();
+        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
 
         for message in &messages {
             if message.source != "system" {
@@ -561,11 +661,12 @@ impl Channel {
 
                 conversation_id = message.conversation_id.clone();
 
-                // Format with relative timestamp
+                // Include both absolute and relative time context.
                 let relative_secs = message
                     .timestamp
                     .signed_duration_since(first_timestamp)
-                    .num_seconds();
+                    .num_seconds()
+                    .max(0);
                 let relative_text = if relative_secs < 1 {
                     "just now".to_string()
                 } else if relative_secs < 60 {
@@ -573,6 +674,7 @@ impl Channel {
                 } else {
                     format!("{}m ago", relative_secs / 60)
                 };
+                let absolute_timestamp = temporal_context.format_timestamp(message.timestamp);
 
                 let display_name = message
                     .metadata
@@ -580,8 +682,12 @@ impl Channel {
                     .and_then(|v| v.as_str())
                     .unwrap_or(&message.sender_id);
 
-                let formatted_text =
-                    format!("[{}] ({}): {}", display_name, relative_text, raw_text);
+                let formatted_text = format_batched_user_message(
+                    display_name,
+                    &absolute_timestamp,
+                    &relative_text,
+                    &raw_text,
+                );
 
                 // Download attachments for this message
                 if !attachments.is_empty() {
@@ -669,9 +775,11 @@ impl Channel {
             opencode_enabled,
         )?;
 
+        let temporal_context = TemporalContext::from_runtime(rc.as_ref());
+        let current_time_line = temporal_context.current_time_line();
         let status_text = {
             let status = self.state.status_block.read().await;
-            status.render()
+            status.render_with_time_context(Some(&current_time_line))
         };
 
         // Render coalesce hint
@@ -726,7 +834,9 @@ impl Channel {
             crate::MessageContent::Interaction { .. } => (message.content.to_string(), Vec::new()),
         };
 
-        let user_text = format_user_message(&raw_text, &message);
+        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
+        let message_timestamp = temporal_context.format_timestamp(message.timestamp);
+        let user_text = format_user_message(&raw_text, &message, &message_timestamp);
 
         let attachment_content = if !attachments.is_empty() {
             download_attachments(&self.deps, &attachments).await
@@ -958,9 +1068,11 @@ impl Channel {
             opencode_enabled,
         )?;
 
+        let temporal_context = TemporalContext::from_runtime(rc.as_ref());
+        let current_time_line = temporal_context.current_time_line();
         let status_text = {
             let status = self.state.status_block.read().await;
-            status.render()
+            status.render_with_time_context(Some(&current_time_line))
         };
 
         let available_channels = self.build_available_channels().await;
@@ -1626,8 +1738,10 @@ impl Channel {
 
     /// Get the current status block as a string.
     pub async fn get_status(&self) -> String {
+        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
+        let current_time_line = temporal_context.current_time_line();
         let status = self.state.status_block.read().await;
-        status.render()
+        status.render_with_time_context(Some(&current_time_line))
     }
 
     /// Check if a memory persistence branch should be spawned based on message count.
@@ -1883,6 +1997,8 @@ pub async fn spawn_worker_from_state(
     let task = task.into();
 
     let rc = &state.deps.runtime_config;
+    let temporal_context = TemporalContext::from_runtime(rc.as_ref());
+    let worker_task = build_worker_task_with_temporal_context(&task, &temporal_context);
     let prompt_engine = rc.prompts.load();
     let worker_system_prompt = prompt_engine
         .render_worker_prompt(
@@ -1911,7 +2027,7 @@ pub async fn spawn_worker_from_state(
     let worker = if interactive {
         let (worker, input_tx) = Worker::new_interactive(
             Some(state.channel_id.clone()),
-            &task,
+            &worker_task,
             &system_prompt,
             state.deps.clone(),
             browser_config.clone(),
@@ -1929,7 +2045,7 @@ pub async fn spawn_worker_from_state(
     } else {
         Worker::new(
             Some(state.channel_id.clone()),
-            &task,
+            &worker_task,
             &system_prompt,
             state.deps.clone(),
             browser_config,
@@ -1996,6 +2112,8 @@ pub async fn spawn_opencode_worker_from_state(
     let directory = std::path::PathBuf::from(directory);
 
     let rc = &state.deps.runtime_config;
+    let temporal_context = TemporalContext::from_runtime(rc.as_ref());
+    let worker_task = build_worker_task_with_temporal_context(&task, &temporal_context);
     let opencode_config = rc.opencode.load();
 
     if !opencode_config.enabled {
@@ -2010,7 +2128,7 @@ pub async fn spawn_opencode_worker_from_state(
         let (worker, input_tx) = crate::opencode::OpenCodeWorker::new_interactive(
             Some(state.channel_id.clone()),
             state.deps.agent_id.clone(),
-            &task,
+            &worker_task,
             directory,
             server_pool,
             state.deps.event_tx.clone(),
@@ -2026,7 +2144,7 @@ pub async fn spawn_opencode_worker_from_state(
         crate::opencode::OpenCodeWorker::new(
             Some(state.channel_id.clone()),
             state.deps.agent_id.clone(),
-            &task,
+            &worker_task,
             directory,
             server_pool,
             state.deps.event_tx.clone(),
@@ -2195,7 +2313,7 @@ fn extract_reply_from_tool_syntax(text: &str) -> Option<String> {
 ///
 /// In multi-user channels, this lets the LLM distinguish who said what.
 /// System-generated messages (re-triggers) are passed through as-is.
-fn format_user_message(raw_text: &str, message: &InboundMessage) -> String {
+fn format_user_message(raw_text: &str, message: &InboundMessage, timestamp_text: &str) -> String {
     if message.source == "system" {
         // System messages should never be empty, but guard against it
         return if raw_text.trim().is_empty() {
@@ -2255,7 +2373,16 @@ fn format_user_message(raw_text: &str, message: &InboundMessage) -> String {
         raw_text
     };
 
-    format!("{display_name}{bot_tag}{reply_context}: {text_content}")
+    format!("{display_name}{bot_tag}{reply_context} [{timestamp_text}]: {text_content}")
+}
+
+fn format_batched_user_message(
+    display_name: &str,
+    absolute_timestamp: &str,
+    relative_text: &str,
+    raw_text: &str,
+) -> String {
+    format!("[{display_name}] ({absolute_timestamp}; {relative_text}): {raw_text}")
 }
 
 fn extract_discord_message_id(message: &InboundMessage) -> Option<u64> {
@@ -3126,7 +3253,7 @@ mod tests {
             timestamp: Utc::now(),
         };
 
-        let formatted = format_user_message("", &message);
+        let formatted = format_user_message("", &message, "2026-02-26 12:00:00 UTC");
         assert!(
             !formatted.trim().is_empty(),
             "formatted message should not be empty"
@@ -3137,7 +3264,7 @@ mod tests {
         );
 
         // Test whitespace-only text
-        let formatted_ws = format_user_message("   ", &message);
+        let formatted_ws = format_user_message("   ", &message, "2026-02-26 12:00:00 UTC");
         assert!(
             formatted_ws.contains("[attachment or empty message]"),
             "should use placeholder for whitespace-only text"
@@ -3156,21 +3283,79 @@ mod tests {
             timestamp: Utc::now(),
         };
 
-        let formatted_sys = format_user_message("", &system_message);
+        let formatted_sys = format_user_message("", &system_message, "2026-02-26 12:00:00 UTC");
         assert_eq!(
             formatted_sys, "[system event]",
             "system messages should use [system event] placeholder"
         );
 
         // Test normal message with text
-        let formatted_normal = format_user_message("hello", &message);
+        let formatted_normal = format_user_message("hello", &message, "2026-02-26 12:00:00 UTC");
         assert!(
             formatted_normal.contains("hello"),
             "normal messages should preserve text"
         );
         assert!(
+            formatted_normal.contains("[2026-02-26 12:00:00 UTC]"),
+            "normal messages should include absolute timestamp context"
+        );
+        assert!(
             !formatted_normal.contains("[attachment or empty message]"),
             "normal messages should not use placeholder"
+        );
+    }
+
+    #[test]
+    fn worker_task_temporal_context_preamble_includes_absolute_dates() {
+        let temporal_context = super::TemporalContext {
+            now_utc: chrono::DateTime::parse_from_rfc3339("2026-02-26T20:30:00Z")
+                .expect("valid RFC3339 timestamp")
+                .with_timezone(&chrono::Utc),
+            timezone: super::TemporalTimezone::Named {
+                timezone_name: "America/New_York".to_string(),
+                timezone: "America/New_York"
+                    .parse()
+                    .expect("valid timezone identifier"),
+            },
+        };
+
+        let worker_task = super::build_worker_task_with_temporal_context(
+            "Run the migration checks",
+            &temporal_context,
+        );
+        assert!(
+            worker_task.contains("Current local date/time:"),
+            "worker task should include local time context"
+        );
+        assert!(
+            worker_task.contains("Current UTC date/time:"),
+            "worker task should include UTC time context"
+        );
+        assert!(
+            worker_task.contains("Run the migration checks"),
+            "worker task should preserve the original task body"
+        );
+    }
+
+    #[test]
+    fn format_batched_message_includes_absolute_and_relative_time() {
+        let formatted = super::format_batched_user_message(
+            "alice",
+            "2026-02-26 15:04:05 PST (America/Los_Angeles, UTC-08:00)",
+            "12s ago",
+            "ship it",
+        );
+        assert!(
+            formatted.contains("2026-02-26 15:04:05 PST"),
+            "batched formatting should include absolute timestamp"
+        );
+        assert!(
+            formatted.contains("12s ago"),
+            "batched formatting should include relative timestamp hint"
+        );
+        assert!(
+            formatted.contains("ship it"),
+            "batched formatting should include original message text"
         );
     }
 }
