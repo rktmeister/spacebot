@@ -300,15 +300,6 @@ fn default_delivery_target_for_conversation(conversation_id: &str) -> Option<Str
     Some(parsed.to_string())
 }
 
-fn link_counterparty_for_agent(conversation_id: &str, agent_id: &str) -> Option<String> {
-    let rest = conversation_id.strip_prefix("link:")?;
-    let (self_id, counterparty_id) = rest.split_once(':')?;
-    if self_id == agent_id {
-        Some(counterparty_id.to_string())
-    } else {
-        None
-    }
-}
 /// Remove per-channel tools from a running ToolServer.
 ///
 /// Called when a conversation turn ends or a channel is torn down. Prevents stale
