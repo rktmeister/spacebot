@@ -46,13 +46,13 @@ require_command() {
 	fi
 }
 
+require_command git
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "not inside a git worktree"
 
 repository_root="$(git rev-parse --show-toplevel)"
 cd "$repository_root"
 
 log "checking required commands"
-require_command git
 require_command cargo
 require_command rustc
 require_command protoc

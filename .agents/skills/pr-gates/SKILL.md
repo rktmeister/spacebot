@@ -5,11 +5,6 @@ description: This skill should be used when the user asks to "open a PR", "prepa
 
 # PR Gates
 
-## Scope Guard
-
-- Apply this skill only when the active repository remote is under `github.com/spacedriveapp/*`.
-- If the repository is outside that scope, stop and switch to a general review/verification skill.
-
 ## Mandatory Flow
 
 1. Run `just preflight` before finalizing changes.

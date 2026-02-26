@@ -114,14 +114,36 @@ check_migration_safety() {
 		return
 	fi
 
-	local violations=()
-	local line
+	declare -A paths_with_add=()
 	for line in "${migration_changes[@]}"; do
-		local status="${line%%$'\t'*}"
-		if [[ "$status" == "$line" ]]; then
+		local status=""
+		local path=""
+		if [[ "$line" == *$'\t'* ]]; then
+			status="${line%%$'\t'*}"
+			path="${line#*$'\t'}"
+		else
 			status="${line%% *}"
+			path="${line#* }"
+			[[ "$path" == "$line" ]] && path=""
 		fi
-		if [[ "$status" != A* ]]; then
+		if [[ -n "$path" && "$status" == A* ]]; then
+			paths_with_add["$path"]=1
+		fi
+	done
+
+	local violations=()
+	for line in "${migration_changes[@]}"; do
+		local status=""
+		local path=""
+		if [[ "$line" == *$'\t'* ]]; then
+			status="${line%%$'\t'*}"
+			path="${line#*$'\t'}"
+		else
+			status="${line%% *}"
+			path="${line#* }"
+			[[ "$path" == "$line" ]] && path=""
+		fi
+		if [[ -n "$path" && "$status" != A* && -z "${paths_with_add[$path]:-}" ]]; then
 			violations+=("$line")
 		fi
 	done
