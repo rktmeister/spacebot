@@ -118,10 +118,6 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         ("en", "fragments/org_context") => {
             include_str!("../../prompts/en/fragments/org_context.md.j2")
         }
-        ("en", "fragments/link_context") => {
-            include_str!("../../prompts/en/fragments/link_context.md.j2")
-        }
-
         // Coalesce Hint
         ("en", "fragments/coalesce_hint") => {
             include_str!("../../prompts/en/fragments/coalesce_hint.md.j2")
@@ -171,9 +167,6 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         }
         ("en", "tools/send_agent_message") => {
             include_str!("../../prompts/en/tools/send_agent_message_description.md.j2")
-        }
-        ("en", "tools/conclude_link") => {
-            include_str!("../../prompts/en/tools/conclude_link_description.md.j2")
         }
         ("en", "tools/task_create") => {
             include_str!("../../prompts/en/tools/task_create_description.md.j2")

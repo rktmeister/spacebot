@@ -406,7 +406,6 @@ impl PromptEngine {
             coalesce_hint,
             available_channels,
             None,
-            None,
         )
     }
 
@@ -439,17 +438,7 @@ impl PromptEngine {
         )
     }
 
-    /// Render the link context fragment for an internal agent-to-agent channel.
-    pub fn render_link_context(&self, link_context: LinkContext) -> Result<String> {
-        self.render(
-            "fragments/link_context",
-            context! {
-                link_context => link_context,
-            },
-        )
-    }
-
-    /// Render the channel system prompt with all dynamic components including org/link context.
+    /// Render the channel system prompt with all dynamic components including org context.
     #[allow(clippy::too_many_arguments)]
     pub fn render_channel_prompt_with_links(
         &self,
@@ -462,7 +451,6 @@ impl PromptEngine {
         coalesce_hint: Option<String>,
         available_channels: Option<String>,
         org_context: Option<String>,
-        link_context: Option<String>,
     ) -> Result<String> {
         self.render(
             "channel",
@@ -476,7 +464,6 @@ impl PromptEngine {
                 coalesce_hint => coalesce_hint,
                 available_channels => available_channels,
                 org_context => org_context,
-                link_context => link_context,
             },
         )
     }
@@ -502,13 +489,6 @@ pub struct LinkedAgent {
     pub id: String,
     /// Whether this is a human (true) or an agent (false).
     pub is_human: bool,
-}
-
-/// Context for the current link channel.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct LinkContext {
-    pub agent_name: String,
-    pub relationship: String,
 }
 
 /// Information about a skill for template rendering.
