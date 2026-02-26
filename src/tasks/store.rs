@@ -162,7 +162,11 @@ impl TaskStore {
     }
 
     pub async fn create(&self, input: CreateTaskInput) -> Result<Task> {
-        let mut tx = self.pool.begin().await.context("failed to open task create transaction")?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to open task create transaction")?;
 
         let task_number: i64 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(task_number), 0) + 1 FROM tasks WHERE agent_id = ?",
@@ -173,7 +177,8 @@ impl TaskStore {
         .context("failed to allocate next task number")?;
 
         let task_id = uuid::Uuid::new_v4().to_string();
-        let subtasks_json = serde_json::to_string(&input.subtasks).context("failed to serialize subtasks")?;
+        let subtasks_json =
+            serde_json::to_string(&input.subtasks).context("failed to serialize subtasks")?;
         let metadata_json = input.metadata.to_string();
 
         sqlx::query(
@@ -200,10 +205,11 @@ impl TaskStore {
         .await
         .context("failed to insert task")?;
 
-        tx.commit().await.context("failed to commit task create transaction")?;
+        tx.commit()
+            .await
+            .context("failed to commit task create transaction")?;
 
-        self
-            .get_by_number(&input.agent_id, task_number)
+        self.get_by_number(&input.agent_id, task_number)
             .await?
             .context("task inserted but not found")
             .map_err(Into::into)
@@ -246,7 +252,8 @@ impl TaskStore {
     }
 
     pub async fn list_ready(&self, agent_id: &str, limit: i64) -> Result<Vec<Task>> {
-        self.list(agent_id, Some(TaskStatus::Ready), None, limit).await
+        self.list(agent_id, Some(TaskStatus::Ready), None, limit)
+            .await
     }
 
     pub async fn get_by_number(&self, agent_id: &str, task_number: i64) -> Result<Option<Task>> {
@@ -505,9 +512,7 @@ mod tests {
             .await
             .expect_err("pending_approval -> in_progress must fail");
 
-        assert!(error
-            .to_string()
-            .contains("invalid task status transition"));
+        assert!(error.to_string().contains("invalid task status transition"));
     }
 
     #[tokio::test]
@@ -590,16 +595,14 @@ fn parse_metadata(value: &str) -> Value {
 }
 
 fn task_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Task> {
-    let status_value: String = row.try_get("status").unwrap_or_else(|_| "backlog".to_string());
+    let status_value: String = row
+        .try_get("status")
+        .unwrap_or_else(|_| "backlog".to_string());
     let priority_value: String = row
         .try_get("priority")
         .unwrap_or_else(|_| "medium".to_string());
-    let subtasks_value: String = row
-        .try_get("subtasks")
-        .unwrap_or_else(|_| "[]".to_string());
-    let metadata_value: String = row
-        .try_get("metadata")
-        .unwrap_or_else(|_| "{}".to_string());
+    let subtasks_value: String = row.try_get("subtasks").unwrap_or_else(|_| "[]".to_string());
+    let metadata_value: String = row.try_get("metadata").unwrap_or_else(|_| "{}".to_string());
 
     let status = TaskStatus::parse(&status_value)
         .with_context(|| format!("invalid task status in database: {status_value}"))?;
@@ -625,10 +628,12 @@ fn task_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Task> {
         created_by: row.try_get("created_by").unwrap_or_default(),
         approved_at: row.try_get("approved_at").ok(),
         approved_by: row.try_get("approved_by").ok(),
-        created_at: row.try_get::<chrono::NaiveDateTime, _>("created_at")
+        created_at: row
+            .try_get::<chrono::NaiveDateTime, _>("created_at")
             .map(|v| v.and_utc().to_rfc3339())
             .unwrap_or_default(),
-        updated_at: row.try_get::<chrono::NaiveDateTime, _>("updated_at")
+        updated_at: row
+            .try_get::<chrono::NaiveDateTime, _>("updated_at")
             .map(|v| v.and_utc().to_rfc3339())
             .unwrap_or_default(),
         completed_at: row

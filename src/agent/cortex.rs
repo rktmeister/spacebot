@@ -9,13 +9,13 @@
 //! The cortex also observes system-wide activity via signals for future use in
 //! health monitoring and memory consolidation.
 
+use crate::agent::worker::Worker;
 use crate::error::Result;
 use crate::hooks::CortexHook;
 use crate::llm::SpacebotModel;
 use crate::memory::search::{SearchConfig, SearchMode, SearchSort};
 use crate::memory::types::{Association, MemoryType, RelationType};
 use crate::tasks::{TaskStatus, UpdateTaskInput};
-use crate::agent::worker::Worker;
 use crate::{AgentDeps, ProcessEvent, ProcessType};
 
 use rig::agent::AgentBuilder;
@@ -997,8 +997,16 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         }
     }
 
-    let screenshot_dir = deps.runtime_config.workspace_dir.join(".spacebot").join("screenshots");
-    let logs_dir = deps.runtime_config.workspace_dir.join(".spacebot").join("logs");
+    let screenshot_dir = deps
+        .runtime_config
+        .workspace_dir
+        .join(".spacebot")
+        .join("screenshots");
+    let logs_dir = deps
+        .runtime_config
+        .workspace_dir
+        .join(".spacebot")
+        .join("logs");
     let _ = std::fs::create_dir_all(&screenshot_dir);
     let _ = std::fs::create_dir_all(&logs_dir);
 

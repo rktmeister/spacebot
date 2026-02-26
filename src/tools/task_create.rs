@@ -15,7 +15,11 @@ pub struct TaskCreateTool {
 }
 
 impl TaskCreateTool {
-    pub fn new(task_store: Arc<TaskStore>, agent_id: impl Into<String>, created_by: impl Into<String>) -> Self {
+    pub fn new(
+        task_store: Arc<TaskStore>,
+        agent_id: impl Into<String>,
+        created_by: impl Into<String>,
+    ) -> Self {
         Self {
             task_store,
             agent_id: agent_id.into(),

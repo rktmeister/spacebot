@@ -125,7 +125,9 @@ impl Tool for TaskUpdateTool {
                 .map_err(|error| TaskUpdateError(format!("{error}")))?;
 
             let Some(task) = current else {
-                return Err(TaskUpdateError("worker is not assigned to a task".to_string()));
+                return Err(TaskUpdateError(
+                    "worker is not assigned to a task".to_string(),
+                ));
             };
 
             if task.task_number != task_number {
