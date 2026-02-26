@@ -17,6 +17,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/ui/Dialog";
+import { Markdown } from "@/components/Markdown";
 import { formatTimeAgo } from "@/lib/format";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -553,9 +554,9 @@ function TaskDetailDialog({
               <label className="mb-1 block text-xs text-ink-dull">
                 Description
               </label>
-              <p className="whitespace-pre-wrap text-sm text-ink">
+              <Markdown className="break-words text-sm text-ink">
                 {task.description}
-              </p>
+              </Markdown>
             </div>
           )}
 
