@@ -307,7 +307,9 @@ impl Scheduler {
                                     }
                                 }
 
-                                if let Err(error) = exec_context.store.update_enabled(&exec_job_id, false).await {
+                                if let Err(error) =
+                                    exec_context.store.update_enabled(&exec_job_id, false).await
+                                {
                                     tracing::error!(%error, "failed to persist cron job disabled state");
                                 }
                             }
@@ -324,11 +326,12 @@ impl Scheduler {
                             }
                         }
 
-                        if let Err(error) = exec_context.store.update_enabled(&exec_job_id, false).await {
+                        if let Err(error) =
+                            exec_context.store.update_enabled(&exec_job_id, false).await
+                        {
                             tracing::error!(%error, "failed to persist run-once cron disabled state");
                         }
                     }
-
                 });
             }
         });
