@@ -221,21 +221,21 @@ fn validate_cron_request(request: &CreateCronRequest) -> Result<(), (StatusCode,
         ));
     }
 
-    if let Some(start) = request.active_start_hour {
-        if start > 23 {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "active_start_hour must be 0-23".into(),
-            ));
-        }
+    if let Some(start) = request.active_start_hour
+        && start > 23
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "active_start_hour must be 0-23".into(),
+        ));
     }
-    if let Some(end) = request.active_end_hour {
-        if end > 23 {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "active_end_hour must be 0-23".into(),
-            ));
-        }
+    if let Some(end) = request.active_end_hour
+        && end > 23
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "active_end_hour must be 0-23".into(),
+        ));
     }
 
     Ok(())
@@ -248,24 +248,39 @@ pub(super) async fn create_or_update_cron(
 ) -> Result<Json<CronActionResponse>, (StatusCode, Json<CronActionResponse>)> {
     if let Err((status, message)) = validate_cron_request(&request) {
         tracing::warn!(agent_id = %request.agent_id, cron_id = %request.id, %message, "cron validation failed");
-        return Err((status, Json(CronActionResponse {
-            success: false,
-            message,
-        })));
+        return Err((
+            status,
+            Json(CronActionResponse {
+                success: false,
+                message,
+            }),
+        ));
     }
 
     let stores = state.cron_stores.load();
     let schedulers = state.cron_schedulers.load();
 
     let cron_err = |status: StatusCode, message: String| {
-        (status, Json(CronActionResponse { success: false, message }))
+        (
+            status,
+            Json(CronActionResponse {
+                success: false,
+                message,
+            }),
+        )
     };
 
     let store = stores.get(&request.agent_id).ok_or_else(|| {
-        cron_err(StatusCode::NOT_FOUND, format!("agent '{}' not found", request.agent_id))
+        cron_err(
+            StatusCode::NOT_FOUND,
+            format!("agent '{}' not found", request.agent_id),
+        )
     })?;
     let scheduler = schedulers.get(&request.agent_id).ok_or_else(|| {
-        cron_err(StatusCode::NOT_FOUND, format!("agent '{}' not found", request.agent_id))
+        cron_err(
+            StatusCode::NOT_FOUND,
+            format!("agent '{}' not found", request.agent_id),
+        )
     })?;
 
     let active_hours = match (request.active_start_hour, request.active_end_hour) {
