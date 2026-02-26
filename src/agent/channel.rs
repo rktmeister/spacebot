@@ -698,11 +698,7 @@ impl Channel {
                 };
                 let absolute_timestamp = temporal_context.format_timestamp(message.timestamp);
 
-                let display_name = message
-                    .metadata
-                    .get("sender_display_name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&message.sender_id);
+                let display_name = message_display_name(message);
 
                 let formatted_text = format_batched_user_message(
                     display_name,
@@ -2340,6 +2336,19 @@ fn extract_reply_from_tool_syntax(text: &str) -> Option<String> {
 ///
 /// In multi-user channels, this lets the LLM distinguish who said what.
 /// System-generated messages (re-triggers) are passed through as-is.
+fn message_display_name(message: &InboundMessage) -> &str {
+    message
+        .formatted_author
+        .as_deref()
+        .or_else(|| {
+            message
+                .metadata
+                .get("sender_display_name")
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or(&message.sender_id)
+}
+
 fn format_user_message(raw_text: &str, message: &InboundMessage, timestamp_text: &str) -> String {
     if message.source == "system" {
         // System messages should never be empty, but guard against it
@@ -2350,17 +2359,7 @@ fn format_user_message(raw_text: &str, message: &InboundMessage, timestamp_text:
         };
     }
 
-    // Use platform-formatted author if available, fall back to metadata
-    let display_name = message
-        .formatted_author
-        .as_deref()
-        .or_else(|| {
-            message
-                .metadata
-                .get("sender_display_name")
-                .and_then(|v| v.as_str())
-        })
-        .unwrap_or(&message.sender_id);
+    let display_name = message_display_name(message);
 
     let bot_tag = if message
         .metadata
@@ -3335,6 +3334,66 @@ mod tests {
             !formatted_normal.contains("[attachment or empty message]"),
             "normal messages should not use placeholder"
         );
+    }
+
+    #[test]
+    fn message_display_name_uses_consistent_fallback_order() {
+        use super::message_display_name;
+        use crate::{Arc, InboundMessage};
+        use chrono::Utc;
+        use std::collections::HashMap;
+
+        let mut metadata_only = HashMap::new();
+        metadata_only.insert(
+            "sender_display_name".to_string(),
+            serde_json::Value::String("Metadata User".to_string()),
+        );
+        let metadata_message = InboundMessage {
+            id: "metadata".to_string(),
+            agent_id: Some(Arc::from("test_agent")),
+            sender_id: "sender123".to_string(),
+            conversation_id: "conv".to_string(),
+            content: crate::MessageContent::Text("hello".to_string()),
+            source: "discord".to_string(),
+            metadata: metadata_only,
+            formatted_author: None,
+            timestamp: Utc::now(),
+        };
+        assert_eq!(message_display_name(&metadata_message), "Metadata User");
+
+        let mut both_metadata = HashMap::new();
+        both_metadata.insert(
+            "sender_display_name".to_string(),
+            serde_json::Value::String("Metadata User".to_string()),
+        );
+        let formatted_author_message = InboundMessage {
+            id: "formatted".to_string(),
+            agent_id: Some(Arc::from("test_agent")),
+            sender_id: "sender123".to_string(),
+            conversation_id: "conv".to_string(),
+            content: crate::MessageContent::Text("hello".to_string()),
+            source: "discord".to_string(),
+            metadata: both_metadata,
+            formatted_author: Some("Formatted Author".to_string()),
+            timestamp: Utc::now(),
+        };
+        assert_eq!(
+            message_display_name(&formatted_author_message),
+            "Formatted Author"
+        );
+
+        let sender_fallback_message = InboundMessage {
+            id: "fallback".to_string(),
+            agent_id: Some(Arc::from("test_agent")),
+            sender_id: "sender123".to_string(),
+            conversation_id: "conv".to_string(),
+            content: crate::MessageContent::Text("hello".to_string()),
+            source: "discord".to_string(),
+            metadata: HashMap::new(),
+            formatted_author: None,
+            timestamp: Utc::now(),
+        };
+        assert_eq!(message_display_name(&sender_fallback_message), "sender123");
     }
 
     #[test]
