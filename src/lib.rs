@@ -267,7 +267,11 @@ impl InboundMessage {
     ///
     /// Falls back to the platform source for backward compatibility.
     pub fn adapter_key(&self) -> &str {
-        self.adapter.as_deref().unwrap_or(&self.source)
+        self.adapter
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&self.source)
     }
 
     /// Platform-scoped adapter selector used by bindings.

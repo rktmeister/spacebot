@@ -83,7 +83,7 @@ chat_id = "-100123456789"
 
 Without any filtering (no guild ID, workspace ID, or chat ID), a binding accepts messages from anywhere on that platform.
 
-Named adapters use `adapter = "<name>"` in bindings. Omit `adapter` to target the platform default adapter (`discord`, `slack`, `telegram`, `twitch`).
+Named adapters use `adapter = "<name>"` in bindings. Omit `adapter` to target the platform default adapter (`discord`, `slack`, `telegram`, `twitch`, `email`, `webhook`).
 
 If no binding matches an incoming message, it's routed to the default agent automatically. This means the bot responds everywhere out of the box — add bindings to restrict it to specific channels or servers.
 

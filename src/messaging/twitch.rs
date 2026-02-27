@@ -1,6 +1,7 @@
 //! Twitch chat messaging adapter using twitch-irc.
 
 use crate::config::TwitchPermissions;
+use crate::messaging::apply_runtime_adapter_to_conversation_id;
 use crate::messaging::traits::{InboundStream, Messaging};
 use crate::{InboundMessage, MessageContent, OutboundResponse};
 
@@ -461,21 +462,6 @@ impl Messaging for TwitchAdapter {
 
         tracing::info!("twitch adapter shut down");
         Ok(())
-    }
-}
-
-fn apply_runtime_adapter_to_conversation_id(
-    runtime_key: &str,
-    base_conversation_id: String,
-) -> String {
-    let Some((platform, remainder)) = base_conversation_id.split_once(':') else {
-        return base_conversation_id;
-    };
-
-    if runtime_key == platform {
-        base_conversation_id
-    } else {
-        format!("{runtime_key}:{remainder}")
     }
 }
 

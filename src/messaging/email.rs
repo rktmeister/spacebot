@@ -36,6 +36,7 @@ struct EmailPollConfig {
     poll_interval: Duration,
     allowed_senders: Vec<String>,
     max_body_bytes: usize,
+    runtime_key: String,
 }
 
 struct HistoryEntry {
@@ -167,6 +168,7 @@ impl EmailAdapter {
             poll_interval: self.poll_interval,
             allowed_senders: self.allowed_senders.clone(),
             max_body_bytes: self.max_body_bytes,
+            runtime_key: "email".to_string(),
         }
     }
 
@@ -837,7 +839,7 @@ fn parse_inbound_email(
     Ok(Some(InboundMessage {
         id: message_id,
         source: "email".into(),
-        adapter: Some("email".into()),
+        adapter: Some(config.runtime_key.clone()),
         conversation_id,
         sender_id: sender_email,
         agent_id: None,
@@ -1032,6 +1034,7 @@ pub fn search_mailbox(
         poll_interval: Duration::from_secs(config.poll_interval_secs.max(5)),
         allowed_senders: config.allowed_senders.clone(),
         max_body_bytes: config.max_body_bytes.max(1024),
+        runtime_key: "email".to_string(),
     })?;
 
     let limit = query.limit.clamp(1, 50);

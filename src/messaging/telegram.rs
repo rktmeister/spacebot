@@ -1,6 +1,7 @@
 //! Telegram messaging adapter using teloxide.
 
 use crate::config::TelegramPermissions;
+use crate::messaging::apply_runtime_adapter_to_conversation_id;
 use crate::messaging::traits::{InboundStream, Messaging};
 use crate::{Attachment, InboundMessage, MessageContent, OutboundResponse, StatusUpdate};
 
@@ -585,21 +586,6 @@ impl Messaging for TelegramAdapter {
 
         tracing::info!("telegram adapter shut down");
         Ok(())
-    }
-}
-
-fn apply_runtime_adapter_to_conversation_id(
-    runtime_key: &str,
-    base_conversation_id: String,
-) -> String {
-    let Some((platform, remainder)) = base_conversation_id.split_once(':') else {
-        return base_conversation_id;
-    };
-
-    if runtime_key == platform {
-        base_conversation_id
-    } else {
-        format!("{runtime_key}:{remainder}")
     }
 }
 

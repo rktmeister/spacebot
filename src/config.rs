@@ -1350,7 +1350,13 @@ fn validate_named_messaging_adapters(
             ))
         })?;
 
-        match binding.adapter.as_deref() {
+        let normalized_adapter = binding
+            .adapter
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        match normalized_adapter {
             Some(adapter_name) => {
                 if !state.named_instances.contains(adapter_name) {
                     return Err(ConfigError::Invalid(format!(
@@ -4465,23 +4471,27 @@ impl Config {
                 let instances = d
                     .instances
                     .into_iter()
-                    .filter_map(|instance| {
-                        let token = instance.token.as_deref().and_then(resolve_env_value)?;
-                        Some(DiscordInstanceConfig {
+                    .map(|instance| {
+                        let token = instance.token.as_deref().and_then(resolve_env_value);
+                        if instance.enabled && token.is_none() {
+                            tracing::warn!(
+                                adapter = %instance.name,
+                                "discord instance is enabled but token is missing/unresolvable — disabling"
+                            );
+                        }
+                        DiscordInstanceConfig {
                             name: instance.name,
-                            enabled: instance.enabled,
-                            token,
+                            enabled: instance.enabled && token.is_some(),
+                            token: token.unwrap_or_default(),
                             dm_allowed_users: instance.dm_allowed_users,
                             allow_bot_messages: instance.allow_bot_messages,
-                        })
+                        }
                     })
                     .collect::<Vec<_>>();
 
-                let token = d
-                    .token
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("DISCORD_BOT_TOKEN").ok());
+                let token = std::env::var("DISCORD_BOT_TOKEN")
+                    .ok()
+                    .or_else(|| d.token.as_deref().and_then(resolve_env_value));
 
                 if token.is_none() && instances.is_empty() {
                     return None;
@@ -4499,16 +4509,23 @@ impl Config {
                 let instances = s
                     .instances
                     .into_iter()
-                    .filter_map(|instance| {
+                    .map(|instance| {
                         let bot_token =
-                            instance.bot_token.as_deref().and_then(resolve_env_value)?;
+                            instance.bot_token.as_deref().and_then(resolve_env_value);
                         let app_token =
-                            instance.app_token.as_deref().and_then(resolve_env_value)?;
-                        Some(SlackInstanceConfig {
+                            instance.app_token.as_deref().and_then(resolve_env_value);
+                        if instance.enabled && (bot_token.is_none() || app_token.is_none()) {
+                            tracing::warn!(
+                                adapter = %instance.name,
+                                "slack instance is enabled but tokens are missing/unresolvable — disabling"
+                            );
+                        }
+                        let has_credentials = bot_token.is_some() && app_token.is_some();
+                        SlackInstanceConfig {
                             name: instance.name,
-                            enabled: instance.enabled,
-                            bot_token,
-                            app_token,
+                            enabled: instance.enabled && has_credentials,
+                            bot_token: bot_token.unwrap_or_default(),
+                            app_token: app_token.unwrap_or_default(),
                             dm_allowed_users: instance.dm_allowed_users,
                             commands: instance
                                 .commands
@@ -4519,20 +4536,16 @@ impl Config {
                                     description: command.description,
                                 })
                                 .collect(),
-                        })
+                        }
                     })
                     .collect::<Vec<_>>();
 
-                let bot_token = s
-                    .bot_token
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("SLACK_BOT_TOKEN").ok());
-                let app_token = s
-                    .app_token
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("SLACK_APP_TOKEN").ok());
+                let bot_token = std::env::var("SLACK_BOT_TOKEN")
+                    .ok()
+                    .or_else(|| s.bot_token.as_deref().and_then(resolve_env_value));
+                let app_token = std::env::var("SLACK_APP_TOKEN")
+                    .ok()
+                    .or_else(|| s.app_token.as_deref().and_then(resolve_env_value));
 
                 if (bot_token.is_none() || app_token.is_none()) && instances.is_empty() {
                     return None;
@@ -4559,22 +4572,26 @@ impl Config {
                 let instances = t
                     .instances
                     .into_iter()
-                    .filter_map(|instance| {
-                        let token = instance.token.as_deref().and_then(resolve_env_value)?;
-                        Some(TelegramInstanceConfig {
+                    .map(|instance| {
+                        let token = instance.token.as_deref().and_then(resolve_env_value);
+                        if instance.enabled && token.is_none() {
+                            tracing::warn!(
+                                adapter = %instance.name,
+                                "telegram instance is enabled but token is missing/unresolvable — disabling"
+                            );
+                        }
+                        TelegramInstanceConfig {
                             name: instance.name,
-                            enabled: instance.enabled,
-                            token,
+                            enabled: instance.enabled && token.is_some(),
+                            token: token.unwrap_or_default(),
                             dm_allowed_users: instance.dm_allowed_users,
-                        })
+                        }
                     })
                     .collect::<Vec<_>>();
 
-                let token = t
-                    .token
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok());
+                let token = std::env::var("TELEGRAM_BOT_TOKEN")
+                    .ok()
+                    .or_else(|| t.token.as_deref().and_then(resolve_env_value));
 
                 if token.is_none() && instances.is_empty() {
                     return None;
@@ -4653,12 +4670,19 @@ impl Config {
                 let instances = t
                     .instances
                     .into_iter()
-                    .filter_map(|instance| {
-                        let username = instance.username.as_deref().and_then(resolve_env_value)?;
+                    .map(|instance| {
+                        let username = instance.username.as_deref().and_then(resolve_env_value);
                         let oauth_token = instance
                             .oauth_token
                             .as_deref()
-                            .and_then(resolve_env_value)?;
+                            .and_then(resolve_env_value);
+                        if instance.enabled && (username.is_none() || oauth_token.is_none()) {
+                            tracing::warn!(
+                                adapter = %instance.name,
+                                "twitch instance is enabled but credentials are missing/unresolvable — disabling"
+                            );
+                        }
+                        let has_credentials = username.is_some() && oauth_token.is_some();
                         let client_id = instance.client_id.as_deref().and_then(resolve_env_value);
                         let client_secret = instance
                             .client_secret
@@ -4668,30 +4692,26 @@ impl Config {
                             .refresh_token
                             .as_deref()
                             .and_then(resolve_env_value);
-                        Some(TwitchInstanceConfig {
+                        TwitchInstanceConfig {
                             name: instance.name,
-                            enabled: instance.enabled,
-                            username,
-                            oauth_token,
+                            enabled: instance.enabled && has_credentials,
+                            username: username.unwrap_or_default(),
+                            oauth_token: oauth_token.unwrap_or_default(),
                             client_id,
                             client_secret,
                             refresh_token,
                             channels: instance.channels,
                             trigger_prefix: instance.trigger_prefix,
-                        })
+                        }
                     })
                     .collect::<Vec<_>>();
 
-                let username = t
-                    .username
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("TWITCH_BOT_USERNAME").ok());
-                let oauth_token = t
-                    .oauth_token
-                    .as_deref()
-                    .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("TWITCH_OAUTH_TOKEN").ok());
+                let username = std::env::var("TWITCH_BOT_USERNAME")
+                    .ok()
+                    .or_else(|| t.username.as_deref().and_then(resolve_env_value));
+                let oauth_token = std::env::var("TWITCH_OAUTH_TOKEN")
+                    .ok()
+                    .or_else(|| t.oauth_token.as_deref().and_then(resolve_env_value));
 
                 if (username.is_none() || oauth_token.is_none()) && instances.is_empty() {
                     return None;
@@ -5313,17 +5333,17 @@ pub fn spawn_file_watcher(
                         if let Some(discord_config) = &config.messaging.discord
                             && discord_config.enabled {
                                 if !discord_config.token.is_empty() && !manager.has_adapter("discord").await {
-                                    let perms = match discord_permissions {
+                                    let permissions = match discord_permissions {
                                         Some(ref existing) => existing.clone(),
                                         None => {
-                                            let perms = DiscordPermissions::from_config(discord_config, &config.bindings);
-                                            Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                            let permissions = DiscordPermissions::from_config(discord_config, &config.bindings);
+                                            Arc::new(arc_swap::ArcSwap::from_pointee(permissions))
                                         }
                                     };
                                     let adapter = crate::messaging::discord::DiscordAdapter::new(
                                         "discord",
                                         &discord_config.token,
-                                        perms,
+                                        permissions,
                                     );
                                     if let Err(error) = manager.register_and_start(adapter).await {
                                         tracing::error!(%error, "failed to hot-start discord adapter from config change");
@@ -5336,16 +5356,22 @@ pub fn spawn_file_watcher(
                                         Some(instance.name.as_str()),
                                     );
                                     if manager.has_adapter(runtime_key.as_str()).await {
+                                        // TODO: named instance permissions are not hot-updated on
+                                        // config reload because each instance owns its own
+                                        // Arc<ArcSwap> with no external handle. Fixing this
+                                        // requires either a permission-update method on the
+                                        // Messaging trait or a shared handle registry. Permissions
+                                        // will be correct after a full restart.
                                         continue;
                                     }
 
-                                    let perms = Arc::new(arc_swap::ArcSwap::from_pointee(
+                                    let permissions = Arc::new(arc_swap::ArcSwap::from_pointee(
                                         DiscordPermissions::from_instance_config(instance, &config.bindings),
                                     ));
                                     let adapter = crate::messaging::discord::DiscordAdapter::new(
                                         runtime_key,
                                         &instance.token,
-                                        perms,
+                                        permissions,
                                     );
                                     if let Err(error) = manager.register_and_start(adapter).await {
                                         tracing::error!(%error, adapter = %instance.name, "failed to hot-start named discord adapter from config change");
@@ -5360,18 +5386,18 @@ pub fn spawn_file_watcher(
                                     && !slack_config.app_token.is_empty()
                                     && !manager.has_adapter("slack").await
                                 {
-                                    let perms = match slack_permissions {
+                                    let permissions = match slack_permissions {
                                         Some(ref existing) => existing.clone(),
                                         None => {
-                                            let perms = SlackPermissions::from_config(slack_config, &config.bindings);
-                                            Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                            let permissions = SlackPermissions::from_config(slack_config, &config.bindings);
+                                            Arc::new(arc_swap::ArcSwap::from_pointee(permissions))
                                         }
                                     };
                                     match crate::messaging::slack::SlackAdapter::new(
                                         "slack",
                                         &slack_config.bot_token,
                                         &slack_config.app_token,
-                                        perms,
+                                        permissions,
                                         slack_config.commands.clone(),
                                     ) {
                                         Ok(adapter) => {
@@ -5391,17 +5417,18 @@ pub fn spawn_file_watcher(
                                         Some(instance.name.as_str()),
                                     );
                                     if manager.has_adapter(runtime_key.as_str()).await {
+                                        // TODO: named instance permissions not hot-updated (see discord block comment)
                                         continue;
                                     }
 
-                                    let perms = Arc::new(arc_swap::ArcSwap::from_pointee(
+                                    let permissions = Arc::new(arc_swap::ArcSwap::from_pointee(
                                         SlackPermissions::from_instance_config(instance, &config.bindings),
                                     ));
                                     match crate::messaging::slack::SlackAdapter::new(
                                         runtime_key,
                                         &instance.bot_token,
                                         &instance.app_token,
-                                        perms,
+                                        permissions,
                                         instance.commands.clone(),
                                     ) {
                                         Ok(adapter) => {
@@ -5422,17 +5449,17 @@ pub fn spawn_file_watcher(
                                 if !telegram_config.token.is_empty()
                                     && !manager.has_adapter("telegram").await
                                 {
-                                    let perms = match telegram_permissions {
+                                    let permissions = match telegram_permissions {
                                         Some(ref existing) => existing.clone(),
                                         None => {
-                                            let perms = TelegramPermissions::from_config(telegram_config, &config.bindings);
-                                            Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                            let permissions = TelegramPermissions::from_config(telegram_config, &config.bindings);
+                                            Arc::new(arc_swap::ArcSwap::from_pointee(permissions))
                                         }
                                     };
                                     let adapter = crate::messaging::telegram::TelegramAdapter::new(
                                         "telegram",
                                         &telegram_config.token,
-                                        perms,
+                                        permissions,
                                     );
                                     if let Err(error) = manager.register_and_start(adapter).await {
                                         tracing::error!(%error, "failed to hot-start telegram adapter from config change");
@@ -5445,16 +5472,17 @@ pub fn spawn_file_watcher(
                                         Some(instance.name.as_str()),
                                     );
                                     if manager.has_adapter(runtime_key.as_str()).await {
+                                        // TODO: named instance permissions not hot-updated (see discord block comment)
                                         continue;
                                     }
 
-                                    let perms = Arc::new(arc_swap::ArcSwap::from_pointee(
+                                    let permissions = Arc::new(arc_swap::ArcSwap::from_pointee(
                                         TelegramPermissions::from_instance_config(instance, &config.bindings),
                                     ));
                                     let adapter = crate::messaging::telegram::TelegramAdapter::new(
                                         runtime_key,
                                         &instance.token,
-                                        perms,
+                                        permissions,
                                     );
                                     if let Err(error) = manager.register_and_start(adapter).await {
                                         tracing::error!(%error, adapter = %instance.name, "failed to hot-start named telegram adapter from config change");
@@ -5484,11 +5512,11 @@ pub fn spawn_file_watcher(
                                     && !twitch_config.oauth_token.is_empty()
                                     && !manager.has_adapter("twitch").await
                                 {
-                                    let perms = match twitch_permissions {
+                                    let permissions = match twitch_permissions {
                                         Some(ref existing) => existing.clone(),
                                         None => {
-                                            let perms = TwitchPermissions::from_config(twitch_config, &config.bindings);
-                                            Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                            let permissions = TwitchPermissions::from_config(twitch_config, &config.bindings);
+                                            Arc::new(arc_swap::ArcSwap::from_pointee(permissions))
                                         }
                                     };
                                     let token_path = instance_dir.join("twitch_token.json");
@@ -5502,7 +5530,7 @@ pub fn spawn_file_watcher(
                                         Some(token_path),
                                         twitch_config.channels.clone(),
                                         twitch_config.trigger_prefix.clone(),
-                                        perms,
+                                        permissions,
                                     );
                                     if let Err(error) = manager.register_and_start(adapter).await {
                                         tracing::error!(%error, "failed to hot-start twitch adapter from config change");
@@ -5515,19 +5543,26 @@ pub fn spawn_file_watcher(
                                         Some(instance.name.as_str()),
                                     );
                                     if manager.has_adapter(runtime_key.as_str()).await {
+                                        // TODO: named instance permissions not hot-updated (see discord block comment)
                                         continue;
                                     }
 
-                                    let token_file_name = format!(
-                                        "twitch_token_{}.json",
-                                        instance
-                                            .name
-                                            .chars()
-                                            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-                                            .collect::<String>()
-                                    );
+                                    let token_file_name = {
+                                        use std::hash::{Hash, Hasher};
+                                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                        instance.name.hash(&mut hasher);
+                                        let name_hash = hasher.finish();
+                                        format!(
+                                            "twitch_token_{}_{name_hash:016x}.json",
+                                            instance
+                                                .name
+                                                .chars()
+                                                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                                                .collect::<String>()
+                                        )
+                                    };
                                     let token_path = instance_dir.join(token_file_name);
-                                    let perms = Arc::new(arc_swap::ArcSwap::from_pointee(
+                                    let permissions = Arc::new(arc_swap::ArcSwap::from_pointee(
                                         TwitchPermissions::from_instance_config(instance, &config.bindings),
                                     ));
                                     let adapter = crate::messaging::twitch::TwitchAdapter::new(
@@ -5540,7 +5575,7 @@ pub fn spawn_file_watcher(
                                         Some(token_path),
                                         instance.channels.clone(),
                                         instance.trigger_prefix.clone(),
-                                        perms,
+                                        permissions,
                                     );
                                     if let Err(error) = manager.register_and_start(adapter).await {
                                         tracing::error!(%error, adapter = %instance.name, "failed to hot-start named twitch adapter from config change");

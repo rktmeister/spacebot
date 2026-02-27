@@ -1132,7 +1132,7 @@ pub(super) async fn create_messaging_instance(
     // Validate instance name
     if let Some(name) = &request.name {
         let trimmed = name.trim();
-        if trimmed.is_empty() || trimmed == "default" {
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
             return Ok(Json(MessagingInstanceActionResponse {
                 success: false,
                 message: "instance name cannot be empty or 'default'".to_string(),
@@ -1516,6 +1516,22 @@ pub(super) async fn delete_messaging_instance(
                     table.remove("client_id");
                     table.remove("client_secret");
                     table.remove("refresh_token");
+                }
+                "email" => {
+                    table.remove("imap_host");
+                    table.remove("imap_port");
+                    table.remove("imap_username");
+                    table.remove("imap_password");
+                    table.remove("smtp_host");
+                    table.remove("smtp_port");
+                    table.remove("smtp_username");
+                    table.remove("smtp_password");
+                    table.remove("from_address");
+                }
+                "webhook" => {
+                    table.remove("port");
+                    table.remove("bind");
+                    table.remove("auth_token");
                 }
                 _ => {}
             }

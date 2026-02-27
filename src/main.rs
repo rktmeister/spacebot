@@ -1468,6 +1468,10 @@ async fn initialize_agents(
             .iter()
             .filter(|instance| instance.enabled)
         {
+            if instance.token.is_empty() {
+                tracing::warn!(adapter = %instance.name, "skipping enabled discord instance with empty token");
+                continue;
+            }
             let runtime_key = spacebot::config::binding_runtime_adapter_key(
                 "discord",
                 Some(instance.name.as_str()),
@@ -1523,6 +1527,10 @@ async fn initialize_agents(
             .iter()
             .filter(|instance| instance.enabled)
         {
+            if instance.bot_token.is_empty() || instance.app_token.is_empty() {
+                tracing::warn!(adapter = %instance.name, "skipping enabled slack instance with missing tokens");
+                continue;
+            }
             let runtime_key = spacebot::config::binding_runtime_adapter_key(
                 "slack",
                 Some(instance.name.as_str()),
@@ -1576,6 +1584,10 @@ async fn initialize_agents(
             .iter()
             .filter(|instance| instance.enabled)
         {
+            if instance.token.is_empty() {
+                tracing::warn!(adapter = %instance.name, "skipping enabled telegram instance with empty token");
+                continue;
+            }
             let runtime_key = spacebot::config::binding_runtime_adapter_key(
                 "telegram",
                 Some(instance.name.as_str()),
@@ -1653,18 +1665,28 @@ async fn initialize_agents(
             .iter()
             .filter(|instance| instance.enabled)
         {
+            if instance.username.is_empty() || instance.oauth_token.is_empty() {
+                tracing::warn!(adapter = %instance.name, "skipping enabled twitch instance with missing credentials");
+                continue;
+            }
             let runtime_key = spacebot::config::binding_runtime_adapter_key(
                 "twitch",
                 Some(instance.name.as_str()),
             );
-            let token_file_name = format!(
-                "twitch_token_{}.json",
-                instance
-                    .name
-                    .chars()
-                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-                    .collect::<String>()
-            );
+            let token_file_name = {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                instance.name.hash(&mut hasher);
+                let name_hash = hasher.finish();
+                format!(
+                    "twitch_token_{}_{name_hash:016x}.json",
+                    instance
+                        .name
+                        .chars()
+                        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                        .collect::<String>()
+                )
+            };
             let token_path = config.instance_dir.join(token_file_name);
             let perms = Arc::new(ArcSwap::from_pointee(
                 spacebot::config::TwitchPermissions::from_instance_config(

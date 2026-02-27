@@ -325,9 +325,10 @@ export function InstanceCard({instance, expanded, onToggleExpand}: InstanceCardP
 	return (
 		<div className="rounded-lg border border-app-line bg-app-box">
 			{/* Collapsed summary header */}
-			<div
-				role="button"
+			<button
+				type="button"
 				onClick={onToggleExpand}
+				aria-expanded={expanded}
 				className="flex w-full items-center gap-3 p-3 text-left cursor-pointer"
 			>
 				<PlatformIcon platform={platform} size="sm" className="text-ink-faint" />
@@ -357,7 +358,7 @@ export function InstanceCard({instance, expanded, onToggleExpand}: InstanceCardP
 				>
 					<FontAwesomeIcon icon={faChevronDown} size="sm" />
 				</motion.div>
-			</div>
+			</button>
 
 			{/* Expanded content */}
 			<AnimatePresence initial={false}>

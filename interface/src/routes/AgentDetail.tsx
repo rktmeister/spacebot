@@ -244,8 +244,10 @@ function HeroSection({
 		<div className="flex flex-col gap-4 border-b border-app-line pb-6">
 			<div className="flex items-start justify-between">
 				<div>
-					<h1 className="font-plex text-3xl font-semibold text-ink">{displayName ?? agentId}</h1>
-					{displayName && (
+					<h1 className="font-plex text-3xl font-semibold text-ink">
+						{displayName?.trim() ? displayName : agentId}
+					</h1>
+					{displayName?.trim() && (
 						<span className="mt-0.5 text-sm text-ink-faint">{agentId}</span>
 					)}
 					<div className="mt-2 flex items-center gap-4 text-sm">

@@ -416,8 +416,13 @@ pub(super) async fn create_binding(
     let mut binding_table = toml_edit::Table::new();
     binding_table["agent_id"] = toml_edit::value(&request.agent_id);
     binding_table["channel"] = toml_edit::value(&request.channel);
-    if let Some(adapter) = &request.adapter {
-        binding_table["adapter"] = toml_edit::value(adapter.as_str());
+    if let Some(adapter) = request
+        .adapter
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        binding_table["adapter"] = toml_edit::value(adapter);
     }
     if let Some(guild_id) = &request.guild_id {
         binding_table["guild_id"] = toml_edit::value(guild_id.as_str());
@@ -746,8 +751,11 @@ pub(super) async fn update_binding(
     binding.remove("workspace_id");
     binding.remove("chat_id");
 
-    if let Some(ref adapter) = request.adapter
-        && !adapter.is_empty()
+    if let Some(adapter) = request
+        .adapter
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
     {
         binding["adapter"] = toml_edit::value(adapter);
     }

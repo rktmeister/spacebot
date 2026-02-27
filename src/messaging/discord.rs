@@ -1,6 +1,7 @@
 //! Discord messaging adapter using serenity.
 
 use crate::config::DiscordPermissions;
+use crate::messaging::apply_runtime_adapter_to_conversation_id;
 use crate::messaging::traits::{HistoryMessage, InboundStream, Messaging};
 use crate::{InboundMessage, MessageContent, OutboundResponse, StatusUpdate};
 
@@ -785,21 +786,6 @@ fn build_conversation_id(runtime_key: &str, message: &Message) -> String {
     };
 
     apply_runtime_adapter_to_conversation_id(runtime_key, base_conversation_id)
-}
-
-fn apply_runtime_adapter_to_conversation_id(
-    runtime_key: &str,
-    base_conversation_id: String,
-) -> String {
-    let Some((platform, remainder)) = base_conversation_id.split_once(':') else {
-        return base_conversation_id;
-    };
-
-    if runtime_key == platform {
-        base_conversation_id
-    } else {
-        format!("{runtime_key}:{remainder}")
-    }
 }
 
 fn extract_content(message: &Message) -> MessageContent {
