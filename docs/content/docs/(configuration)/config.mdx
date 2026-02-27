@@ -62,6 +62,7 @@ context_window = 128000        # context window size in tokens
 history_backfill_count = 50    # messages to fetch from platform on new channel
 worker_log_mode = "errors_only" # "errors_only", "all_separate", or "all_combined"
 cron_timezone = "UTC"          # optional default timezone for cron active hours
+user_timezone = "UTC"          # optional default timezone for channel/worker time context
 
 # Model routing per process type.
 [defaults.routing]
@@ -116,6 +117,7 @@ id = "main"
 default = true
 workspace = "/custom/workspace/path"   # optional, defaults to ~/.spacebot/agents/{id}/workspace
 cron_timezone = "America/Los_Angeles"  # optional per-agent cron timezone override
+user_timezone = "America/Los_Angeles"  # optional per-agent timezone override for channel/worker time context
 
 # Per-agent routing overrides (merges with defaults).
 [agents.routing]
@@ -417,6 +419,7 @@ At least one provider (legacy key or custom provider) must be configured.
 | `history_backfill_count` | integer | 50 | Messages to fetch from platform on new channel |
 | `worker_log_mode` | string | `"errors_only"` | Worker log persistence: `"errors_only"`, `"all_separate"`, or `"all_combined"` |
 | `cron_timezone` | string | None | Default timezone for cron active-hours evaluation (IANA name like `UTC` or `America/New_York`) |
+| `user_timezone` | string | inherits `cron_timezone` | Default timezone for channel/worker temporal context (IANA name) |
 
 ### `[defaults.routing]`
 
@@ -522,6 +525,7 @@ When branch/worker/cron dispatch happens before readiness is satisfied, Spacebot
 | `default` | bool | false | Whether this is the default agent |
 | `workspace` | string | `~/.spacebot/agents/{id}/workspace` | Custom workspace path |
 | `cron_timezone` | string | inherits | Per-agent timezone override for cron active-hours evaluation |
+| `user_timezone` | string | inherits | Per-agent timezone override for channel/worker temporal context |
 | `max_concurrent_branches` | integer | inherits | Override instance default |
 | `max_turns` | integer | inherits | Override instance default |
 | `context_window` | integer | inherits | Override instance default |
@@ -576,6 +580,14 @@ Cron timezone precedence is:
 4. server local timezone
 
 If a configured timezone is invalid, Spacebot logs a warning and falls back to server local time.
+
+Channel/worker temporal context timezone precedence is:
+
+1. `agents.user_timezone`
+2. `defaults.user_timezone`
+3. `SPACEBOT_USER_TIMEZONE`
+4. resolved cron timezone (from `agents.cron_timezone` / `defaults.cron_timezone` / `SPACEBOT_CRON_TIMEZONE`)
+5. server local timezone
 
 ### `[messaging.discord]`
 
