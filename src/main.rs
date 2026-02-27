@@ -1199,7 +1199,11 @@ async fn wait_for_startup_warmup_tasks(
     let wait_all = async {
         while let Some(result) = startup_warmup.join_next().await {
             if let Err(error) = result {
-                tracing::error!(%error, "startup warmup task panicked");
+                if error.is_cancelled() {
+                    tracing::warn!(%error, "startup warmup task cancelled");
+                } else {
+                    tracing::error!(%error, "startup warmup task panicked");
+                }
             }
         }
     };
@@ -1827,10 +1831,17 @@ mod tests {
         let warmup_lock = Arc::new(tokio::sync::Mutex::new(()));
         let mut tasks = tokio::task::JoinSet::new();
         let warmup_lock_for_task = Arc::clone(&warmup_lock);
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
         tasks.spawn(async move {
             let _guard = warmup_lock_for_task.lock().await;
+            let _ = locked_tx.send(());
             pending::<()>().await;
         });
+
+        tokio::time::timeout(Duration::from_millis(50), locked_rx)
+            .await
+            .expect("task should acquire lock")
+            .expect("lock signal should send");
 
         let timed_out = wait_for_startup_warmup_tasks(&mut tasks, Duration::from_millis(5)).await;
         assert!(timed_out);
