@@ -265,6 +265,8 @@ pub struct Channel {
     pub self_tx: mpsc::Sender<InboundMessage>,
     /// Conversation ID from the first message (for synthetic re-trigger messages).
     pub conversation_id: Option<String>,
+    /// Adapter source captured from the first non-system message.
+    pub source_adapter: Option<String>,
     /// Conversation context (platform, channel name, server) captured from the first message.
     pub conversation_context: Option<String>,
     /// Context monitor that triggers background compaction.
@@ -377,6 +379,7 @@ impl Channel {
             response_tx,
             self_tx,
             conversation_id: None,
+            source_adapter: None,
             conversation_context: None,
             compactor,
             message_count: 0,
@@ -402,6 +405,21 @@ impl Channel {
             .get(self.deps.agent_id.as_ref())
             .map(String::as_str)
             .unwrap_or(self.deps.agent_id.as_ref())
+    }
+
+    fn current_adapter(&self) -> Option<&str> {
+        self.source_adapter
+            .as_deref()
+            .or_else(|| {
+                self.conversation_id
+                    .as_deref()
+                    .and_then(|conversation_id| conversation_id.split(':').next())
+            })
+            .filter(|adapter| !adapter.is_empty())
+    }
+
+    fn suppress_plaintext_fallback(&self) -> bool {
+        matches!(self.current_adapter(), Some("email"))
     }
 
     /// Run the channel event loop.
@@ -615,6 +633,13 @@ impl Channel {
             self.conversation_id = Some(first.conversation_id.clone());
         }
 
+        if self.source_adapter.is_none()
+            && let Some(first) = messages.first()
+            && first.source != "system"
+        {
+            self.source_adapter = Some(first.source.clone());
+        }
+
         // Capture conversation context from the first message
         if self.conversation_context.is_none()
             && let Some(first) = messages.first()
@@ -810,6 +835,10 @@ impl Channel {
 
         let org_context = self.build_org_context(&prompt_engine);
 
+        let adapter_prompt = self
+            .current_adapter()
+            .and_then(|adapter| prompt_engine.render_channel_adapter_prompt(adapter));
+
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
 
         prompt_engine.render_channel_prompt_with_links(
@@ -822,6 +851,7 @@ impl Channel {
             coalesce_hint,
             available_channels,
             org_context,
+            adapter_prompt,
         )
     }
 
@@ -841,6 +871,10 @@ impl Channel {
         // Track conversation_id for synthetic re-trigger messages
         if self.conversation_id.is_none() {
             self.conversation_id = Some(message.conversation_id.clone());
+        }
+
+        if self.source_adapter.is_none() && message.source != "system" {
+            self.source_adapter = Some(message.source.clone());
         }
 
         let (raw_text, attachments) = match &message.content {
@@ -1097,6 +1131,10 @@ impl Channel {
 
         let org_context = self.build_org_context(&prompt_engine);
 
+        let adapter_prompt = self
+            .current_adapter()
+            .and_then(|adapter| prompt_engine.render_channel_adapter_prompt(adapter));
+
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
 
         prompt_engine.render_channel_prompt_with_links(
@@ -1109,6 +1147,7 @@ impl Channel {
             None, // coalesce_hint - only set for batched messages
             available_channels,
             org_context,
+            adapter_prompt,
         )
     }
 
@@ -1131,6 +1170,7 @@ impl Channel {
     )> {
         let skip_flag = crate::tools::new_skip_flag();
         let replied_flag = crate::tools::new_replied_flag();
+        let allow_direct_reply = !self.suppress_plaintext_fallback();
 
         if let Err(error) = crate::tools::add_channel_tools(
             &self.tool_server,
@@ -1141,6 +1181,7 @@ impl Channel {
             replied_flag.clone(),
             self.deps.cron_tool.clone(),
             self.send_agent_message_tool.clone(),
+            allow_direct_reply,
         )
         .await
         {
@@ -1232,7 +1273,9 @@ impl Channel {
             );
         }
 
-        if let Err(error) = crate::tools::remove_channel_tools(&self.tool_server).await {
+        if let Err(error) =
+            crate::tools::remove_channel_tools(&self.tool_server, allow_direct_reply).await
+        {
             tracing::warn!(%error, "failed to remove channel tools");
         }
 
@@ -1257,6 +1300,8 @@ impl Channel {
             Ok(response) => {
                 let skipped = skip_flag.load(std::sync::atomic::Ordering::Relaxed);
                 let replied = replied_flag.load(std::sync::atomic::Ordering::Relaxed);
+                let suppress_plaintext_fallback = self.suppress_plaintext_fallback();
+                let adapter = self.current_adapter().unwrap_or("unknown");
 
                 if skipped && is_retrigger {
                     // The LLM skipped on a retrigger turn. This means a worker
@@ -1269,6 +1314,12 @@ impl Channel {
                             tracing::warn!(
                                 channel_id = %self.id,
                                 "blocked retrigger fallback output containing structured or tool syntax"
+                            );
+                        } else if suppress_plaintext_fallback {
+                            tracing::info!(
+                                channel_id = %self.id,
+                                adapter,
+                                "suppressing retrigger plaintext fallback for adapter; explicit reply tool call required"
                             );
                         } else {
                             tracing::info!(
@@ -1323,6 +1374,12 @@ impl Channel {
                                 channel_id = %self.id,
                                 "blocked retrigger output containing structured or tool syntax"
                             );
+                        } else if suppress_plaintext_fallback {
+                            tracing::info!(
+                                channel_id = %self.id,
+                                adapter,
+                                "suppressing retrigger plaintext output for adapter; explicit reply tool call required"
+                            );
                         } else {
                             tracing::info!(
                                 channel_id = %self.id,
@@ -1368,6 +1425,12 @@ impl Channel {
                         tracing::warn!(
                             channel_id = %self.id,
                             "blocked fallback output containing structured or tool syntax"
+                        );
+                    } else if suppress_plaintext_fallback {
+                        tracing::info!(
+                            channel_id = %self.id,
+                            adapter,
+                            "suppressing plaintext fallback for adapter; explicit reply tool call required"
                         );
                     } else {
                         let extracted = extract_reply_from_tool_syntax(text);

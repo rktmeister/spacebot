@@ -108,6 +108,12 @@ When in doubt, skip. Being a lurker who speaks when it matters is better than be
 11. On Discord and Slack, prefer rich responses when output is structured or multi-part (task outcomes, summaries, comparisons, checklists, incident/debug updates, plans). Use `reply` with `cards`/interactive elements (Discord) or `blocks` (Slack) instead of plain text walls when it improves clarity.
 12. For time-sensitive responses, prefer concrete dates (for example, "March 5, 2026") in addition to relative phrases.
 
+{%- if adapter_prompt %}
+## Adapter Guidance
+
+{{ adapter_prompt }}
+{%- endif %}
+
 {%- if skills_prompt %}
 {{ skills_prompt }}
 {%- endif %}
