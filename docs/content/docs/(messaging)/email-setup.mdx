@@ -90,6 +90,15 @@ Email channels are treated as intake streams, not always-on chat threads.
 - For urgent mail, it can escalate to another active channel using cross-channel messaging.
 - If you need to send an email intentionally, initiate it from another channel using cross-channel tooling.
 
+## Intentional outbound email from another channel
+
+When the Email adapter is configured, you can intentionally send email from a non-email channel (for example, Telegram or Discord) using cross-channel messaging.
+
+- explicit format: `email:alice@example.com`
+- bare address also works: `alice@example.com`
+
+This keeps email channels inbound-only while still allowing deliberate outbound send workflows.
+
 ## Thread behavior
 
 Spacebot keeps one conversation per email thread. It uses `References`, `In-Reply-To`, and `Message-ID` headers to map replies back to the correct conversation.

@@ -30,7 +30,7 @@ Spacebot connects to chat platforms so your agent can talk to people where they 
 
 You can connect multiple platforms at the same time. An agent on Discord and Slack simultaneously is just two bindings pointing at the same agent.
 
-For Email specifically, Spacebot treats inbound mail as intake-first by default: triage, memory capture for meaningful non-spam messages, and escalation to other channels for urgent items. Inbound email channels do not auto-reply.
+For Email specifically, Spacebot treats inbound mail as intake-first by default: triage, memory capture for meaningful non-spam messages, and escalation to other channels for urgent items. Inbound email channels do not auto-reply. When the Email adapter is configured, intentional outbound email can still be initiated from other channels using an explicit target such as `email:alice@example.com`.
 
 ## Bindings
 
