@@ -434,6 +434,12 @@ token = "env:DISCORD_BOT_TOKEN"
 agent_id = "my-agent"
 channel = "discord"
 guild_id = "your-discord-guild-id"
+
+# Optional: route a named adapter instance
+[[bindings]]
+agent_id = "my-agent"
+channel = "discord"
+adapter = "ops"
 ```
 
 ```bash
