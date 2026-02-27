@@ -243,6 +243,24 @@ pub(super) async fn disconnect_platform(
         tracing::warn!(%error, platform = %platform, "failed to shut down adapter during disconnect");
     }
 
+    if platform == "twitch" {
+        let instance_dir = state.instance_dir.load();
+        let token_path = instance_dir.join("twitch_token.json");
+        match tokio::fs::remove_file(&token_path).await {
+            Ok(()) => {
+                tracing::info!(path = %token_path.display(), "twitch token file deleted");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    path = %token_path.display(),
+                    "failed to delete twitch token file"
+                );
+            }
+        }
+    }
+
     tracing::info!(platform = %platform, "platform disconnected via API");
 
     Ok(Json(serde_json::json!({
