@@ -678,7 +678,7 @@ fn next_fire_duration(
             .next()?
             .with_timezone(&chrono::Utc)
     };
-    let delay_ms = (next_utc - now_utc).num_milliseconds().max(0) as u64;
+    let delay_ms = (next_utc - now_utc).num_milliseconds().max(1) as u64;
 
     Some((Duration::from_millis(delay_ms), next_utc, timezone_label))
 }
