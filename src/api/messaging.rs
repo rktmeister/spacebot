@@ -765,7 +765,36 @@ pub(super) async fn toggle_platform(
         })));
     };
 
-    table["enabled"] = toml_edit::value(request.enabled);
+    if let Some(adapter_name) = &request.adapter {
+        // Toggle a specific named instance
+        let adapter_name = adapter_name.trim();
+        let mut found = false;
+        if let Some(instances) = table
+            .get_mut("instances")
+            .and_then(|item| item.as_array_of_tables_mut())
+        {
+            for instance in instances.iter_mut() {
+                if instance
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|n| n == adapter_name)
+                {
+                    instance["enabled"] = toml_edit::value(request.enabled);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found {
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": format!("instance '{adapter_name}' not found for {platform}")
+            })));
+        }
+    } else {
+        // Toggle the default (root-level) instance
+        table["enabled"] = toml_edit::value(request.enabled);
+    }
 
     tokio::fs::write(&config_path, doc.to_string())
         .await
