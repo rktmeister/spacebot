@@ -1834,7 +1834,7 @@ mod tests {
         let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
         tasks.spawn(async move {
             let _guard = warmup_lock_for_task.lock().await;
-            let _ = locked_tx.send(());
+            locked_tx.send(()).ok();
             pending::<()>().await;
         });
 
