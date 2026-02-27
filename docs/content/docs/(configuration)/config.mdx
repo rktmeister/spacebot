@@ -552,8 +552,6 @@ When `mode = "enabled"`, shell and exec commands run inside a mount namespace wh
 
 The agent's data directory (databases, config) is explicitly re-mounted read-only even if it would otherwise be writable due to path overlap.
 
-When `SPACEBOT_DEPLOYMENT=hosted`, sandbox mode is always `"enabled"` regardless of config.
-
 If the sandbox backend isn't available (e.g. bubblewrap not installed), processes run unsandboxed with a warning at startup.
 
 ```toml

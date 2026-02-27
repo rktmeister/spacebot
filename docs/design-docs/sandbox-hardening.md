@@ -1,77 +1,6 @@
 # Sandbox Hardening
 
-Hosted enforcement, dynamic sandbox mode, hot-reload fix, capability manager, and policy enforcement for shell and OpenCode workers.
-
-## 0. Hosted Sandbox Enforcement (Missing)
-
-### Problem
-
-Sandbox enforcement on hosted deployments was never implemented. The original sandbox design doc (`docs/design-docs/sandbox.md:127`) states: "When `SPACEBOT_DEPLOYMENT=hosted`, the platform boot script forces `mode = "enabled"` regardless of user config." This enforcement does not exist anywhere in the codebase.
-
-A hosted instance was confirmed running completely unsandboxed — a worker successfully wrote files to `/etc/spacebot_test` and `/tmp/spacebot_test` as root with exit code 0.
-
-### Evidence
-
-Searched every location where enforcement could exist:
-
-1. **`docker-entrypoint.sh`** generates `config.toml` from env vars on first boot. It never writes a `[agents.sandbox]` section. Agents get `SandboxConfig::default()` (`mode: Enabled`) initially, but this is not enforced after first boot.
-
-2. **`config.rs:1116`** — `AgentConfig::resolve()` does `self.sandbox.clone().unwrap_or_default()`. The default is `mode: Enabled`, but if the user has set `mode = "disabled"` in the TOML (via the UI or direct edit), that value is used as-is. No hosted override.
-
-3. **`api/config.rs:372`** — The `update_agent_config` handler writes whatever sandbox config the UI sends. No check for `SPACEBOT_DEPLOYMENT=hosted`. A user can disable sandbox mode via the UI at any time.
-
-4. **`SPACEBOT_DEPLOYMENT` env var** is set to `"hosted"` by the platform (`spacebot-platform/api/src/fly.rs:424`) but the spacebot binary only checks it for API bind address override (`config.rs:2374`) and agent limits (`api/agents.rs:15`). No sandbox-related code reads it.
-
-5. **`Sandbox::new()` (`sandbox.rs:79`)** — If `config.mode == SandboxMode::Disabled`, backend detection is skipped entirely and `SandboxBackend::None` is used. No hosted override here either.
-
-### Root Cause
-
-The enforcement was specified in the design but never implemented. There is no code path that forces sandbox mode to `Enabled` on hosted deployments. If a user disables the sandbox via the UI (which writes `mode = "disabled"` to `config.toml`), it stays disabled permanently.
-
-### Fix
-
-Enforcement at three points:
-
-**1. Config resolution (`config.rs`, `AgentConfig::resolve()`).**
-Add a helper `enforce_hosted_sandbox()` in `sandbox.rs` that checks `SPACEBOT_DEPLOYMENT=hosted` and forces `mode = Enabled` if it's `Disabled`. Call it during resolve so every config load (startup, hot-reload, file watcher) applies the override.
-
-**2. API update handler (`api/config.rs`, `update_agent_config()`).**
-Before writing the sandbox section, check if this is a hosted deployment. If the request tries to set `mode = "disabled"`, return `403 Forbidden` with a message explaining sandbox cannot be disabled on hosted deployments.
-
-**3. UI.**
-When `SPACEBOT_DEPLOYMENT=hosted` (exposed via an existing status/health API endpoint), the sandbox mode dropdown should be disabled with a tooltip explaining it's always enforced on hosted instances.
-
-### Helpers
-
-```rust
-// sandbox.rs
-
-pub fn is_hosted_deployment() -> bool {
-    std::env::var("SPACEBOT_DEPLOYMENT")
-        .ok()
-        .is_some_and(|v| v.eq_ignore_ascii_case("hosted"))
-}
-
-pub fn enforce_hosted_sandbox(config: &mut SandboxConfig) {
-    if is_hosted_deployment() && config.mode == SandboxMode::Disabled {
-        tracing::warn!(
-            "sandbox mode forced to enabled — \
-             sandbox cannot be disabled on hosted deployments"
-        );
-        config.mode = SandboxMode::Enabled;
-    }
-}
-```
-
-### Files Changed
-
-| File | Change |
-|------|--------|
-| `src/sandbox.rs` | Add `is_hosted_deployment()` and `enforce_hosted_sandbox()` |
-| `src/config.rs` | Call `enforce_hosted_sandbox()` in `AgentConfig::resolve()` after sandbox config is resolved |
-| `src/api/config.rs` | Reject sandbox disable on hosted in `update_agent_config()` |
-
----
+Dynamic sandbox mode, hot-reload fix, capability manager, and policy enforcement for shell and OpenCode workers.
 
 ## 1. Dynamic Sandbox Mode (Hot-Reload Fix)
 
@@ -521,9 +450,9 @@ Use the capabilities API to install supported tools, or request the tool be
 added to the capability registry.
 ```
 
-#### Self-Hosted Override
+#### Config Override
 
-The guard is **always active on hosted** (`SPACEBOT_DEPLOYMENT=hosted`). On self-hosted instances, it can be disabled via config:
+The guard is active by default on all deployments. It can be disabled via config:
 
 ```toml
 [agents.sandbox]
@@ -531,7 +460,7 @@ mode = "enabled"
 allow_package_managers = false  # default: false
 ```
 
-Setting `allow_package_managers = true` on a self-hosted instance disables the guard. The field is ignored when `SPACEBOT_DEPLOYMENT=hosted`.
+Setting `allow_package_managers = true` disables the guard. This is mainly useful for self-hosted instances where users manage their own system packages.
 
 #### Implementation
 
@@ -642,15 +571,6 @@ Current state of protection across all tool paths, with sandbox disabled:
 ---
 
 ## Phase Plan
-
-### Phase 0: Hosted Sandbox Enforcement (Critical)
-
-Fix the security gap on hosted instances. Changes to `sandbox.rs`, `config.rs`, `api/config.rs`.
-
-1. Add `is_hosted_deployment()` and `enforce_hosted_sandbox()` helpers in `sandbox.rs`.
-2. Call `enforce_hosted_sandbox()` in `AgentConfig::resolve()`.
-3. Reject sandbox disable in `update_agent_config()` on hosted.
-4. Verify: on a hosted instance, confirm sandbox mode cannot be set to `disabled` via API; confirm resolve always returns `Enabled`.
 
 ### Phase 1: Dynamic Sandbox Mode (Hot-Reload Fix)
 
@@ -786,9 +706,9 @@ This is not ready to implement. Key gaps from the stereOS integration research:
 
 ### Relationship to Current Work
 
-The phases above (0-6) are prerequisites, not alternatives:
+The phases above (1-6) are prerequisites, not alternatives:
 
-- **Phases 0-2** (enforcement, hot-reload, env sanitization) fix correctness bugs that matter regardless of backend. Even with VM isolation, the host process still needs `--clearenv` for any non-VM code paths (MCP processes, in-process tools).
+- **Phases 1-2** (hot-reload fix, env sanitization) fix correctness bugs that matter regardless of backend. Even with VM isolation, the host process still needs `--clearenv` for any non-VM code paths (MCP processes, in-process tools).
 - **Phase 3** (policy guards) applies inside the VM too. The shell package-manager guard prevents non-durable installs whether the worker runs in bubblewrap or a VM.
 - **Phase 4-6** (capability manager) become more important with VMs. The VM image needs to know what binaries to include. The capability registry is the source of truth for what goes into the mixtape.
 

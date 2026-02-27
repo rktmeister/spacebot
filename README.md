@@ -258,8 +258,6 @@ mode = "enabled"                              # "enabled" (default) or "disabled
 writable_paths = ["/home/user/projects/myapp"] # additional writable dirs beyond workspace
 ```
 
-On the hosted platform, sandbox mode is always forced to `enabled` regardless of user config.
-
 ---
 
 ## How It Works
