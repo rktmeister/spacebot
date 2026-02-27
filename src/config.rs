@@ -329,6 +329,7 @@ const ANTHROPIC_PROVIDER_BASE_URL: &str = "https://api.anthropic.com";
 const OPENAI_PROVIDER_BASE_URL: &str = "https://api.openai.com";
 const OPENROUTER_PROVIDER_BASE_URL: &str = "https://openrouter.ai/api";
 const KILO_PROVIDER_BASE_URL: &str = "https://api.kilo.ai/api/gateway";
+const OLLAMA_PROVIDER_BASE_URL: &str = "http://localhost:11434";
 const OPENCODE_ZEN_PROVIDER_BASE_URL: &str = "https://opencode.ai/zen";
 const OPENCODE_GO_PROVIDER_BASE_URL: &str = "https://opencode.ai/zen/go";
 const MINIMAX_PROVIDER_BASE_URL: &str = "https://api.minimax.io/anthropic";
@@ -436,6 +437,13 @@ pub(crate) fn default_provider_config(
             api_type: ApiType::Gemini,
             base_url: GEMINI_PROVIDER_BASE_URL.to_string(),
             api_key,
+            name: None,
+            use_bearer_auth: false,
+        },
+        "ollama" => ProviderConfig {
+            api_type: ApiType::OpenAiCompletions,
+            base_url: api_key,
+            api_key: String::new(),
             name: None,
             use_bearer_auth: false,
         },
@@ -3647,7 +3655,7 @@ impl Config {
                     base_url: llm
                         .ollama_base_url
                         .clone()
-                        .unwrap_or_else(|| "http://localhost:11434".to_string()),
+                        .unwrap_or_else(|| OLLAMA_PROVIDER_BASE_URL.to_string()),
                     api_key: llm.ollama_key.clone().unwrap_or_default(),
                     name: None,
                     use_bearer_auth: false,
@@ -4176,7 +4184,7 @@ impl Config {
                     base_url: llm
                         .ollama_base_url
                         .clone()
-                        .unwrap_or_else(|| "http://localhost:11434".to_string()),
+                        .unwrap_or_else(|| OLLAMA_PROVIDER_BASE_URL.to_string()),
                     api_key: llm.ollama_key.clone().unwrap_or_default(),
                     name: None,
                     use_bearer_auth: false,
@@ -6974,6 +6982,15 @@ id = "main"
             .get("ollama")
             .expect("ollama provider should be registered");
         assert_eq!(provider.base_url, "http://remote-ollama:11434");
+    }
+
+    #[test]
+    fn default_provider_config_ollama_uses_base_url_and_empty_api_key() {
+        let provider = default_provider_config("ollama", "http://remote-ollama.local:11434")
+            .expect("ollama provider should be supported");
+        assert_eq!(provider.api_type, ApiType::OpenAiCompletions);
+        assert_eq!(provider.base_url, "http://remote-ollama.local:11434");
+        assert_eq!(provider.api_key, "");
     }
 
     #[test]
