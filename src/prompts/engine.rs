@@ -445,10 +445,16 @@ impl PromptEngine {
             _ => return None,
         };
 
-        self.render_static(template_name)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+        match self.render_static(template_name) {
+            Ok(value) => {
+                let value = value.trim().to_string();
+                if value.is_empty() { None } else { Some(value) }
+            }
+            Err(error) => {
+                tracing::error!(template_name, %error, "failed to render adapter prompt template");
+                None
+            }
+        }
     }
 
     /// Render the cortex chat system prompt with optional channel context.

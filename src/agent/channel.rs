@@ -1854,6 +1854,7 @@ async fn spawn_branch(
         state.deps.agent_id.clone(),
         state.deps.task_store.clone(),
         state.deps.memory_search.clone(),
+        state.deps.runtime_config.clone(),
         state.conversation_logger.clone(),
         state.channel_store.clone(),
         crate::conversation::ProcessRunLogger::new(state.deps.sqlite_pool.clone()),
