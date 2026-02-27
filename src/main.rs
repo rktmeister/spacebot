@@ -1593,6 +1593,7 @@ async fn initialize_agents(
             let cron_config = spacebot::cron::CronConfig {
                 id: cron_def.id.clone(),
                 prompt: cron_def.prompt.clone(),
+                cron_expr: cron_def.cron_expr.clone(),
                 interval_secs: cron_def.interval_secs,
                 delivery_target: cron_def.delivery_target.clone(),
                 active_hours: cron_def.active_hours,

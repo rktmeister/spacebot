@@ -971,6 +971,9 @@ pub struct AgentConfig {
 pub struct CronDef {
     pub id: String,
     pub prompt: String,
+    /// Optional cron expression (wall-clock schedule) in standard 5-field format.
+    /// When set, this takes precedence over `interval_secs`.
+    pub cron_expr: Option<String>,
     pub interval_secs: u64,
     /// Delivery target in "adapter:target" format (e.g. "discord:123456789").
     pub delivery_target: String,
@@ -2135,6 +2138,7 @@ struct TomlAgentConfig {
 struct TomlCronDef {
     id: String,
     prompt: String,
+    cron_expr: Option<String>,
     interval_secs: Option<u64>,
     delivery_target: String,
     active_start_hour: Option<u8>,
@@ -3756,6 +3760,7 @@ impl Config {
                     .map(|h| CronDef {
                         id: h.id,
                         prompt: h.prompt,
+                        cron_expr: h.cron_expr,
                         interval_secs: h.interval_secs.unwrap_or(3600),
                         delivery_target: h.delivery_target,
                         active_hours: match (h.active_start_hour, h.active_end_hour) {

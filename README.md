@@ -119,7 +119,8 @@ Every memory has a type, an importance score, and graph edges connecting it to r
 Cron jobs created and managed from conversation or config:
 
 - **Natural scheduling** — "check my inbox every 30 minutes" becomes a cron job with a delivery target
-- **Clock-aligned intervals** — sub-daily intervals snap to UTC boundaries so jobs fire on clean marks (e.g. every 30 min fires at :00 and :30)
+- **Strict wall-clock schedules** — use cron expressions for exact local-time execution (for example, `0 9 * * *` for 9:00 every day)
+- **Legacy interval compatibility** — existing `interval_secs` jobs still run and remain configurable
 - **Configurable timeouts** — per-job `timeout_secs` to cap execution time (defaults to 120s)
 - **Active hours** — restrict jobs to specific time windows (supports midnight wrapping)
 - **Circuit breaker** — auto-disables after 3 consecutive failures
@@ -375,9 +376,9 @@ Memories are structured objects, not files. Every memory is a row in SQLite with
 
 Scheduled recurring tasks. Each cron job gets a fresh short-lived channel with full branching and worker capabilities.
 
-- Multiple cron jobs run independently at different intervals
+- Multiple cron jobs run independently on wall-clock schedules (or legacy intervals)
 - Stored in the database, created via config, conversation, or programmatically
-- Clock-aligned intervals snap to UTC boundaries for predictable firing times
+- Cron expressions execute against the resolved cron timezone for predictable local-time firing
 - Per-job `timeout_secs` to cap execution time
 - Circuit breaker auto-disables after 3 consecutive failures
 - Active hours support with midnight wrapping

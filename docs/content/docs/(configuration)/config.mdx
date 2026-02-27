@@ -132,7 +132,7 @@ writable_paths = ["/home/user/projects/myapp"] # additional writable directories
 [[agents.cron]]
 id = "daily-check"
 prompt = "Check in on ongoing projects and report status."
-interval_secs = 86400
+cron_expr = "0 9 * * *"
 delivery_target = "discord:123456789"
 active_start_hour = 9
 active_end_hour = 17
@@ -566,6 +566,7 @@ writable_paths = ["/home/user/projects/myapp", "/var/data/shared"]
 |-----|------|---------|-------------|
 | `id` | string | **required** | Cron job identifier |
 | `prompt` | string | **required** | Prompt sent to a fresh channel on each tick |
+| `cron_expr` | string | None | Strict wall-clock schedule (cron expression, e.g. `0 9 * * *`) |
 | `interval_secs` | integer | 3600 | Seconds between firings |
 | `delivery_target` | string | **required** | Where to send results (`adapter:target`) |
 | `active_start_hour` | integer | None | Start of active hours window (24h format) |
