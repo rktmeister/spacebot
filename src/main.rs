@@ -1452,13 +1452,39 @@ async fn initialize_agents(
     if let Some(discord_config) = &config.messaging.discord
         && discord_config.enabled
     {
-        let adapter = spacebot::messaging::discord::DiscordAdapter::new(
-            &discord_config.token,
-            discord_permissions.clone().ok_or_else(|| {
-                anyhow::anyhow!("discord permissions not initialized when discord is enabled")
-            })?,
-        );
-        new_messaging_manager.register(adapter).await;
+        if !discord_config.token.is_empty() {
+            let adapter = spacebot::messaging::discord::DiscordAdapter::new(
+                "discord",
+                &discord_config.token,
+                discord_permissions.clone().ok_or_else(|| {
+                    anyhow::anyhow!("discord permissions not initialized when discord is enabled")
+                })?,
+            );
+            new_messaging_manager.register(adapter).await;
+        }
+
+        for instance in discord_config
+            .instances
+            .iter()
+            .filter(|instance| instance.enabled)
+        {
+            let runtime_key = spacebot::config::binding_runtime_adapter_key(
+                "discord",
+                Some(instance.name.as_str()),
+            );
+            let perms = Arc::new(ArcSwap::from_pointee(
+                spacebot::config::DiscordPermissions::from_instance_config(
+                    instance,
+                    &config.bindings,
+                ),
+            ));
+            let adapter = spacebot::messaging::discord::DiscordAdapter::new(
+                runtime_key,
+                &instance.token,
+                perms,
+            );
+            new_messaging_manager.register(adapter).await;
+        }
     }
 
     // Shared Slack permissions (hot-reloadable via file watcher)
@@ -1473,19 +1499,53 @@ async fn initialize_agents(
     if let Some(slack_config) = &config.messaging.slack
         && slack_config.enabled
     {
-        match spacebot::messaging::slack::SlackAdapter::new(
-            &slack_config.bot_token,
-            &slack_config.app_token,
-            slack_permissions.clone().ok_or_else(|| {
-                anyhow::anyhow!("slack permissions not initialized when slack is enabled")
-            })?,
-            slack_config.commands.clone(),
-        ) {
-            Ok(adapter) => {
-                new_messaging_manager.register(adapter).await;
+        if !slack_config.bot_token.is_empty() && !slack_config.app_token.is_empty() {
+            match spacebot::messaging::slack::SlackAdapter::new(
+                "slack",
+                &slack_config.bot_token,
+                &slack_config.app_token,
+                slack_permissions.clone().ok_or_else(|| {
+                    anyhow::anyhow!("slack permissions not initialized when slack is enabled")
+                })?,
+                slack_config.commands.clone(),
+            ) {
+                Ok(adapter) => {
+                    new_messaging_manager.register(adapter).await;
+                }
+                Err(error) => {
+                    tracing::error!(%error, "failed to build slack adapter");
+                }
             }
-            Err(error) => {
-                tracing::error!(%error, "failed to build slack adapter");
+        }
+
+        for instance in slack_config
+            .instances
+            .iter()
+            .filter(|instance| instance.enabled)
+        {
+            let runtime_key = spacebot::config::binding_runtime_adapter_key(
+                "slack",
+                Some(instance.name.as_str()),
+            );
+            let perms = Arc::new(ArcSwap::from_pointee(
+                spacebot::config::SlackPermissions::from_instance_config(
+                    instance,
+                    &config.bindings,
+                ),
+            ));
+            match spacebot::messaging::slack::SlackAdapter::new(
+                runtime_key,
+                &instance.bot_token,
+                &instance.app_token,
+                perms,
+                instance.commands.clone(),
+            ) {
+                Ok(adapter) => {
+                    new_messaging_manager.register(adapter).await;
+                }
+                Err(error) => {
+                    tracing::error!(%error, adapter = %instance.name, "failed to build named slack adapter");
+                }
             }
         }
     }
@@ -1500,13 +1560,39 @@ async fn initialize_agents(
     if let Some(telegram_config) = &config.messaging.telegram
         && telegram_config.enabled
     {
-        let adapter = spacebot::messaging::telegram::TelegramAdapter::new(
-            &telegram_config.token,
-            telegram_permissions.clone().ok_or_else(|| {
-                anyhow::anyhow!("telegram permissions not initialized when telegram is enabled")
-            })?,
-        );
-        new_messaging_manager.register(adapter).await;
+        if !telegram_config.token.is_empty() {
+            let adapter = spacebot::messaging::telegram::TelegramAdapter::new(
+                "telegram",
+                &telegram_config.token,
+                telegram_permissions.clone().ok_or_else(|| {
+                    anyhow::anyhow!("telegram permissions not initialized when telegram is enabled")
+                })?,
+            );
+            new_messaging_manager.register(adapter).await;
+        }
+
+        for instance in telegram_config
+            .instances
+            .iter()
+            .filter(|instance| instance.enabled)
+        {
+            let runtime_key = spacebot::config::binding_runtime_adapter_key(
+                "telegram",
+                Some(instance.name.as_str()),
+            );
+            let perms = Arc::new(ArcSwap::from_pointee(
+                spacebot::config::TelegramPermissions::from_instance_config(
+                    instance,
+                    &config.bindings,
+                ),
+            ));
+            let adapter = spacebot::messaging::telegram::TelegramAdapter::new(
+                runtime_key,
+                &instance.token,
+                perms,
+            );
+            new_messaging_manager.register(adapter).await;
+        }
     }
 
     if let Some(email_config) = &config.messaging.email
@@ -1544,20 +1630,62 @@ async fn initialize_agents(
         && twitch_config.enabled
     {
         let twitch_token_path = config.instance_dir.join("twitch_token.json");
-        let adapter = spacebot::messaging::twitch::TwitchAdapter::new(
-            &twitch_config.username,
-            &twitch_config.oauth_token,
-            twitch_config.client_id.clone(),
-            twitch_config.client_secret.clone(),
-            twitch_config.refresh_token.clone(),
-            Some(twitch_token_path),
-            twitch_config.channels.clone(),
-            twitch_config.trigger_prefix.clone(),
-            twitch_permissions.clone().ok_or_else(|| {
-                anyhow::anyhow!("twitch permissions not initialized when twitch is enabled")
-            })?,
-        );
-        new_messaging_manager.register(adapter).await;
+        if !twitch_config.username.is_empty() && !twitch_config.oauth_token.is_empty() {
+            let adapter = spacebot::messaging::twitch::TwitchAdapter::new(
+                "twitch",
+                &twitch_config.username,
+                &twitch_config.oauth_token,
+                twitch_config.client_id.clone(),
+                twitch_config.client_secret.clone(),
+                twitch_config.refresh_token.clone(),
+                Some(twitch_token_path),
+                twitch_config.channels.clone(),
+                twitch_config.trigger_prefix.clone(),
+                twitch_permissions.clone().ok_or_else(|| {
+                    anyhow::anyhow!("twitch permissions not initialized when twitch is enabled")
+                })?,
+            );
+            new_messaging_manager.register(adapter).await;
+        }
+
+        for instance in twitch_config
+            .instances
+            .iter()
+            .filter(|instance| instance.enabled)
+        {
+            let runtime_key = spacebot::config::binding_runtime_adapter_key(
+                "twitch",
+                Some(instance.name.as_str()),
+            );
+            let token_file_name = format!(
+                "twitch_token_{}.json",
+                instance
+                    .name
+                    .chars()
+                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                    .collect::<String>()
+            );
+            let token_path = config.instance_dir.join(token_file_name);
+            let perms = Arc::new(ArcSwap::from_pointee(
+                spacebot::config::TwitchPermissions::from_instance_config(
+                    instance,
+                    &config.bindings,
+                ),
+            ));
+            let adapter = spacebot::messaging::twitch::TwitchAdapter::new(
+                runtime_key,
+                &instance.username,
+                &instance.oauth_token,
+                instance.client_id.clone(),
+                instance.client_secret.clone(),
+                instance.refresh_token.clone(),
+                Some(token_path),
+                instance.channels.clone(),
+                instance.trigger_prefix.clone(),
+                perms,
+            );
+            new_messaging_manager.register(adapter).await;
+        }
     }
 
     let webchat_adapter = Arc::new(spacebot::messaging::webchat::WebChatAdapter::new());

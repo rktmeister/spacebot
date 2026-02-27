@@ -20,6 +20,7 @@ use tokio::sync::{RwLock, mpsc};
 
 /// Discord adapter state.
 pub struct DiscordAdapter {
+    runtime_key: String,
     token: String,
     permissions: Arc<ArcSwap<DiscordPermissions>>,
     http: Arc<RwLock<Option<Arc<Http>>>>,
@@ -32,8 +33,13 @@ pub struct DiscordAdapter {
 }
 
 impl DiscordAdapter {
-    pub fn new(token: impl Into<String>, permissions: Arc<ArcSwap<DiscordPermissions>>) -> Self {
+    pub fn new(
+        runtime_key: impl Into<String>,
+        token: impl Into<String>,
+        permissions: Arc<ArcSwap<DiscordPermissions>>,
+    ) -> Self {
         Self {
+            runtime_key: runtime_key.into(),
             token: token.into(),
             permissions,
             http: Arc::new(RwLock::new(None)),
@@ -89,7 +95,7 @@ impl DiscordAdapter {
 
 impl Messaging for DiscordAdapter {
     fn name(&self) -> &str {
-        "discord"
+        &self.runtime_key
     }
 
     async fn start(&self) -> crate::Result<InboundStream> {
@@ -97,6 +103,7 @@ impl Messaging for DiscordAdapter {
 
         let handler = Handler {
             inbound_tx,
+            runtime_key: self.runtime_key.clone(),
             permissions: self.permissions.clone(),
             http_slot: self.http.clone(),
             bot_user_id_slot: self.bot_user_id.clone(),
@@ -556,6 +563,7 @@ impl Messaging for DiscordAdapter {
 
 struct Handler {
     inbound_tx: mpsc::Sender<InboundMessage>,
+    runtime_key: String,
     permissions: Arc<ArcSwap<DiscordPermissions>>,
     http_slot: Arc<RwLock<Option<Arc<Http>>>>,
     bot_user_id_slot: Arc<RwLock<Option<UserId>>>,
@@ -603,7 +611,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let conversation_id = build_conversation_id(&message);
+        let conversation_id = build_conversation_id(&self.runtime_key, &message);
         let content = extract_content(&message);
         let (metadata, formatted_author) = build_metadata(&ctx, &message, bot_user_id).await;
 
@@ -627,6 +635,7 @@ impl EventHandler for Handler {
         let inbound = InboundMessage {
             id: message.id.to_string(),
             source: "discord".into(),
+            adapter: Some(self.runtime_key.clone()),
             conversation_id,
             sender_id: message.author.id.to_string(),
             agent_id: None,
@@ -679,10 +688,12 @@ impl EventHandler for Handler {
             return;
         }
 
-        let conversation_id = match component.guild_id {
+        let base_conversation_id = match component.guild_id {
             Some(guild_id) => format!("discord:{}:{}", guild_id, component.channel_id),
             None => format!("discord:dm:{}", user.id),
         };
+        let conversation_id =
+            apply_runtime_adapter_to_conversation_id(&self.runtime_key, base_conversation_id);
 
         let values = match &component.data.kind {
             serenity::all::ComponentInteractionDataKind::StringSelect { values } => values.clone(),
@@ -730,6 +741,7 @@ impl EventHandler for Handler {
         let inbound = InboundMessage {
             id: component.id.to_string(), // Use interaction ID to ensure uniqueness
             source: "discord".into(),
+            adapter: Some(self.runtime_key.clone()),
             conversation_id,
             sender_id: user.id.to_string(),
             agent_id: None,
@@ -766,10 +778,27 @@ fn is_mention_or_reply_to_bot(message: &Message, bot_user_id: Option<UserId>) ->
 
 // -- Helper functions --
 
-fn build_conversation_id(message: &Message) -> String {
-    match message.guild_id {
+fn build_conversation_id(runtime_key: &str, message: &Message) -> String {
+    let base_conversation_id = match message.guild_id {
         Some(guild_id) => format!("discord:{}:{}", guild_id, message.channel_id),
         None => format!("discord:dm:{}", message.author.id),
+    };
+
+    apply_runtime_adapter_to_conversation_id(runtime_key, base_conversation_id)
+}
+
+fn apply_runtime_adapter_to_conversation_id(
+    runtime_key: &str,
+    base_conversation_id: String,
+) -> String {
+    let Some((platform, remainder)) = base_conversation_id.split_once(':') else {
+        return base_conversation_id;
+    };
+
+    if runtime_key == platform {
+        base_conversation_id
+    } else {
+        format!("{runtime_key}:{remainder}")
     }
 }
 

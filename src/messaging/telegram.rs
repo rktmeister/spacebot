@@ -26,6 +26,7 @@ const REJECTED_USERS_CAPACITY: usize = 50;
 
 /// Telegram adapter state.
 pub struct TelegramAdapter {
+    runtime_key: String,
     permissions: Arc<ArcSwap<TelegramPermissions>>,
     bot: Bot,
     bot_user_id: Arc<RwLock<Option<UserId>>>,
@@ -55,10 +56,16 @@ const FORMATTED_SPLIT_LENGTH: usize = MAX_MESSAGE_LENGTH / 2;
 const STREAM_EDIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
 
 impl TelegramAdapter {
-    pub fn new(token: impl Into<String>, permissions: Arc<ArcSwap<TelegramPermissions>>) -> Self {
+    pub fn new(
+        runtime_key: impl Into<String>,
+        token: impl Into<String>,
+        permissions: Arc<ArcSwap<TelegramPermissions>>,
+    ) -> Self {
+        let runtime_key = runtime_key.into();
         let token = token.into();
         let bot = Bot::new(&token);
         Self {
+            runtime_key,
             permissions,
             bot,
             bot_user_id: Arc::new(RwLock::new(None)),
@@ -97,7 +104,7 @@ impl TelegramAdapter {
 
 impl Messaging for TelegramAdapter {
     fn name(&self) -> &str {
-        "telegram"
+        &self.runtime_key
     }
 
     async fn start(&self) -> crate::Result<InboundStream> {
@@ -122,6 +129,7 @@ impl Messaging for TelegramAdapter {
         );
 
         let bot = self.bot.clone();
+        let runtime_key = self.runtime_key.clone();
         let permissions = self.permissions.clone();
         let bot_user_id = self.bot_user_id.clone();
         let bot_username = self.bot_username.clone();
@@ -238,7 +246,11 @@ impl Messaging for TelegramAdapter {
                             }
 
                             let content = build_content(&bot, message, &text).await;
-                            let conversation_id = format!("telegram:{chat_id}");
+                            let base_conversation_id = format!("telegram:{chat_id}");
+                            let conversation_id = apply_runtime_adapter_to_conversation_id(
+                                &runtime_key,
+                                base_conversation_id,
+                            );
                             let sender_id = message
                                 .from
                                 .as_ref()
@@ -253,6 +265,7 @@ impl Messaging for TelegramAdapter {
                             let inbound = InboundMessage {
                                 id: message.id.0.to_string(),
                                 source: "telegram".into(),
+                                adapter: Some(runtime_key.clone()),
                                 conversation_id,
                                 sender_id,
                                 agent_id: None,
@@ -572,6 +585,21 @@ impl Messaging for TelegramAdapter {
 
         tracing::info!("telegram adapter shut down");
         Ok(())
+    }
+}
+
+fn apply_runtime_adapter_to_conversation_id(
+    runtime_key: &str,
+    base_conversation_id: String,
+) -> String {
+    let Some((platform, remainder)) = base_conversation_id.split_once(':') else {
+        return base_conversation_id;
+    };
+
+    if runtime_key == platform {
+        base_conversation_id
+    } else {
+        format!("{runtime_key}:{remainder}")
     }
 }
 

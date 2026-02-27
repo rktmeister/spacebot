@@ -1154,6 +1154,10 @@ impl ResolvedAgentConfig {
 pub struct Binding {
     pub agent_id: String,
     pub channel: String,
+    /// Optional named adapter selector (platform-scoped).
+    ///
+    /// `None` targets the default adapter for this platform.
+    pub adapter: Option<String>,
     pub guild_id: Option<String>,
     pub workspace_id: Option<String>, // Slack workspace (team) ID
     pub chat_id: Option<String>,
@@ -1166,9 +1170,23 @@ pub struct Binding {
 }
 
 impl Binding {
+    /// Runtime adapter key for this binding.
+    pub fn runtime_adapter_key(&self) -> String {
+        binding_runtime_adapter_key(self.channel.as_str(), self.adapter.as_deref())
+    }
+
+    /// Whether this binding targets the default adapter for its platform.
+    pub fn uses_default_adapter(&self) -> bool {
+        self.adapter.is_none()
+    }
+
     /// Check if this binding matches an inbound message.
     fn matches(&self, message: &crate::InboundMessage) -> bool {
         if self.channel != message.source {
+            return false;
+        }
+
+        if !binding_adapter_matches(self, message) {
             return false;
         }
 
@@ -1278,6 +1296,248 @@ impl Binding {
     }
 }
 
+/// Build a runtime adapter key from platform and optional named selector.
+pub fn binding_runtime_adapter_key(platform: &str, adapter: Option<&str>) -> String {
+    if let Some(name) = adapter
+        && !name.is_empty()
+    {
+        return format!("{platform}:{name}");
+    }
+    platform.to_string()
+}
+
+/// Match a binding's adapter selector against an inbound message adapter.
+fn binding_adapter_matches(binding: &Binding, message: &crate::InboundMessage) -> bool {
+    match (&binding.adapter, message.adapter_selector()) {
+        (None, None) => true,
+        (Some(expected), Some(actual)) => expected == actual,
+        _ => false,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AdapterValidationState {
+    default_present: bool,
+    named_instances: std::collections::HashSet<String>,
+}
+
+fn is_named_adapter_platform(platform: &str) -> bool {
+    matches!(platform, "discord" | "slack" | "telegram" | "twitch")
+}
+
+fn validate_named_messaging_adapters(
+    messaging: &MessagingConfig,
+    bindings: &[Binding],
+) -> Result<()> {
+    let adapter_states = build_adapter_validation_states(messaging)?;
+
+    for binding in bindings {
+        if !is_named_adapter_platform(binding.channel.as_str()) {
+            if binding.adapter.is_some() {
+                return Err(ConfigError::Invalid(format!(
+                    "binding for channel '{}' can't set adapter: this platform does not support named adapters",
+                    binding.channel
+                ))
+                .into());
+            }
+            continue;
+        }
+
+        let state = adapter_states.get(binding.channel.as_str()).ok_or_else(|| {
+            ConfigError::Invalid(format!(
+                "binding for channel '{}' can't be resolved: no messaging config exists for that platform",
+                binding.channel
+            ))
+        })?;
+
+        match binding.adapter.as_deref() {
+            Some(adapter_name) => {
+                if !state.named_instances.contains(adapter_name) {
+                    return Err(ConfigError::Invalid(format!(
+                        "binding for channel '{}' references missing adapter '{}'",
+                        binding.channel, adapter_name
+                    ))
+                    .into());
+                }
+            }
+            None => {
+                if !state.default_present {
+                    return Err(ConfigError::Invalid(format!(
+                        "binding for channel '{}' requires the default adapter, but no default credentials are configured",
+                        binding.channel
+                    ))
+                    .into());
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn build_adapter_validation_states(
+    messaging: &MessagingConfig,
+) -> Result<std::collections::HashMap<&'static str, AdapterValidationState>> {
+    let mut states = std::collections::HashMap::new();
+
+    if let Some(discord) = &messaging.discord {
+        let named_instances = validate_instance_names(
+            "discord",
+            discord
+                .instances
+                .iter()
+                .map(|instance| instance.name.as_str()),
+        )?;
+        validate_runtime_keys(
+            "discord",
+            !discord.token.trim().is_empty(),
+            &named_instances,
+        )?;
+        states.insert(
+            "discord",
+            AdapterValidationState {
+                default_present: !discord.token.trim().is_empty(),
+                named_instances,
+            },
+        );
+    }
+
+    if let Some(slack) = &messaging.slack {
+        let named_instances = validate_instance_names(
+            "slack",
+            slack
+                .instances
+                .iter()
+                .map(|instance| instance.name.as_str()),
+        )?;
+        let default_present =
+            !slack.bot_token.trim().is_empty() && !slack.app_token.trim().is_empty();
+        validate_runtime_keys("slack", default_present, &named_instances)?;
+        states.insert(
+            "slack",
+            AdapterValidationState {
+                default_present,
+                named_instances,
+            },
+        );
+    }
+
+    if let Some(telegram) = &messaging.telegram {
+        let named_instances = validate_instance_names(
+            "telegram",
+            telegram
+                .instances
+                .iter()
+                .map(|instance| instance.name.as_str()),
+        )?;
+        let default_present = !telegram.token.trim().is_empty();
+        validate_runtime_keys("telegram", default_present, &named_instances)?;
+        states.insert(
+            "telegram",
+            AdapterValidationState {
+                default_present,
+                named_instances,
+            },
+        );
+    }
+
+    if let Some(twitch) = &messaging.twitch {
+        let named_instances = validate_instance_names(
+            "twitch",
+            twitch
+                .instances
+                .iter()
+                .map(|instance| instance.name.as_str()),
+        )?;
+        let default_present =
+            !twitch.username.trim().is_empty() && !twitch.oauth_token.trim().is_empty();
+        validate_runtime_keys("twitch", default_present, &named_instances)?;
+        states.insert(
+            "twitch",
+            AdapterValidationState {
+                default_present,
+                named_instances,
+            },
+        );
+    }
+
+    Ok(states)
+}
+
+fn validate_instance_names<'a>(
+    platform: &str,
+    names: impl Iterator<Item = &'a str>,
+) -> Result<std::collections::HashSet<String>> {
+    let mut seen = std::collections::HashSet::new();
+
+    for name in names {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "messaging.{platform}.instances name can't be empty"
+            ))
+            .into());
+        }
+        if trimmed != name {
+            return Err(ConfigError::Invalid(format!(
+                "messaging.{platform}.instances name '{}' can't contain leading or trailing whitespace",
+                name
+            ))
+            .into());
+        }
+        if trimmed.eq_ignore_ascii_case("default") {
+            return Err(ConfigError::Invalid(format!(
+                "messaging.{platform}.instances name '{}' is reserved",
+                name
+            ))
+            .into());
+        }
+        if trimmed.contains(':') {
+            return Err(ConfigError::Invalid(format!(
+                "messaging.{platform}.instances name '{}' can't contain ':'",
+                name
+            ))
+            .into());
+        }
+        if !seen.insert(trimmed.to_string()) {
+            return Err(ConfigError::Invalid(format!(
+                "messaging.{platform}.instances has duplicate name '{}'",
+                name
+            ))
+            .into());
+        }
+    }
+
+    Ok(seen)
+}
+
+fn validate_runtime_keys(
+    platform: &str,
+    default_present: bool,
+    named_instances: &std::collections::HashSet<String>,
+) -> Result<()> {
+    let mut runtime_keys = std::collections::HashSet::new();
+
+    if default_present && !runtime_keys.insert(platform.to_string()) {
+        return Err(ConfigError::Invalid(format!(
+            "messaging.{platform} has duplicate runtime adapter key '{platform}'"
+        ))
+        .into());
+    }
+
+    for instance_name in named_instances {
+        let runtime_key = format!("{platform}:{instance_name}");
+        if !runtime_keys.insert(runtime_key.clone()) {
+            return Err(ConfigError::Invalid(format!(
+                "messaging.{platform} has duplicate runtime adapter key '{runtime_key}'"
+            ))
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
 /// Resolve which agent should handle an inbound message.
 ///
 /// Checks bindings in order. First match wins. Falls back to the default
@@ -1310,10 +1570,35 @@ pub struct MessagingConfig {
 pub struct DiscordConfig {
     pub enabled: bool,
     pub token: String,
+    /// Additional named Discord bot instances for this platform.
+    pub instances: Vec<DiscordInstanceConfig>,
     /// User IDs allowed to DM the bot. If empty, DMs are ignored entirely.
     pub dm_allowed_users: Vec<String>,
     /// Whether to process messages from other bots (self-messages are always ignored).
     pub allow_bot_messages: bool,
+}
+
+#[derive(Clone)]
+pub struct DiscordInstanceConfig {
+    pub name: String,
+    pub enabled: bool,
+    pub token: String,
+    /// User IDs allowed to DM this bot instance.
+    pub dm_allowed_users: Vec<String>,
+    /// Whether this bot instance processes messages from other bots.
+    pub allow_bot_messages: bool,
+}
+
+impl std::fmt::Debug for DiscordInstanceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiscordInstanceConfig")
+            .field("name", &self.name)
+            .field("enabled", &self.enabled)
+            .field("token", &"[REDACTED]")
+            .field("dm_allowed_users", &self.dm_allowed_users)
+            .field("allow_bot_messages", &self.allow_bot_messages)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for DiscordConfig {
@@ -1321,6 +1606,7 @@ impl std::fmt::Debug for DiscordConfig {
         f.debug_struct("DiscordConfig")
             .field("enabled", &self.enabled)
             .field("token", &"[REDACTED]")
+            .field("instances", &self.instances)
             .field("dm_allowed_users", &self.dm_allowed_users)
             .field("allow_bot_messages", &self.allow_bot_messages)
             .finish()
@@ -1346,10 +1632,37 @@ pub struct SlackConfig {
     pub enabled: bool,
     pub bot_token: String,
     pub app_token: String,
+    /// Additional named Slack app instances for this platform.
+    pub instances: Vec<SlackInstanceConfig>,
     /// User IDs allowed to DM the bot. If empty, DMs are ignored entirely.
     pub dm_allowed_users: Vec<String>,
     /// Slash command definitions. If empty, all slash commands are ignored.
     pub commands: Vec<SlackCommandConfig>,
+}
+
+#[derive(Clone)]
+pub struct SlackInstanceConfig {
+    pub name: String,
+    pub enabled: bool,
+    pub bot_token: String,
+    pub app_token: String,
+    /// User IDs allowed to DM this app instance.
+    pub dm_allowed_users: Vec<String>,
+    /// Slash command definitions for this app instance.
+    pub commands: Vec<SlackCommandConfig>,
+}
+
+impl std::fmt::Debug for SlackInstanceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlackInstanceConfig")
+            .field("name", &self.name)
+            .field("enabled", &self.enabled)
+            .field("bot_token", &"[REDACTED]")
+            .field("app_token", &"[REDACTED]")
+            .field("dm_allowed_users", &self.dm_allowed_users)
+            .field("commands", &self.commands)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for SlackConfig {
@@ -1358,6 +1671,7 @@ impl std::fmt::Debug for SlackConfig {
             .field("enabled", &self.enabled)
             .field("bot_token", &"[REDACTED]")
             .field("app_token", &"[REDACTED]")
+            .field("instances", &self.instances)
             .field("dm_allowed_users", &self.dm_allowed_users)
             .field("commands", &self.commands)
             .finish()
@@ -1390,8 +1704,30 @@ pub struct SlackPermissions {
 impl SlackPermissions {
     /// Build from the current config's slack settings and bindings.
     pub fn from_config(slack: &SlackConfig, bindings: &[Binding]) -> Self {
-        let slack_bindings: Vec<&Binding> =
-            bindings.iter().filter(|b| b.channel == "slack").collect();
+        Self::from_bindings_for_adapter(slack.dm_allowed_users.clone(), bindings, None)
+    }
+
+    /// Build permissions for a named Slack adapter instance.
+    pub fn from_instance_config(instance: &SlackInstanceConfig, bindings: &[Binding]) -> Self {
+        Self::from_bindings_for_adapter(
+            instance.dm_allowed_users.clone(),
+            bindings,
+            Some(instance.name.as_str()),
+        )
+    }
+
+    fn from_bindings_for_adapter(
+        seed_dm_allowed_users: Vec<String>,
+        bindings: &[Binding],
+        adapter_selector: Option<&str>,
+    ) -> Self {
+        let slack_bindings: Vec<&Binding> = bindings
+            .iter()
+            .filter(|binding| {
+                binding.channel == "slack"
+                    && binding_adapter_selector_matches(binding, adapter_selector)
+            })
+            .collect();
 
         let workspace_filter = {
             let workspace_ids: Vec<String> = slack_bindings
@@ -1421,7 +1757,7 @@ impl SlackPermissions {
             filter
         };
 
-        let mut dm_allowed_users = slack.dm_allowed_users.clone();
+        let mut dm_allowed_users = seed_dm_allowed_users;
 
         for binding in &slack_bindings {
             for id in &binding.dm_allowed_users {
@@ -1442,8 +1778,37 @@ impl SlackPermissions {
 impl DiscordPermissions {
     /// Build from the current config's discord settings and bindings.
     pub fn from_config(discord: &DiscordConfig, bindings: &[Binding]) -> Self {
-        let discord_bindings: Vec<&Binding> =
-            bindings.iter().filter(|b| b.channel == "discord").collect();
+        Self::from_bindings_for_adapter(
+            discord.dm_allowed_users.clone(),
+            discord.allow_bot_messages,
+            bindings,
+            None,
+        )
+    }
+
+    /// Build permissions for a named Discord adapter instance.
+    pub fn from_instance_config(instance: &DiscordInstanceConfig, bindings: &[Binding]) -> Self {
+        Self::from_bindings_for_adapter(
+            instance.dm_allowed_users.clone(),
+            instance.allow_bot_messages,
+            bindings,
+            Some(instance.name.as_str()),
+        )
+    }
+
+    fn from_bindings_for_adapter(
+        seed_dm_allowed_users: Vec<String>,
+        allow_bot_messages: bool,
+        bindings: &[Binding],
+        adapter_selector: Option<&str>,
+    ) -> Self {
+        let discord_bindings: Vec<&Binding> = bindings
+            .iter()
+            .filter(|binding| {
+                binding.channel == "discord"
+                    && binding_adapter_selector_matches(binding, adapter_selector)
+            })
+            .collect();
 
         let guild_filter = {
             let guild_ids: Vec<u64> = discord_bindings
@@ -1478,8 +1843,7 @@ impl DiscordPermissions {
             filter
         };
 
-        let mut dm_allowed_users: Vec<u64> = discord
-            .dm_allowed_users
+        let mut dm_allowed_users: Vec<u64> = seed_dm_allowed_users
             .iter()
             .filter_map(|id| id.parse::<u64>().ok())
             .collect();
@@ -1499,7 +1863,7 @@ impl DiscordPermissions {
             guild_filter,
             channel_filter,
             dm_allowed_users,
-            allow_bot_messages: discord.allow_bot_messages,
+            allow_bot_messages,
         }
     }
 }
@@ -1508,8 +1872,30 @@ impl DiscordPermissions {
 pub struct TelegramConfig {
     pub enabled: bool,
     pub token: String,
+    /// Additional named Telegram bot instances for this platform.
+    pub instances: Vec<TelegramInstanceConfig>,
     /// User IDs allowed to DM the bot. If empty, DMs are ignored entirely.
     pub dm_allowed_users: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct TelegramInstanceConfig {
+    pub name: String,
+    pub enabled: bool,
+    pub token: String,
+    /// User IDs allowed to DM this bot instance.
+    pub dm_allowed_users: Vec<String>,
+}
+
+impl std::fmt::Debug for TelegramInstanceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramInstanceConfig")
+            .field("name", &self.name)
+            .field("enabled", &self.enabled)
+            .field("token", &"[REDACTED]")
+            .field("dm_allowed_users", &self.dm_allowed_users)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for TelegramConfig {
@@ -1517,6 +1903,7 @@ impl std::fmt::Debug for TelegramConfig {
         f.debug_struct("TelegramConfig")
             .field("enabled", &self.enabled)
             .field("token", &"[REDACTED]")
+            .field("instances", &self.instances)
             .field("dm_allowed_users", &self.dm_allowed_users)
             .finish()
     }
@@ -1583,9 +1970,29 @@ pub struct TelegramPermissions {
 impl TelegramPermissions {
     /// Build from the current config's telegram settings and bindings.
     pub fn from_config(telegram: &TelegramConfig, bindings: &[Binding]) -> Self {
+        Self::from_bindings_for_adapter(telegram.dm_allowed_users.clone(), bindings, None)
+    }
+
+    /// Build permissions for a named Telegram adapter instance.
+    pub fn from_instance_config(instance: &TelegramInstanceConfig, bindings: &[Binding]) -> Self {
+        Self::from_bindings_for_adapter(
+            instance.dm_allowed_users.clone(),
+            bindings,
+            Some(instance.name.as_str()),
+        )
+    }
+
+    fn from_bindings_for_adapter(
+        seed_dm_allowed_users: Vec<String>,
+        bindings: &[Binding],
+        adapter_selector: Option<&str>,
+    ) -> Self {
         let telegram_bindings: Vec<&Binding> = bindings
             .iter()
-            .filter(|b| b.channel == "telegram")
+            .filter(|binding| {
+                binding.channel == "telegram"
+                    && binding_adapter_selector_matches(binding, adapter_selector)
+            })
             .collect();
 
         let chat_filter = {
@@ -1600,8 +2007,7 @@ impl TelegramPermissions {
             }
         };
 
-        let mut dm_allowed_users: Vec<i64> = telegram
-            .dm_allowed_users
+        let mut dm_allowed_users: Vec<i64> = seed_dm_allowed_users
             .iter()
             .filter_map(|id| id.parse::<i64>().ok())
             .collect();
@@ -1631,10 +2037,49 @@ pub struct TwitchConfig {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub refresh_token: Option<String>,
+    /// Additional named Twitch bot instances for this platform.
+    pub instances: Vec<TwitchInstanceConfig>,
     /// Channels to join (without the # prefix).
     pub channels: Vec<String>,
     /// Optional prefix that triggers the bot (e.g. "!ask"). If empty, all messages are processed.
     pub trigger_prefix: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct TwitchInstanceConfig {
+    pub name: String,
+    pub enabled: bool,
+    pub username: String,
+    pub oauth_token: String,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub refresh_token: Option<String>,
+    /// Channels to join (without the # prefix).
+    pub channels: Vec<String>,
+    /// Optional prefix that triggers the bot for this instance.
+    pub trigger_prefix: Option<String>,
+}
+
+impl std::fmt::Debug for TwitchInstanceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TwitchInstanceConfig")
+            .field("name", &self.name)
+            .field("enabled", &self.enabled)
+            .field("username", &self.username)
+            .field("oauth_token", &"[REDACTED]")
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("channels", &self.channels)
+            .field("trigger_prefix", &self.trigger_prefix)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for TwitchConfig {
@@ -1643,6 +2088,7 @@ impl std::fmt::Debug for TwitchConfig {
             .field("enabled", &self.enabled)
             .field("username", &self.username)
             .field("oauth_token", &"[REDACTED]")
+            .field("instances", &self.instances)
             .field("channels", &self.channels)
             .field("trigger_prefix", &self.trigger_prefix)
             .finish()
@@ -1663,8 +2109,22 @@ pub struct TwitchPermissions {
 impl TwitchPermissions {
     /// Build from the current config's twitch settings and bindings.
     pub fn from_config(_twitch: &TwitchConfig, bindings: &[Binding]) -> Self {
-        let twitch_bindings: Vec<&Binding> =
-            bindings.iter().filter(|b| b.channel == "twitch").collect();
+        Self::from_bindings_for_adapter(bindings, None)
+    }
+
+    /// Build permissions for a named Twitch adapter instance.
+    pub fn from_instance_config(instance: &TwitchInstanceConfig, bindings: &[Binding]) -> Self {
+        Self::from_bindings_for_adapter(bindings, Some(instance.name.as_str()))
+    }
+
+    fn from_bindings_for_adapter(bindings: &[Binding], adapter_selector: Option<&str>) -> Self {
+        let twitch_bindings: Vec<&Binding> = bindings
+            .iter()
+            .filter(|binding| {
+                binding.channel == "twitch"
+                    && binding_adapter_selector_matches(binding, adapter_selector)
+            })
+            .collect();
 
         let channel_filter = {
             let channel_ids: Vec<String> = twitch_bindings
@@ -1691,6 +2151,16 @@ impl TwitchPermissions {
             channel_filter,
             allowed_users,
         }
+    }
+}
+
+fn binding_adapter_selector_matches(binding: &Binding, adapter_selector: Option<&str>) -> bool {
+    match (binding.adapter.as_deref(), adapter_selector) {
+        (None, None) => true,
+        (Some(binding_selector), Some(requested_selector)) => {
+            binding_selector == requested_selector
+        }
+        _ => false,
     }
 }
 
@@ -2170,6 +2640,20 @@ struct TomlDiscordConfig {
     enabled: bool,
     token: Option<String>,
     #[serde(default)]
+    instances: Vec<TomlDiscordInstanceConfig>,
+    #[serde(default)]
+    dm_allowed_users: Vec<String>,
+    #[serde(default)]
+    allow_bot_messages: bool,
+}
+
+#[derive(Deserialize)]
+struct TomlDiscordInstanceConfig {
+    name: String,
+    #[serde(default)]
+    enabled: bool,
+    token: Option<String>,
+    #[serde(default)]
     dm_allowed_users: Vec<String>,
     #[serde(default)]
     allow_bot_messages: bool,
@@ -2177,6 +2661,21 @@ struct TomlDiscordConfig {
 
 #[derive(Deserialize)]
 struct TomlSlackConfig {
+    #[serde(default)]
+    enabled: bool,
+    bot_token: Option<String>,
+    app_token: Option<String>,
+    #[serde(default)]
+    instances: Vec<TomlSlackInstanceConfig>,
+    #[serde(default)]
+    dm_allowed_users: Vec<String>,
+    #[serde(default)]
+    commands: Vec<TomlSlackCommandConfig>,
+}
+
+#[derive(Deserialize)]
+struct TomlSlackInstanceConfig {
+    name: String,
     #[serde(default)]
     enabled: bool,
     bot_token: Option<String>,
@@ -2196,6 +2695,18 @@ struct TomlSlackCommandConfig {
 
 #[derive(Deserialize)]
 struct TomlTelegramConfig {
+    #[serde(default)]
+    enabled: bool,
+    token: Option<String>,
+    #[serde(default)]
+    instances: Vec<TomlTelegramInstanceConfig>,
+    #[serde(default)]
+    dm_allowed_users: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct TomlTelegramInstanceConfig {
+    name: String,
     #[serde(default)]
     enabled: bool,
     token: Option<String>,
@@ -2256,6 +2767,23 @@ struct TomlTwitchConfig {
     client_secret: Option<String>,
     refresh_token: Option<String>,
     #[serde(default)]
+    instances: Vec<TomlTwitchInstanceConfig>,
+    #[serde(default)]
+    channels: Vec<String>,
+    trigger_prefix: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TomlTwitchInstanceConfig {
+    name: String,
+    #[serde(default)]
+    enabled: bool,
+    username: Option<String>,
+    oauth_token: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    refresh_token: Option<String>,
+    #[serde(default)]
     channels: Vec<String>,
     trigger_prefix: Option<String>,
 }
@@ -2303,6 +2831,8 @@ fn default_email_max_attachment_bytes() -> usize {
 struct TomlBinding {
     agent_id: String,
     channel: String,
+    #[serde(default)]
+    adapter: Option<String>,
     guild_id: Option<String>,
     workspace_id: Option<String>,
     chat_id: Option<String>,
@@ -3932,33 +4462,87 @@ impl Config {
 
         let messaging = MessagingConfig {
             discord: toml.messaging.discord.and_then(|d| {
+                let instances = d
+                    .instances
+                    .into_iter()
+                    .filter_map(|instance| {
+                        let token = instance.token.as_deref().and_then(resolve_env_value)?;
+                        Some(DiscordInstanceConfig {
+                            name: instance.name,
+                            enabled: instance.enabled,
+                            token,
+                            dm_allowed_users: instance.dm_allowed_users,
+                            allow_bot_messages: instance.allow_bot_messages,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
                 let token = d
                     .token
                     .as_deref()
                     .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("DISCORD_BOT_TOKEN").ok())?;
+                    .or_else(|| std::env::var("DISCORD_BOT_TOKEN").ok());
+
+                if token.is_none() && instances.is_empty() {
+                    return None;
+                }
+
                 Some(DiscordConfig {
                     enabled: d.enabled,
-                    token,
+                    token: token.unwrap_or_default(),
+                    instances,
                     dm_allowed_users: d.dm_allowed_users,
                     allow_bot_messages: d.allow_bot_messages,
                 })
             }),
             slack: toml.messaging.slack.and_then(|s| {
+                let instances = s
+                    .instances
+                    .into_iter()
+                    .filter_map(|instance| {
+                        let bot_token =
+                            instance.bot_token.as_deref().and_then(resolve_env_value)?;
+                        let app_token =
+                            instance.app_token.as_deref().and_then(resolve_env_value)?;
+                        Some(SlackInstanceConfig {
+                            name: instance.name,
+                            enabled: instance.enabled,
+                            bot_token,
+                            app_token,
+                            dm_allowed_users: instance.dm_allowed_users,
+                            commands: instance
+                                .commands
+                                .into_iter()
+                                .map(|command| SlackCommandConfig {
+                                    command: command.command,
+                                    agent_id: command.agent_id,
+                                    description: command.description,
+                                })
+                                .collect(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
                 let bot_token = s
                     .bot_token
                     .as_deref()
                     .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("SLACK_BOT_TOKEN").ok())?;
+                    .or_else(|| std::env::var("SLACK_BOT_TOKEN").ok());
                 let app_token = s
                     .app_token
                     .as_deref()
                     .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("SLACK_APP_TOKEN").ok())?;
+                    .or_else(|| std::env::var("SLACK_APP_TOKEN").ok());
+
+                if (bot_token.is_none() || app_token.is_none()) && instances.is_empty() {
+                    return None;
+                }
+
                 Some(SlackConfig {
                     enabled: s.enabled,
-                    bot_token,
-                    app_token,
+                    bot_token: bot_token.unwrap_or_default(),
+                    app_token: app_token.unwrap_or_default(),
+                    instances,
                     dm_allowed_users: s.dm_allowed_users,
                     commands: s
                         .commands
@@ -3972,14 +4556,34 @@ impl Config {
                 })
             }),
             telegram: toml.messaging.telegram.and_then(|t| {
+                let instances = t
+                    .instances
+                    .into_iter()
+                    .filter_map(|instance| {
+                        let token = instance.token.as_deref().and_then(resolve_env_value)?;
+                        Some(TelegramInstanceConfig {
+                            name: instance.name,
+                            enabled: instance.enabled,
+                            token,
+                            dm_allowed_users: instance.dm_allowed_users,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
                 let token = t
                     .token
                     .as_deref()
                     .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())?;
+                    .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok());
+
+                if token.is_none() && instances.is_empty() {
+                    return None;
+                }
+
                 Some(TelegramConfig {
                     enabled: t.enabled,
-                    token,
+                    token: token.unwrap_or_default(),
+                    instances,
                     dm_allowed_users: t.dm_allowed_users,
                 })
             }),
@@ -4046,16 +4650,53 @@ impl Config {
                 auth_token: w.auth_token.as_deref().and_then(resolve_env_value),
             }),
             twitch: toml.messaging.twitch.and_then(|t| {
+                let instances = t
+                    .instances
+                    .into_iter()
+                    .filter_map(|instance| {
+                        let username = instance.username.as_deref().and_then(resolve_env_value)?;
+                        let oauth_token = instance
+                            .oauth_token
+                            .as_deref()
+                            .and_then(resolve_env_value)?;
+                        let client_id = instance.client_id.as_deref().and_then(resolve_env_value);
+                        let client_secret = instance
+                            .client_secret
+                            .as_deref()
+                            .and_then(resolve_env_value);
+                        let refresh_token = instance
+                            .refresh_token
+                            .as_deref()
+                            .and_then(resolve_env_value);
+                        Some(TwitchInstanceConfig {
+                            name: instance.name,
+                            enabled: instance.enabled,
+                            username,
+                            oauth_token,
+                            client_id,
+                            client_secret,
+                            refresh_token,
+                            channels: instance.channels,
+                            trigger_prefix: instance.trigger_prefix,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
                 let username = t
                     .username
                     .as_deref()
                     .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("TWITCH_BOT_USERNAME").ok())?;
+                    .or_else(|| std::env::var("TWITCH_BOT_USERNAME").ok());
                 let oauth_token = t
                     .oauth_token
                     .as_deref()
                     .and_then(resolve_env_value)
-                    .or_else(|| std::env::var("TWITCH_OAUTH_TOKEN").ok())?;
+                    .or_else(|| std::env::var("TWITCH_OAUTH_TOKEN").ok());
+
+                if (username.is_none() || oauth_token.is_none()) && instances.is_empty() {
+                    return None;
+                }
+
                 let client_id = t
                     .client_id
                     .as_deref()
@@ -4073,23 +4714,25 @@ impl Config {
                     .or_else(|| std::env::var("TWITCH_REFRESH_TOKEN").ok());
                 Some(TwitchConfig {
                     enabled: t.enabled,
-                    username,
-                    oauth_token,
+                    username: username.unwrap_or_default(),
+                    oauth_token: oauth_token.unwrap_or_default(),
                     client_id,
                     client_secret,
                     refresh_token,
+                    instances,
                     channels: t.channels,
                     trigger_prefix: t.trigger_prefix,
                 })
             }),
         };
 
-        let bindings = toml
+        let bindings: Vec<Binding> = toml
             .bindings
             .into_iter()
             .map(|b| Binding {
                 agent_id: b.agent_id,
                 channel: b.channel,
+                adapter: b.adapter,
                 guild_id: b.guild_id,
                 workspace_id: b.workspace_id,
                 chat_id: b.chat_id,
@@ -4098,6 +4741,8 @@ impl Config {
                 dm_allowed_users: b.dm_allowed_users,
             })
             .collect();
+
+        validate_named_messaging_adapters(&messaging, &bindings)?;
 
         let api = ApiConfig {
             enabled: toml.api.enabled,
@@ -4664,68 +5309,156 @@ pub fn spawn_file_watcher(
                     let instance_dir = instance_dir.clone();
 
                     rt.spawn(async move {
-                        // Discord: start if enabled and not already running
+                        // Discord: start default + named instances that are enabled and not already running.
                         if let Some(discord_config) = &config.messaging.discord
-                            && discord_config.enabled && !manager.has_adapter("discord").await {
-                                let perms = match discord_permissions {
-                                    Some(ref existing) => existing.clone(),
-                                    None => {
-                                        let perms = DiscordPermissions::from_config(discord_config, &config.bindings);
-                                        Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                            && discord_config.enabled {
+                                if !discord_config.token.is_empty() && !manager.has_adapter("discord").await {
+                                    let perms = match discord_permissions {
+                                        Some(ref existing) => existing.clone(),
+                                        None => {
+                                            let perms = DiscordPermissions::from_config(discord_config, &config.bindings);
+                                            Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                        }
+                                    };
+                                    let adapter = crate::messaging::discord::DiscordAdapter::new(
+                                        "discord",
+                                        &discord_config.token,
+                                        perms,
+                                    );
+                                    if let Err(error) = manager.register_and_start(adapter).await {
+                                        tracing::error!(%error, "failed to hot-start discord adapter from config change");
                                     }
-                                };
-                                let adapter = crate::messaging::discord::DiscordAdapter::new(
-                                    &discord_config.token,
-                                    perms,
-                                );
-                                if let Err(error) = manager.register_and_start(adapter).await {
-                                    tracing::error!(%error, "failed to hot-start discord adapter from config change");
+                                }
+
+                                for instance in discord_config.instances.iter().filter(|instance| instance.enabled) {
+                                    let runtime_key = binding_runtime_adapter_key(
+                                        "discord",
+                                        Some(instance.name.as_str()),
+                                    );
+                                    if manager.has_adapter(runtime_key.as_str()).await {
+                                        continue;
+                                    }
+
+                                    let perms = Arc::new(arc_swap::ArcSwap::from_pointee(
+                                        DiscordPermissions::from_instance_config(instance, &config.bindings),
+                                    ));
+                                    let adapter = crate::messaging::discord::DiscordAdapter::new(
+                                        runtime_key,
+                                        &instance.token,
+                                        perms,
+                                    );
+                                    if let Err(error) = manager.register_and_start(adapter).await {
+                                        tracing::error!(%error, adapter = %instance.name, "failed to hot-start named discord adapter from config change");
+                                    }
                                 }
                             }
 
-                        // Slack: start if enabled and not already running
+                        // Slack: start default + named instances that are enabled and not already running.
                         if let Some(slack_config) = &config.messaging.slack
-                            && slack_config.enabled && !manager.has_adapter("slack").await {
-                                let perms = match slack_permissions {
-                                    Some(ref existing) => existing.clone(),
-                                    None => {
-                                        let perms = SlackPermissions::from_config(slack_config, &config.bindings);
-                                        Arc::new(arc_swap::ArcSwap::from_pointee(perms))
-                                    }
-                                };
-                                match crate::messaging::slack::SlackAdapter::new(
-                                    &slack_config.bot_token,
-                                    &slack_config.app_token,
-                                    perms,
-                                    slack_config.commands.clone(),
-                                ) {
-                                    Ok(adapter) => {
-                                        if let Err(error) = manager.register_and_start(adapter).await {
-                                            tracing::error!(%error, "failed to hot-start slack adapter from config change");
+                            && slack_config.enabled {
+                                if !slack_config.bot_token.is_empty()
+                                    && !slack_config.app_token.is_empty()
+                                    && !manager.has_adapter("slack").await
+                                {
+                                    let perms = match slack_permissions {
+                                        Some(ref existing) => existing.clone(),
+                                        None => {
+                                            let perms = SlackPermissions::from_config(slack_config, &config.bindings);
+                                            Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                        }
+                                    };
+                                    match crate::messaging::slack::SlackAdapter::new(
+                                        "slack",
+                                        &slack_config.bot_token,
+                                        &slack_config.app_token,
+                                        perms,
+                                        slack_config.commands.clone(),
+                                    ) {
+                                        Ok(adapter) => {
+                                            if let Err(error) = manager.register_and_start(adapter).await {
+                                                tracing::error!(%error, "failed to hot-start slack adapter from config change");
+                                            }
+                                        }
+                                        Err(error) => {
+                                            tracing::error!(%error, "failed to build slack adapter from config change");
                                         }
                                     }
-                                    Err(error) => {
-                                        tracing::error!(%error, "failed to build slack adapter from config change");
+                                }
+
+                                for instance in slack_config.instances.iter().filter(|instance| instance.enabled) {
+                                    let runtime_key = binding_runtime_adapter_key(
+                                        "slack",
+                                        Some(instance.name.as_str()),
+                                    );
+                                    if manager.has_adapter(runtime_key.as_str()).await {
+                                        continue;
+                                    }
+
+                                    let perms = Arc::new(arc_swap::ArcSwap::from_pointee(
+                                        SlackPermissions::from_instance_config(instance, &config.bindings),
+                                    ));
+                                    match crate::messaging::slack::SlackAdapter::new(
+                                        runtime_key,
+                                        &instance.bot_token,
+                                        &instance.app_token,
+                                        perms,
+                                        instance.commands.clone(),
+                                    ) {
+                                        Ok(adapter) => {
+                                            if let Err(error) = manager.register_and_start(adapter).await {
+                                                tracing::error!(%error, adapter = %instance.name, "failed to hot-start named slack adapter from config change");
+                                            }
+                                        }
+                                        Err(error) => {
+                                            tracing::error!(%error, adapter = %instance.name, "failed to build named slack adapter from config change");
+                                        }
                                     }
                                 }
                             }
 
-                        // Telegram: start if enabled and not already running
+                        // Telegram: start default + named instances that are enabled and not already running.
                         if let Some(telegram_config) = &config.messaging.telegram
-                            && telegram_config.enabled && !manager.has_adapter("telegram").await {
-                                let perms = match telegram_permissions {
-                                    Some(ref existing) => existing.clone(),
-                                    None => {
-                                        let perms = TelegramPermissions::from_config(telegram_config, &config.bindings);
-                                        Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                            && telegram_config.enabled {
+                                if !telegram_config.token.is_empty()
+                                    && !manager.has_adapter("telegram").await
+                                {
+                                    let perms = match telegram_permissions {
+                                        Some(ref existing) => existing.clone(),
+                                        None => {
+                                            let perms = TelegramPermissions::from_config(telegram_config, &config.bindings);
+                                            Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                        }
+                                    };
+                                    let adapter = crate::messaging::telegram::TelegramAdapter::new(
+                                        "telegram",
+                                        &telegram_config.token,
+                                        perms,
+                                    );
+                                    if let Err(error) = manager.register_and_start(adapter).await {
+                                        tracing::error!(%error, "failed to hot-start telegram adapter from config change");
                                     }
-                                };
-                                let adapter = crate::messaging::telegram::TelegramAdapter::new(
-                                    &telegram_config.token,
-                                    perms,
-                                );
-                                if let Err(error) = manager.register_and_start(adapter).await {
-                                    tracing::error!(%error, "failed to hot-start telegram adapter from config change");
+                                }
+
+                                for instance in telegram_config.instances.iter().filter(|instance| instance.enabled) {
+                                    let runtime_key = binding_runtime_adapter_key(
+                                        "telegram",
+                                        Some(instance.name.as_str()),
+                                    );
+                                    if manager.has_adapter(runtime_key.as_str()).await {
+                                        continue;
+                                    }
+
+                                    let perms = Arc::new(arc_swap::ArcSwap::from_pointee(
+                                        TelegramPermissions::from_instance_config(instance, &config.bindings),
+                                    ));
+                                    let adapter = crate::messaging::telegram::TelegramAdapter::new(
+                                        runtime_key,
+                                        &instance.token,
+                                        perms,
+                                    );
+                                    if let Err(error) = manager.register_and_start(adapter).await {
+                                        tracing::error!(%error, adapter = %instance.name, "failed to hot-start named telegram adapter from config change");
+                                    }
                                 }
                             }
 
@@ -4744,30 +5477,74 @@ pub fn spawn_file_watcher(
                                 }
                             }
 
-                        // Twitch: start if enabled and not already running
+                        // Twitch: start default + named instances that are enabled and not already running.
                         if let Some(twitch_config) = &config.messaging.twitch
-                            && twitch_config.enabled && !manager.has_adapter("twitch").await {
-                                let perms = match twitch_permissions {
-                                    Some(ref existing) => existing.clone(),
-                                    None => {
-                                        let perms = TwitchPermissions::from_config(twitch_config, &config.bindings);
-                                        Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                            && twitch_config.enabled {
+                                if !twitch_config.username.is_empty()
+                                    && !twitch_config.oauth_token.is_empty()
+                                    && !manager.has_adapter("twitch").await
+                                {
+                                    let perms = match twitch_permissions {
+                                        Some(ref existing) => existing.clone(),
+                                        None => {
+                                            let perms = TwitchPermissions::from_config(twitch_config, &config.bindings);
+                                            Arc::new(arc_swap::ArcSwap::from_pointee(perms))
+                                        }
+                                    };
+                                    let token_path = instance_dir.join("twitch_token.json");
+                                    let adapter = crate::messaging::twitch::TwitchAdapter::new(
+                                        "twitch",
+                                        &twitch_config.username,
+                                        &twitch_config.oauth_token,
+                                        twitch_config.client_id.clone(),
+                                        twitch_config.client_secret.clone(),
+                                        twitch_config.refresh_token.clone(),
+                                        Some(token_path),
+                                        twitch_config.channels.clone(),
+                                        twitch_config.trigger_prefix.clone(),
+                                        perms,
+                                    );
+                                    if let Err(error) = manager.register_and_start(adapter).await {
+                                        tracing::error!(%error, "failed to hot-start twitch adapter from config change");
                                     }
-                                };
-                                let token_path = instance_dir.join("twitch_token.json");
-                                let adapter = crate::messaging::twitch::TwitchAdapter::new(
-                                    &twitch_config.username,
-                                    &twitch_config.oauth_token,
-                                    twitch_config.client_id.clone(),
-                                    twitch_config.client_secret.clone(),
-                                    twitch_config.refresh_token.clone(),
-                                    Some(token_path),
-                                    twitch_config.channels.clone(),
-                                    twitch_config.trigger_prefix.clone(),
-                                    perms,
-                                );
-                                if let Err(error) = manager.register_and_start(adapter).await {
-                                    tracing::error!(%error, "failed to hot-start twitch adapter from config change");
+                                }
+
+                                for instance in twitch_config.instances.iter().filter(|instance| instance.enabled) {
+                                    let runtime_key = binding_runtime_adapter_key(
+                                        "twitch",
+                                        Some(instance.name.as_str()),
+                                    );
+                                    if manager.has_adapter(runtime_key.as_str()).await {
+                                        continue;
+                                    }
+
+                                    let token_file_name = format!(
+                                        "twitch_token_{}.json",
+                                        instance
+                                            .name
+                                            .chars()
+                                            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                                            .collect::<String>()
+                                    );
+                                    let token_path = instance_dir.join(token_file_name);
+                                    let perms = Arc::new(arc_swap::ArcSwap::from_pointee(
+                                        TwitchPermissions::from_instance_config(instance, &config.bindings),
+                                    ));
+                                    let adapter = crate::messaging::twitch::TwitchAdapter::new(
+                                        runtime_key,
+                                        &instance.username,
+                                        &instance.oauth_token,
+                                        instance.client_id.clone(),
+                                        instance.client_secret.clone(),
+                                        instance.refresh_token.clone(),
+                                        Some(token_path),
+                                        instance.channels.clone(),
+                                        instance.trigger_prefix.clone(),
+                                        perms,
+                                    );
+                                    if let Err(error) = manager.register_and_start(adapter).await {
+                                        tracing::error!(%error, adapter = %instance.name, "failed to hot-start named twitch adapter from config change");
+                                    }
                                 }
                             }
                     });
@@ -5543,6 +6320,7 @@ bind = "127.0.0.1"
             enabled: true,
             bot_token: "xoxb-test".into(),
             app_token: "xapp-test".into(),
+            instances: vec![],
             dm_allowed_users,
             commands: vec![],
         }
@@ -5553,6 +6331,7 @@ bind = "127.0.0.1"
         Binding {
             agent_id: "test-agent".into(),
             channel: "slack".into(),
+            adapter: None,
             guild_id: None,
             workspace_id: workspace_id.map(String::from),
             chat_id: None,
@@ -6262,5 +7041,417 @@ startup_delay_secs = 2
                 provider.base_url
             );
         }
+    }
+
+    // --- Named Messaging Adapter Tests ---
+
+    #[test]
+    fn runtime_adapter_key_default() {
+        assert_eq!(binding_runtime_adapter_key("telegram", None), "telegram");
+    }
+
+    #[test]
+    fn runtime_adapter_key_named() {
+        assert_eq!(
+            binding_runtime_adapter_key("telegram", Some("support")),
+            "telegram:support"
+        );
+    }
+
+    #[test]
+    fn runtime_adapter_key_empty_name_is_default() {
+        assert_eq!(binding_runtime_adapter_key("discord", Some("")), "discord");
+    }
+
+    #[test]
+    fn binding_runtime_adapter_key_method() {
+        let binding = Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: Some("sales".into()),
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        };
+        assert_eq!(binding.runtime_adapter_key(), "telegram:sales");
+    }
+
+    #[test]
+    fn binding_uses_default_adapter() {
+        let binding = Binding {
+            agent_id: "main".into(),
+            channel: "discord".into(),
+            adapter: None,
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        };
+        assert!(binding.uses_default_adapter());
+    }
+
+    fn test_inbound_message(source: &str, adapter: Option<&str>) -> crate::InboundMessage {
+        crate::InboundMessage {
+            id: "test".into(),
+            source: source.into(),
+            adapter: adapter.map(String::from),
+            conversation_id: "conv".into(),
+            sender_id: "user1".into(),
+            agent_id: None,
+            content: crate::MessageContent::Text("hello".into()),
+            timestamp: chrono::Utc::now(),
+            metadata: Default::default(),
+            formatted_author: None,
+        }
+    }
+
+    #[test]
+    fn adapter_matches_default_binding_default_message() {
+        let binding = Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: None,
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        };
+        let message = test_inbound_message("telegram", None);
+        assert!(binding_adapter_matches(&binding, &message));
+    }
+
+    #[test]
+    fn adapter_matches_named_binding_named_message() {
+        let binding = Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: Some("support".into()),
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        };
+        let message = test_inbound_message("telegram", Some("telegram:support"));
+        assert!(binding_adapter_matches(&binding, &message));
+    }
+
+    #[test]
+    fn adapter_mismatch_named_vs_default() {
+        let binding = Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: Some("support".into()),
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        };
+        let message = test_inbound_message("telegram", None);
+        assert!(!binding_adapter_matches(&binding, &message));
+    }
+
+    #[test]
+    fn adapter_mismatch_default_vs_named() {
+        let binding = Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: None,
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        };
+        let message = test_inbound_message("telegram", Some("telegram:support"));
+        assert!(!binding_adapter_matches(&binding, &message));
+    }
+
+    #[test]
+    fn adapter_mismatch_different_names() {
+        let binding = Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: Some("support".into()),
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        };
+        let message = test_inbound_message("telegram", Some("telegram:sales"));
+        assert!(!binding_adapter_matches(&binding, &message));
+    }
+
+    #[test]
+    fn validate_named_adapters_valid_config() {
+        let messaging = MessagingConfig {
+            discord: None,
+            slack: None,
+            telegram: Some(TelegramConfig {
+                enabled: true,
+                token: "tok".into(),
+                instances: vec![TelegramInstanceConfig {
+                    name: "support".into(),
+                    enabled: true,
+                    token: "tok2".into(),
+                    dm_allowed_users: vec![],
+                }],
+                dm_allowed_users: vec![],
+            }),
+            email: None,
+            webhook: None,
+            twitch: None,
+        };
+        let bindings = vec![
+            Binding {
+                agent_id: "main".into(),
+                channel: "telegram".into(),
+                adapter: None,
+                guild_id: None,
+                workspace_id: None,
+                chat_id: None,
+                channel_ids: vec![],
+                require_mention: false,
+                dm_allowed_users: vec![],
+            },
+            Binding {
+                agent_id: "support-agent".into(),
+                channel: "telegram".into(),
+                adapter: Some("support".into()),
+                guild_id: None,
+                workspace_id: None,
+                chat_id: None,
+                channel_ids: vec![],
+                require_mention: false,
+                dm_allowed_users: vec![],
+            },
+        ];
+        assert!(validate_named_messaging_adapters(&messaging, &bindings).is_ok());
+    }
+
+    #[test]
+    fn validate_named_adapters_missing_instance() {
+        let messaging = MessagingConfig {
+            discord: None,
+            slack: None,
+            telegram: Some(TelegramConfig {
+                enabled: true,
+                token: "tok".into(),
+                instances: vec![],
+                dm_allowed_users: vec![],
+            }),
+            email: None,
+            webhook: None,
+            twitch: None,
+        };
+        let bindings = vec![Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: Some("nonexistent".into()),
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        }];
+        assert!(validate_named_messaging_adapters(&messaging, &bindings).is_err());
+    }
+
+    #[test]
+    fn validate_named_adapters_duplicate_names_rejected() {
+        let result = validate_instance_names("telegram", ["support", "support"].into_iter());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_named_adapters_empty_name_rejected() {
+        let result = validate_instance_names("telegram", [""].into_iter());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_named_adapters_default_name_rejected() {
+        let result = validate_instance_names("telegram", ["default"].into_iter());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_adapter_on_unsupported_platform_rejected() {
+        let messaging = MessagingConfig {
+            discord: None,
+            slack: None,
+            telegram: None,
+            email: Some(EmailConfig {
+                enabled: true,
+                imap_host: "imap.test.com".into(),
+                imap_port: 993,
+                imap_username: "user".into(),
+                imap_password: "pass".into(),
+                imap_use_tls: true,
+                smtp_host: "smtp.test.com".into(),
+                smtp_port: 587,
+                smtp_username: "user".into(),
+                smtp_password: "pass".into(),
+                smtp_use_starttls: true,
+                from_address: "bot@test.com".into(),
+                from_name: None,
+                poll_interval_secs: 60,
+                folders: vec![],
+                allowed_senders: vec![],
+                max_body_bytes: 1_000_000,
+                max_attachment_bytes: 10_000_000,
+            }),
+            webhook: None,
+            twitch: None,
+        };
+        let bindings = vec![Binding {
+            agent_id: "main".into(),
+            channel: "email".into(),
+            adapter: Some("named".into()),
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        }];
+        assert!(validate_named_messaging_adapters(&messaging, &bindings).is_err());
+    }
+
+    #[test]
+    fn validate_binding_without_default_adapter_rejected() {
+        let messaging = MessagingConfig {
+            discord: None,
+            slack: None,
+            telegram: Some(TelegramConfig {
+                enabled: true,
+                token: "".into(), // no default credential
+                instances: vec![TelegramInstanceConfig {
+                    name: "support".into(),
+                    enabled: true,
+                    token: "tok".into(),
+                    dm_allowed_users: vec![],
+                }],
+                dm_allowed_users: vec![],
+            }),
+            email: None,
+            webhook: None,
+            twitch: None,
+        };
+        // Binding targets default adapter, but no default credentials exist
+        let bindings = vec![Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: None,
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        }];
+        assert!(validate_named_messaging_adapters(&messaging, &bindings).is_err());
+    }
+
+    #[test]
+    fn inbound_message_adapter_selector_default() {
+        let message = test_inbound_message("telegram", None);
+        assert_eq!(message.adapter_selector(), None);
+    }
+
+    #[test]
+    fn inbound_message_adapter_selector_named() {
+        let message = test_inbound_message("telegram", Some("telegram:support"));
+        assert_eq!(message.adapter_selector(), Some("support"));
+    }
+
+    #[test]
+    fn inbound_message_adapter_key_default() {
+        let message = test_inbound_message("telegram", None);
+        assert_eq!(message.adapter_key(), "telegram");
+    }
+
+    #[test]
+    fn inbound_message_adapter_key_named() {
+        let message = test_inbound_message("telegram", Some("telegram:support"));
+        assert_eq!(message.adapter_key(), "telegram:support");
+    }
+
+    #[test]
+    fn toml_round_trip_with_named_instances() {
+        let _guard = env_test_lock().lock().unwrap();
+        let guard = EnvGuard::new();
+
+        let toml_content = r#"
+[messaging.telegram]
+enabled = true
+token = "default-token"
+
+[[messaging.telegram.instances]]
+name = "support"
+enabled = true
+token = "support-token"
+
+[[bindings]]
+agent_id = "main"
+channel = "telegram"
+
+[[bindings]]
+agent_id = "support-bot"
+channel = "telegram"
+adapter = "support"
+chat_id = "-100111"
+"#;
+        let config_path = guard.test_dir.join("config.toml");
+        std::fs::write(&config_path, toml_content).unwrap();
+
+        let config = Config::load_from_path(&config_path).unwrap();
+        let telegram = config.messaging.telegram.as_ref().unwrap();
+        assert_eq!(telegram.token, "default-token");
+        assert_eq!(telegram.instances.len(), 1);
+        assert_eq!(telegram.instances[0].name, "support");
+        assert_eq!(telegram.instances[0].token, "support-token");
+
+        assert_eq!(config.bindings.len(), 2);
+        assert!(config.bindings[0].adapter.is_none());
+        assert_eq!(config.bindings[1].adapter.as_deref(), Some("support"));
+        assert_eq!(config.bindings[1].chat_id.as_deref(), Some("-100111"));
+    }
+
+    #[test]
+    fn toml_backward_compat_no_adapter_field() {
+        let _guard = env_test_lock().lock().unwrap();
+        let guard = EnvGuard::new();
+
+        let toml_content = r#"
+[messaging.discord]
+enabled = true
+token = "my-discord-token"
+
+[[bindings]]
+agent_id = "main"
+channel = "discord"
+guild_id = "123456"
+"#;
+        let config_path = guard.test_dir.join("config.toml");
+        std::fs::write(&config_path, toml_content).unwrap();
+
+        let config = Config::load_from_path(&config_path).unwrap();
+        assert!(config.bindings[0].adapter.is_none());
+        assert_eq!(config.bindings[0].guild_id.as_deref(), Some("123456"));
     }
 }

@@ -268,6 +268,7 @@ async fn handle_send(
     let inbound = InboundMessage {
         id: uuid::Uuid::new_v4().to_string(),
         source: "webhook".into(),
+        adapter: Some("webhook".into()),
         conversation_id,
         sender_id: request.sender_id.clone(),
         agent_id: request.agent_id.map(Into::into),

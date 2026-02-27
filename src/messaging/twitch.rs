@@ -100,6 +100,7 @@ type IrcClient = TwitchIRCClient<SecureTCPTransport, TwitchCredentials>;
 
 /// Twitch chat adapter state.
 pub struct TwitchAdapter {
+    runtime_key: String,
     username: String,
     oauth_token: String,
     client_id: Option<String>,
@@ -119,6 +120,7 @@ const MAX_MESSAGE_LENGTH: usize = 500;
 impl TwitchAdapter {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        runtime_key: impl Into<String>,
         username: impl Into<String>,
         oauth_token: impl Into<String>,
         client_id: Option<String>,
@@ -130,6 +132,7 @@ impl TwitchAdapter {
         permissions: Arc<ArcSwap<TwitchPermissions>>,
     ) -> Self {
         Self {
+            runtime_key: runtime_key.into(),
             username: username.into(),
             oauth_token: oauth_token.into(),
             client_id,
@@ -147,7 +150,7 @@ impl TwitchAdapter {
 
 impl Messaging for TwitchAdapter {
     fn name(&self) -> &str {
-        "twitch"
+        &self.runtime_key
     }
 
     async fn start(&self) -> crate::Result<InboundStream> {
@@ -198,6 +201,7 @@ impl Messaging for TwitchAdapter {
         let permissions = self.permissions.clone();
         let bot_username = self.username.to_lowercase();
         let trigger_prefix = self.trigger_prefix.clone();
+        let runtime_key = self.runtime_key.clone();
 
         tokio::spawn(async move {
             loop {
@@ -249,7 +253,11 @@ impl Messaging for TwitchAdapter {
                         }
 
                         let channel_login = privmsg.channel_login.clone();
-                        let conversation_id = format!("twitch:{channel_login}");
+                        let base_conversation_id = format!("twitch:{channel_login}");
+                        let conversation_id = apply_runtime_adapter_to_conversation_id(
+                            &runtime_key,
+                            base_conversation_id,
+                        );
 
                         let mut metadata = HashMap::new();
                         metadata.insert(
@@ -282,6 +290,7 @@ impl Messaging for TwitchAdapter {
                         let inbound = InboundMessage {
                             id: privmsg.message_id.clone(),
                             source: "twitch".into(),
+                            adapter: Some(runtime_key.clone()),
                             conversation_id,
                             sender_id: privmsg.sender.id.clone(),
                             agent_id: None,
@@ -452,6 +461,21 @@ impl Messaging for TwitchAdapter {
 
         tracing::info!("twitch adapter shut down");
         Ok(())
+    }
+}
+
+fn apply_runtime_adapter_to_conversation_id(
+    runtime_key: &str,
+    base_conversation_id: String,
+) -> String {
+    let Some((platform, remainder)) = base_conversation_id.split_once(':') else {
+        return base_conversation_id;
+    };
+
+    if runtime_key == platform {
+        base_conversation_id
+    } else {
+        format!("{runtime_key}:{remainder}")
     }
 }
 

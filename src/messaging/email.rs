@@ -837,6 +837,7 @@ fn parse_inbound_email(
     Ok(Some(InboundMessage {
         id: message_id,
         source: "email".into(),
+        adapter: Some("email".into()),
         conversation_id,
         sender_id: sender_email,
         agent_id: None,
