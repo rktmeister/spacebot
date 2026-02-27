@@ -827,6 +827,7 @@ export interface SkillInfo {
 	file_path: string;
 	base_dir: string;
 	source: "instance" | "workspace";
+	source_repo?: string;
 }
 
 export interface SkillsListResponse {
