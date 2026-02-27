@@ -287,7 +287,7 @@ impl CronTool {
         let schedule_desc = cron_expr
             .as_deref()
             .map(|expr| format!("on schedule `{expr}`"))
-            .unwrap_or_else(|| format!("{}", format_interval(interval_secs)));
+            .unwrap_or_else(|| format_interval(interval_secs));
         let timezone = self.scheduler.cron_timezone_label();
         let mut message = if run_once {
             format!("Cron job '{id}' created. First run {schedule_desc}; it then disables itself.")
