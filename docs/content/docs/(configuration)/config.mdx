@@ -499,6 +499,8 @@ Thresholds are fractions of `context_window`.
 | `refresh_secs` | integer | 900 | Seconds between background warmup passes |
 | `startup_delay_secs` | integer | 5 | Delay before first warmup pass after boot |
 
+When warmup is enabled, it is the primary bulletin refresh path. The cortex bulletin loop remains as a fallback generator when warmup is disabled or when the cached bulletin is stale (`bulletin_age_secs >= max(1, warmup.refresh_secs)`).
+
 Dispatch readiness is derived from warmup runtime state:
 
 - warmup state must be `warm`
