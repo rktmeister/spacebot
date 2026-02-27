@@ -604,6 +604,13 @@ fn normalize_cron_expr(cron_expr: Option<String>) -> Result<Option<String>> {
         return Ok(None);
     }
 
+    let field_count = trimmed.split_whitespace().count();
+    if field_count != 5 {
+        return Err(crate::error::Error::Other(anyhow::anyhow!(
+            "cron expression must have exactly 5 fields (got {field_count}): '{trimmed}'"
+        )));
+    }
+
     Schedule::from_str(trimmed).map_err(|error| {
         crate::error::Error::Other(anyhow::anyhow!(
             "invalid cron expression '{trimmed}': {error}"

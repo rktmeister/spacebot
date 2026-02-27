@@ -216,6 +216,13 @@ fn validate_cron_request(request: &CreateCronRequest) -> Result<(), (StatusCode,
     }
 
     if let Some(expr) = cron_expr {
+        let field_count = expr.split_whitespace().count();
+        if field_count != 5 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("cron_expr must have exactly 5 fields (got {field_count}): '{expr}'"),
+            ));
+        }
         cron::Schedule::from_str(expr).map_err(|error| {
             (
                 StatusCode::BAD_REQUEST,

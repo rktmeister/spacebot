@@ -229,6 +229,12 @@ impl CronTool {
         }
 
         if let Some(expr) = cron_expr.as_deref() {
+            let field_count = expr.split_whitespace().count();
+            if field_count != 5 {
+                return Err(CronError(format!(
+                    "'cron_expr' must have exactly 5 fields (got {field_count}): '{expr}'"
+                )));
+            }
             cron::Schedule::from_str(expr)
                 .map_err(|error| CronError(format!("invalid 'cron_expr' '{expr}': {error}")))?;
         }
