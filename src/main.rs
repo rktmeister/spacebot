@@ -1192,6 +1192,26 @@ async fn run(
 
 /// Initialize agents, messaging adapters, cron, cortex, and ingestion.
 /// Extracted so it can be called either at startup or after providers are configured.
+async fn wait_for_startup_warmup_tasks(
+    startup_warmup: &mut tokio::task::JoinSet<()>,
+    timeout: std::time::Duration,
+) -> bool {
+    let wait_all = async {
+        while let Some(result) = startup_warmup.join_next().await {
+            if let Err(error) = result {
+                tracing::error!(%error, "startup warmup task panicked");
+            }
+        }
+    };
+
+    if tokio::time::timeout(timeout, wait_all).await.is_err() {
+        startup_warmup.abort_all();
+        true
+    } else {
+        false
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn initialize_agents(
     config: &spacebot::config::Config,
@@ -1434,6 +1454,50 @@ async fn initialize_agents(
         api_state.set_agent_workspaces(agent_workspaces);
         api_state.set_sandboxes(sandboxes);
         api_state.set_instance_dir(config.instance_dir.clone());
+    }
+
+    // Run a startup warmup pass for every agent before adapters begin receiving
+    // inbound traffic. This reduces first-message cold-start latency.
+    {
+        const STARTUP_WARMUP_WAIT_SECS: u64 = 30;
+        let mut startup_warmup = tokio::task::JoinSet::new();
+
+        for (agent_id, agent) in agents.iter() {
+            let deps = agent.deps.clone();
+            let sqlite_pool = agent.db.sqlite.clone();
+            let agent_id = agent_id.clone();
+            startup_warmup.spawn(async move {
+                let logger = spacebot::agent::cortex::CortexLogger::new(sqlite_pool);
+                spacebot::agent::cortex::run_warmup_once(
+                    &deps,
+                    &logger,
+                    "startup_pre_adapter",
+                    false,
+                )
+                .await;
+                let status = deps.runtime_config.warmup_status.load().as_ref().clone();
+                tracing::info!(
+                    agent_id = %agent_id,
+                    state = ?status.state,
+                    embedding_ready = status.embedding_ready,
+                    bulletin_age_secs = ?status.bulletin_age_secs,
+                    last_error = ?status.last_error,
+                    "startup warmup pass finished"
+                );
+            });
+        }
+
+        if wait_for_startup_warmup_tasks(
+            &mut startup_warmup,
+            std::time::Duration::from_secs(STARTUP_WARMUP_WAIT_SECS),
+        )
+        .await
+        {
+            tracing::warn!(
+                timeout_secs = STARTUP_WARMUP_WAIT_SECS,
+                "startup warmup wait timed out; cancelled unfinished startup warmup tasks and continuing startup"
+            );
+        }
     }
 
     // Initialize messaging adapters
@@ -1731,4 +1795,64 @@ async fn initialize_agents(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wait_for_startup_warmup_tasks;
+    use std::future::pending;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn startup_warmup_wait_returns_false_when_tasks_finish_in_time() {
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(async {});
+        let timed_out = wait_for_startup_warmup_tasks(&mut tasks, Duration::from_millis(50)).await;
+        assert!(!timed_out);
+    }
+
+    #[tokio::test]
+    async fn startup_warmup_wait_returns_true_when_timeout_expires() {
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        });
+        let timed_out = wait_for_startup_warmup_tasks(&mut tasks, Duration::from_millis(5)).await;
+        assert!(timed_out);
+    }
+
+    #[tokio::test]
+    async fn startup_warmup_wait_aborts_timed_out_task_and_releases_lock() {
+        let warmup_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let mut tasks = tokio::task::JoinSet::new();
+        let warmup_lock_for_task = Arc::clone(&warmup_lock);
+        tasks.spawn(async move {
+            let _guard = warmup_lock_for_task.lock().await;
+            pending::<()>().await;
+        });
+
+        let timed_out = wait_for_startup_warmup_tasks(&mut tasks, Duration::from_millis(5)).await;
+        assert!(timed_out);
+
+        let _guard = tokio::time::timeout(Duration::from_millis(50), warmup_lock.lock())
+            .await
+            .expect("startup warmup timeout should cancel blocked task and release lock");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn startup_warmup_wait_timeout_stays_bounded_for_non_cooperative_task() {
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(async {
+            std::thread::sleep(Duration::from_millis(100));
+        });
+
+        let started = std::time::Instant::now();
+        let timed_out = wait_for_startup_warmup_tasks(&mut tasks, Duration::from_millis(5)).await;
+        assert!(timed_out);
+        assert!(
+            started.elapsed() < Duration::from_millis(80),
+            "startup warmup timeout should return without waiting for non-cooperative task"
+        );
+    }
 }
