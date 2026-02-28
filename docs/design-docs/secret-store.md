@@ -1,8 +1,8 @@
 # Secret Store
 
-Encrypted credential storage with two secret categories: system secrets (internal, never exposed) and tool secrets (passed to worker subprocesses as env vars).
+Credential storage with two secret categories: system secrets (internal, never exposed) and tool secrets (passed to worker subprocesses as env vars). Works out of the box without encryption — the master key is an optional hardening layer that adds encryption at rest.
 
-**Hard dependency:** Environment sanitization (sandbox-hardening.md, Phase 2) must ship before or alongside this. Without `--clearenv` in sandbox wrapping, system secrets and other env vars leak to workers. The master key itself is protected by the OS credential store (see "Master Key Storage" below) and is never in the process environment.
+**Hard dependency:** Environment sanitization (sandbox-hardening.md, Phase 2) must ship before or alongside this. Without `--clearenv` in sandbox wrapping, system secrets and other env vars leak to workers.
 
 ## Current State
 
@@ -94,9 +94,26 @@ The dashboard's secrets panel exposes the category when adding or editing a secr
 
 Users can override the auto-categorization. If someone wants `GH_TOKEN` as a system secret (e.g., used only by a webhook integration, not by workers), they can set it.
 
-### Master Key Storage
+### Two Modes: Unencrypted and Encrypted
 
-The master encryption key is stored in the **OS credential store** — macOS Keychain or Linux kernel keyring. It never exists as an environment variable or a file readable by workers. This is the only approach that definitively protects the key from LLM-driven workers regardless of sandbox state.
+The secret store operates in two modes:
+
+**Unencrypted (default):** Secrets are stored in plaintext in `secrets.redb`. The store is always available — no master key needed, no unlock step, no setup. All secret store features work: `secret:` config references, system/tool categorization, env sanitization, output scrubbing, worker secret name injection. The only thing missing is encryption at rest — if someone gets access to the redb file, they can read the secrets.
+
+This is still a significant improvement over the current state (plaintext keys in config.toml) because:
+- Config.toml is safe to display (only `secret:` aliases).
+- System secrets never enter subprocess environments.
+- Tool secret values are scrubbed from worker output.
+- The dashboard secrets panel never shows plaintext values.
+- The attack surface narrows from "read a config file" to "read a specific redb file and know how to parse it."
+
+**Encrypted (opt-in, recommended):** User enables encryption by generating a master key. Secrets are encrypted with AES-256-GCM in redb. The master key is stored in the OS credential store (macOS Keychain, Linux kernel keyring) — never as an env var or file on disk. Even if the volume is compromised, secrets are unreadable without the key.
+
+Hosted instances are always encrypted — the platform generates and manages the master key automatically. Self-hosted users can enable encryption at any time via the dashboard or CLI.
+
+### Master Key Storage (Encrypted Mode)
+
+When encryption is enabled, the master key is stored in the **OS credential store** — macOS Keychain or Linux kernel keyring. It never exists as an environment variable or a file readable by workers. This is the only approach that definitively protects the key from LLM-driven workers regardless of sandbox state.
 
 #### Why Not an Env Var or File?
 
@@ -163,23 +180,33 @@ Properties:
 
 #### Self-Hosted Deployment
 
-Self-hosted users opt into the secret store through the dashboard:
+The secret store is **always enabled** on self-hosted instances — it works in unencrypted mode out of the box. Users can opt into encryption through the dashboard:
 
-1. User clicks "Enable Secret Manager" in the embedded dashboard.
-2. Spacebot generates a 32-byte random master key.
-3. The key is stored directly in the OS credential store (Keychain on macOS, kernel keyring on Linux).
-4. On macOS, the key persists in Keychain across restarts — no user action needed.
-5. On Linux, the kernel keyring is cleared on reboot. Spacebot writes a **key file** at `{data_dir}/.master_key` (0600) as durable backup. On startup, it reads the file, loads into the kernel keyring, and operates from the keyring thereafter. The file is only readable by the Spacebot user, and with sandbox on, the file path is excluded from bind mounts so workers can't access it. Without sandbox, the file is theoretically readable — but the worker would need to know the exact path and the LLM would need to be instructed to look for it. This is a known trade-off for unsandboxed Linux; the recommendation is to enable sandbox.
-6. Docker users: the key file lives on the persistent volume. `docker inspect` doesn't expose it (it's not an env var). A volume mount compromise exposes both `secrets.redb` and `.master_key` — but that's equivalent to the current state where `config.toml` has plaintext keys on the same volume.
+1. User navigates to Settings → Secrets. The secrets panel is fully functional (add, edit, delete secrets). A banner shows: *"Secrets are stored without encryption. Enable encryption for protection against volume compromise."*
+2. User clicks "Enable Encryption."
+3. Spacebot generates a 32-byte random master key, encrypts all existing secrets in place.
+4. The key is stored in the OS credential store (Keychain on macOS, kernel keyring on Linux).
+5. The dashboard displays the key once: *"Save this master key somewhere safe. You'll need it to unlock the secret manager after a reboot (Linux) or if the Keychain is reset (macOS)."*
+6. The key is **not written to disk**. No `.master_key` file, no env var, no config entry. The only durable copies are the OS credential store and whatever the user saved externally.
+
+**On macOS**, the Keychain persists across restarts. The encrypted store unlocks automatically on every boot. The user's saved copy is a disaster-recovery backup only.
+
+**On Linux**, the kernel keyring is cleared on reboot. After a reboot, the encrypted store starts in a **locked** state. The user unlocks it via the dashboard or CLI by providing the master key (see "Dashboard & CLI Secret Management" below). This is a deliberate trade-off:
+
+- **No key file on disk** means no file for workers to `cat` — the master key is protected regardless of sandbox state. This was the entire motivation for the OS credential store design.
+- **Unlock on reboot** is a one-time action per boot. For a headless bot that reboots rarely (planned maintenance, kernel updates), this is an acceptable cost.
+- **The bot still functions while locked.** It falls back to unencrypted mode — secrets that existed before encryption was enabled are still available (they were in the unencrypted store). Secrets added after encryption was enabled are unavailable until unlock. The bot starts, connects to messaging platforms, and can receive the unlock command.
+
+For users who don't want encryption at all, the unencrypted store works indefinitely. All features except encryption at rest are available.
 
 **Startup flow (all deployments):**
 
-1. Check OS credential store for master key (Keychain / kernel keyring).
-2. If not found, check `{data_dir}/.master_key` file → load into OS credential store.
-3. If not found, check tmpfs injection path `/run/spacebot/master_key` (hosted) → load into OS credential store → delete tmpfs file.
-4. If still not found, secret store is unavailable. Config resolution falls back to `env:` and literal values. Dashboard shows onboarding prompt.
-5. Derive AES-256-GCM cipher key from master key via Argon2id (one-time ~100ms at startup).
-6. Open `SecretsStore` (redb), decrypt all secrets.
+1. Open `SecretsStore` (redb). The store always initializes — it works in unencrypted mode by default.
+2. Check if the store contains encrypted secrets (encryption header in redb metadata).
+3. If **unencrypted** (or no secrets yet): store is immediately available. Read all secrets. Skip to step 7.
+4. If **encrypted**: check OS credential store for master key (Keychain / kernel keyring).
+5. If master key found (or injected via tmpfs on hosted → load into OS credential store → delete tmpfs file): derive AES-256-GCM cipher key via Argon2id (~100ms), decrypt all secrets. Store is **unlocked**.
+6. If master key not found: store enters **locked** state. Encrypted secrets are unavailable. Dashboard shows unlock prompt (self-hosted) or error (hosted — this shouldn't happen). On unlock (via dashboard or CLI): key is loaded into OS credential store → derive cipher → decrypt → re-initialize dependent components.
 7. **System secrets:** passed directly to Rust components (`LlmManager`, `MessagingManager`, etc.). Never set as env vars.
 8. **Tool secrets:** held in a `HashMap<String, String>` for `Sandbox::wrap()` injection via `--setenv`.
 
@@ -189,13 +216,11 @@ Argon2id rather than the current SHA-256 in `build_cipher()`. For hosted instanc
 
 #### Upgrade Path
 
-The secret store activation is **user-initiated**, not automatic:
+1. **New version ships.** The secret store is enabled by default in unencrypted mode. Auto-migration runs on first boot: literal keys in config.toml → secret store (unencrypted), config.toml rewritten with `secret:` references. All security features work immediately (env sanitization, system/tool separation, output scrubbing, safe config display).
+2. **Hosted users:** The platform also generates master keys for all instances and injects them via tmpfs. Migration encrypts secrets automatically. Fully encrypted from day one, no user action required.
+3. **Self-hosted users:** Migration to the unencrypted store is automatic. The dashboard shows a banner encouraging encryption: *"Secrets are stored without encryption. Enable encryption for protection against volume compromise."* Encryption is opt-in — user clicks "Enable Encryption" when ready.
 
-1. **New version ships.** Nothing changes for anyone by default. No env vars to set, no files to create.
-2. **Hosted users:** On the next platform rollout, the platform generates master keys for all existing instances and injects them via the tmpfs mechanism. On first boot with the new image, auto-migration runs: literal keys in config.toml → secret store, config.toml rewritten with `secret:` references. No user action required.
-3. **Self-hosted users:** Dashboard shows an onboarding prompt: "Enable Secret Manager." User clicks it → key generated → stored in OS credential store. Dashboard then shows detected env vars that look like secrets and offers to migrate them. Until the user opts in, everything works as before.
-
-On startup, Spacebot scans the environment for variables matching known secret patterns (anything with `TOKEN`, `KEY`, `SECRET`, `PASSWORD` in the name). If found and no master key is configured and `passthrough_env` doesn't list them, a prominent warning is logged: "Detected secrets in environment variables. Enable the secret manager to protect these credentials." The warning is informational — nothing breaks, nothing is stripped.
+On startup, Spacebot scans the environment for variables matching known secret patterns (anything with `TOKEN`, `KEY`, `SECRET`, `PASSWORD` in the name). If found and `passthrough_env` doesn't list them, a prominent warning is logged: "Detected secrets in environment variables. Consider moving them to the secret store." The warning is informational — nothing breaks, nothing is stripped.
 
 ### Config Resolution Prefixes
 
@@ -256,20 +281,20 @@ The resolved values are consumed by Rust code (provider constructors, adapter in
 
 **Migration path:**
 
-1. On startup, if the master key is available in the OS credential store and config.toml contains literal key values (not `env:` or `secret:` prefixed), auto-migrate: encrypt each literal value into the secret store under a deterministic UPPER_SNAKE_CASE name (e.g., `anthropic_key` → `secret:ANTHROPIC_API_KEY`), with auto-detected category.
+1. On first boot with the new version, if config.toml contains literal key values (not `env:` or `secret:` prefixed), auto-migrate: store each literal value in the secret store under a deterministic UPPER_SNAKE_CASE name (e.g., `anthropic_key` → `secret:ANTHROPIC_API_KEY`), with auto-detected category. Encryption is not required — migration works in unencrypted mode.
 2. Rewrite config.toml in place to replace literal values with `secret:` references.
 3. Log every migration step. If migration fails for any key, leave the original value in config.toml and warn.
 4. For `env:` prefixed values, leave them as-is. They're already not storing the secret in the config. Users who want to migrate `env:` values to the secret store can do so explicitly via the dashboard.
 5. The `env:` prefix continues to work for users who prefer env-var-based key management.
-6. **Hosted migration:** The platform generates master keys for existing instances and injects them via tmpfs before the image update that introduces the secret store. On first boot with the new image, the key is loaded into the kernel keyring and migration runs automatically. No user action required.
-7. **Self-hosted migration:** Users who enable the secret manager via the dashboard get automatic migration. Users who don't keep the existing behavior (literal/env values in config.toml, no secret store).
+6. **Hosted:** Migration runs automatically on first boot. The platform also enables encryption (see Upgrade Path above).
+7. **Self-hosted:** Migration runs automatically on first boot. The store starts in unencrypted mode. Users can enable encryption later via the dashboard.
 
 ### Dashboard Changes
 
 - **Provider setup** writes `secret:` references by default. The "API Key" field in the provider UI is a password input that sends the value to the API, which stores it in the secret store (as a system secret) and writes `secret:provider_name` to config.toml.
 - **Raw config view** (`GET /api/config/raw`) is safe to display since config.toml only contains aliases.
 - **Secrets panel** — list all secrets with name, category (system/tool), and masked value. Add/remove/rotate. Category is editable. Never displays plaintext values (shows masked `***` with a copy button that copies from a short-lived in-memory decryption).
-- **Secret store status** — indicator showing whether the store is unlocked (master key present) or locked (missing). For hosted instances, master key is always present (platform-managed).
+- **Secret store status** — indicator showing store state: `unencrypted` (working, encryption available), `unlocked` (encrypted and operational), or `locked` (encrypted, needs master key). For hosted instances, always `unlocked` (platform-managed). See "Dashboard & CLI Secret Management" for full UX details.
 
 ### Env Sanitization Integration
 
@@ -340,18 +365,18 @@ Redacted:    "Authenticated as user X. Token: [REDACTED:GH_TOKEN]"
 
 ### Protection Layers (Summary)
 
-| Layer                                                  | What It Protects Against                                                       |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| Secret store encryption (AES-256-GCM)                  | Disk access to secrets.redb (stolen volume, backup leak)                       |
-| Master key in OS credential store (Keychain / kernel keyring) | Worker access to the encryption key — OS enforces access control at the binary/keyring level, independent of sandbox state |
-| `secret:` aliases in config.toml                       | Config file exposure (screenshare, `cat`, dashboard display)                   |
-| System/tool category separation                        | Workers seeing LLM API keys, messaging tokens, or other internal credentials   |
-| `DecryptedSecret` wrapper                              | Accidental logging of secret values in tracing output                          |
-| Env sanitization (`--clearenv` + selective `--setenv`) | Workers only get tool secrets, never system secrets or internal vars |
-| Worker session keyring isolation (`pre_exec`)          | Workers accessing parent's kernel keyring on Linux (additive to `--clearenv`)  |
-| Worker secret name injection (prompt) | Workers know what credentials are available without running `printenv` — no secret values in LLM context |
-| Output scrubbing (exact match) | Tool secret values propagating from worker output back to channels/branches |
-| Leak detection (SpacebotHook, regex)                   | Last-resort safety net — known key format patterns in any tool output          |
+| Layer                                                  | Requires Encryption | What It Protects Against                                                       |
+| ------------------------------------------------------ | ------------------- | ------------------------------------------------------------------------------ |
+| `secret:` aliases in config.toml                       | No                  | Config file exposure (screenshare, `cat`, dashboard display)                   |
+| System/tool category separation                        | No                  | Workers seeing LLM API keys, messaging tokens, or other internal credentials   |
+| `DecryptedSecret` wrapper                              | No                  | Accidental logging of secret values in tracing output                          |
+| Env sanitization (`--clearenv` + selective `--setenv`) | No                  | Workers only get tool secrets, never system secrets or internal vars |
+| Worker secret name injection (prompt)                  | No                  | Workers know what credentials are available without running `printenv` — no secret values in LLM context |
+| Output scrubbing (exact match)                         | No                  | Tool secret values propagating from worker output back to channels/branches |
+| Leak detection (SpacebotHook, regex)                   | No                  | Last-resort safety net — known key format patterns in any tool output          |
+| Secret store encryption (AES-256-GCM)                  | **Yes**             | Disk access to secrets.redb (stolen volume, backup leak)                       |
+| Master key in OS credential store (Keychain / kernel keyring) | **Yes**       | Worker access to the encryption key — OS enforces access control at the binary/keyring level, independent of sandbox state |
+| Worker session keyring isolation (`pre_exec`)          | **Yes**             | Workers accessing parent's kernel keyring on Linux (additive to `--clearenv`)  |
 
 ### What This Doesn't Solve
 
@@ -365,17 +390,17 @@ The key properties: **system secrets never leave Rust memory.** Tool secrets rea
 
 | File                                  | Change                                                                                                                                                              |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/secrets/store.rs`                | Add secret category (system/tool); add `tool_env_vars()` method; add `tool_secret_names()` for prompt injection; replace SHA-256 key derivation with Argon2id       |
+| `src/secrets/store.rs`                | Add unencrypted mode; add secret category (system/tool); add `tool_env_vars()` method; add `tool_secret_names()` for prompt injection; encrypt-in-place support; Argon2id key derivation for encrypted mode |
 | `src/secrets/scrub.rs`                | New: `scrub_secrets()` — exact-match redaction of tool secret values in output strings                                                                              |
 | `src/config.rs`                       | Extend `resolve_env_value()` to handle `secret:` prefix; wire `SecretsStore` into config loading; migration logic for existing literal/env keys                     |
 | `src/sandbox.rs`                      | `wrap()` injects tool secrets via `--setenv`; holds reference to secret store or tool env var cache                                                                 |
 | `src/agent/worker.rs`                 | Scrub worker result text through `scrub_secrets()` before injecting into channel/branch history; inject tool secret names into worker system prompt                  |
 | `src/tools/set_status.rs`             | Scrub status text through `scrub_secrets()` before updating status block                                                                                            |
 | `src/opencode/worker.rs`              | Scrub OpenCode SSE output events through `scrub_secrets()` before forwarding                                                                                        |
-| `src/api/secrets.rs`                  | New: secret CRUD for dashboard with category field, secret store status endpoint                                                                                    |
+| `src/api/secrets.rs`                  | New: secret CRUD, status, encrypt, unlock/lock, rotate, migrate, export/import endpoints                                                                           |
 | `src/api/server.rs`                   | Add secret management routes                                                                                                                                        |
 | `src/secrets/keystore.rs`             | New: OS credential store abstraction — `KeyStore` trait with `MacOSKeyStore` (Security framework / Keychain) and `LinuxKeyStore` (kernel keyring / keyctl) backends  |
-| `src/main.rs`                         | Load master key from OS credential store (or file fallback → keyring), derive cipher key, initialize `SecretsStore`, decrypt system secrets for provider init, run migration if needed |
+| `src/main.rs`                         | Initialize `SecretsStore` (unencrypted or encrypted), auto-migrate literal keys from config.toml on first boot, load master key from OS credential store if encrypted (or enter locked state), pass system secrets to provider init |
 | `src/agent/worker.rs`                 | Add `pre_exec` hook to spawn workers with a fresh empty session keyring (Linux) |
 | `spacebot-platform/api/src/fly.rs`    | Generate per-instance master key on provisioning, store in platform DB, inject via tmpfs at `/run/spacebot/master_key` in `machine_config()`                        |
 | `spacebot-platform/api/src/db.rs`     | Add `master_key` column to instances table (encrypted at rest)                                                                                                      |
@@ -383,20 +408,33 @@ The key properties: **system secrets never leave Rust memory.** Tool secrets rea
 
 ## Phase Plan
 
-**Hard dependency on sandbox-hardening.md Phase 2 (env sanitization).** Without `--clearenv`, the master key and system secrets are exposed via the process environment.
+**Hard dependency on sandbox-hardening.md Phase 2 (env sanitization).** The master key is protected independently by the OS credential store, but without `--clearenv`, system secrets and other env vars still leak to worker subprocesses.
 
-### Phase 1: Core Integration
+### Phase 1: Core Secret Store (Unencrypted)
+
+The secret store ships and works immediately for all users without any setup.
+
+1. Extend `SecretsStore` to support unencrypted mode (plaintext values in redb, no cipher needed).
+2. Extend `resolve_env_value()` to handle `secret:` prefix.
+3. Auto-migration on first boot: detect literal keys in config.toml → store in redb → rewrite config.toml with `secret:` references.
+4. System secrets: pass values directly to `LlmManager`, `MessagingManager`, etc. during init. Never set as env vars.
+5. Tool secrets: expose via `tool_env_vars()` for `Sandbox::wrap()` injection.
+6. Inject tool secret names (not values) into worker system prompts at construction time.
+7. Secret CRUD API: `GET/PUT/DELETE /api/secrets/:name`, `GET /api/secrets/status`.
+8. Dashboard secrets panel: list, add, edit, delete secrets with category assignment.
+
+### Phase 1.5: Encryption (Opt-In)
+
+Layered on top of the working unencrypted store.
 
 1. Implement `KeyStore` abstraction with macOS Keychain and Linux kernel keyring backends (`src/secrets/keystore.rs`).
-2. Startup: load master key from OS credential store (file fallback on Linux → load into keyring), derive cipher key via Argon2id, initialize `SecretsStore`.
+2. `POST /api/secrets/encrypt` — generate master key, encrypt all existing secrets in place, store key in OS credential store.
 3. Add `pre_exec` hook to worker spawning: children get a fresh empty session keyring (Linux).
-4. Platform: generate per-instance master key on provisioning, store in platform DB, inject via tmpfs at `/run/spacebot/master_key`.
-5. Extend `resolve_env_value()` to handle `secret:` prefix.
-6. System secrets: pass decrypted values directly to `LlmManager`, `MessagingManager`, etc. during init. Never set as env vars.
-7. Tool secrets: expose via `tool_env_vars()` for `Sandbox::wrap()` injection.
-8. Inject tool secret names (not values) into worker system prompts at construction time.
-9. Add secret store status endpoint (locked/unlocked).
-10. Self-hosted onboarding: dashboard "Enable Secret Manager" button generates key → stores in OS credential store → writes file backup (Linux).
+4. Startup: detect encrypted store → load master key from OS credential store → derive cipher key via Argon2id → decrypt. If key not found → locked state.
+5. Unlock/lock API: `POST /api/secrets/unlock`, `POST /api/secrets/lock`.
+6. Platform: generate per-instance master key on provisioning, store in platform DB, inject via tmpfs at `/run/spacebot/master_key`. Hosted instances are always encrypted.
+7. Key rotation: `POST /api/secrets/rotate`.
+8. Export/import for backup and migration.
 
 ### Phase 2: Output Scrubbing
 
@@ -407,19 +445,21 @@ The key properties: **system secrets never leave Rust memory.** Tool secrets rea
 5. Wire into branch conclusion path (before channel history injection).
 6. Verify: worker running `echo $GH_TOKEN` produces `[REDACTED:GH_TOKEN]` in the channel's view of the result.
 
-### Phase 3: Migration
+### Phase 3: Hosted Encryption Rollout
 
-1. **Hosted:** Platform generates master keys for all existing instances, stores in platform DB. On next image rollout, keys are injected via tmpfs. Auto-migration runs on first boot: literal keys in config.toml → secret store, config.toml rewritten with `secret:` references. No user action required.
-2. **Self-hosted:** Dashboard shows onboarding prompt with detected secret-looking env vars. User-initiated — nothing changes until user clicks "Enable Secret Manager."
-3. Startup env scan: detect vars matching `*TOKEN*`, `*KEY*`, `*SECRET*`, `*PASSWORD*` patterns. If found and no master key configured, log a prominent warning nudging the user to enable the secret manager.
-4. Verify: config.toml contains no plaintext keys; `GET /api/config/raw` is safe to display.
+1. Platform generates master keys for all existing instances, stores in platform DB.
+2. On next image rollout, keys are injected via tmpfs. Encryption is enabled automatically on first boot with the new image.
+3. Verify: all hosted instances have encrypted stores; config.toml contains no plaintext keys; `GET /api/config/raw` is safe to display.
 
-### Phase 4: Dashboard
+### Phase 4: Dashboard & CLI
 
-1. Secrets panel: list secrets with name, category (system/tool), masked value. Add/remove/rotate.
+1. Secrets panel: list secrets with name, category (system/tool), masked value. Add/remove/rotate. Works in both unencrypted and unlocked states.
 2. Provider setup UI writes `secret:` references and stores as system secrets.
-3. Secret store status indicator (locked/unlocked).
-4. Hosted: master key rotation via platform API.
+3. Secret store status indicator (`unencrypted` / `locked` / `unlocked`).
+4. Encryption onboarding banner for unencrypted self-hosted stores.
+5. Unlock prompt for locked stores (after Linux reboot).
+6. CLI `spacebot secrets` subcommand tree. See "Dashboard & CLI Secret Management" for full specification.
+7. Hosted: master key rotation via platform API.
 
 ## Open Questions
 
@@ -428,12 +468,12 @@ The key properties: **system secrets never leave Rust memory.** Tool secrets rea
 3. **Platform master key storage.** The platform database will store per-instance master keys. What's the encryption/protection model for the platform database itself? Should the platform encrypt master keys at rest with its own key?
 4. **Category override UX.** How prominent should the system/tool toggle be in the dashboard? Auto-categorization handles the common cases, but users need to understand the distinction to make informed overrides.
 5. ~~**Self-hosted tool secrets without master key.**~~ **Resolved — see `passthrough_env` below.**
-6. **Linux key file exposure without sandbox.** On Linux, the `.master_key` file fallback is readable by workers when sandbox is off (same user, same filesystem). The kernel keyring protects the in-memory key, but the durable file is a weaker link. Mitigation: run Spacebot as a separate user from workers (requires process isolation work), or accept this as a known limitation and recommend sandbox. The keyring itself is always protected regardless.
+6. ~~**Linux key file exposure without sandbox.**~~ **Resolved — no key file on disk.** Linux uses the kernel keyring only. After reboot, the secret store enters a locked state and the user unlocks via dashboard or CLI. See "Dashboard & CLI Secret Management" below.
 7. **Keychain ACL on unsigned dev builds.** During development, the Spacebot binary may not be code-signed. macOS Keychain ACLs based on code signature won't work for unsigned binaries — need to handle this gracefully (fall back to file-based storage in dev mode, or use a less restrictive Keychain access policy).
 
-### Env Passthrough for Self-Hosted (No Master Key)
+### Env Passthrough for Self-Hosted
 
-Without a master key in the OS credential store, the secret store is unavailable. But env sanitization (`--clearenv`) still runs — it has to, or system secrets and internal vars leak to workers. This means self-hosted users who set `GH_TOKEN` in their Docker compose lose it silently after env sanitization ships. That's a breaking change.
+Some self-hosted users set credentials as env vars in Docker compose or systemd rather than through the dashboard. With env sanitization (`--clearenv`), these env vars get stripped from worker subprocesses. The secret store handles this for secrets it knows about (they're injected via `--setenv`), but env vars that haven't been migrated to the store would be silently lost. That's a breaking change.
 
 **Fix:** A configurable passthrough list in the sandbox config:
 
@@ -446,11 +486,314 @@ passthrough_env = ["GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN"]
 `wrap()` builds the subprocess environment from three sources, checked in order:
 
 1. **Safe vars** — always passed: `PATH` (with tools/bin), `HOME`, `USER`, `LANG`, `TERM`.
-2. **Tool secrets from the store** — if the secret store is available (master key set), all tool-category secrets are injected via `--setenv`.
+2. **Tool secrets from the store** — all tool-category secrets are injected via `--setenv` (works in both unencrypted and encrypted mode).
 3. **`passthrough_env` list** — for each name in the list, if the var exists in the parent process environment, pass it through to the subprocess. This is the escape hatch for self-hosted users without a master key.
 
-When the secret store is available, `passthrough_env` is redundant — everything should be in the store. The config field still works (it's additive), but the dashboard can show a hint: "You have passthrough env vars configured. Consider moving these to the secret store for encrypted storage."
+When secrets have been migrated to the store, `passthrough_env` is redundant for those vars. The config field still works (it's additive), but the dashboard can show a hint: "You have passthrough env vars configured. Consider moving these to the secret store."
 
 On hosted instances, `passthrough_env` is empty by default and has no effect — the platform manages all secrets via the store.
 
 **Why not just skip `--clearenv` when there's no master key?** Because `--clearenv` protects more than just the master key — it prevents system secrets, internal vars (`SPACEBOT_*`), and any other env vars from leaking to workers. The master key is protected by the OS credential store regardless of `--clearenv`, but env sanitization is still necessary for everything else. The passthrough list is explicit — the user declares exactly which vars they want forwarded. Everything else is stripped.
+
+---
+
+## Dashboard & CLI Secret Management
+
+The secret store needs a complete management interface — onboarding, unlock/lock lifecycle, secret CRUD, and key backup/rotation. Both the embedded dashboard (SPA) and the CLI provide access to the same underlying API.
+
+### Secret Store States
+
+The store has three states, exposed via `GET /api/secrets/status`:
+
+| State | Meaning | Dashboard Display |
+|-------|---------|-------------------|
+| **`unencrypted`** | Store is active, secrets stored in plaintext in redb. No master key configured. | Full secrets panel + banner: "Enable encryption for protection against volume compromise" |
+| **`locked`** | Encryption is enabled but master key is not currently in the OS credential store. Happens after Linux reboot. | Unlock prompt: "Enter your master key to unlock encrypted secrets" + limited panel (can see secret names but not add/edit/read) |
+| **`unlocked`** | Encryption is enabled and master key is in the OS credential store. Secrets are decrypted and operational. | Full secrets panel |
+
+```json
+// GET /api/secrets/status
+{
+  "state": "unencrypted",      // "unencrypted" | "locked" | "unlocked"
+  "encrypted": false,          // whether encryption is enabled
+  "secret_count": 12,          // total secrets in store
+  "system_count": 5,           // system category count
+  "tool_count": 7,             // tool category count
+  "platform_managed": false    // true on hosted (encryption is automatic, UI hides encryption controls)
+}
+```
+
+How to distinguish states: the redb metadata contains an `encrypted` flag. If `encrypted == false` → `unencrypted`. If `encrypted == true` and master key is in OS credential store → `unlocked`. If `encrypted == true` and master key not found → `locked`.
+
+### Enabling Encryption (Self-Hosted)
+
+The secret store works immediately without encryption. Enabling encryption is a separate step.
+
+**Dashboard:**
+
+1. User navigates to Settings → Secrets. The secrets panel is fully functional. A banner shows: *"Secrets are stored without encryption. Enable encryption for protection against volume compromise."*
+2. Clicks "Enable Encryption."
+3. `POST /api/secrets/encrypt` — Spacebot generates a 32-byte random key, stores it in the OS credential store, encrypts all existing secrets in place, returns the key as a hex string.
+4. Dashboard displays the key in a modal with a copy button and a warning: *"Save this key somewhere safe. On Linux, you'll need it to unlock the secret manager after a reboot. This is the only time the key will be shown."*
+5. User confirms they've saved the key. Banner disappears. Store is now encrypted.
+
+**CLI:**
+
+```bash
+# Enable encryption
+spacebot secrets encrypt
+# Output:
+# Encrypting 12 secrets...
+# Master key: a1b2c3d4e5f6...  (64 hex chars)
+#
+# IMPORTANT: Save this key. You will need it to unlock the
+# secret manager after a reboot. This is the only time it
+# will be displayed.
+
+# Migration (separate from encryption — runs automatically on first boot,
+# or manually if needed)
+spacebot secrets migrate
+# Output:
+# Detected 4 plaintext keys in config.toml:
+#   anthropic_key     → ANTHROPIC_API_KEY (system)
+#   openai_key        → OPENAI_API_KEY (system)
+#   discord.token     → DISCORD_BOT_TOKEN (system)
+#   github_token      → GH_TOKEN (tool)
+# Migrate? [y/N]: y
+# Migrated 4 keys. config.toml updated.
+```
+
+### Unlock / Lock Flow (Encrypted Mode Only)
+
+Only applies when encryption is enabled. Unencrypted stores are always available.
+
+**Dashboard:**
+
+1. On page load, dashboard checks `GET /api/secrets/status`.
+2. If `locked`: shows unlock card with a password input: *"Encrypted secrets are locked. Enter your master key to unlock."*
+3. User pastes key → `POST /api/secrets/unlock` with `{ "master_key": "<hex>" }`.
+4. Server validates the key (attempts to derive cipher and decrypt a known sentinel value in the store). If valid: loads into OS credential store, decrypts all secrets, re-initializes LLM providers and messaging adapters that were started without their secrets. Returns `200`.
+5. If invalid: returns `401` with *"Invalid master key."* Dashboard shows error, lets user retry.
+6. On success, dashboard transitions to the full secrets panel.
+
+**CLI:**
+
+```bash
+# Unlock
+spacebot secrets unlock
+# Enter master key: ********
+# Secret manager unlocked. 12 secrets decrypted.
+# Re-initialized: LlmManager (3 providers), MessagingManager (2 adapters).
+
+# Unlock non-interactively (for automation — key in stdin)
+echo "$MASTER_KEY" | spacebot secrets unlock --stdin
+
+# Lock (clears key from OS credential store — useful for maintenance)
+spacebot secrets lock
+# Secret manager locked. Secrets remain encrypted on disk.
+# The bot will continue running with cached credentials until restart.
+
+# Check status
+spacebot secrets status
+# State: unlocked
+# Secrets: 12 (5 system, 7 tool)
+```
+
+**Lock behavior:** `POST /api/secrets/lock` removes the master key from the OS credential store. The derived cipher key in memory is zeroed. New secret operations fail. Already-decrypted values held by LLM providers and messaging adapters continue working until the process restarts — we don't forcefully kill active connections. On next restart, the store comes up locked.
+
+### Secret CRUD
+
+Available only when the store is `unlocked`. All endpoints return `423 Locked` if the store is locked.
+
+**List secrets:**
+
+```
+GET /api/secrets
+```
+```json
+{
+  "secrets": [
+    {
+      "name": "ANTHROPIC_API_KEY",
+      "category": "system",
+      "created_at": "2026-02-25T10:30:00Z",
+      "updated_at": "2026-02-25T10:30:00Z"
+    },
+    {
+      "name": "GH_TOKEN",
+      "category": "tool",
+      "created_at": "2026-02-25T10:31:00Z",
+      "updated_at": "2026-02-27T14:00:00Z"
+    }
+  ]
+}
+```
+
+Values are never returned in list responses. Names and categories only.
+
+**Add / update a secret:**
+
+```
+PUT /api/secrets/:name
+```
+```json
+{
+  "value": "ghp_abc123...",
+  "category": "tool"
+}
+```
+
+If the secret already exists, its value and/or category are updated. The `updated_at` timestamp is refreshed. For tool secrets, the change is immediately available to the next `wrap()` call — no restart needed.
+
+For system secrets, the change is stored but active components (LLM providers, adapters) continue using the old value until a config reload or restart. The response indicates this:
+
+```json
+{
+  "name": "ANTHROPIC_API_KEY",
+  "category": "system",
+  "reload_required": true,
+  "message": "Secret updated. Reload config or restart for the new value to take effect."
+}
+```
+
+**Delete a secret:**
+
+```
+DELETE /api/secrets/:name
+```
+
+Removes from the store. If the secret is referenced by config.toml (`secret:NAME`), the config reference becomes a dangling pointer — `resolve_secret_or_env` returns `None` and the component logs a warning. The response warns about this:
+
+```json
+{
+  "deleted": "GH_TOKEN",
+  "config_references": ["agents.tools.github_token"],
+  "warning": "This secret is referenced in config.toml. The reference will fail to resolve."
+}
+```
+
+**CLI equivalents:**
+
+```bash
+# List
+spacebot secrets list
+# NAME                  CATEGORY   UPDATED
+# ANTHROPIC_API_KEY     system     2026-02-25 10:30
+# GH_TOKEN              tool       2026-02-27 14:00
+
+# Add/update
+spacebot secrets set GH_TOKEN --category tool
+# Enter value: ********
+# Secret GH_TOKEN saved (tool).
+
+# Or non-interactively
+echo "ghp_abc123" | spacebot secrets set GH_TOKEN --category tool --stdin
+
+# Delete
+spacebot secrets delete GH_TOKEN
+# Warning: GH_TOKEN is referenced in config.toml at agents.tools.github_token
+# Delete anyway? [y/N]: y
+# Deleted GH_TOKEN.
+
+# Show category info
+spacebot secrets info GH_TOKEN
+# Name:     GH_TOKEN
+# Category: tool
+# Created:  2026-02-25 10:31
+# Updated:  2026-02-27 14:00
+# Config:   agents.tools.github_token = "secret:GH_TOKEN"
+```
+
+### Key Rotation
+
+Master key rotation replaces the encryption key without changing the stored secrets:
+
+1. User initiates rotation via dashboard or CLI.
+2. `POST /api/secrets/rotate` — Spacebot generates a new master key, re-encrypts all secrets with the new key, stores the new key in the OS credential store, returns the new key for the user to save.
+3. The old key is invalidated. The user's previously saved key no longer works for unlock.
+
+**Dashboard:** Settings → Secrets → "Rotate Master Key" button. Confirms with a warning that the old key becomes invalid. Shows the new key in a modal.
+
+**CLI:**
+
+```bash
+spacebot secrets rotate
+# WARNING: This will invalidate your current master key.
+# You will need to save the new key for future unlocks.
+# Continue? [y/N]: y
+#
+# New master key: f7e8d9c0b1a2...
+# Re-encrypted 12 secrets.
+#
+# IMPORTANT: Save this new key. Your old key no longer works.
+```
+
+**Hosted:** Key rotation is handled by the platform. The user clicks "Rotate Key" in the dashboard, which calls the platform API. The platform generates a new key, updates its database, re-injects on next restart. The user never sees the key.
+
+### Key Export / Import
+
+For disaster recovery and instance migration:
+
+```bash
+# Export all secrets (encrypted with the current master key)
+spacebot secrets export --output secrets-backup.enc
+# Exported 12 secrets to secrets-backup.enc
+# This file is encrypted with your current master key.
+
+# Import secrets from a backup
+spacebot secrets import --input secrets-backup.enc
+# Enter the master key used to create this backup: ********
+# Imported 12 secrets. 3 conflicts (existing secrets with same name):
+#   ANTHROPIC_API_KEY — kept existing (use --overwrite to replace)
+#   GH_TOKEN — kept existing
+#   NPM_TOKEN — kept existing
+
+# Import with overwrite
+spacebot secrets import --input secrets-backup.enc --overwrite
+```
+
+The export file is the raw encrypted redb data plus a header with the Argon2id salt. It's useless without the master key. This covers:
+- **Backup before migration** — export before upgrading, import if something goes wrong.
+- **Instance migration** — export from old instance, import into new instance with the same master key.
+- **Disaster recovery** — if `secrets.redb` is corrupted, import from backup.
+
+### API Summary
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/api/secrets/status` | GET | Token | Store state (`unencrypted` / `locked` / `unlocked`), secret counts |
+| `/api/secrets` | GET | Token | List all secrets (name + category, no values) |
+| `/api/secrets/:name` | PUT | Token | Add or update a secret |
+| `/api/secrets/:name` | DELETE | Token | Delete a secret |
+| `/api/secrets/:name/info` | GET | Token | Secret metadata + config references |
+| `/api/secrets/migrate` | POST | Token | Auto-migrate literal keys from config.toml (runs automatically on first boot, manual trigger if needed) |
+| `/api/secrets/encrypt` | POST | Token | Enable encryption: generate master key, encrypt all secrets, store key in OS credential store (only when `unencrypted`) |
+| `/api/secrets/unlock` | POST | Token | Provide master key, decrypt store (only when `locked`) |
+| `/api/secrets/lock` | POST | Token | Clear master key from OS credential store (only when `unlocked`) |
+| `/api/secrets/rotate` | POST | Token | Rotate master key, re-encrypt all secrets (only when `unlocked`) |
+| `/api/secrets/export` | POST | Token | Export backup (encrypted if encryption enabled, plaintext otherwise) |
+| `/api/secrets/import` | POST | Token | Import from backup |
+
+The CRUD endpoints (`GET/PUT/DELETE /api/secrets`) work in all states — `unencrypted` and `unlocked`. When `locked`, they return `423 Locked` (encrypted secrets can't be read or modified without the key). The encryption/unlock/lock/rotate endpoints only apply to encrypted stores.
+
+Authentication uses the same bearer token as the rest of the control API. On hosted instances, the dashboard proxy handles auth transparently. Self-hosted users authenticate via their configured API token.
+
+### CLI Subcommand Structure
+
+```
+spacebot secrets
+  status              Show store state and secret counts
+  list                List all secrets (name + category)
+  set <name>          Add or update a secret (interactive or --stdin)
+  delete <name>       Delete a secret
+  info <name>         Show secret metadata and config references
+  migrate             Auto-migrate plaintext keys from config.toml
+  encrypt             Enable encryption (generate master key, encrypt all secrets)
+  unlock              Unlock encrypted store (interactive or --stdin)
+  lock                Lock encrypted store (clear key from OS credential store)
+  rotate              Rotate master key (encrypted mode only)
+  export              Export backup
+  import              Import from backup
+```
+
+All subcommands communicate with the running Spacebot instance via the control API (`localhost:19898`). They don't access the secret store directly — this ensures the same locking/unlocking semantics apply regardless of whether the user uses the dashboard or CLI.
