@@ -164,369 +164,123 @@ MCP processes already do this correctly (`mcp.rs:309` calls `env_clear()`).
 
 ### Design
 
-Sandbox `wrap()` must call `env_clear()` (or the bwrap equivalent `--clearenv`) and explicitly pass through only:
+Sandbox `wrap()` must call `env_clear()` (or the bwrap equivalent `--clearenv`) and explicitly re-inject only approved variables. Three categories:
 
+**Always passed through:**
 - `PATH` (with tools/bin prepended, as today)
 - `HOME`, `USER`, `LANG`, `TERM` (basic process operation)
 - `TMPDIR` (if needed)
 
-For the passthrough (no sandbox) case: same env sanitization should apply in the shell/exec tools directly via `Command::env_clear()` before `Command::env()` for the allowed vars.
+**Passed from secret store (tool secrets only):**
+- Credentials for CLI tools workers invoke (`GH_TOKEN`, `GITHUB_TOKEN`, `NPM_TOKEN`, `AWS_*`, etc.)
+- The secret store categorizes secrets as **system** (internal — LLM API keys, messaging tokens) or **tool** (external — CLI credentials). Only tool secrets are injected into worker subprocesses. System secrets stay in Rust memory and never enter any subprocess environment.
+- `wrap()` reads the current tool secrets from the store and injects each via `--setenv` (bubblewrap) or `Command::env()` (passthrough/sandbox-exec).
+- Skills that expect `GH_TOKEN` in the environment just work. Skills never see `ANTHROPIC_API_KEY` because it's a system secret.
 
-This is also a **hard prerequisite for the secret store** — see `docs/design-docs/secret-store.md`. Without `--clearenv`, the master key is readable from `/proc/self/environ` and the entire encryption model is meaningless.
+**Passed from `passthrough_env` config (fallback for self-hosted without secret store):**
+- A user-configured list of env var names to forward from the parent process: `passthrough_env = ["GH_TOKEN", "GITHUB_TOKEN"]`
+- This is the escape hatch for self-hosted users who set env vars in Docker/systemd but don't configure a master key. Without it, `--clearenv` would silently strip their credentials.
+- When the secret store is available, `passthrough_env` is redundant (everything should be in the store). The field still works — it's additive.
+- See `docs/design-docs/secret-store.md` "Env Passthrough for Self-Hosted" for details.
+
+**Always stripped:**
+- All `SPACEBOT_*` internal vars (the master key is never in the environment — it lives in the OS credential store; see `docs/design-docs/secret-store.md`)
+- All system secrets (LLM API keys, messaging tokens — see `docs/design-docs/secret-store.md`)
+- Any env var not in the above three categories
+
+For the passthrough (no sandbox) case: same env sanitization applies in the shell/exec tools directly via `Command::env_clear()` before `Command::env()` for the allowed + secret + passthrough vars.
+
+This is a **hard prerequisite for the secret store** — see `docs/design-docs/secret-store.md`. The master key is protected independently by the OS credential store (Keychain / kernel keyring), but without `--clearenv`, system secrets and other sensitive env vars still leak to workers.
 
 ### Files Changed
 
 | File | Change |
 |------|--------|
-| `src/sandbox.rs` | Add `--clearenv` to bubblewrap wrapping; add `env_clear()` to sandbox-exec and passthrough modes; re-add only safe vars |
+| `src/sandbox.rs` | Add `--clearenv` to bubblewrap wrapping; add `env_clear()` to sandbox-exec and passthrough modes; re-add safe vars + tool secrets + `passthrough_env` vars |
+| `src/config.rs` | Parse `passthrough_env: Vec<String>` in `SandboxConfig` |
 | `src/tools/shell.rs` | Env sanitization for passthrough (no sandbox) mode |
 | `src/tools/exec.rs` | Same env sanitization |
 
 ---
 
-## 3. Capability Manager
+## 3. Durable Binary Location
 
 ### Problem
 
-Tool availability is implicit and fragile:
+On hosted instances, binaries installed via `apt-get` land on the root filesystem which is ephemeral — machine image rollouts replace it. Any ad-hoc `apt-get install git` disappears on the next deploy. The agent reinstalls on demand, but this is slow and wastes turns.
 
-- Some binaries come from the container image (`curl`, `gh`, `bubblewrap`), some don't (`git`).
-- Hosted users lose ad-hoc `apt-get` installs during rollouts because root filesystem changes aren't durable.
-- Agents attempt package-manager installs from shell tools, creating inconsistent behavior across environments.
-- The UI has no visibility into what tooling is available or missing.
+### Existing Infrastructure
 
-### Findings From Hosted Incident
+The durable path already works:
 
-On a hosted instance (`SPACEBOT_DEPLOYMENT=hosted`):
-
-- `git` was installed via `apt-get` and landed at `/usr/bin/git` (non-durable root filesystem).
-- `git` was not installed in `/data/tools/bin` (durable persistent volume).
-- Builtin worker shell/exec commands are sandbox-wrapped when a backend is available, but fall back to unsandboxed execution when backend detection fails.
-- OpenCode workers auto-allow all permission prompts (`worker.rs:429-432`) including bash commands. They follow the same execution paths with no package-manager policy guard.
-
-On hosted rollouts, machine image updates preserve `/data` but not ad-hoc root filesystem installs. Any binary at `/usr/bin` from `apt-get` disappears on update/recreate.
-
-### Goals
-
-1. Make tool availability explicit and inspectable.
-2. Persist runtime-installed binaries across hosted rollouts.
-3. Enforce a single install path (`/data/tools/bin`) instead of ad-hoc system package installs.
-4. Provide an API surface the UI can render as a capabilities panel.
-5. Keep implementation incremental.
-
-### Non-Goals
-
-- Full package manager replacement.
-- Arbitrary third-party plugin execution model in v1.
-- Supporting every OS package format in v1.
-
-### Design
-
-#### Durable Binary Location
-
-`{instance_dir}/tools/bin` is the persistent binary directory. It already exists:
-
-- Hosted boot flow creates it (`mkdir -p "$SPACEBOT_DIR/tools/bin"`).
+- `{instance_dir}/tools/bin` exists — hosted boot flow creates it (`mkdir -p "$SPACEBOT_DIR/tools/bin"`).
 - `Sandbox` already prepends `tools/bin` to `PATH` for worker subprocesses (`sandbox.rs:138-149`).
 - `/data` survives hosted machine image rollouts.
 
-This becomes the only supported runtime install target.
+### Design
 
-#### Capability States
+No internal registry, no install manager, no package-manager guards. The agent can install binaries however it wants — `apt-get`, `curl`, compile from source. The system's only job is to tell the agent where to put them so they survive.
 
-Each capability reports one of:
+#### Worker System Prompt Instruction
 
-| State | Meaning |
-|-------|---------|
-| `available` | Usable now |
-| `installable` | Known capability, can be installed |
-| `installing` | Active install in progress |
-| `error` | Install attempted, failed |
+Workers get a line in their system prompt:
 
-Optional metadata per capability:
-
-- `version` -- reported version string
-- `path` -- resolved binary path
-- `source` -- `system` (found in PATH outside tools/bin) or `managed` (in tools/bin)
-- `last_error` -- last install failure message
-
-#### Capability Registry (v1)
-
-Static in-code registry with pinned artifacts and checksums:
-
-```rust
-pub struct CapabilitySpec {
-    pub name: &'static str,
-    pub version: &'static str,
-    /// Download URL template. `{arch}` and `{os}` are substituted at runtime.
-    pub url: &'static str,
-    pub sha256: &'static str,
-    pub binary_name: &'static str,
-    /// How to extract the binary from the downloaded artifact.
-    pub extract: ExtractMethod,
-}
-
-pub enum ExtractMethod {
-    /// Binary is the download itself (no archive).
-    None,
-    /// tar.gz archive, binary at the given path inside the archive.
-    TarGz { inner_path: &'static str },
-    /// zip archive, binary at the given path inside the archive.
-    Zip { inner_path: &'static str },
-}
+```
+Persistent binary directory: /data/tools/bin (on PATH, survives restarts and rollouts)
+Binaries installed via package managers (apt, brew, etc.) land on the root filesystem
+which is ephemeral on hosted instances — they disappear on rollouts. To install a tool
+durably, download or copy the binary into /data/tools/bin.
 ```
 
-Initial entry: `git` (Linux x86_64). Future entries: `gh`, `jq`, `ripgrep`, browser runtime.
+This is an instruction, not a guard. If the agent runs `apt install gh`, it works. The binary is ephemeral. If the agent is smart it downloads to `tools/bin` instead. If it's not, the binary disappears and it reinstalls next time. Not our problem to gatekeep.
 
-#### Install Flow
+#### Dashboard Observability (Optional)
 
-1. Acquire per-capability install lock (prevents races from concurrent install requests).
-2. Download artifact to temp path under `{instance_dir}/tools/bin/.tmp/`.
-3. Verify SHA-256 checksum (required, fails install if mismatch).
-4. Extract if needed (tar/zip).
-5. Set executable bits (`chmod +x`).
-6. Atomic rename into `{instance_dir}/tools/bin/{binary_name}`.
-7. Run `{binary_name} --version` probe to verify.
-8. Publish updated capability status.
+A lightweight API endpoint that lists the contents of `tools/bin`:
 
-On failure: preserve previous working binary if one exists. Report error state with message.
-
-#### Module Structure
-
-New module at `src/capabilities.rs`:
-
-```rust
-pub struct CapabilityManager {
-    tools_bin: PathBuf,
-    specs: Vec<CapabilitySpec>,
-    states: ArcSwap<Vec<CapabilityStatus>>,
-    install_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
-}
-
-pub struct CapabilityStatus {
-    pub name: String,
-    pub state: CapabilityState,
-    pub version: Option<String>,
-    pub path: Option<PathBuf>,
-    pub source: Option<CapabilitySource>,
-    pub last_error: Option<String>,
-}
-
-pub enum CapabilityState {
-    Available,
-    Installable,
-    Installing,
-    Error,
-}
-
-pub enum CapabilitySource {
-    System,
-    Managed,
-}
-```
-
-At startup, the manager probes for each registered capability:
-
-1. Check `{tools_bin}/{binary_name}` -- if found, state is `Available`, source is `Managed`.
-2. Check system PATH via `which {binary_name}` -- if found, state is `Available`, source is `System`.
-3. Otherwise, state is `Installable`.
-
-#### API Endpoints
-
-**`GET /api/capabilities`**
-
-Returns all known capabilities and their runtime status.
+**`GET /api/tools`**
 
 ```json
 {
-  "capabilities": [
-    {
-      "name": "git",
-      "state": "available",
-      "version": "2.46.0",
-      "path": "/data/tools/bin/git",
-      "source": "managed",
-      "last_error": null
-    },
-    {
-      "name": "gh",
-      "state": "installable",
-      "version": null,
-      "path": null,
-      "source": null,
-      "last_error": null
-    }
+  "tools_bin": "/data/tools/bin",
+  "binaries": [
+    { "name": "git", "size": 3456789, "modified": "2026-02-15T10:30:00Z" },
+    { "name": "gh", "size": 1234567, "modified": "2026-02-20T14:15:00Z" }
   ]
 }
 ```
 
-**`POST /api/capabilities/{name}/install`**
-
-Triggers installation for an installable capability.
-
-| Response | Meaning |
-|----------|---------|
-| `202 Accepted` | Install started |
-| `409 Conflict` | Install already in progress |
-| `404 Not Found` | Unknown capability |
-| `400 Bad Request` | Capability already available |
-
-Returns a `CapabilityStatus` in the response body reflecting the new state (`installing` or `error` if it completed synchronously).
-
-#### UI Surface
-
-Add a Capabilities panel (likely under the existing Settings or a new Tools section):
-
-- List capabilities with state badges (green/available, yellow/installable, red/error, spinner/installing).
-- Show source indicator (`system` vs `managed`).
-- Show version and path.
-- Show last error with retry button.
-- Install button for `installable` capabilities.
-
-#### LLM Process Awareness
-
-Channels and workers should know what capabilities are available so they don't waste turns attempting to use missing tools or trying to install them via package managers.
-
-**Channels** get a short capability summary injected into their status block -- just the list of available tool names. This lets the channel answer questions like "can you use git?" without branching, and lets it inform the user or route to a worker appropriately. The channel doesn't need paths, versions, or install details.
-
-```
-Available tools: git, gh, ripgrep
-Unavailable tools: jq (installable)
-```
-
-**Workers** get full capability details in their system prompt -- name, version, path, and source. Workers are the processes that actually invoke these binaries, so they need to know exact paths (especially when a tool is in `tools/bin` vs a system location) and version constraints. This also prevents workers from attempting to install missing tools via shell commands since the prompt explicitly states what's available and that package-manager installs are blocked.
-
-The capability list is read from `CapabilityManager.states` (the `ArcSwap<Vec<CapabilityStatus>>`). Channels read a formatted summary via a helper on `CapabilityManager`. Workers receive the full `Vec<CapabilityStatus>` serialized into their system prompt context.
-
-#### Wiring
-
-`CapabilityManager` is created during startup alongside `Sandbox`:
-
-- Stored in `ApiState` for API handlers.
-- Also stored in `AgentDeps` (or accessible via a shared `Arc`) so channel status injection and worker prompt assembly can read capability state.
-- Probes run once at startup, results cached in `ArcSwap<Vec<CapabilityStatus>>`.
-- Install requests update the state atomically. Channels and workers pick up the new state on their next turn via the ArcSwap.
+Just a directory listing — no state machine, no install locks, no checksums. The dashboard can render this as a "Tools" panel showing what's installed. Purely observational.
 
 ### Files Changed
 
 | File | Change |
 |------|--------|
-| `src/capabilities.rs` | New module: `CapabilityManager`, `CapabilitySpec`, `CapabilityStatus`, registry, probe, install flow |
-| `src/lib.rs` | Add `pub mod capabilities` |
-| `src/api/capabilities.rs` | New: `get_capabilities`, `install_capability` handlers |
-| `src/api/server.rs` | Add capability routes |
-| `src/api/mod.rs` | Add `mod capabilities` |
-| `src/main.rs` | Create `CapabilityManager` at startup, store in `ApiState` |
+| `prompts/worker.md` | Add durable binary location instruction |
+| `src/api/tools.rs` | Optional: `GET /api/tools` directory listing endpoint |
 
 ---
 
-## 4. Shell Package-Manager Guard
+## 4. OpenCode Auto-Allow (Independent Bug)
 
 ### Problem
 
-Agents can run `apt-get install`, `apk add`, etc. via the shell tool, installing binaries to non-durable root filesystem locations. On hosted instances, these installs disappear on rollout. Even on self-hosted, ad-hoc package installs create unreproducible environments.
+OpenCode workers auto-allow all permission prompts (`opencode/worker.rs:429-432`). When OpenCode asks permission to run a bash command, the worker replies `PermissionReply::Once` unconditionally. OpenCode worker output is also not scanned by SpacebotHook, so leak detection doesn't apply.
+
+This is an independent bug regardless of the other sections — OpenCode workers operate with no policy checks at all.
 
 ### Design
 
-Add a pre-execution check in `ShellTool::call()` that rejects commands containing package-manager invocations. This runs before sandbox wrapping -- it's a policy check, not a security boundary.
+The auto-allow behavior is intentional for now (OpenCode needs to run commands to be useful as a worker backend). The immediate fix is to wire OpenCode worker output through leak detection so that secret patterns in tool output are caught the same way they are for builtin workers.
 
-#### Blocked Tokens
-
-Commands are rejected if they contain any of these as standalone command tokens (not as substrings of paths or arguments):
-
-```
-apt, apt-get, dpkg, apk, yum, dnf, pacman, brew, snap, pip, pip3, npm install -g, gem install
-```
-
-The check splits the command on shell operators (`|`, `&&`, `||`, `;`, newline) and checks if any segment starts with a blocked token.
-
-#### Error Message
-
-```
-Package manager commands are not allowed. Binaries installed via apt/apk/etc
-are not durable across hosted rollouts and create inconsistent environments.
-
-Use the capabilities API to install supported tools, or request the tool be
-added to the capability registry.
-```
-
-#### Config Override
-
-The guard is active by default on all deployments. It can be disabled via config:
-
-```toml
-[agents.sandbox]
-mode = "enabled"
-allow_package_managers = false  # default: false
-```
-
-Setting `allow_package_managers = true` disables the guard. This is mainly useful for self-hosted instances where users manage their own system packages.
-
-#### Implementation
-
-Add a `check_package_manager()` function in `tools/shell.rs`, called at the top of `ShellTool::call()` before `sandbox.wrap()`. Returns a descriptive `ShellError` if blocked.
-
-This is deliberately simpler than the old `check_command()` that was removed during the sandbox implementation. The old checks were security-boundary string filtering (180+ lines). This is a single policy guard (~30 lines) that catches the most common footgun. It's not trying to be exhaustive -- the sandbox handles security.
+Longer term, OpenCode's permission model could be integrated with the sandbox — permissions for bash commands routed through the same `wrap()` path. But that requires understanding OpenCode's permission protocol better (see Open Questions).
 
 ### Files Changed
 
 | File | Change |
 |------|--------|
-| `src/tools/shell.rs` | Add `check_package_manager()`, call before `wrap()` |
-| `src/sandbox.rs` | Add `allow_package_managers: bool` to `SandboxConfig` (default false) |
-| `src/config.rs` | Parse `allow_package_managers` in sandbox config |
-
----
-
-## 5. OpenCode Permission Guard
-
-### Problem
-
-OpenCode workers auto-allow all permission prompts (`opencode/worker.rs:429-432`). When OpenCode asks permission to run a bash command, the worker replies `PermissionReply::Once` unconditionally. This means OpenCode workers can run `apt-get install` and any other command without the same policy checks that apply to builtin workers.
-
-### Design
-
-Before auto-allowing a permission request, inspect the patterns to check for package-manager commands. If a blocked pattern is detected, reply with `PermissionReply::Deny` (or equivalent) and log a warning.
-
-#### Implementation
-
-In `opencode/worker.rs`, in the `SseEvent::PermissionAsked` handler (line 403), before the auto-reply:
-
-```rust
-SseEvent::PermissionAsked(permission) => {
-    // ... existing logging ...
-
-    // Check if this is a bash permission with package-manager patterns
-    if is_blocked_permission(&permission) {
-        tracing::warn!(
-            worker_id = %self.id,
-            patterns = ?permission.patterns,
-            "blocked package-manager command in OpenCode worker"
-        );
-        let guard = server.lock().await;
-        let _ = guard.reply_permission(&permission.id, PermissionReply::Deny).await;
-        return EventAction::Continue;
-    }
-
-    // Auto-allow
-    let guard = server.lock().await;
-    guard.reply_permission(&permission.id, PermissionReply::Once).await;
-    // ...
-}
-```
-
-The `is_blocked_permission()` function checks if the permission type is bash-related and if any pattern matches the same package-manager tokens used by the shell guard.
-
-#### Shared Policy
-
-Extract the package-manager token list into a shared constant or function (e.g., `src/policy.rs` or inline in `src/sandbox.rs`) so both the shell tool guard and the OpenCode permission guard use the same blocked list.
-
-### Files Changed
-
-| File | Change |
-|------|--------|
-| `src/opencode/worker.rs` | Add package-manager check before auto-allow in `PermissionAsked` handler |
-| `src/policy.rs` (new) or `src/sandbox.rs` | Shared `is_package_manager_command()` function |
+| `src/opencode/worker.rs` | Scan SSE output events through leak detection patterns before forwarding |
+| `src/hooks/spacebot.rs` | Extract leak detection regex into a shared function callable from OpenCode worker |
 
 ---
 
@@ -584,61 +338,44 @@ Fix the user-facing bug where toggling sandbox mode via UI doesn't take effect. 
 
 ### Phase 2: Environment Sanitization
 
-Prevent secret leakage through environment variable inheritance.
+Prevent secret leakage through environment variable inheritance. Secret-store-aware — workers get tool secrets (CLI credentials) but never system secrets (LLM keys, messaging tokens) or internal vars.
 
-1. Add `--clearenv` to bubblewrap wrapping, re-add only PATH and safe vars.
-2. Add `env_clear()` to sandbox-exec and passthrough wrapping modes.
+1. Add `--clearenv` to bubblewrap wrapping, re-add only safe vars + tool secrets from the secret store.
+2. Add `env_clear()` to sandbox-exec and passthrough wrapping modes with same allowlist.
 3. Add `env_clear()` to shell/exec tools for the no-sandbox case.
-4. Verify: worker running `printenv` shows only PATH/HOME/LANG, not API keys.
+4. Verify: worker running `printenv` shows PATH/HOME/LANG + tool secrets (e.g., `GH_TOKEN`), but NOT `ANTHROPIC_API_KEY` or other system/internal vars. (The master key is never in the environment — it lives in the OS credential store.)
 
-### Phase 3: Policy Enforcement
+### Phase 3: Durable Binary Instruction
 
-Guard against non-durable package-manager installs.
+Add the persistent binary location instruction to worker prompts and optional dashboard observability.
 
-1. Add shell package-manager guard in `tools/shell.rs`.
-2. Add OpenCode permission guard in `opencode/worker.rs`.
-3. Extract shared blocked-token list.
-4. Add `allow_package_managers` config option.
-5. Verify: `apt-get install git` via shell tool returns policy error; OpenCode bash permission for `apt-get` is denied.
+1. Add tools/bin instruction to worker system prompt.
+2. Optionally add `GET /api/tools` directory listing endpoint.
+3. Verify: worker prompt includes the durable path; dashboard shows installed tools.
 
-### Phase 4: Capability Manager
+### Phase 4: OpenCode Leak Detection
 
-Make tool availability explicit and persistent.
+Wire OpenCode worker output through the same leak detection that covers builtin workers.
 
-1. Add `capabilities.rs` module with static registry and probe logic.
-2. Add capability API endpoints.
-3. Wire into startup and `ApiState`.
-4. Add UI capabilities panel.
-5. Add `git` as first managed capability with pinned artifact.
-6. Verify: `GET /api/capabilities` returns correct state; `POST /api/capabilities/git/install` downloads to tools/bin and survives simulated rollout.
+1. Extract leak detection regex from SpacebotHook into a shared function.
+2. Scan OpenCode SSE output events through leak detection before forwarding.
+3. Verify: a secret pattern in OpenCode tool output triggers the same kill behavior as builtin workers.
 
-### Phase 5: Additional Capabilities
+### Phase 5: send_file Workspace Validation
 
-Expand the registry.
+Fix the independent bug where `send_file` can exfiltrate any readable file.
 
-1. Add `gh`, `jq`, `ripgrep` specs.
-2. Add per-capability health probes (periodic version check).
-3. Add telemetry for install attempts and failures.
-
-### Phase 6: Browser Capability
-
-Replace the slim/full image split.
-
-1. Model browser runtime as a capability with its own install lifecycle.
-2. Install browser bundle to persistent data path.
-3. Add browser-specific readiness checks.
-4. Evaluate deprecating slim/full split.
+1. Add workspace validation to `send_file` matching the file tool's `resolve_path()` pattern.
+2. Verify: `send_file` with a path outside workspace returns an error.
 
 ---
 
 ## Open Questions
 
-1. **Artifact hosting.** Where do we host pinned, checksummed binary artifacts? GitHub releases? S3? A dedicated CDN?
-2. **Self-hosted install opt-out.** Should self-hosted instances be able to disable runtime installs entirely?
-3. **Version cleanup.** What's the quota/cleanup policy for old capability versions in tools/bin?
-4. **Admin gating.** Should capability installs require admin role on hosted instances?
-5. **OpenCode deny semantics.** Does `PermissionReply::Deny` exist in the OpenCode protocol, or do we need `PermissionReply::Once` with a modified command that prints the policy error? Need to check the OpenCode permission reply spec.
-6. **Dynamic writable_paths.** The hot-reload fix reads `writable_paths` from the ArcSwap on every `wrap()` call, canonicalizing each time. If an agent has many writable paths and spawns commands at high frequency, this could be optimized with a change-detection cache. Likely not a concern in practice.
+1. **OpenCode permission protocol.** Can OpenCode's permission model be integrated with the sandbox? Would need to route bash permission requests through `wrap()`. Requires understanding the OpenCode permission protocol internals.
+2. **Dynamic writable_paths.** The hot-reload fix reads `writable_paths` from the ArcSwap on every `wrap()` call, canonicalizing each time. If an agent has many writable paths and spawns commands at high frequency, this could be optimized with a change-detection cache. Likely not a concern in practice.
+3. **Tool secret injection interface.** How does `wrap()` get tool secrets? Options: (a) `Sandbox` holds an `Arc<SecretsStore>` and calls `tool_env_vars()` on each `wrap()`, (b) tool secrets cached in an `Arc<ArcSwap<HashMap<String, String>>>` updated when secrets change. Option (b) avoids decryption on every subprocess spawn. Tool secrets change rarely (only via dashboard), so the cache is almost always warm.
+4. **Worker keyring isolation.** The `pre_exec` hook that gives workers a fresh session keyring (see `secret-store.md`) should be wired into `wrap()` alongside env sanitization. Both run regardless of sandbox state — `--clearenv` strips env vars, `keyctl(JOIN_SESSION_KEYRING)` strips keyring access. Need to verify this works correctly with bubblewrap's `--unshare-pid` (the keyring is per-session, not per-PID-namespace, so both should be independent).
 
 ---
 
@@ -684,7 +421,7 @@ stereOS adds layers that bubblewrap cannot provide:
 | **Secret injection** | Env vars (cleared by `--clearenv`) | Written to tmpfs at `/run/stereos/secrets/` with root-only permissions (0700), never on disk |
 | **User isolation** | UID mapping in namespace | Immutable users, no passwords, SSH keys injected ephemerally over vsock |
 
-The secret injection model is particularly relevant. Today, the secret store design (see `docs/design-docs/secret-store.md`) relies on `--clearenv` to prevent workers from reading the master key via `/proc/self/environ`. With stereOS, the master key never enters the VM at all — it stays on the host. Secrets are injected individually into the guest's tmpfs by `stereosd`. The agent process inside the VM reads from `/run/stereos/secrets/` and the master key exposure problem disappears entirely.
+The secret injection model is particularly relevant. Today, the secret store design (see `docs/design-docs/secret-store.md`) protects the master key via the OS credential store (Keychain / kernel keyring) — workers can't access it regardless of sandbox state. With stereOS, an even stronger model is possible: the master key stays on the host entirely, never entering the VM. Secrets are injected individually into the guest's tmpfs by `stereosd`. The agent process inside the VM reads from `/run/stereos/secrets/`. The OS credential store and VM isolation are complementary — the credential store protects on the host, the VM boundary protects in the guest.
 
 ### Network Isolation
 
@@ -706,11 +443,11 @@ This is not ready to implement. Key gaps from the stereOS integration research:
 
 ### Relationship to Current Work
 
-The phases above (1-6) are prerequisites, not alternatives:
+The phases above (1-5) are prerequisites, not alternatives:
 
 - **Phases 1-2** (hot-reload fix, env sanitization) fix correctness bugs that matter regardless of backend. Even with VM isolation, the host process still needs `--clearenv` for any non-VM code paths (MCP processes, in-process tools).
-- **Phase 3** (policy guards) applies inside the VM too. The shell package-manager guard prevents non-durable installs whether the worker runs in bubblewrap or a VM.
-- **Phase 4-6** (capability manager) become more important with VMs. The VM image needs to know what binaries to include. The capability registry is the source of truth for what goes into the mixtape.
+- **Phase 3** (durable binary instruction) applies inside the VM too — the VM image would include `tools/bin` on the persistent volume mount.
+- **Phases 4-5** (OpenCode leak detection, send_file fix) are bug fixes that apply regardless of sandbox backend.
 
 bubblewrap remains the default sandbox backend for all deployments. VM isolation would be an opt-in upgrade for the hosted platform where multi-tenant security justifies the resource overhead. Self-hosted users who want maximum isolation could run a `spacebot-mixtape` directly (NixOS image, no Docker) as an alternative deployment path.
 
