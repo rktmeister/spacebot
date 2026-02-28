@@ -195,9 +195,10 @@ The secret store is **always enabled** on self-hosted instances — it works in 
 
 - **No key file on disk** means no file for workers to `cat` — the master key is protected regardless of sandbox state. This was the entire motivation for the OS credential store design.
 - **Unlock on reboot** is a one-time action per boot. For a headless bot that reboots rarely (planned maintenance, kernel updates), this is an acceptable cost.
-- **The bot still functions while locked.** It falls back to unencrypted mode — secrets that existed before encryption was enabled are still available (they were in the unencrypted store). Secrets added after encryption was enabled are unavailable until unlock. The bot starts, connects to messaging platforms, and can receive the unlock command.
+- **All secrets are unavailable while locked.** `POST /api/secrets/encrypt` does an in-place encryption — plaintext values are wiped and replaced with encrypted versions. There is no parallel plaintext copy. When locked, `secret:` references fail to resolve, LLM providers and messaging adapters start without credentials (degraded mode). The bot starts and the control API is available (so the unlock command has something to talk to), but it cannot process messages or make LLM calls until unlocked.
+- **Secrets configured via `env:` or literal values in config.toml still work while locked** — they don't go through the secret store. If a user keeps some credentials in `env:` config references as a fallback for critical services (e.g., the Discord bot token to stay connected and receive the unlock command), those work regardless of store state. This is a valid pattern for Linux self-hosters who want encryption but also want the bot to stay reachable after reboot.
 
-For users who don't want encryption at all, the unencrypted store works indefinitely. All features except encryption at rest are available.
+For users who don't want the unlock-after-reboot requirement, the unencrypted store works indefinitely. All features except encryption at rest are available.
 
 **Startup flow (all deployments):**
 
@@ -206,7 +207,7 @@ For users who don't want encryption at all, the unencrypted store works indefini
 3. If **unencrypted** (or no secrets yet): store is immediately available. Read all secrets. Skip to step 7.
 4. If **encrypted**: check OS credential store for master key (Keychain / kernel keyring).
 5. If master key found (or injected via tmpfs on hosted → load into OS credential store → delete tmpfs file): derive AES-256-GCM cipher key via Argon2id (~100ms), decrypt all secrets. Store is **unlocked**.
-6. If master key not found: store enters **locked** state. Encrypted secrets are unavailable. Dashboard shows unlock prompt (self-hosted) or error (hosted — this shouldn't happen). On unlock (via dashboard or CLI): key is loaded into OS credential store → derive cipher → decrypt → re-initialize dependent components.
+6. If master key not found: store enters **locked** state. Encrypted secrets are unavailable. **The bot still starts** — the control API (port 19898) and embedded dashboard come up so the user can issue the unlock command. LLM providers and messaging adapters that depend on `secret:` references start in degraded mode (no credentials). Components configured via `env:` or literal config values still work. On unlock (via dashboard or CLI): key is loaded into OS credential store → derive cipher → decrypt → re-initialize dependent components.
 7. **System secrets:** passed directly to Rust components (`LlmManager`, `MessagingManager`, etc.). Never set as env vars.
 8. **Tool secrets:** held in a `HashMap<String, String>` for `Sandbox::wrap()` injection via `--setenv`.
 
@@ -233,11 +234,11 @@ anthropic_key = "sk-ant-abc123..."
 # env: — read from system environment variable at resolve time
 anthropic_key = "env:ANTHROPIC_API_KEY"
 
-# secret: — read from encrypted secret store (decrypted at boot, held in memory)
+# secret: — read from secret store (held in memory)
 anthropic_key = "secret:ANTHROPIC_API_KEY"
 ```
 
-The `secret:` prefix is a resolution directive: "this value lives in the encrypted `SecretsStore`, look it up by this name, return the decrypted value." The config doesn't know or care whether the secret is categorized as system or tool — it just gets the resolved string. The category is metadata on the secret in the store and only matters at `wrap()` time when deciding what to inject into worker subprocesses.
+The `secret:` prefix is a resolution directive: "this value lives in the `SecretsStore`, look it up by this name, return the value." The config doesn't know or care whether the secret is categorized as system or tool, or whether the store is encrypted — it just gets the resolved string. The category is metadata on the secret in the store and only matters at `wrap()` time when deciding what to inject into worker subprocesses.
 
 **Secret names use UPPER_SNAKE_CASE matching env var convention.** The secret name in the store IS the env var name — `GH_TOKEN`, not `gh_token`. For tool secrets, `wrap()` iterates the store and does `--setenv {name} {value}` with no translation. For system secrets, the name is just an identifier (they're never env vars), but using the same convention keeps everything consistent. Skills that say "set `GH_TOKEN`" map directly to a secret named `GH_TOKEN` in the dashboard.
 
@@ -586,7 +587,11 @@ spacebot secrets unlock
 # Re-initialized: LlmManager (3 providers), MessagingManager (2 adapters).
 
 # Unlock non-interactively (for automation — key in stdin)
-echo "$MASTER_KEY" | spacebot secrets unlock --stdin
+# NOTE: This example uses an env var for illustration. For production
+# automation, pipe from a secrets manager or file, not a shell env var
+# (env vars are visible in /proc and process listings — the same exposure
+# the OS credential store is designed to avoid).
+cat /run/secrets/spacebot_key | spacebot secrets unlock --stdin
 
 # Lock (clears key from OS credential store — useful for maintenance)
 spacebot secrets lock
@@ -752,7 +757,15 @@ spacebot secrets import --input secrets-backup.enc
 spacebot secrets import --input secrets-backup.enc --overwrite
 ```
 
-The export file is the raw encrypted redb data plus a header with the Argon2id salt. It's useless without the master key. This covers:
+**Unencrypted store warning:** If encryption is not enabled, the export file contains plaintext secrets. The CLI warns:
+
+```
+# WARNING: Encryption is not enabled. This export contains
+# plaintext secrets. Store it securely or enable encryption
+# first with: spacebot secrets encrypt
+```
+
+When encryption is enabled, the export file is the raw encrypted redb data plus a header with the Argon2id salt. It's useless without the master key. This covers:
 - **Backup before migration** — export before upgrading, import if something goes wrong.
 - **Instance migration** — export from old instance, import into new instance with the same master key.
 - **Disaster recovery** — if `secrets.redb` is corrupted, import from backup.
