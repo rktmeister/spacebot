@@ -183,7 +183,8 @@ pub struct ProviderConfig {
     /// Anthropic requests. Set automatically when the key originates from
     /// `ANTHROPIC_AUTH_TOKEN` (proxy-compatible auth).
     pub use_bearer_auth: bool,
-    /// Additional HTTP headers to include in every request to this provider.
+    /// Additional HTTP headers included in requests to this provider.
+    /// Currently applied in `call_openai()` (the `OpenAiCompletions` path).
     pub extra_headers: Vec<(String, String)>,
 }
 
@@ -4001,7 +4002,11 @@ impl Config {
                             api_key,
                             name: config.name,
                             use_bearer_auth: false,
-                            extra_headers: vec![],
+                            extra_headers: if provider_id == "openrouter" {
+                                openrouter_extra_headers()
+                            } else {
+                                vec![]
+                            },
                         },
                     ))
                 })
