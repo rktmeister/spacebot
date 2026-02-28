@@ -271,7 +271,13 @@ This is an independent bug regardless of the other sections — OpenCode workers
 
 ### Design
 
-The auto-allow behavior is intentional for now (OpenCode needs to run commands to be useful as a worker backend). The immediate fix is to wire OpenCode worker output through leak detection so that secret patterns in tool output are caught the same way they are for builtin workers.
+The auto-allow behavior is intentional for now (OpenCode needs to run commands to be useful as a worker backend). The fix is to wire OpenCode worker output through **both** protection layers that cover builtin workers:
+
+1. **Output scrubbing (exact match)** — `StreamScrubber` from `src/secrets/scrub.rs` (see `secret-store.md`, Output Scrubbing). Replaces tool secret values with `[REDACTED:<name>]` in SSE events before they're forwarded. Uses the rolling buffer strategy to handle secrets split across SSE chunks. This runs first — proactive redaction.
+
+2. **Leak detection (regex)** — shared regex patterns from `SpacebotHook` (see `src/hooks/spacebot.rs`). Scans for known API key formats (`sk-ant-*`, `ghp_*`, etc.) in the scrubbed output. If a match is found after scrubbing, it's a leak of a secret not in the store — kill the agent. This runs second — reactive safety net.
+
+The sequencing matters: scrubbing first means stored tool secrets are redacted before leak detection runs, so leak detection only fires on unknown/unstored secrets. Without this order, leak detection would fire on every tool secret value (which is expected in worker output) and kill the agent unnecessarily.
 
 Longer term, OpenCode's permission model could be integrated with the sandbox — permissions for bash commands routed through the same `wrap()` path. But that requires understanding OpenCode's permission protocol better (see Open Questions).
 
@@ -279,7 +285,8 @@ Longer term, OpenCode's permission model could be integrated with the sandbox �
 
 | File | Change |
 |------|--------|
-| `src/opencode/worker.rs` | Scan SSE output events through leak detection patterns before forwarding |
+| `src/opencode/worker.rs` | Wire SSE output through `StreamScrubber` (exact-match redaction) then leak detection (regex) before forwarding |
+| `src/secrets/scrub.rs` | `StreamScrubber` — rolling buffer scrubber for chunked output (shared with other streaming paths) |
 | `src/hooks/spacebot.rs` | Extract leak detection regex into a shared function callable from OpenCode worker |
 
 ---
@@ -353,13 +360,14 @@ Add the persistent binary location instruction to worker prompts and optional da
 2. Optionally add `GET /api/tools` directory listing endpoint.
 3. Verify: worker prompt includes the durable path; dashboard shows installed tools.
 
-### Phase 4: OpenCode Leak Detection
+### Phase 4: OpenCode Output Protection
 
-Wire OpenCode worker output through the same leak detection that covers builtin workers.
+Wire OpenCode worker output through both protection layers (output scrubbing + leak detection) that cover builtin workers.
 
-1. Extract leak detection regex from SpacebotHook into a shared function.
-2. Scan OpenCode SSE output events through leak detection before forwarding.
-3. Verify: a secret pattern in OpenCode tool output triggers the same kill behavior as builtin workers.
+1. Wire SSE output through `StreamScrubber` (exact-match redaction of tool secret values, rolling buffer for split secrets). Runs first — proactive.
+2. Extract leak detection regex from SpacebotHook into a shared function.
+3. Scan scrubbed SSE output through leak detection. Runs second — reactive safety net for secrets not in the store.
+4. Verify: a stored tool secret in OpenCode output is redacted to `[REDACTED:<name>]`; an unknown secret pattern triggers the same kill behavior as builtin workers.
 
 ### Phase 5: send_file Workspace Validation
 

@@ -90,9 +90,9 @@ The dashboard's secrets panel exposes the category when adding or editing a secr
 | `GH_TOKEN`, `GITHUB_TOKEN`                | Tool           | `gh` CLI expects this                                     |
 | `NPM_TOKEN`                               | Tool           | `npm` expects this                                        |
 | `AWS_*`                                   | Tool           | AWS CLI expects these                                     |
-| Everything else                           | Tool (default) | User-configured credentials are most likely for CLI tools |
+| Everything else                           | **System (default)** | Unknown credentials default to the more restrictive category — not exposed to workers |
 
-Users can override the auto-categorization. If someone wants `GH_TOKEN` as a system secret (e.g., used only by a webhook integration, not by workers), they can set it.
+Users can override the auto-categorization. The default for unknown secrets is **system** (not exposed to workers) because defaulting to tool would be privilege-expanding — an internal credential accidentally categorized as tool becomes visible to every worker subprocess. It's safer to require the user to explicitly opt a secret into tool category if workers need it. The dashboard shows a clear prompt: *"Should worker processes have access to this credential? (Required for CLI tools like `gh`, `npm`, `aws`.)"*
 
 ### Two Modes: Unencrypted and Encrypted
 
@@ -153,11 +153,22 @@ unsafe {
     command.pre_exec(|| {
         // Give the child a new empty session keyring.
         // It cannot access the parent's session keyring.
-        libc::syscall(libc::SYS_keyctl, 0x01 /* KEYCTL_JOIN_SESSION_KEYRING */, std::ptr::null::<libc::c_char>());
+        // CRITICAL: if this fails, the child inherits the parent's keyring
+        // and can access the master key. Fail hard — do not spawn the worker.
+        let result = libc::syscall(
+            libc::SYS_keyctl,
+            0x01, /* KEYCTL_JOIN_SESSION_KEYRING */
+            std::ptr::null::<libc::c_char>(),
+        );
+        if result < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
         Ok(())
     });
 }
 ```
+
+If `KEYCTL_JOIN_SESSION_KEYRING` fails (returns -1), `pre_exec` returns `Err`, which causes `Command::spawn()` to fail. The worker is not started. This is the correct behavior — a worker that inherits the parent's session keyring could access the master key via `keyctl read`. The failure should be logged as an error with the errno for debugging (common causes: kernel compiled without `CONFIG_KEYS`, seccomp policy blocking `keyctl`).
 
 This is additive to `--clearenv` — env sanitization strips env vars, the session keyring swap strips keyring access. Both run regardless of sandbox state.
 
@@ -175,7 +186,7 @@ Flow:
 Properties:
 - The key persists across restarts and rollouts — the platform always re-injects it from its database.
 - The key is tied to the user's platform account, not to the volume. If the volume is compromised without platform access, the `secrets.redb` file is useless.
-- The key is manageable in the dashboard (the platform can rotate it, the user can view/reset it through their account settings).
+- The key is platform-managed. The user never sees the raw master key — the platform handles injection and rotation. The user can trigger rotation via the dashboard ("Rotate Encryption Key"), which calls the platform API to generate a new key, re-encrypt, and update its database. No key is displayed to the user.
 - The platform database becomes a store of master keys, but it already stores auth tokens and Stripe credentials — same protection requirements.
 
 #### Self-Hosted Deployment
@@ -360,9 +371,39 @@ Redacted:    "Authenticated as user X. Token: [REDACTED:GH_TOKEN]"
 - **Leak detection (regex):** catches known formats even if the secret isn't in the store (e.g., a key the user typed inline). Reactive — kills the agent after detection.
 - **Output scrubbing (exact match):** catches any stored tool secret regardless of format. Proactive — redacts before the value reaches the channel. The channel sees `[REDACTED:GH_TOKEN]` and knows the secret was used, but never sees the value.
 
+**Streaming safety (split-secret problem):** If a secret value is split across two adjacent SSE events or stream chunks, a per-string exact match misses it. For example, `GH_TOKEN = "ghp_abc123def456"` split as `"...ghp_abc123"` + `"def456..."` — neither chunk contains the full secret.
+
+Fix: the scrubber maintains a **rolling buffer** per output stream. For each stream (identified by worker ID + output path), the scrubber holds the tail of the previous chunk, sized to `max_secret_length - 1` bytes. On each new chunk, it concatenates `[tail_of_previous | new_chunk]`, scrubs the combined string, then emits everything except the new tail (which is held for the next chunk). On stream end, the held tail is flushed and scrubbed.
+
+```rust
+struct StreamScrubber {
+    buffer: String,
+    max_secret_len: usize, // max length across all tool secret values
+}
+
+impl StreamScrubber {
+    fn scrub_chunk(&mut self, chunk: &str, secrets: &HashMap<String, String>) -> String {
+        self.buffer.push_str(chunk);
+        let emit_up_to = self.buffer.len().saturating_sub(self.max_secret_len - 1);
+        let to_emit = scrub_secrets(&self.buffer[..emit_up_to], secrets);
+        self.buffer = self.buffer[emit_up_to..].to_string();
+        to_emit
+    }
+
+    fn flush(&mut self, secrets: &HashMap<String, String>) -> String {
+        let remaining = std::mem::take(&mut self.buffer);
+        scrub_secrets(&remaining, secrets)
+    }
+}
+```
+
+This adds latency of `max_secret_len` bytes per chunk — typically 40-100 bytes for API keys. Negligible for worker output which is displayed progressively anyway.
+
+For non-streaming paths (worker result text, branch conclusions), the full string is available at once — no buffer needed, simple `scrub_secrets()` call.
+
 **Cost:** Comparing every worker output string against every tool secret value. With typically <20 secrets and output in the KB range, this is a substring search over a small set — negligible. The secret values are already in memory (the tool env var cache). No decryption on each check.
 
-**Implementation:** A `scrub_secrets(text: &str, tool_secrets: &HashMap<String, String>) -> String` function that iterates the map and replaces all occurrences. Called in the worker result path, status update path, and OpenCode event forwarding path. The function lives alongside the existing leak detection code — either in `src/hooks/spacebot.rs` or extracted into a shared `src/secrets/scrub.rs`.
+**Implementation:** A `scrub_secrets(text: &str, tool_secrets: &HashMap<String, String>) -> String` function that iterates the map and replaces all occurrences, plus `StreamScrubber` for chunked output paths (OpenCode SSE, streaming tool output). Both live in `src/secrets/scrub.rs`.
 
 ### Protection Layers (Summary)
 
@@ -608,7 +649,7 @@ spacebot secrets status
 
 ### Secret CRUD
 
-Available only when the store is `unlocked`. All endpoints return `423 Locked` if the store is locked.
+Available when the store is `unencrypted` or `unlocked`. When `locked`, read-only endpoints (`GET /api/secrets`, `GET /api/secrets/:name/info`) still work — secret names, categories, and metadata are stored as unencrypted headers in redb. Mutation endpoints (`PUT`, `DELETE`) and any operation that touches secret values return `423 Locked`.
 
 **List secrets:**
 
@@ -787,7 +828,7 @@ When encryption is enabled, the export file is the raw encrypted redb data plus 
 | `/api/secrets/export` | POST | Token | Export backup (encrypted if encryption enabled, plaintext otherwise) |
 | `/api/secrets/import` | POST | Token | Import from backup |
 
-The CRUD endpoints (`GET/PUT/DELETE /api/secrets`) work in all states — `unencrypted` and `unlocked`. When `locked`, they return `423 Locked` (encrypted secrets can't be read or modified without the key). The encryption/unlock/lock/rotate endpoints only apply to encrypted stores.
+Read-only endpoints (`GET /api/secrets`, `GET /api/secrets/:name/info`, `GET /api/secrets/status`) work in all states — secret names and categories are unencrypted metadata. Mutation endpoints (`PUT /api/secrets/:name`, `DELETE /api/secrets/:name`) work when `unencrypted` or `unlocked` but return `423 Locked` when locked (can't encrypt new values without the key). The encryption/unlock/lock/rotate endpoints only apply to encrypted stores.
 
 Authentication uses the same bearer token as the rest of the control API. On hosted instances, the dashboard proxy handles auth transparently. Self-hosted users authenticate via their configured API token.
 
