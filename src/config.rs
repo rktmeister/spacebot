@@ -196,7 +196,14 @@ impl std::fmt::Debug for ProviderConfig {
             .field("api_key", &"[REDACTED]")
             .field("name", &self.name)
             .field("use_bearer_auth", &self.use_bearer_auth)
-            .field("extra_headers", &self.extra_headers)
+            .field(
+                "extra_headers",
+                &self
+                    .extra_headers
+                    .iter()
+                    .map(|(key, _)| key.as_str())
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -3994,19 +4001,21 @@ impl Config {
                     let api_key = resolve_env_value(&config.api_key).ok_or_else(|| {
                         anyhow::anyhow!("failed to resolve API key for provider '{}'", provider_id)
                     })?;
+                    let normalized_id = provider_id.to_lowercase();
+                    let extra_headers = if normalized_id == "openrouter" {
+                        openrouter_extra_headers()
+                    } else {
+                        vec![]
+                    };
                     Ok((
-                        provider_id.to_lowercase(),
+                        normalized_id,
                         ProviderConfig {
                             api_type: config.api_type,
                             base_url: config.base_url,
                             api_key,
                             name: config.name,
                             use_bearer_auth: false,
-                            extra_headers: if provider_id == "openrouter" {
-                                openrouter_extra_headers()
-                            } else {
-                                vec![]
-                            },
+                            extra_headers,
                         },
                     ))
                 })
@@ -6518,8 +6527,8 @@ openrouter_key = "legacy-openrouter-key"
             openrouter_provider
                 .extra_headers
                 .iter()
-                .find(|(k, _)| k == name)
-                .map(|(_, v)| v.as_str())
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
         };
         assert_eq!(find_header("HTTP-Referer"), Some("https://spacebot.sh/"));
         assert_eq!(find_header("X-OpenRouter-Title"), Some("Spacebot"));
@@ -6586,8 +6595,8 @@ name = "My OpenRouter"
             openrouter_provider
                 .extra_headers
                 .iter()
-                .find(|(k, _)| k == name)
-                .map(|(_, v)| v.as_str())
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
         };
         assert_eq!(find_header("HTTP-Referer"), Some("https://spacebot.sh/"));
         assert_eq!(find_header("X-OpenRouter-Title"), Some("Spacebot"));

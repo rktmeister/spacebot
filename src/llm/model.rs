@@ -123,12 +123,17 @@ impl SpacebotModel {
                     .name
                     .as_deref()
                     .unwrap_or("OpenAI-compatible provider");
+                let headers: Vec<(&str, &str)> = provider_config
+                    .extra_headers
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
                 self.call_openai_compatible_with_optional_auth(
                     request,
                     display_name,
                     &endpoint,
                     Some(provider_config.api_key.clone()),
-                    &[],
+                    &headers,
                 )
                 .await
             }
