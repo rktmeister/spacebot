@@ -256,13 +256,13 @@ The resolved values are consumed by Rust code (provider constructors, adapter in
 
 **Migration path:**
 
-1. On startup, if `SPACEBOT_MASTER_KEY` is present and config.toml contains literal key values (not `env:` or `secret:` prefixed), auto-migrate: encrypt each literal value into the secret store under a deterministic UPPER_SNAKE_CASE name (e.g., `anthropic_key` → `secret:ANTHROPIC_API_KEY`), with auto-detected category.
+1. On startup, if the master key is available in the OS credential store and config.toml contains literal key values (not `env:` or `secret:` prefixed), auto-migrate: encrypt each literal value into the secret store under a deterministic UPPER_SNAKE_CASE name (e.g., `anthropic_key` → `secret:ANTHROPIC_API_KEY`), with auto-detected category.
 2. Rewrite config.toml in place to replace literal values with `secret:` references.
 3. Log every migration step. If migration fails for any key, leave the original value in config.toml and warn.
 4. For `env:` prefixed values, leave them as-is. They're already not storing the secret in the config. Users who want to migrate `env:` values to the secret store can do so explicitly via the dashboard.
 5. The `env:` prefix continues to work for users who prefer env-var-based key management.
-6. **Hosted migration:** The platform sets `SPACEBOT_MASTER_KEY` on existing instances before the image update that introduces the secret store. On first boot with the new image, migration runs automatically. No user action required.
-7. **Self-hosted migration:** Users who set `SPACEBOT_MASTER_KEY` get automatic migration. Users who don't keep the existing behavior (literal/env values in config.toml, no secret store).
+6. **Hosted migration:** The platform generates master keys for existing instances and injects them via tmpfs before the image update that introduces the secret store. On first boot with the new image, the key is loaded into the kernel keyring and migration runs automatically. No user action required.
+7. **Self-hosted migration:** Users who enable the secret manager via the dashboard get automatic migration. Users who don't keep the existing behavior (literal/env values in config.toml, no secret store).
 
 ### Dashboard Changes
 
@@ -278,7 +278,7 @@ The sandbox `wrap()` function (see sandbox-hardening.md, Section 2) handles the 
 1. `--clearenv` strips everything from the subprocess.
 2. Re-add safe vars: `PATH` (with tools/bin), `HOME`, `USER`, `LANG`, `TERM`.
 3. Re-add **tool secrets only** — iterate the secret store's tool category, `--setenv` each into the subprocess.
-4. System secrets are **never** injected. `SPACEBOT_MASTER_KEY` is **never** injected.
+4. System secrets are **never** injected. The master key is never in the process environment (it lives in the OS credential store), so there's nothing to strip — but even if it were, `--clearenv` would exclude it.
 
 The `Sandbox` struct needs access to the tool secrets. Options:
 
@@ -433,7 +433,7 @@ The key properties: **system secrets never leave Rust memory.** Tool secrets rea
 
 ### Env Passthrough for Self-Hosted (No Master Key)
 
-Without `SPACEBOT_MASTER_KEY`, the secret store is unavailable. But env sanitization (`--clearenv`) still runs — it has to, or the master key protection is opt-in and useless. This means self-hosted users who set `GH_TOKEN` in their Docker compose lose it silently after env sanitization ships. That's a breaking change.
+Without a master key in the OS credential store, the secret store is unavailable. But env sanitization (`--clearenv`) still runs — it has to, or system secrets and internal vars leak to workers. This means self-hosted users who set `GH_TOKEN` in their Docker compose lose it silently after env sanitization ships. That's a breaking change.
 
 **Fix:** A configurable passthrough list in the sandbox config:
 
