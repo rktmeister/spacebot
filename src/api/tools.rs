@@ -6,6 +6,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use serde::Serialize;
+use std::io::ErrorKind;
 use std::sync::Arc;
 
 #[derive(Serialize)]
@@ -30,27 +31,39 @@ pub(super) async fn list_tools(
 
     let mut binaries = Vec::new();
 
-    if tools_bin.is_dir() {
-        let entries = std::fs::read_dir(&tools_bin).map_err(|error| {
+    let tools_bin_is_dir = match tokio::fs::metadata(&tools_bin).await {
+        Ok(metadata) => metadata.is_dir(),
+        Err(error) if error.kind() == ErrorKind::NotFound => false,
+        Err(error) => {
+            tracing::warn!(path = %tools_bin.display(), %error, "failed to stat tools/bin");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    if tools_bin_is_dir {
+        let mut entries = tokio::fs::read_dir(&tools_bin).await.map_err(|error| {
             tracing::warn!(path = %tools_bin.display(), %error, "failed to read tools/bin");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
+        while let Some(entry) = entries.next_entry().await.map_err(|error| {
+            tracing::warn!(path = %tools_bin.display(), %error, "failed during tools/bin iteration");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })? {
+            let entry_path = entry.path();
+            let metadata = match tokio::fs::symlink_metadata(&entry_path).await {
+                Ok(metadata) => metadata,
                 Err(error) => {
-                    tracing::debug!(%error, "skipping unreadable tools/bin entry");
+                    tracing::debug!(
+                        path = %entry_path.display(),
+                        %error,
+                        "skipping entry with unreadable metadata"
+                    );
                     continue;
                 }
             };
 
-            let metadata = match entry.metadata() {
-                Ok(metadata) => metadata,
-                Err(_) => continue,
-            };
-
-            if !metadata.is_file() {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
                 continue;
             }
 

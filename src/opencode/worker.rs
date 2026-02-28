@@ -321,16 +321,12 @@ impl OpenCodeWorker {
                         // Leak detection: scan text content for known secret patterns.
                         // OpenCode output is not scanned by SpacebotHook, so this is
                         // the only leak protection layer for OpenCode workers.
-                        if let Some(leaked) = crate::secrets::scrub::scan_for_leaks(text) {
-                            let prefix = &leaked[..leaked.len().min(12)];
+                        if crate::secrets::scrub::scan_for_leaks(text).is_some() {
                             tracing::error!(
                                 worker_id = %self.id,
-                                leaked_prefix = prefix,
                                 "LEAK DETECTED in OpenCode worker output — terminating"
                             );
-                            return EventAction::Error(format!(
-                                "leak detected in output: {prefix}..."
-                            ));
+                            return EventAction::Error("leak detected in output".to_string());
                         }
 
                         *last_text = text.clone();
@@ -359,19 +355,17 @@ impl OpenCodeWorker {
                                 ToolState::Completed { output, .. } => {
                                     // Scan tool output for leaks
                                     if let Some(tool_output) = output
-                                        && let Some(leaked) =
-                                            crate::secrets::scrub::scan_for_leaks(tool_output)
+                                        && crate::secrets::scrub::scan_for_leaks(tool_output)
+                                            .is_some()
                                     {
-                                        let prefix = &leaked[..leaked.len().min(12)];
                                         tracing::error!(
                                             worker_id = %self.id,
                                             tool = %tool_name,
-                                            leaked_prefix = prefix,
                                             "LEAK DETECTED in OpenCode tool output — terminating"
                                         );
-                                        return EventAction::Error(format!(
-                                            "leak detected in tool output: {prefix}..."
-                                        ));
+                                        return EventAction::Error(
+                                            "leak detected in tool output".to_string(),
+                                        );
                                     }
 
                                     if current_tool.as_deref() == Some(tool_name.as_str()) {

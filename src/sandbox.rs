@@ -180,7 +180,7 @@ impl Sandbox {
         };
 
         if config.mode == SandboxMode::Disabled {
-            return self.wrap_passthrough(program, args, working_dir, &path_env);
+            return self.wrap_passthrough(program, args, working_dir, &path_env, &config);
         }
 
         match self.backend {
@@ -195,7 +195,9 @@ impl Sandbox {
             SandboxBackend::SandboxExec => {
                 self.wrap_sandbox_exec(program, args, working_dir, &path_env, &config)
             }
-            SandboxBackend::None => self.wrap_passthrough(program, args, working_dir, &path_env),
+            SandboxBackend::None => {
+                self.wrap_passthrough(program, args, working_dir, &path_env, &config)
+            }
         }
     }
 
@@ -333,9 +335,8 @@ impl Sandbox {
         args: &[&str],
         working_dir: &Path,
         path_env: &str,
+        config: &SandboxConfig,
     ) -> Command {
-        let config = self.config.load();
-
         let mut cmd = Command::new(program);
         for arg in args {
             cmd.arg(arg);

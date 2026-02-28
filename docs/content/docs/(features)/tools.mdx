@@ -185,11 +185,7 @@ Leak detection (via `SpacebotHook`) scans all tool output for secret patterns (A
 
 ### Status reporting
 
-Workers report progress via `set_status`. The channel sees these in its status block. Status updates use `try_send` (non-blocking) so a slow event bus never blocks tool execution.
-
-### Fire-and-forget sends
-
-`set_status` uses `try_send` instead of `.await` on the event channel. If the channel is full, the update is dropped rather than blocking the worker.
+Workers report progress via `set_status`, and the channel sees those updates in its status block. `set_status` uses `try_send` (non-blocking), so if the event channel is full the update is dropped instead of blocking the worker.
 
 ## What Each Tool Does
 

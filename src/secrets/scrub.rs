@@ -156,7 +156,10 @@ impl StreamScrubber {
         // Hold back the last max_secret_len chars to catch secrets that might
         // be split at the next boundary. Emit everything before that.
         if self.max_secret_len > 0 && scrubbed.len() > self.max_secret_len {
-            let split_at = scrubbed.len() - self.max_secret_len;
+            let mut split_at = scrubbed.len() - self.max_secret_len;
+            while split_at > 0 && !scrubbed.is_char_boundary(split_at) {
+                split_at -= 1;
+            }
             self.tail = scrubbed[split_at..].to_string();
             scrubbed[..split_at].to_string()
         } else {
@@ -222,6 +225,14 @@ mod tests {
     fn scrubber_no_secrets_passes_through() {
         let mut scrubber = StreamScrubber::new(vec![]);
         assert_eq!(scrubber.scrub("hello world"), "hello world");
+    }
+
+    #[test]
+    fn scrubber_split_respects_utf8_boundaries() {
+        let mut scrubber = StreamScrubber::new(vec![("DUMMY".to_string(), "abc".to_string())]);
+        let part = scrubber.scrub("ééééé");
+        let rest = scrubber.flush();
+        assert_eq!(format!("{part}{rest}"), "ééééé");
     }
 
     #[test]
