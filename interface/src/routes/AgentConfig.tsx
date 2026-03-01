@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AgentConfigResponse, type AgentConfigUpdateRequest } from "@/api/client";
-import { Button, SettingSidebarButton, Input, TextArea, Toggle, NumberStepper, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, cx } from "@/ui";
+import { Button, SettingSidebarButton, TextArea, Toggle, NumberStepper, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, cx } from "@/ui";
 import { ModelSelect } from "@/components/ModelSelect";
 import { TagInput } from "@/components/TagInput";
 import { Markdown } from "@/components/Markdown";
@@ -34,7 +34,7 @@ const SECTIONS: {
 	{ id: "coalesce", label: "Coalesce", group: "config", description: "Message batching", detail: "When multiple messages arrive in quick succession, coalescing batches them into a single LLM turn. This prevents the agent from responding to each message individually in fast-moving conversations." },
 	{ id: "memory", label: "Memory Persistence", group: "config", description: "Auto-save interval", detail: "Spawns a silent background branch at regular intervals to recall existing memories and save new ones from the recent conversation. Runs without blocking the channel." },
 	{ id: "browser", label: "Browser", group: "config", description: "Chrome automation", detail: "Controls browser automation tools available to workers. When enabled, workers can navigate web pages, take screenshots, and interact with sites. JavaScript evaluation is a separate permission." },
-	{ id: "sandbox", label: "Sandbox", group: "config", description: "Process containment", detail: "OS-level filesystem containment for shell and exec tool subprocesses. When enabled, worker processes run inside a kernel-enforced sandbox (bubblewrap on Linux, sandbox-exec on macOS) that makes the entire filesystem read-only except for the workspace and any configured writable paths. On hosted deployments, sandbox mode is always enforced." },
+	{ id: "sandbox", label: "Sandbox", group: "config", description: "Process containment", detail: "OS-level filesystem containment for shell and exec tool subprocesses. When enabled, worker processes run inside a kernel-enforced sandbox (bubblewrap on Linux, sandbox-exec on macOS) with an allowlist-only filesystem — only system paths, the workspace, and explicitly configured extra paths are accessible." },
 ];
 
 interface AgentConfigProps {
@@ -827,7 +827,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 					<div className="grid gap-4">
 						<div className="flex flex-col gap-1.5">
 							<label className="text-sm font-medium text-ink">Mode</label>
-							<p className="text-tiny text-ink-faint">Kernel-enforced filesystem containment for shell and exec subprocesses. On hosted deployments this is always enforced regardless of this setting.</p>
+							<p className="text-tiny text-ink-faint">Kernel-enforced filesystem containment for shell and exec subprocesses.</p>
 							<Select
 								value={localValues.mode as string}
 								onValueChange={(v) => handleChange("mode", v)}
@@ -842,8 +842,8 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 							</Select>
 						</div>
 						<div className="flex flex-col gap-1.5">
-							<label className="text-sm font-medium text-ink">Writable Paths</label>
-							<p className="text-tiny text-ink-faint">Additional directories workers can write to beyond the workspace. The workspace is always writable. Press Enter to add a path.</p>
+						<label className="text-sm font-medium text-ink">Extra Allowed Paths</label>
+						<p className="text-tiny text-ink-faint">Additional directories workers can read and write beyond the workspace. The workspace is always accessible. Press Enter to add a path.</p>
 							<TagInput
 								value={(localValues.writable_paths as string[]) ?? []}
 								onChange={(paths) => handleChange("writable_paths", paths)}
@@ -881,28 +881,6 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 }
 
 // -- Form Field Components --
-
-interface ConfigFieldProps {
-	label: string;
-	description: string;
-	value: string;
-	onChange: (value: string) => void;
-}
-
-function ConfigField({ label, description, value, onChange }: ConfigFieldProps) {
-	return (
-		<div className="flex flex-col gap-1.5">
-			<label className="text-sm font-medium text-ink">{label}</label>
-			<p className="text-tiny text-ink-faint">{description}</p>
-			<Input
-				type="text"
-				value={value}
-				onChange={(e) => onChange(e.target.value)}
-				className="mt-1 border-app-line/50 bg-app-darkBox/30"
-			/>
-		</div>
-	);
-}
 
 interface ConfigToggleFieldProps {
 	label: string;
