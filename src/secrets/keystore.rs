@@ -12,9 +12,15 @@
 //!   keyring via `pre_exec`.
 
 use crate::error::SecretsError;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Service name used for Keychain/keyring identification.
 const SERVICE_NAME: &str = "sh.spacebot.master-key";
+
+/// Whether the kernel keyring `keyctl` syscall is available on this system.
+/// Set once at startup by `probe_keyring_support()`. When `false`, the
+/// `pre_exec_new_session_keyring` hook is a no-op so workers always start.
+static KEYRING_ISOLATION_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
 /// Trait for OS-level credential storage.
 ///
@@ -277,11 +283,53 @@ impl KeyStore for LinuxKeyStore {
     }
 }
 
+/// Probe whether the `keyctl` syscall is available on this system.
+///
+/// Call once at startup. Tests `KEYCTL_GET_KEYRING_ID` on the session keyring
+/// — a read-only, side-effect-free operation. If it succeeds, worker keyring
+/// isolation is enabled. If it fails (restrictive seccomp, gVisor, etc.),
+/// workers will still start but without keyring isolation.
+#[cfg(target_os = "linux")]
+pub fn probe_keyring_support() {
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_keyctl,
+            0x00_i64, // KEYCTL_GET_KEYRING_ID
+            -3_i64,   // KEY_SPEC_SESSION_KEYRING
+            0_i64,    // don't create
+        )
+    };
+    if result >= 0 {
+        KEYRING_ISOLATION_AVAILABLE.store(true, Ordering::Release);
+        tracing::debug!("kernel keyring available — worker keyring isolation enabled");
+    } else {
+        let error = std::io::Error::last_os_error();
+        tracing::warn!(
+            %error,
+            "kernel keyring unavailable — worker keyring isolation disabled \
+             (keyctl blocked by seccomp or unsupported kernel)"
+        );
+    }
+}
+
+/// No-op on non-Linux — keyring isolation is a Linux-only feature.
+#[cfg(not(target_os = "linux"))]
+pub fn probe_keyring_support() {}
+
+/// Whether worker keyring isolation is available (set by `probe_keyring_support`).
+pub fn keyring_isolation_available() -> bool {
+    KEYRING_ISOLATION_AVAILABLE.load(Ordering::Acquire)
+}
+
 /// Spawn a worker subprocess with a fresh empty session keyring (Linux only).
 ///
 /// Must be called via `Command::pre_exec()` before `spawn()`. The child gets
 /// a new session keyring and cannot access the parent's keyring (which holds
 /// the master key).
+///
+/// Returns `Ok(())` immediately if keyring isolation is unavailable (probed
+/// at startup). Workers always start — keyring isolation is defense-in-depth,
+/// not a hard requirement.
 ///
 /// # Safety
 ///
@@ -290,6 +338,10 @@ impl KeyStore for LinuxKeyStore {
 /// is a direct syscall and is safe in this context.
 #[cfg(target_os = "linux")]
 pub unsafe fn pre_exec_new_session_keyring() -> std::io::Result<()> {
+    if !KEYRING_ISOLATION_AVAILABLE.load(Ordering::Acquire) {
+        return Ok(());
+    }
+
     // KEYCTL_JOIN_SESSION_KEYRING with NULL name creates a new anonymous
     // session keyring for this process.
     // SAFETY: `libc::syscall` is a direct syscall wrapper. We pass valid

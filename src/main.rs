@@ -1144,6 +1144,11 @@ const KEYSTORE_INSTANCE_ID: &str = "instance";
 fn bootstrap_secrets_store(
     config_path: &Option<std::path::PathBuf>,
 ) -> Option<Arc<spacebot::secrets::store::SecretsStore>> {
+    // Probe kernel keyring support before any workers spawn. If keyctl is
+    // blocked (restrictive seccomp, gVisor, etc.), worker keyring isolation
+    // is disabled but workers still start normally.
+    spacebot::secrets::keystore::probe_keyring_support();
+
     let instance_dir = if let Some(path) = config_path {
         path.parent()
             .map(|p| p.to_path_buf())
