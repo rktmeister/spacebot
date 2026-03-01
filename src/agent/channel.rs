@@ -3094,9 +3094,12 @@ fn apply_history_after_turn(
         }
         Err(rig::completion::PromptError::PromptCancelled { .. }) => {
             // Rig appended the user prompt and possibly an assistant tool-call
-            // message to history before cancellation. We keep only the first
-            // user text message (the actual user prompt) and discard everything else
-            // (assistant tool-calls without results, tool-result user messages).
+            // message to history before cancellation. We preserve:
+            // 1. The first user text message (the actual user prompt)
+            // 2. A clean assistant text message extracted from the reply tool call
+            //
+            // We discard: dangling tool calls (without results), tool-result user
+            // messages, and internal correction prompts.
             //
             // Exception: retrigger turns. The "user prompt" Rig pushed is actually
             // the synthetic system retrigger message (internal template scaffolding),
@@ -3112,18 +3115,34 @@ fn apply_history_after_turn(
             }
             let new_messages = &history[history_len_before..];
             let mut preserved = 0usize;
+
+            // Preserve the user text message
             if let Some(message) = new_messages.iter().find(|m| is_user_text_message(m)) {
                 guard.push(message.clone());
-                preserved = 1;
+                preserved += 1;
             }
-            // Skip: Assistant messages (contain tool calls without results),
-            // user ToolResult messages, and internal correction prompts.
+
+            // Extract and preserve the reply content from the assistant's tool call.
+            // The assistant message contains ToolCall(reply, {content: "..."}), but
+            // we can't store the tool call without its result (it would poison future
+            // turns). Instead, extract the content and push a clean text-only message.
+            if let Some(reply_content) = extract_reply_content_from_cancelled_history(new_messages)
+            {
+                guard.push(rig::message::Message::Assistant {
+                    id: None,
+                    content: rig::OneOrMany::one(rig::message::AssistantContent::text(
+                        reply_content,
+                    )),
+                });
+                preserved += 1;
+            }
+
             tracing::debug!(
                 channel_id = %channel_id,
                 total_new = new_messages.len(),
                 preserved,
                 discarded = new_messages.len() - preserved,
-                "selectively preserved first user message after PromptCancelled"
+                "preserved user message and assistant reply after PromptCancelled"
             );
         }
         Err(_) => {
@@ -3136,6 +3155,35 @@ fn apply_history_after_turn(
             guard.truncate(history_len_before);
         }
     }
+}
+
+/// Extract reply content from a cancelled turn's assistant message.
+///
+/// When the reply tool fires, Rig's history contains an Assistant message with
+/// a ToolCall for `reply` with args like `{"content": "Hey there!"}`. This
+/// extracts that content string so we can inject a clean text-only assistant
+/// message into history (the tool call itself can't be preserved since it has
+/// no matching result).
+fn extract_reply_content_from_cancelled_history(
+    new_messages: &[rig::message::Message],
+) -> Option<String> {
+    for message in new_messages {
+        if let rig::message::Message::Assistant { content, .. } = message {
+            for item in content.iter() {
+                if let rig::message::AssistantContent::ToolCall(tool_call) = item {
+                    if tool_call.function.name == "reply" {
+                        // Extract the "content" field from the reply tool args
+                        if let Some(content_value) = tool_call.function.arguments.get("content") {
+                            if let Some(text) = content_value.as_str() {
+                                return Some(text.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Returns true if a message is a User message containing only text content
@@ -3219,16 +3267,23 @@ mod tests {
         assert_eq!(guard, history);
     }
 
-    /// PromptCancelled preserves user text messages but discards assistant
-    /// tool-call messages (which have no matching tool results).
+    /// PromptCancelled preserves user text messages and extracts reply content
+    /// from the assistant's tool call, discarding the dangling tool call itself.
     #[test]
-    fn prompt_cancelled_preserves_user_prompt() {
+    fn prompt_cancelled_preserves_user_and_reply() {
         let initial = make_history(&["hello", "thinking..."]);
         let mut guard = initial.clone();
-        // Simulate what Rig does: push user prompt + assistant tool-call
+        // Simulate what Rig does: push user prompt + assistant reply tool-call
         let mut history = initial.clone();
         history.push(user_msg("new user prompt")); // should be preserved
-        history.push(assistant_msg("tool call without result")); // should be discarded
+        history.push(Message::Assistant {
+            id: None,
+            content: rig::OneOrMany::one(rig::message::AssistantContent::tool_call(
+                "call_1",
+                "reply",
+                serde_json::json!({"content": "Hey there!"}),
+            )),
+        });
         let len_before = initial.len();
 
         let err = Err(PromptError::PromptCancelled {
@@ -3238,18 +3293,19 @@ mod tests {
 
         apply_history_after_turn(&err, &mut guard, history, len_before, "test", false);
 
-        // User prompt should be preserved, assistant tool-call discarded
+        // User prompt and reply content should be preserved, tool-call structure discarded
         let mut expected = initial;
         expected.push(user_msg("new user prompt"));
+        expected.push(assistant_msg("Hey there!"));
         assert_eq!(
             guard, expected,
-            "user text messages should be preserved, assistant messages discarded"
+            "user text message and reply content should be preserved"
         );
     }
 
-    /// PromptCancelled discards tool-result User messages (ToolResult content).
+    /// PromptCancelled extracts reply content and discards tool-result User messages.
     #[test]
-    fn prompt_cancelled_discards_tool_results() {
+    fn prompt_cancelled_extracts_reply_discards_tool_results() {
         let initial = make_history(&["hello", "thinking..."]);
         let mut guard = initial.clone();
         let mut history = initial.clone();
@@ -3285,9 +3341,10 @@ mod tests {
 
         let mut expected = initial;
         expected.push(user_msg("new user prompt"));
+        expected.push(assistant_msg("hello"));
         assert_eq!(
             guard, expected,
-            "tool-call and tool-result messages should be discarded"
+            "reply content should be extracted, tool-result messages discarded"
         );
     }
 
@@ -3300,8 +3357,15 @@ mod tests {
         let mut history = initial.clone();
         history.push(user_msg("real user prompt")); // preserved
         history.push(assistant_msg("bad tool syntax"));
-        history.push(user_msg("Please proceed and use the available tools.")); // dropped
-        history.push(assistant_msg("tool call without result"));
+        history.push(user_msg("Please proceed and use the available tools.")); // dropped (correction)
+        history.push(Message::Assistant {
+            id: None,
+            content: rig::OneOrMany::one(rig::message::AssistantContent::tool_call(
+                "call_1",
+                "reply",
+                serde_json::json!({"content": "Got it!"}),
+            )),
+        });
         let len_before = initial.len();
 
         let err = Err(PromptError::PromptCancelled {
@@ -3313,9 +3377,10 @@ mod tests {
 
         let mut expected = initial;
         expected.push(user_msg("real user prompt"));
+        expected.push(assistant_msg("Got it!"));
         assert_eq!(
             guard, expected,
-            "only the first user prompt should be preserved"
+            "only the first user prompt and final reply should be preserved"
         );
     }
 
@@ -3460,15 +3525,19 @@ mod tests {
             false,
         );
 
-        // User prompt preserved, assistant tool-call discarded
+        // User prompt and reply content preserved, tool-call structure discarded
         assert_eq!(
             guard.len(),
-            initial.len() + 1,
-            "user prompt should be preserved"
+            initial.len() + 2,
+            "user prompt and assistant reply should be preserved"
         );
         assert!(
-            matches!(&guard[guard.len() - 1], Message::User { .. }),
-            "last message should be the preserved user prompt"
+            matches!(&guard[guard.len() - 2], Message::User { .. }),
+            "second-to-last message should be the preserved user prompt"
+        );
+        assert!(
+            matches!(&guard[guard.len() - 1], Message::Assistant { .. }),
+            "last message should be the extracted reply content"
         );
 
         // Second turn: new user message appended, successful response
