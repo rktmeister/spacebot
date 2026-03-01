@@ -35,6 +35,11 @@ const RETRIGGER_DEBOUNCE_MS: u64 = 500;
 /// infinite retrigger cascades where each retrigger spawns more work.
 const MAX_RETRIGGERS_PER_TURN: usize = 3;
 
+/// Max LLM turns for retrigger relay. Retriggers are simple relay tasks —
+/// the LLM just needs to call the reply tool once. A low cap avoids wasting
+/// tokens on retries when the model struggles with the retrigger format.
+const RETRIGGER_MAX_TURNS: usize = 3;
+
 #[derive(Debug, Clone)]
 enum TemporalTimezone {
     Named { timezone_name: String, timezone: Tz },
@@ -969,12 +974,19 @@ impl Channel {
         self.handle_agent_result(result, &skip_flag, &replied_flag, is_retrigger)
             .await;
 
-        // After a successful retrigger relay, inject a compact record into
-        // history so the conversation has context about what was relayed.
-        // The retrigger turn itself is rolled back by apply_history_after_turn
-        // (PromptCancelled leaves dangling tool calls), so without this the
-        // LLM would have no memory of the background result on subsequent turns.
-        if is_retrigger && replied_flag.load(std::sync::atomic::Ordering::Relaxed) {
+        // After a retrigger turn, replace the synthetic bridge message in history
+        // with a compact summary so the conversation has context about what
+        // happened. The retrigger turn itself is rolled back by
+        // apply_history_after_turn (PromptCancelled leaves dangling tool calls),
+        // so without this the LLM would have no memory of the background result
+        // on subsequent turns.
+        //
+        // This runs on both success and failure paths: if the LLM successfully
+        // relayed (replied_flag=true), it records what was sent. If the LLM
+        // failed (CompletionError, empty response, etc.), it preserves the result
+        // so it's not silently lost — the next real user turn will see it.
+        if is_retrigger {
+            let replied = replied_flag.load(std::sync::atomic::Ordering::Relaxed);
             // Extract the result summaries from the metadata we attached in
             // flush_pending_retrigger, so we record only the substance (not
             // the retrigger instructions/template scaffolding).
@@ -982,12 +994,43 @@ impl Channel {
                 .metadata
                 .get("retrigger_result_summary")
                 .and_then(|v| v.as_str())
-                .unwrap_or("[background work completed and result relayed to user]");
+                .unwrap_or("[background work completed]");
+
+            let record = if replied {
+                summary.to_string()
+            } else {
+                tracing::warn!(
+                    channel_id = %self.id,
+                    "retrigger relay failed, preserving result in history for next turn"
+                );
+                format!(
+                    "[background work completed but relay to user failed — include this in your next response]\n{summary}"
+                )
+            };
 
             let mut history = self.state.history.write().await;
+            // Replace the synthetic bridge message (if present) with the summary
+            // to avoid consecutive assistant messages in history.
+            let replaced = if history.last().is_some_and(|m| match m {
+                rig::message::Message::Assistant { content, .. } => content.iter().any(|c| {
+                    matches!(c, rig::message::AssistantContent::Text(t) if t.text.contains("[acknowledged"))
+                }),
+                _ => false,
+            }) {
+                history.pop();
+                true
+            } else {
+                false
+            };
+            tracing::debug!(
+                channel_id = %self.id,
+                replaced_bridge = replaced,
+                replied,
+                "injecting retrigger summary into history"
+            );
             history.push(rig::message::Message::Assistant {
                 id: None,
-                content: OneOrMany::one(rig::message::AssistantContent::text(summary)),
+                content: OneOrMany::one(rig::message::AssistantContent::text(record)),
             });
         }
 
@@ -1195,7 +1238,11 @@ impl Channel {
 
         let rc = &self.deps.runtime_config;
         let routing = rc.routing.load();
-        let max_turns = **rc.max_turns.load();
+        let max_turns = if is_retrigger {
+            RETRIGGER_MAX_TURNS
+        } else {
+            **rc.max_turns.load()
+        };
         let model_name = routing.resolve(ProcessType::Channel, None);
         let model = SpacebotModel::make(&self.deps.llm_manager, model_name)
             .with_context(&*self.deps.agent_id, "channel")
@@ -1219,6 +1266,29 @@ impl Channel {
                 OneOrMany::one(UserContent::text("[attachment processing failed]"))
             });
             history.push(rig::message::Message::User { content });
+            drop(history);
+        }
+
+        // For retrigger turns, inject a synthetic assistant acknowledgment so the
+        // LLM sees proper user/assistant role alternation. Without this, the API
+        // receives back-to-back user messages (the original user prompt preserved
+        // from the prior turn + the retrigger system message), which causes some
+        // models to return empty responses or get confused about whose turn it is.
+        if is_retrigger {
+            let mut history = self.state.history.write().await;
+            // Only inject if the last message is a user message (avoid double-stacking
+            // if history already ends with an assistant message).
+            let needs_bridge = history
+                .last()
+                .is_some_and(|m| matches!(m, rig::message::Message::User { .. }));
+            if needs_bridge {
+                history.push(rig::message::Message::Assistant {
+                    id: None,
+                    content: OneOrMany::one(rig::message::AssistantContent::text(
+                        "[acknowledged — working on it in background]",
+                    )),
+                });
+            }
             drop(history);
         }
 
