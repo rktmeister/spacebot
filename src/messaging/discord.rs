@@ -88,7 +88,7 @@ impl DiscordAdapter {
     fn extract_reply_message_id(message: &InboundMessage) -> Option<MessageId> {
         message
             .metadata
-            .get("discord_reply_to_message_id")
+            .get(crate::metadata_keys::REPLY_TO_MESSAGE_ID)
             .and_then(|value| value.as_u64())
             .map(MessageId::new)
     }
@@ -843,6 +843,10 @@ async fn build_metadata(
     metadata.insert("discord_channel_id".into(), message.channel_id.get().into());
     metadata.insert("discord_message_id".into(), message.id.get().into());
     metadata.insert(
+        crate::metadata_keys::MESSAGE_ID.into(),
+        serde_json::Value::String(message.id.get().to_string()),
+    );
+    metadata.insert(
         "discord_author_name".into(),
         message.author.name.clone().into(),
     );
@@ -882,7 +886,8 @@ async fn build_metadata(
 
         // Try to get guild name
         if let Ok(guild) = guild_id.to_partial_guild(&ctx.http).await {
-            metadata.insert("discord_guild_name".into(), guild.name.into());
+            metadata.insert("discord_guild_name".into(), guild.name.clone().into());
+            metadata.insert(crate::metadata_keys::SERVER_NAME.into(), guild.name.into());
         }
     }
 
@@ -892,6 +897,10 @@ async fn build_metadata(
     {
         metadata.insert(
             "discord_channel_name".into(),
+            guild_channel.name.clone().into(),
+        );
+        metadata.insert(
+            crate::metadata_keys::CHANNEL_NAME.into(),
             guild_channel.name.clone().into(),
         );
 
@@ -921,7 +930,8 @@ async fn build_metadata(
         } else {
             reply_content
         };
-        metadata.insert("reply_to_content".into(), truncated.into());
+        metadata.insert("reply_to_content".into(), truncated.clone().into());
+        metadata.insert(crate::metadata_keys::REPLY_TO_TEXT.into(), truncated.into());
     }
 
     metadata.insert(

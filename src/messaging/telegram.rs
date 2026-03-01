@@ -796,6 +796,10 @@ fn build_metadata(
         "telegram_message_id".into(),
         serde_json::Value::Number(message.id.0.into()),
     );
+    metadata.insert(
+        crate::metadata_keys::MESSAGE_ID.into(),
+        serde_json::Value::String(message.id.0.to_string()),
+    );
 
     let chat_type = if message.chat.is_private() {
         "private"
@@ -812,7 +816,9 @@ fn build_metadata(
 
     if let Some(title) = &message.chat.title() {
         metadata.insert("telegram_chat_title".into(), (*title).into());
+        metadata.insert(crate::metadata_keys::SERVER_NAME.into(), (*title).into());
     }
+    metadata.insert(crate::metadata_keys::CHANNEL_NAME.into(), chat_type.into());
 
     let formatted_author = if let Some(from) = &message.from {
         metadata.insert(
