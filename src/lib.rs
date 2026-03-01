@@ -198,6 +198,18 @@ pub enum ProcessEvent {
     },
 }
 
+/// A message to be injected into a specific channel from outside the normal
+/// inbound message flow. Used for cross-agent task completion notifications.
+#[derive(Debug, Clone)]
+pub struct ChannelInjection {
+    /// The conversation_id of the target channel.
+    pub conversation_id: String,
+    /// The agent that owns the target channel.
+    pub agent_id: String,
+    /// The message to inject.
+    pub message: InboundMessage,
+}
+
 /// Shared dependency bundle for agent processes.
 #[derive(Clone)]
 pub struct AgentDeps {
@@ -215,6 +227,15 @@ pub struct AgentDeps {
     pub links: Arc<arc_swap::ArcSwap<Vec<links::AgentLink>>>,
     /// Map of all agent IDs to display names, for inter-agent message routing.
     pub agent_names: Arc<std::collections::HashMap<String, String>>,
+    /// Cross-agent task store registry. Maps agent_id → TaskStore for agents
+    /// reachable via links. Used by `send_agent_message` to create tasks on
+    /// target agents and by the cortex to look up delegation metadata.
+    /// Populated after all agents are initialized.
+    pub task_store_registry:
+        Arc<arc_swap::ArcSwap<std::collections::HashMap<String, Arc<tasks::TaskStore>>>>,
+    /// Sender for injecting messages into channels from outside the normal
+    /// inbound message flow (e.g. cross-agent task completion notifications).
+    pub injection_tx: tokio::sync::mpsc::Sender<ChannelInjection>,
 }
 
 impl AgentDeps {
