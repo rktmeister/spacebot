@@ -292,11 +292,17 @@ impl KeyStore for LinuxKeyStore {
 pub unsafe fn pre_exec_new_session_keyring() -> std::io::Result<()> {
     // KEYCTL_JOIN_SESSION_KEYRING with NULL name creates a new anonymous
     // session keyring for this process.
-    let result = libc::syscall(
-        libc::SYS_keyctl,
-        0x01_i64, // KEYCTL_JOIN_SESSION_KEYRING
-        std::ptr::null::<libc::c_char>(),
-    );
+    // SAFETY: `libc::syscall` is a direct syscall wrapper. We pass valid
+    // constants and a null pointer (requesting a new anonymous keyring).
+    // This runs in a pre_exec context where only async-signal-safe ops are
+    // permitted — `keyctl` is a direct syscall and qualifies.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_keyctl,
+            0x01_i64, // KEYCTL_JOIN_SESSION_KEYRING
+            std::ptr::null::<libc::c_char>(),
+        )
+    };
     if result < 0 {
         return Err(std::io::Error::last_os_error());
     }
