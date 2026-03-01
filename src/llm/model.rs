@@ -1573,13 +1573,19 @@ fn parse_openai_error_message(response_text: &str) -> Option<String> {
 fn format_api_error(status: reqwest::StatusCode, body: &serde_json::Value) -> String {
     let message = body["error"]["message"].as_str().unwrap_or("unknown error");
 
-    let provider_name = body["error"]["metadata"]["provider_name"].as_str();
-    let raw = body["error"]["metadata"]["raw"]
+    let provider_name = body["error"]["metadata"]["provider_name"]
         .as_str()
-        .or_else(|| body["error"]["metadata"]["raw"].as_object().map(|_| ""))
-        .and_then(|s| if s.is_empty() { None } else { Some(s) });
+        .filter(|s| !s.is_empty());
+    let raw = match &body["error"]["metadata"]["raw"] {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        serde_json::Value::Null => None,
+        other => {
+            let s = other.to_string();
+            if s == "null" { None } else { Some(s) }
+        }
+    };
 
-    match (provider_name, raw) {
+    match (provider_name, raw.as_deref()) {
         (Some(provider), Some(raw_err)) => {
             format!("{status}: {message} (upstream provider {provider}: {raw_err})")
         }
@@ -1787,5 +1793,19 @@ mod tests {
         let msg = format_api_error(status, &body);
         assert!(msg.contains("Azure"));
         assert!(!msg.contains("raw"));
+
+        // Structured JSON raw error (not a string)
+        let body = serde_json::json!({
+            "error": {
+                "message": "Provider returned error",
+                "metadata": {
+                    "provider_name": "Google",
+                    "raw": {"code": 400, "detail": "invalid schema"}
+                }
+            }
+        });
+        let msg = format_api_error(status, &body);
+        assert!(msg.contains("Google"));
+        assert!(msg.contains("invalid schema"));
     }
 }
