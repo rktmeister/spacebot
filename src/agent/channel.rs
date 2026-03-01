@@ -3170,14 +3170,14 @@ fn extract_reply_content_from_cancelled_history(
     for message in new_messages {
         if let rig::message::Message::Assistant { content, .. } = message {
             for item in content.iter() {
-                if let rig::message::AssistantContent::ToolCall(tool_call) = item {
-                    if tool_call.function.name == "reply" {
-                        // Extract the "content" field from the reply tool args
-                        if let Some(content_value) = tool_call.function.arguments.get("content") {
-                            if let Some(text) = content_value.as_str() {
-                                return Some(text.to_string());
-                            }
-                        }
+                if let rig::message::AssistantContent::ToolCall(tool_call) = item
+                    && tool_call.function.name == "reply"
+                {
+                    // Extract the "content" field from the reply tool args
+                    if let Some(content_value) = tool_call.function.arguments.get("content")
+                        && let Some(text) = content_value.as_str()
+                    {
+                        return Some(text.to_string());
                     }
                 }
             }
