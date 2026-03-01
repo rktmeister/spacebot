@@ -160,6 +160,13 @@ async fn spawn_branch(
     let branch_id = branch.id;
     let prompt = prompt.to_owned();
 
+    // Capture what the spawned task needs to notify the channel on failure.
+    // branch.run() only sends BranchResult on the success path, so the
+    // spawner must handle failures to prevent orphaned branches (see #279).
+    let event_tx = state.deps.event_tx.clone();
+    let agent_id = state.deps.agent_id.clone();
+    let channel_id = state.channel_id.clone();
+
     let branch_span = tracing::info_span!(
         "branch.run",
         branch_id = %branch_id,
@@ -170,6 +177,12 @@ async fn spawn_branch(
         async move {
             if let Err(error) = branch.run(&prompt).await {
                 tracing::error!(branch_id = %branch_id, %error, "branch failed");
+                let _ = event_tx.send(crate::ProcessEvent::BranchResult {
+                    agent_id,
+                    branch_id,
+                    channel_id,
+                    conclusion: format!("Branch failed: {error}"),
+                });
             }
         }
         .instrument(branch_span),
