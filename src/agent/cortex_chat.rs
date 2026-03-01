@@ -89,7 +89,8 @@ impl<M: CompletionModel> PromptHook<M> for CortexChatHook {
         result: &str,
     ) -> HookAction {
         let preview = if result.len() > 200 {
-            format!("{}...", &result[..result.floor_char_boundary(200)])
+            let end = result.floor_char_boundary(200);
+            format!("{}...", &result[..end])
         } else {
             result.to_string()
         };
