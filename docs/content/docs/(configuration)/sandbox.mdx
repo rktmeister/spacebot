@@ -5,19 +5,20 @@ description: OS-level filesystem containment and environment sanitization for wo
 
 # Sandbox
 
-OS-level containment for worker subprocesses. Prevents workers from modifying the host filesystem, reading secrets from environment variables, or accessing the agent's internal data.
+OS-level containment for builtin worker subprocesses (`shell` and `exec`). Prevents workers from modifying the host filesystem, reading inherited environment secrets, and accessing the agent's internal data directory.
 
 ## How It Works
 
-When a worker runs a shell or exec command, the sandbox wraps the subprocess in an OS-level containment layer before execution. The worker's command runs normally -- it just can't access anything outside its allowed boundaries.
+When a worker runs a shell or exec command, the sandbox wraps the subprocess in an OS-level containment layer before execution. The worker's command runs normally -- it can only read a minimal runtime allowlist plus workspace paths, and can only write to explicitly allowed paths.
 
 ```
 Worker calls shell("npm test")
   → Sandbox.wrap() builds a contained command
   → Subprocess runs with:
-      - Read-only view of the host filesystem
-      - Writable access only to the workspace + /tmp
+      - Read access to a minimal system allowlist + workspace
+      - Writable access only to the workspace + configured writable paths + /tmp
       - Clean environment (no inherited secrets)
+      - HOME set to workspace, TMPDIR set to /tmp
       - tools/bin prepended to PATH
   → stdout/stderr captured and returned to worker
 ```
@@ -43,12 +44,14 @@ If the sandbox is enabled but no backend is available, processes run unsandboxed
 
 The default on all hosted instances and most self-hosted Linux deployments. Bubblewrap creates a mount namespace where:
 
-- The entire host filesystem is mounted **read-only**
+- A minimal host runtime allowlist is mounted **read-only** (`/bin`, `/sbin`, `/usr`, `/lib`, `/lib64`, `/etc`, `/opt`, `/run`, `/nix` when present)
+- The persistent tools directory is mounted **read-only** (if present)
 - The workspace directory is mounted **read-write**
+- `writable_paths` entries are mounted **read-write**
 - `/tmp` is a private tmpfs per invocation
 - `/dev` has standard device nodes
 - `/proc` is a fresh procfs (when supported by the environment)
-- The agent's data directory is explicitly re-mounted read-only even if it overlaps with the workspace parent
+- The agent's data directory is masked with an empty tmpfs (no reads/writes)
 - PID namespace isolation prevents the subprocess from seeing other processes
 - `--die-with-parent` ensures the subprocess is killed if the parent exits
 
@@ -59,12 +62,12 @@ Nested containers (Docker-in-Docker, Fly Machines) may not support `--proc /proc
 Uses Apple's sandbox-exec with a generated SBPL (Sandbox Profile Language) profile. The profile starts with `(deny default)` and explicitly allows:
 
 - Process execution and forking
-- Reading all files
+- Reading only a backend allowlist (system runtime roots + workspace + configured writable paths + tools/bin)
 - Writing only to the workspace, configured writable paths, and `/tmp`
 - Network access (unrestricted)
 - Standard device and IPC operations
 
-The agent's data directory is denied for writes even if it falls under the workspace subtree.
+The agent's data directory is denied for both reads and writes even if it falls under the workspace subtree.
 
 Note: `sandbox-exec` is deprecated by Apple but remains functional. It's the only user-space sandbox option on macOS without requiring a full VM.
 
@@ -74,14 +77,15 @@ When the sandbox is enabled, the subprocess sees:
 
 | Path | Access | Notes |
 |------|--------|-------|
-| `/` (everything) | Read-only | The entire host filesystem |
+| System runtime allowlist | Read-only | Backend-specific system roots required to execute common tools |
 | Agent workspace | Read-write | Where the worker does its job |
 | `writable_paths` entries | Read-write | User-configured additional paths |
+| `{instance_dir}/tools/bin` | Read-only | Persistent binaries on PATH |
 | `/tmp` | Read-write | Private per invocation (bubblewrap) |
 | `/dev` | Read-write | Standard device nodes |
-| Agent data directory | **Read-only** | Databases, config -- explicitly protected |
+| Agent data directory | **No access** | Masked/denied to protect databases and config |
 
-The data directory protection is important: even if the data directory is a subdirectory of the workspace (or vice versa), it's explicitly re-mounted read-only. Workers can't modify databases, config files, or identity files at the kernel level.
+The data directory protection is important: even if the data directory overlaps with workspace-related paths, it's explicitly blocked. Workers can't read or modify databases, config files, or identity files at the kernel level.
 
 ## Environment Sanitization
 
@@ -92,11 +96,11 @@ A worker running `printenv` sees only:
 | Variable | Source | Value |
 |----------|--------|-------|
 | `PATH` | Always | `{instance_dir}/tools/bin:{system_path}` |
-| `HOME` | Always | From parent (if set) |
+| `HOME` | Always | Worker workspace path |
+| `TMPDIR` | Always | `/tmp` |
 | `USER` | Always | From parent (if set) |
 | `LANG` | Always | From parent (if set) |
 | `TERM` | Always | From parent (if set) |
-| `TMPDIR` | Always | From parent (if set) |
 | `passthrough_env` entries | Config | User-configured forwarding |
 
 Workers never see `ANTHROPIC_API_KEY`, `DISCORD_BOT_TOKEN`, `SPACEBOT_*` internal vars, or any other environment variables from the parent process.
@@ -206,7 +210,7 @@ The sandbox is one layer in a defense-in-depth model:
 
 | Layer | What It Does | Scope |
 |-------|-------------|-------|
-| **Sandbox (filesystem)** | Read-only filesystem, writable workspace only | Shell, exec subprocesses |
+| **Sandbox (filesystem)** | Read allowlist + writable workspace/writable_paths/tmp; blocks agent data dir | Shell, exec subprocesses |
 | **Env sanitization** | Clean environment, no inherited secrets | All subprocesses (including passthrough mode) |
 | **File tool workspace guard** | Path validation against workspace boundary | File tool only (in-process) |
 | **Exec env var blocklist** | Blocks `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, etc. | Exec tool |

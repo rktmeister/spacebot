@@ -64,7 +64,32 @@ enum SandboxBackend {
 
 /// Environment variables always passed through to worker subprocesses.
 /// These are required for basic process operation.
-const SAFE_ENV_VARS: &[&str] = &["HOME", "USER", "LANG", "TERM", "TMPDIR"];
+const SAFE_ENV_VARS: &[&str] = &["USER", "LANG", "TERM"];
+
+/// Linux host paths exposed read-only inside bubblewrap sandboxes.
+/// This is a minimal runtime allowlist: worker/user data directories are not
+/// mounted unless they are explicitly configured as writable paths.
+const LINUX_READ_ONLY_SYSTEM_PATHS: &[&str] = &[
+    "/bin", "/sbin", "/usr", "/lib", "/lib64", "/etc", "/opt", "/run", "/nix",
+];
+
+/// macOS host paths exposed read-only in sandbox-exec profiles.
+/// User data directories are intentionally excluded; worker access is limited
+/// to workspace paths plus core system roots.
+const MACOS_READ_ONLY_SYSTEM_PATHS: &[&str] = &[
+    "/System",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/opt",
+    "/Library",
+    "/Applications",
+    "/private/etc",
+    "/private/var/run",
+    "/private/tmp",
+    "/etc",
+    "/dev",
+];
 
 /// Filesystem sandbox for subprocess execution.
 ///
@@ -155,6 +180,106 @@ impl Sandbox {
         }
     }
 
+    /// True when sandbox mode is enabled in config.
+    pub fn mode_enabled(&self) -> bool {
+        self.config.load().mode == SandboxMode::Enabled
+    }
+
+    /// True when OS-level containment is currently active.
+    ///
+    /// If mode is enabled but no backend is available, this returns false
+    /// because subprocesses fall back to passthrough execution.
+    pub fn containment_active(&self) -> bool {
+        self.mode_enabled() && !matches!(self.backend, SandboxBackend::None)
+    }
+
+    /// Read-allowlisted filesystem paths exposed to shell/exec subprocesses when
+    /// containment is active.
+    pub fn prompt_read_allowlist(&self) -> Vec<String> {
+        if !self.containment_active() {
+            return Vec::new();
+        }
+
+        let config = self.config.load();
+        let mut paths = Vec::new();
+
+        match self.backend {
+            SandboxBackend::Bubblewrap { .. } => {
+                for system_path in LINUX_READ_ONLY_SYSTEM_PATHS {
+                    let path = Path::new(system_path);
+                    if path.exists() {
+                        push_unique_path(&mut paths, canonicalize_or_self(path));
+                    }
+                }
+
+                if self.tools_bin.exists() {
+                    push_unique_path(&mut paths, canonicalize_or_self(&self.tools_bin));
+                }
+
+                push_unique_path(&mut paths, canonicalize_or_self(&self.workspace));
+
+                for path in &config.writable_paths {
+                    if let Ok(canonical) = path.canonicalize() {
+                        push_unique_path(&mut paths, canonical);
+                    }
+                }
+            }
+            SandboxBackend::SandboxExec => {
+                for system_path in MACOS_READ_ONLY_SYSTEM_PATHS {
+                    let path = Path::new(system_path);
+                    if path.exists() {
+                        push_unique_path(&mut paths, canonicalize_or_self(path));
+                    }
+                }
+
+                if self.tools_bin.exists() {
+                    push_unique_path(&mut paths, canonicalize_or_self(&self.tools_bin));
+                }
+
+                push_unique_path(&mut paths, canonicalize_or_self(&self.workspace));
+
+                for path in &config.writable_paths {
+                    push_unique_path(&mut paths, canonicalize_or_self(path));
+                }
+            }
+            SandboxBackend::None => {}
+        }
+
+        paths
+    }
+
+    /// Write-allowlisted filesystem paths exposed to shell/exec subprocesses when
+    /// containment is active.
+    pub fn prompt_write_allowlist(&self) -> Vec<String> {
+        if !self.containment_active() {
+            return Vec::new();
+        }
+
+        let config = self.config.load();
+        let mut paths = Vec::new();
+
+        push_unique_path(&mut paths, canonicalize_or_self(&self.workspace));
+        push_unique_path(&mut paths, canonicalize_or_self(Path::new("/tmp")));
+
+        match self.backend {
+            SandboxBackend::Bubblewrap { .. } => {
+                for path in &config.writable_paths {
+                    if let Ok(canonical) = path.canonicalize() {
+                        push_unique_path(&mut paths, canonical);
+                    }
+                }
+            }
+            SandboxBackend::SandboxExec => {
+                for path in &config.writable_paths {
+                    push_unique_path(&mut paths, canonicalize_or_self(path));
+                }
+            }
+            SandboxBackend::None => {}
+        }
+
+        paths
+    }
+
     /// Wrap a command for sandboxed execution.
     ///
     /// Returns a `Command` ready to spawn, potentially prefixed with bwrap or
@@ -214,8 +339,20 @@ impl Sandbox {
         let mut cmd = Command::new("bwrap");
 
         // Mount order matters — later mounts override earlier ones.
-        // 1. Entire filesystem read-only
-        cmd.arg("--ro-bind").arg("/").arg("/");
+        // 1. Mount a minimal read-only runtime allowlist.
+        for system_path in LINUX_READ_ONLY_SYSTEM_PATHS {
+            let path = Path::new(system_path);
+            if path.exists() {
+                cmd.arg("--ro-bind").arg(path).arg(path);
+            }
+        }
+
+        // Keep persistent tools visible on PATH if present.
+        if self.tools_bin.exists() {
+            cmd.arg("--ro-bind")
+                .arg(&self.tools_bin)
+                .arg(&self.tools_bin);
+        }
 
         // 2. Writable /dev with standard nodes
         cmd.arg("--dev").arg("/dev");
@@ -247,8 +384,9 @@ impl Sandbox {
             }
         }
 
-        // 7. Re-protect agent data dir (may overlap with workspace parent)
-        cmd.arg("--ro-bind").arg(&self.data_dir).arg(&self.data_dir);
+        // 7. Mask agent data dir with an empty tmpfs to prevent reads/writes,
+        // even when it overlaps with workspace-related paths.
+        cmd.arg("--tmpfs").arg(&self.data_dir);
 
         // 8. Isolation flags
         cmd.arg("--unshare-pid");
@@ -265,21 +403,27 @@ impl Sandbox {
         // 11. Set PATH inside the sandbox
         cmd.arg("--setenv").arg("PATH").arg(path_env);
 
-        // 12. Re-inject safe environment variables for basic process operation
+        // 12. Set deterministic sandbox-local home/temp paths.
+        cmd.arg("--setenv")
+            .arg("HOME")
+            .arg(self.workspace.to_string_lossy().into_owned());
+        cmd.arg("--setenv").arg("TMPDIR").arg("/tmp");
+
+        // 13. Re-inject safe environment variables for basic process operation
         for var_name in SAFE_ENV_VARS {
             if let Ok(value) = std::env::var(var_name) {
                 cmd.arg("--setenv").arg(var_name).arg(value);
             }
         }
 
-        // 13. Re-inject passthrough env vars (user-configured forwarding)
+        // 14. Re-inject passthrough env vars (user-configured forwarding)
         for var_name in &config.passthrough_env {
             if let Ok(value) = std::env::var(var_name) {
                 cmd.arg("--setenv").arg(var_name).arg(value);
             }
         }
 
-        // 14. The actual command
+        // 15. The actual command
         cmd.arg("--").arg(program);
         for arg in args {
             cmd.arg(arg);
@@ -311,6 +455,8 @@ impl Sandbox {
         // approved vars. Prevents system secrets from leaking to workers.
         cmd.env_clear();
         cmd.env("PATH", path_env);
+        cmd.env("HOME", &self.workspace);
+        cmd.env("TMPDIR", "/tmp");
         for var_name in SAFE_ENV_VARS {
             if let Ok(value) = std::env::var(var_name) {
                 cmd.env(var_name, value);
@@ -347,6 +493,8 @@ impl Sandbox {
         // approved vars. Prevents system secrets from leaking to workers.
         cmd.env_clear();
         cmd.env("PATH", path_env);
+        cmd.env("HOME", &self.workspace);
+        cmd.env("TMPDIR", "/tmp");
         for var_name in SAFE_ENV_VARS {
             if let Ok(value) = std::env::var(var_name) {
                 cmd.env(var_name, value);
@@ -366,6 +514,7 @@ impl Sandbox {
     /// Paths are canonicalized because /var on macOS is actually /private/var.
     fn generate_sbpl_profile(&self, config: &SandboxConfig) -> String {
         let workspace = canonicalize_or_self(&self.workspace);
+        let tools_bin = canonicalize_or_self(&self.tools_bin);
 
         let mut profile = String::from(
             r#"(version 1)
@@ -376,40 +525,67 @@ impl Sandbox {
 (allow process-fork)
 (allow signal (target same-sandbox))
 (allow process-info* (target same-sandbox))
-
-; filesystem: read everything
-(allow file-read*)
-
 "#,
         );
+
+        profile.push_str("\n; filesystem: read allowlist (system roots + workspace)\n");
+        // Allow access to the root directory entry itself so macOS can traverse
+        // into explicitly-allowed subpaths without granting recursive read access.
+        profile.push_str("(allow file-read* (literal \"/\"))\n");
+        for system_path in MACOS_READ_ONLY_SYSTEM_PATHS {
+            let path = Path::new(system_path);
+            if path.exists() {
+                let canonical = canonicalize_or_self(path);
+                profile.push_str(&format!(
+                    "(allow file-read* (subpath \"{}\"))\n",
+                    escape_sbpl_path(&canonical)
+                ));
+            }
+        }
+
+        profile.push_str(&format!(
+            "(allow file-read* (subpath \"{}\"))\n",
+            escape_sbpl_path(&workspace)
+        ));
+
+        if self.tools_bin.exists() {
+            profile.push_str(&format!(
+                "(allow file-read* (subpath \"{}\"))\n",
+                escape_sbpl_path(&tools_bin)
+            ));
+        }
+
+        profile.push('\n');
 
         // Workspace writable
         profile.push_str(&format!(
             "; workspace writable\n(allow file-write* (subpath \"{}\"))\n\n",
-            workspace.display()
+            escape_sbpl_path(&workspace)
         ));
 
-        // Additional writable paths (canonicalized dynamically)
+        // Additional writable paths (canonicalized dynamically) are readable and writable.
         for (index, path) in config.writable_paths.iter().enumerate() {
             let canonical = canonicalize_or_self(path);
             profile.push_str(&format!(
-                "; writable path {index}\n(allow file-write* (subpath \"{}\"))\n",
-                canonical.display()
+                "; writable path {index}\n(allow file-read* (subpath \"{}\"))\n(allow file-write* (subpath \"{}\"))\n",
+                escape_sbpl_path(&canonical),
+                escape_sbpl_path(&canonical)
             ));
         }
-
-        // Protect data_dir even if it falls under the workspace subtree
-        let data_dir = canonicalize_or_self(&self.data_dir);
-        profile.push_str(&format!(
-            "\n; data dir read-only\n(deny file-write* (subpath \"{}\"))\n",
-            data_dir.display()
-        ));
 
         // /tmp writable
         let tmp = canonicalize_or_self(Path::new("/tmp"));
         profile.push_str(&format!(
             "\n; tmp writable\n(allow file-write* (subpath \"{}\"))\n",
-            tmp.display()
+            escape_sbpl_path(&tmp)
+        ));
+
+        // Protect data_dir even if it falls under the workspace subtree
+        let data_dir = canonicalize_or_self(&self.data_dir);
+        profile.push_str(&format!(
+            "\n; data dir blocked\n(deny file-read* (subpath \"{}\"))\n(deny file-write* (subpath \"{}\"))\n",
+            escape_sbpl_path(&data_dir),
+            escape_sbpl_path(&data_dir)
         ));
 
         profile.push_str(
@@ -428,6 +604,21 @@ impl Sandbox {
 
         profile
     }
+}
+
+/// Push a path into a list while preserving order and removing duplicates.
+fn push_unique_path(paths: &mut Vec<String>, path: PathBuf) {
+    let value = path.display().to_string();
+    if !paths.contains(&value) {
+        paths.push(value);
+    }
+}
+
+/// Escape a path for embedding in an SBPL string literal.
+fn escape_sbpl_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
 }
 
 /// Canonicalize a path, falling back to the original if canonicalization fails.
