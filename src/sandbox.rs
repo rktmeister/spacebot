@@ -66,6 +66,19 @@ enum SandboxBackend {
 /// These are required for basic process operation.
 const SAFE_ENV_VARS: &[&str] = &["USER", "LANG", "TERM"];
 
+/// Environment variable names that are set by the hardened sandbox defaults and
+/// must not be overridden via `passthrough_env`. Allowing user config to replace
+/// PATH would drop `tools/bin` precedence; replacing HOME/TMPDIR would break the
+/// deterministic sandbox-local paths.
+const RESERVED_ENV_VARS: &[&str] = &["PATH", "HOME", "TMPDIR"];
+
+/// Returns true if the variable name is reserved (set by hardened defaults) or
+/// is in the safe-vars list, and therefore must not be overridden by
+/// `passthrough_env`.
+fn is_reserved_env_var(name: &str) -> bool {
+    RESERVED_ENV_VARS.contains(&name) || SAFE_ENV_VARS.contains(&name)
+}
+
 /// Linux host paths exposed read-only inside bubblewrap sandboxes.
 /// This is a minimal runtime allowlist: worker/user data directories are not
 /// mounted unless they are explicitly configured as writable paths.
@@ -416,8 +429,13 @@ impl Sandbox {
             }
         }
 
-        // 14. Re-inject passthrough env vars (user-configured forwarding)
+        // 14. Re-inject passthrough env vars (user-configured forwarding),
+        // skipping any that would override hardened defaults.
         for var_name in &config.passthrough_env {
+            if is_reserved_env_var(var_name) {
+                tracing::debug!(%var_name, "skipping reserved passthrough_env variable");
+                continue;
+            }
             if let Ok(value) = std::env::var(var_name) {
                 cmd.arg("--setenv").arg(var_name).arg(value);
             }
@@ -463,6 +481,10 @@ impl Sandbox {
             }
         }
         for var_name in &config.passthrough_env {
+            if is_reserved_env_var(var_name) {
+                tracing::debug!(%var_name, "skipping reserved passthrough_env variable");
+                continue;
+            }
             if let Ok(value) = std::env::var(var_name) {
                 cmd.env(var_name, value);
             }
@@ -501,6 +523,10 @@ impl Sandbox {
             }
         }
         for var_name in &config.passthrough_env {
+            if is_reserved_env_var(var_name) {
+                tracing::debug!(%var_name, "skipping reserved passthrough_env variable");
+                continue;
+            }
             if let Ok(value) = std::env::var(var_name) {
                 cmd.env(var_name, value);
             }
