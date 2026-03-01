@@ -1,0 +1,32 @@
+name: Interface CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "interface/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "interface/**"
+
+jobs:
+  quality:
+    name: Interface Quality
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: interface
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v1
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
+
+      - name: Build
+        run: bun run build
