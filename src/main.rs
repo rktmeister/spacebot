@@ -777,8 +777,27 @@ fn cmd_secrets(
                     let count = body["count"].as_u64().unwrap_or(0);
                     let content = serde_json::to_string_pretty(&body)
                         .context("failed to serialize export data")?;
-                    std::fs::write(&output, content)
-                        .with_context(|| format!("failed to write {}", output.display()))?;
+                    // Write with restrictive permissions — this file contains
+                    // plaintext secrets.
+                    #[cfg(unix)]
+                    {
+                        use std::io::Write as _;
+                        use std::os::unix::fs::OpenOptionsExt as _;
+                        let mut file = std::fs::OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .truncate(true)
+                            .mode(0o600)
+                            .open(&output)
+                            .with_context(|| format!("failed to create {}", output.display()))?;
+                        file.write_all(content.as_bytes())
+                            .with_context(|| format!("failed to write {}", output.display()))?;
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        std::fs::write(&output, content)
+                            .with_context(|| format!("failed to write {}", output.display()))?;
+                    }
                     eprintln!("Exported {count} secrets to {}", output.display());
 
                     if let Some(warning) = body["warning"].as_str() {

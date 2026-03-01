@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::Path;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 /// Table for secret values. Stores either plaintext UTF-8 or nonce+ciphertext
 /// depending on the store's encryption mode.
@@ -146,6 +146,11 @@ pub struct SecretsStore {
     cipher_state: RwLock<Option<CipherState>>,
     /// Whether the redb store has encrypted secrets (persisted flag).
     encrypted: RwLock<bool>,
+    /// Serializes mutating operations (`set`, `lock`, `rotate_key`,
+    /// `enable_encryption`) so that multi-step read-then-write sequences
+    /// cannot interleave and corrupt data. These are all cold-path
+    /// operations, so contention is irrelevant.
+    mutation_guard: Mutex<()>,
 }
 
 /// Derived cipher key + salt for the encrypted mode.
@@ -217,7 +222,12 @@ impl SecretsStore {
             })?;
             match table.get(CONFIG_KEY_ENCRYPTED) {
                 Ok(Some(value)) => value.value() == [1],
-                _ => false,
+                Ok(None) => false,
+                Err(error) => {
+                    return Err(SecretsError::Other(anyhow::anyhow!(
+                        "failed to read encryption flag: {error}"
+                    )));
+                }
             }
         };
 
@@ -225,6 +235,7 @@ impl SecretsStore {
             db,
             cipher_state: RwLock::new(None),
             encrypted: RwLock::new(encrypted),
+            mutation_guard: Mutex::new(()),
         })
     }
 
@@ -280,6 +291,7 @@ impl SecretsStore {
         value: &str,
         category: SecretCategory,
     ) -> Result<(), SecretsError> {
+        let _guard = self.mutation_guard.lock().expect("mutation guard poisoned");
         let state = self.state();
         if state == StoreState::Locked {
             return Err(SecretsError::Other(anyhow::anyhow!(
@@ -499,10 +511,15 @@ impl SecretsStore {
 
         let mut result = HashMap::new();
         for (name, meta) in &metadata {
-            if meta.category == SecretCategory::Tool
-                && let Ok(secret) = self.get(name)
-            {
-                result.insert(name.clone(), secret.expose().to_string());
+            if meta.category == SecretCategory::Tool {
+                match self.get(name) {
+                    Ok(secret) => {
+                        result.insert(name.clone(), secret.expose().to_string());
+                    }
+                    Err(error) => {
+                        tracing::warn!(secret = %name, %error, "failed to decrypt tool secret — skipping");
+                    }
+                }
             }
         }
 
@@ -539,6 +556,7 @@ impl SecretsStore {
     /// Returns the raw master key bytes for the caller to store in the OS
     /// credential store and display to the user.
     pub fn enable_encryption(&self) -> Result<Vec<u8>, SecretsError> {
+        let _guard = self.mutation_guard.lock().expect("mutation guard poisoned");
         if self.is_encrypted() {
             return Err(SecretsError::Other(anyhow::anyhow!(
                 "encryption is already enabled"
@@ -706,6 +724,7 @@ impl SecretsStore {
     /// Lock the store. Clears the in-memory cipher key. Encrypted secrets become
     /// inaccessible until `unlock()` is called again.
     pub fn lock(&self) -> Result<(), SecretsError> {
+        let _guard = self.mutation_guard.lock().expect("mutation guard poisoned");
         if !self.is_encrypted() {
             return Err(SecretsError::Other(anyhow::anyhow!(
                 "store is not encrypted — nothing to lock"
@@ -718,6 +737,7 @@ impl SecretsStore {
     /// Rotate the master key. Generates a new key, re-encrypts all secrets and
     /// the sentinel, updates the salt. Returns the new master key bytes.
     pub fn rotate_key(&self) -> Result<Vec<u8>, SecretsError> {
+        let _guard = self.mutation_guard.lock().expect("mutation guard poisoned");
         if self.state() != StoreState::Unlocked {
             return Err(SecretsError::Other(anyhow::anyhow!(
                 "store must be unlocked to rotate key"
