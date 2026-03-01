@@ -196,24 +196,6 @@ pub enum ProcessEvent {
         /// "created", "updated", or "deleted".
         action: String,
     },
-    /// A delegated task (created via send_agent_message) completed or failed.
-    /// Emitted by the executor agent's cortex so the delegating agent can be notified.
-    DelegatedTaskCompleted {
-        /// Agent that executed the task.
-        executor_agent_id: AgentId,
-        /// Agent that delegated the task.
-        delegating_agent_id: AgentId,
-        /// Task number on the executor agent.
-        task_number: i64,
-        /// Task title.
-        title: String,
-        /// Worker result summary.
-        result_summary: String,
-        /// Whether the task completed successfully.
-        success: bool,
-        /// The channel on the delegating agent where the original request came from.
-        originating_channel: String,
-    },
 }
 
 /// A message to be injected into a specific channel from outside the normal

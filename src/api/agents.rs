@@ -831,8 +831,14 @@ pub(super) async fn create_agent(
         state.memory_searches.store(std::sync::Arc::new(searches));
 
         let mut task_stores = (**state.task_stores.load()).clone();
-        task_stores.insert(agent_id.clone(), task_store);
+        task_stores.insert(agent_id.clone(), task_store.clone());
         state.task_stores.store(std::sync::Arc::new(task_stores));
+
+        let mut registry = (**state.task_store_registry.load()).clone();
+        registry.insert(agent_id.clone(), task_store);
+        state
+            .task_store_registry
+            .store(std::sync::Arc::new(registry));
 
         let mut workspaces = (**state.agent_workspaces.load()).clone();
         workspaces.insert(agent_id.clone(), agent_config.workspace.clone());

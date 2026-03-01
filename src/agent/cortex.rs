@@ -1404,10 +1404,11 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
     Ok(())
 }
 
-/// When a task with `metadata.delegated_by` completes or fails, log the result
-/// in the link channel between the two agents and inject a retrigger system
-/// message into the delegating agent's originating channel so the user gets
-/// notified.
+/// When a task with `metadata.delegating_agent_id` completes or fails, log the
+/// result in the link channel between the two agents and inject a retrigger
+/// system message into the delegating agent's originating channel so the user
+/// gets notified.
+#[allow(clippy::too_many_arguments)]
 async fn notify_delegation_completion(
     task: &crate::tasks::Task,
     result_summary: &str,

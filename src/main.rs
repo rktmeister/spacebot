@@ -1505,6 +1505,7 @@ async fn run(
             &mut twitch_permissions,
             agent_links.clone(),
             injection_tx.clone(),
+            task_store_registry.clone(),
             &bootstrapped_store,
         )
         .await?;
@@ -1875,6 +1876,7 @@ async fn run(
                                     &mut new_twitch_permissions,
                                     agent_links.clone(),
                                     injection_tx.clone(),
+                                    task_store_registry.clone(),
                                     &bootstrapped_store,
                                 ).await {
                                     Ok(()) => {
@@ -2010,12 +2012,12 @@ async fn initialize_agents(
     twitch_permissions: &mut Option<Arc<ArcSwap<spacebot::config::TwitchPermissions>>>,
     agent_links: Arc<ArcSwap<Vec<spacebot::links::AgentLink>>>,
     injection_tx: tokio::sync::mpsc::Sender<spacebot::ChannelInjection>,
+    task_store_registry: Arc<
+        ArcSwap<std::collections::HashMap<String, Arc<spacebot::tasks::TaskStore>>>,
+    >,
     bootstrapped_store: &Option<Arc<spacebot::secrets::store::SecretsStore>>,
 ) -> anyhow::Result<()> {
     let resolved_agents = config.resolve_agents();
-
-    // Shared task store registry — starts empty, populated after all agents are initialized.
-    let task_store_registry = Arc::new(ArcSwap::from_pointee(std::collections::HashMap::new()));
 
     // Build agent name map for inter-agent message routing
     let agent_name_map: Arc<std::collections::HashMap<String, String>> = Arc::new(
