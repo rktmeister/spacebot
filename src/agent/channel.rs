@@ -1170,7 +1170,7 @@ impl Channel {
 
         // Deterministic liveness ping for Telegram mentions.
         // This avoids model/provider flakiness for simple "you there?" style checks.
-        if message.source == "telegram" && message.source != "system" {
+        if message.source == "telegram" {
             let text = raw_text.trim().to_lowercase();
             let mention = message
                 .metadata
@@ -1196,7 +1196,7 @@ impl Channel {
 
         // Deterministic ping ack for Discord quiet-mode mentions/replies to avoid
         // flaky model behavior (e.g. skipping or over-formatting simple liveness checks).
-        if message.source == "discord" && self.listen_only_mode && message.source != "system" {
+        if message.source == "discord" && self.listen_only_mode {
             let text = raw_text.trim().to_lowercase();
             let (_, invoked_by_mention, invoked_by_reply) =
                 self.compute_listen_mode_invocation(&message, &raw_text);
@@ -1214,11 +1214,9 @@ impl Channel {
             }
         }
 
-        let rewritten_text = raw_text.clone();
-
         let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
         let message_timestamp = temporal_context.format_timestamp(message.timestamp);
-        let user_text = format_user_message(&rewritten_text, &message, &message_timestamp);
+        let user_text = format_user_message(&raw_text, &message, &message_timestamp);
 
         // Persist user messages (skip system re-triggers)
         if message.source != "system" {
@@ -1332,19 +1330,11 @@ impl Channel {
                 "discord" | "telegram" | "slack" | "twitch"
             )
         {
-            let ack = "yeah i'm here — tell me what you need.".to_string();
-            self.state.conversation_logger.log_bot_message_with_name(
-                &self.state.channel_id,
-                &ack,
-                Some(self.agent_display_name()),
-            );
-            if let Err(error) = self.response_tx.send(OutboundResponse::Text(ack)).await {
-                tracing::error!(
-                    %error,
-                    channel_id = %self.id,
-                    "failed to send quiet-mode explicit invoke fallback"
-                );
-            }
+            self.send_builtin_text(
+                "yeah i'm here — tell me what you need.".to_string(),
+                "quiet-mode-fallback",
+            )
+            .await;
         }
 
         // After retrigger turns, persist a fallback summary only when we don't
