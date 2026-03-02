@@ -313,6 +313,16 @@ impl Channel {
             .listen_only_mode;
     }
 
+    fn set_listen_only_mode(&mut self, enabled: bool) {
+        self.listen_only_mode = enabled;
+        self.deps
+            .runtime_config
+            .channel_config
+            .store(Arc::new(crate::config::ChannelConfig {
+                listen_only_mode: enabled,
+            }));
+    }
+
     fn suppress_plaintext_fallback(&self) -> bool {
         matches!(self.current_adapter(), Some("email"))
     }
@@ -431,7 +441,7 @@ impl Channel {
                 return Ok(true);
             }
             "/quiet" => {
-                self.listen_only_mode = true;
+                self.set_listen_only_mode(true);
                 self.send_builtin_text(
                     "quiet mode enabled. i'll only reply to commands, @mentions, or replies to my message."
                         .to_string(),
@@ -441,7 +451,7 @@ impl Channel {
                 return Ok(true);
             }
             "/active" => {
-                self.listen_only_mode = false;
+                self.set_listen_only_mode(false);
                 self.send_builtin_text(
                     "active mode enabled. i'll respond normally in this chat.".to_string(),
                     "active",
