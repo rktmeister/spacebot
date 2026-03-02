@@ -551,15 +551,19 @@ impl Channel {
                 return Ok(true);
             }
             "/help" => {
-                let body = "commands:\n\
-                            - /status: current mode, models, binding snapshot\n\
-                            - /today: in-progress + ready task snapshot\n\
-                            - /tasks: ready task list\n\
-                            - /quiet: listen-only mode\n\
-                            - /active: normal reply mode\n\
-                            - /digest: one-shot day digest (00:00 -> now)\n\
-                            - /agent-id: runtime agent id"
-                    .to_string();
+                let mut lines = vec![
+                    "commands:".to_string(),
+                    "- /status: current mode, models, binding snapshot".to_string(),
+                    "- /today: in-progress + ready task snapshot".to_string(),
+                    "- /tasks: ready task list".to_string(),
+                    "- /quiet: listen-only mode".to_string(),
+                    "- /active: normal reply mode".to_string(),
+                    "- /agent-id: runtime agent id".to_string(),
+                ];
+                if message.source == "telegram" {
+                    lines.push("- /digest: one-shot day digest (00:00 -> now)".to_string());
+                }
+                let body = lines.join("\n");
                 self.send_builtin_text(body, "help").await;
                 return Ok(true);
             }
