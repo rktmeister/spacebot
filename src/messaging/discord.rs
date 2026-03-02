@@ -766,14 +766,21 @@ impl EventHandler for Handler {
 }
 
 fn is_mention_or_reply_to_bot(message: &Message, bot_user_id: Option<UserId>) -> bool {
+    is_mention_to_bot(message, bot_user_id) || is_reply_to_bot(message, bot_user_id)
+}
+
+fn is_mention_to_bot(message: &Message, bot_user_id: Option<UserId>) -> bool {
     let Some(bot_id) = bot_user_id else {
         return false;
     };
 
-    let directly_mentioned = message.mentions.iter().any(|user| user.id == bot_id);
-    if directly_mentioned {
-        return true;
-    }
+    message.mentions.iter().any(|user| user.id == bot_id)
+}
+
+fn is_reply_to_bot(message: &Message, bot_user_id: Option<UserId>) -> bool {
+    let Some(bot_id) = bot_user_id else {
+        return false;
+    };
 
     message
         .referenced_message
@@ -941,6 +948,14 @@ async fn build_metadata(
     metadata.insert(
         "discord_mentions_or_replies_to_bot".into(),
         is_mention_or_reply_to_bot(message, bot_user_id).into(),
+    );
+    metadata.insert(
+        "discord_mentioned_bot".into(),
+        is_mention_to_bot(message, bot_user_id).into(),
+    );
+    metadata.insert(
+        "discord_reply_to_bot".into(),
+        is_reply_to_bot(message, bot_user_id).into(),
     );
 
     (metadata, formatted_author)

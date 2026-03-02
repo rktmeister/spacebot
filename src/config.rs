@@ -715,6 +715,7 @@ pub struct DefaultsConfig {
     pub cortex: CortexConfig,
     pub warmup: WarmupConfig,
     pub browser: BrowserConfig,
+    pub channel: ChannelConfig,
     pub mcp: Vec<McpServerConfig>,
     /// Brave Search API key for web search tool. Supports "env:VAR_NAME" references.
     pub brave_search_key: Option<String>,
@@ -745,6 +746,7 @@ impl std::fmt::Debug for DefaultsConfig {
             .field("cortex", &self.cortex)
             .field("warmup", &self.warmup)
             .field("browser", &self.browser)
+            .field("channel", &self.channel)
             .field("mcp", &self.mcp)
             .field(
                 "brave_search_key",
@@ -929,6 +931,21 @@ impl Default for BrowserConfig {
             executable_path: None,
             screenshot_dir: None,
             chrome_cache_dir: PathBuf::from("chrome_cache"),
+        }
+    }
+}
+
+/// Channel behavior configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct ChannelConfig {
+    /// When true, unsolicited chat messages are ignored unless command/mention/reply.
+    pub listen_only_mode: bool,
+}
+
+impl Default for ChannelConfig {
+    fn default() -> Self {
+        Self {
+            listen_only_mode: false,
         }
     }
 }
@@ -1156,6 +1173,7 @@ pub struct AgentConfig {
     pub cortex: Option<CortexConfig>,
     pub warmup: Option<WarmupConfig>,
     pub browser: Option<BrowserConfig>,
+    pub channel: Option<ChannelConfig>,
     pub mcp: Option<Vec<McpServerConfig>>,
     /// Per-agent Brave Search API key override. None inherits from defaults.
     pub brave_search_key: Option<String>,
@@ -1211,6 +1229,7 @@ pub struct ResolvedAgentConfig {
     pub cortex: CortexConfig,
     pub warmup: WarmupConfig,
     pub browser: BrowserConfig,
+    pub channel: ChannelConfig,
     pub mcp: Vec<McpServerConfig>,
     pub brave_search_key: Option<String>,
     pub cron_timezone: Option<String>,
@@ -1238,6 +1257,7 @@ impl Default for DefaultsConfig {
             cortex: CortexConfig::default(),
             warmup: WarmupConfig::default(),
             browser: BrowserConfig::default(),
+            channel: ChannelConfig::default(),
             mcp: Vec::new(),
             brave_search_key: None,
             cron_timezone: None,
@@ -1301,6 +1321,7 @@ impl AgentConfig {
                 .browser
                 .clone()
                 .unwrap_or_else(|| defaults.browser.clone()),
+            channel: self.channel.unwrap_or(defaults.channel),
             mcp: resolve_mcp_configs(&defaults.mcp, self.mcp.as_deref()),
             brave_search_key: self
                 .brave_search_key
@@ -2902,6 +2923,7 @@ struct TomlDefaultsConfig {
     cortex: Option<TomlCortexConfig>,
     warmup: Option<TomlWarmupConfig>,
     browser: Option<TomlBrowserConfig>,
+    channel: Option<TomlChannelConfig>,
     #[serde(default)]
     mcp: Vec<TomlMcpServerConfig>,
     brave_search_key: Option<String>,
@@ -3049,6 +3071,7 @@ struct TomlAgentConfig {
     cortex: Option<TomlCortexConfig>,
     warmup: Option<TomlWarmupConfig>,
     browser: Option<TomlBrowserConfig>,
+    channel: Option<TomlChannelConfig>,
     mcp: Option<Vec<TomlMcpServerConfig>>,
     brave_search_key: Option<String>,
     cron_timezone: Option<String>,
@@ -3072,6 +3095,11 @@ struct TomlCronDef {
     #[serde(default)]
     run_once: bool,
     timeout_secs: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct TomlChannelConfig {
+    listen_only_mode: Option<bool>,
 }
 
 fn default_enabled() -> bool {
@@ -4179,6 +4207,7 @@ impl Config {
             cortex: None,
             warmup: None,
             browser: None,
+            channel: None,
             mcp: None,
             brave_search_key: None,
             cron_timezone: None,
@@ -4848,6 +4877,15 @@ impl Config {
                         ..base_defaults.browser.clone()
                     })
             },
+            channel: toml
+                .defaults
+                .channel
+                .map(|c| ChannelConfig {
+                    listen_only_mode: c
+                        .listen_only_mode
+                        .unwrap_or(base_defaults.channel.listen_only_mode),
+                })
+                .unwrap_or(base_defaults.channel),
             mcp: default_mcp,
             brave_search_key: toml
                 .defaults
@@ -5039,6 +5077,11 @@ impl Config {
                             .or_else(|| defaults.browser.screenshot_dir.clone()),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
+                    channel: a.channel.map(|c| ChannelConfig {
+                        listen_only_mode: c
+                            .listen_only_mode
+                            .unwrap_or(defaults.channel.listen_only_mode),
+                    }),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(
                             mcp_servers
@@ -5077,6 +5120,7 @@ impl Config {
                 cortex: None,
                 warmup: None,
                 browser: None,
+                channel: None,
                 mcp: None,
                 brave_search_key: None,
                 cron_timezone: None,
@@ -5623,6 +5667,7 @@ pub struct RuntimeConfig {
     pub max_concurrent_branches: ArcSwap<usize>,
     pub max_concurrent_workers: ArcSwap<usize>,
     pub browser_config: ArcSwap<BrowserConfig>,
+    pub channel_config: ArcSwap<ChannelConfig>,
     pub mcp: ArcSwap<Vec<McpServerConfig>>,
     pub history_backfill_count: ArcSwap<usize>,
     pub brave_search_key: ArcSwap<Option<String>>,
@@ -5689,6 +5734,7 @@ impl RuntimeConfig {
             max_concurrent_branches: ArcSwap::from_pointee(agent_config.max_concurrent_branches),
             max_concurrent_workers: ArcSwap::from_pointee(agent_config.max_concurrent_workers),
             browser_config: ArcSwap::from_pointee(agent_config.browser.clone()),
+            channel_config: ArcSwap::from_pointee(agent_config.channel),
             mcp: ArcSwap::from_pointee(agent_config.mcp.clone()),
             history_backfill_count: ArcSwap::from_pointee(agent_config.history_backfill_count),
             brave_search_key: ArcSwap::from_pointee(agent_config.brave_search_key.clone()),
@@ -5781,6 +5827,7 @@ impl RuntimeConfig {
         self.max_concurrent_workers
             .store(Arc::new(resolved.max_concurrent_workers));
         self.browser_config.store(Arc::new(resolved.browser));
+        self.channel_config.store(Arc::new(resolved.channel));
         self.mcp.store(Arc::new(new_mcp.clone()));
         self.history_backfill_count
             .store(Arc::new(resolved.history_backfill_count));

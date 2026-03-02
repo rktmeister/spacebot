@@ -260,6 +260,18 @@ async fn handle_message_event(
         &adapter_state.channel_name_cache,
     )
     .await;
+    let mut metadata = metadata;
+    let mentioned_bot = msg_event
+        .content
+        .as_ref()
+        .and_then(|content| content.text.as_ref())
+        .as_ref()
+        .map(|text| text.contains(&format!("<@{}>", adapter_state.bot_user_id)))
+        .unwrap_or(false);
+    metadata.insert(
+        "slack_mentions_or_replies_to_bot".into(),
+        serde_json::Value::Bool(mentioned_bot),
+    );
 
     send_inbound(
         &adapter_state.inbound_tx,
@@ -350,6 +362,11 @@ async fn handle_app_mention_event(
         &adapter_state.channel_name_cache,
     )
     .await;
+    let mut metadata = metadata;
+    metadata.insert(
+        "slack_mentions_or_replies_to_bot".into(),
+        serde_json::Value::Bool(true),
+    );
 
     send_inbound(
         &adapter_state.inbound_tx,

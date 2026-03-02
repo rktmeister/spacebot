@@ -46,6 +46,7 @@ pub struct ReplyTool {
     channel_id: ChannelId,
     replied_flag: RepliedFlag,
     agent_display_name: String,
+    agent_id: String,
 }
 
 impl ReplyTool {
@@ -56,6 +57,7 @@ impl ReplyTool {
         conversation_logger: ConversationLogger,
         channel_id: ChannelId,
         replied_flag: RepliedFlag,
+        agent_id: impl Into<String>,
         agent_display_name: impl Into<String>,
     ) -> Self {
         Self {
@@ -64,9 +66,47 @@ impl ReplyTool {
             conversation_logger,
             channel_id,
             replied_flag,
+            agent_id: agent_id.into(),
             agent_display_name: agent_display_name.into(),
         }
     }
+}
+
+fn enforce_agent_style(_agent_id: &str, content: &str) -> String {
+    content.to_string()
+}
+
+fn cards_to_text(cards: &[crate::Card]) -> String {
+    let mut sections = Vec::new();
+    for card in cards {
+        let mut lines = Vec::new();
+        if let Some(title) = &card.title
+            && !title.trim().is_empty()
+        {
+            lines.push(title.trim().to_string());
+        }
+        if let Some(description) = &card.description
+            && !description.trim().is_empty()
+        {
+            lines.push(description.trim().to_string());
+        }
+        for field in &card.fields {
+            let name = field.name.trim();
+            let value = field.value.trim();
+            if !name.is_empty() || !value.is_empty() {
+                lines.push(format!("{name}\n{value}").trim().to_string());
+            }
+        }
+        if let Some(footer) = &card.footer
+            && !footer.trim().is_empty()
+        {
+            lines.push(footer.trim().to_string());
+        }
+        if !lines.is_empty() {
+            sections.push(lines.join("\n\n"));
+        }
+    }
+    sections.join("\n\n")
 }
 
 /// Error type for reply tool.
@@ -361,6 +401,21 @@ impl Tool for ReplyTool {
             source,
         )
         .await;
+        let mut converted_content = enforce_agent_style(&self.agent_id, &converted_content);
+
+        // Some adapters/models emit card-only payloads with empty content.
+        // Derive a readable plaintext fallback from cards to avoid empty-message errors.
+        if converted_content.trim().is_empty()
+            && let Some(cards) = &args.cards
+        {
+            let from_cards = cards_to_text(cards);
+            if !from_cards.trim().is_empty() {
+                converted_content = enforce_agent_style(&self.agent_id, &from_cards);
+            }
+        }
+        if converted_content.trim().is_empty() {
+            converted_content = "noted.".to_string();
+        }
 
         if crate::tools::should_block_user_visible_text(&converted_content) {
             tracing::warn!(
@@ -378,12 +433,18 @@ impl Tool for ReplyTool {
             Some(&self.agent_display_name),
         );
 
-        let response = if let Some(ref name) = args.thread_name {
+        let thread_name = args
+            .thread_name
+            .as_ref()
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty());
+
+        let response = if let Some(name) = thread_name {
             // Cap thread names at 100 characters (Discord limit)
             let thread_name = if name.len() > 100 {
                 name[..name.floor_char_boundary(100)].to_string()
             } else {
-                name.clone()
+                name.to_string()
             };
             OutboundResponse::ThreadReply {
                 thread_name,
@@ -391,12 +452,17 @@ impl Tool for ReplyTool {
             }
         } else if args.cards.is_some() || args.interactive_elements.is_some() || args.poll.is_some()
         {
-            OutboundResponse::RichMessage {
-                text: converted_content.clone(),
-                blocks: vec![], // No block generation for now; Slack adapters will fall back to text
-                cards: args.cards.unwrap_or_default(),
-                interactive_elements: args.interactive_elements.unwrap_or_default(),
-                poll: args.poll,
+            if source == "telegram" || source == "discord" {
+                // Force plain text on adapters where rich payloads can fail silently.
+                OutboundResponse::Text(converted_content.clone())
+            } else {
+                OutboundResponse::RichMessage {
+                    text: converted_content.clone(),
+                    blocks: vec![], // No block generation for now; Slack adapters will fall back to text
+                    cards: args.cards.unwrap_or_default(),
+                    interactive_elements: args.interactive_elements.unwrap_or_default(),
+                    poll: args.poll,
+                }
             }
         } else {
             OutboundResponse::Text(converted_content.clone())

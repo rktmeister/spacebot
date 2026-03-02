@@ -173,6 +173,9 @@ pub struct Channel {
     pending_results: Vec<PendingResult>,
     /// Optional send_agent_message tool (only when agent has active links).
     send_agent_message_tool: Option<crate::tools::SendAgentMessageTool>,
+    /// Channel-local reply mode toggle for telegram marketing intel.
+    /// true = listen-only unless explicit invoke, false = respond normally.
+    listen_only_mode: bool,
 }
 
 impl Channel {
@@ -248,6 +251,7 @@ impl Channel {
         };
 
         let self_tx = message_tx.clone();
+        let default_listen_only_mode = deps.runtime_config.channel_config.load().listen_only_mode;
         let channel = Self {
             id: id.clone(),
             title: None,
@@ -274,6 +278,7 @@ impl Channel {
             retrigger_deadline: None,
             pending_results: Vec::new(),
             send_agent_message_tool,
+            listen_only_mode: default_listen_only_mode,
         };
 
         (channel, message_tx)
@@ -299,8 +304,328 @@ impl Channel {
             .filter(|adapter| !adapter.is_empty())
     }
 
+    fn sync_listen_only_mode_from_runtime(&mut self) {
+        self.listen_only_mode = self
+            .deps
+            .runtime_config
+            .channel_config
+            .load()
+            .listen_only_mode;
+    }
+
     fn suppress_plaintext_fallback(&self) -> bool {
         matches!(self.current_adapter(), Some("email"))
+    }
+
+    fn compute_listen_mode_invocation(
+        &self,
+        message: &InboundMessage,
+        raw_text: &str,
+    ) -> (bool, bool, bool) {
+        let text = raw_text.trim();
+        let invoked_by_command = text.starts_with('/');
+        let invoked_by_mention = match message.source.as_str() {
+            "telegram" => message
+                .metadata
+                .get("telegram_bot_username")
+                .and_then(|v| v.as_str())
+                .map(|username| {
+                    let mention = format!("@{username}");
+                    text.contains(&mention)
+                })
+                .unwrap_or(false),
+            "discord" => message
+                .metadata
+                .get("discord_mentioned_bot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            "slack" => message
+                .metadata
+                .get("slack_mentions_or_replies_to_bot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            _ => false,
+        };
+        let invoked_by_reply = match message.source.as_str() {
+            // Use bot-specific reply metadata; generic reply_to_is_bot can
+            // match unrelated bots and cause false invokes.
+            "discord" => message
+                .metadata
+                .get("discord_reply_to_bot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            _ => message
+                .metadata
+                .get("reply_to_is_bot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        };
+
+        (invoked_by_command, invoked_by_mention, invoked_by_reply)
+    }
+
+    async fn send_builtin_text(&mut self, text: String, log_label: &str) {
+        self.state.conversation_logger.log_bot_message_with_name(
+            &self.state.channel_id,
+            &text,
+            Some(self.agent_display_name()),
+        );
+        if let Err(error) = self.response_tx.send(OutboundResponse::Text(text)).await {
+            tracing::error!(%error, channel_id = %self.id, %log_label, "failed to send built-in reply");
+        }
+    }
+
+    async fn try_handle_builtin_ops_commands(
+        &mut self,
+        raw_text: &str,
+        message: &InboundMessage,
+    ) -> Result<bool> {
+        if message.source == "system" {
+            return Ok(false);
+        }
+        let supported_source = matches!(
+            message.source.as_str(),
+            "telegram" | "discord" | "slack" | "twitch"
+        );
+        if !supported_source {
+            return Ok(false);
+        }
+
+        let text = raw_text.trim();
+        if !text.starts_with('/') {
+            return Ok(false);
+        }
+
+        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
+        let now_line = temporal_context.current_time_line();
+
+        match text {
+            "/status" => {
+                let routing = self.deps.runtime_config.routing.load();
+                let channel_model = routing.resolve(ProcessType::Channel, None).to_string();
+                let branch_model = routing.resolve(ProcessType::Branch, None).to_string();
+                let mode = if self.listen_only_mode {
+                    "quiet"
+                } else {
+                    "active"
+                };
+                let adapter = self.current_adapter().unwrap_or("unknown");
+                let body = format!(
+                    "status\n\
+                     - agent: {}\n\
+                     - channel: {}\n\
+                     - adapter: {}\n\
+                     - mode: {} (quiet => only command/@mention/reply-to-bot)\n\
+                     - channel model: {}\n\
+                     - branch model: {}\n\
+                     - time: {}",
+                    self.deps.agent_id,
+                    self.id,
+                    adapter,
+                    mode,
+                    channel_model,
+                    branch_model,
+                    now_line
+                );
+                self.send_builtin_text(body, "status").await;
+                return Ok(true);
+            }
+            "/quiet" => {
+                self.listen_only_mode = true;
+                self.send_builtin_text(
+                    "quiet mode enabled. i'll only reply to commands, @mentions, or replies to my message."
+                        .to_string(),
+                    "quiet",
+                )
+                .await;
+                return Ok(true);
+            }
+            "/active" => {
+                self.listen_only_mode = false;
+                self.send_builtin_text(
+                    "active mode enabled. i'll respond normally in this chat.".to_string(),
+                    "active",
+                )
+                .await;
+                return Ok(true);
+            }
+            "/tasks" => {
+                let ready = self
+                    .deps
+                    .task_store
+                    .list_ready(self.deps.agent_id.as_ref(), 10)
+                    .await?;
+                let body = if ready.is_empty() {
+                    "tasks (ready): none".to_string()
+                } else {
+                    let mut lines = vec!["tasks (ready):".to_string()];
+                    for task in ready {
+                        lines.push(format!(
+                            "- #{} [{}] {}",
+                            task.task_number, task.priority, task.title
+                        ));
+                    }
+                    lines.join("\n")
+                };
+                self.send_builtin_text(body, "tasks").await;
+                return Ok(true);
+            }
+            "/today" => {
+                let in_progress = self
+                    .deps
+                    .task_store
+                    .list(
+                        self.deps.agent_id.as_ref(),
+                        Some(crate::tasks::TaskStatus::InProgress),
+                        None,
+                        5,
+                    )
+                    .await?;
+                let ready = self
+                    .deps
+                    .task_store
+                    .list_ready(self.deps.agent_id.as_ref(), 5)
+                    .await?;
+
+                let mut lines = vec!["today (local tasks snapshot):".to_string()];
+                if in_progress.is_empty() {
+                    lines.push("- in progress: none".to_string());
+                } else {
+                    lines.push("- in progress:".to_string());
+                    for task in in_progress {
+                        lines.push(format!(
+                            "  #{} [{}] {}",
+                            task.task_number, task.priority, task.title
+                        ));
+                    }
+                }
+                if ready.is_empty() {
+                    lines.push("- up next (ready): none".to_string());
+                } else {
+                    lines.push("- up next (ready):".to_string());
+                    for task in ready {
+                        lines.push(format!(
+                            "  #{} [{}] {}",
+                            task.task_number, task.priority, task.title
+                        ));
+                    }
+                }
+                self.send_builtin_text(lines.join("\n"), "today").await;
+                return Ok(true);
+            }
+            "/help" => {
+                let body = "commands:\n\
+                            - /status: current mode, models, binding snapshot\n\
+                            - /today: in-progress + ready task snapshot\n\
+                            - /tasks: ready task list\n\
+                            - /quiet: listen-only mode\n\
+                            - /active: normal reply mode\n\
+                            - /digest: one-shot day digest (00:00 -> now)\n\
+                            - /agent-id: runtime agent id"
+                    .to_string();
+                self.send_builtin_text(body, "help").await;
+                return Ok(true);
+            }
+            _ => {}
+        }
+
+        Ok(false)
+    }
+
+    async fn try_handle_builtin_digest(
+        &mut self,
+        raw_text: &str,
+        message: &InboundMessage,
+    ) -> Result<bool> {
+        if message.source != "telegram"
+            || message.source == "system"
+            || raw_text.trim() != "/digest"
+        {
+            return Ok(false);
+        }
+
+        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
+        let today_local = temporal_context.local_date(temporal_context.now_utc);
+
+        let all_messages = self
+            .state
+            .conversation_logger
+            .load_recent(&self.state.channel_id, 400)
+            .await?;
+
+        let mut transcript = String::new();
+        for item in all_messages {
+            if item.role != "user" {
+                continue;
+            }
+            if temporal_context.local_date(item.created_at) != today_local {
+                continue;
+            }
+            let sender = item.sender_name.unwrap_or_else(|| "user".to_string());
+            let content = item.content.trim();
+            if content.is_empty() || content.eq_ignore_ascii_case("/digest") {
+                continue;
+            }
+            let ts = temporal_context.format_timestamp(item.created_at);
+            let line = format!("[{}] {}: {}\n", ts, sender, content);
+            if transcript.len() + line.len() > 12000 {
+                break;
+            }
+            transcript.push_str(&line);
+        }
+
+        let reply_text = if transcript.trim().is_empty() {
+            "no material updates today.".to_string()
+        } else {
+            let routing = self.deps.runtime_config.routing.load();
+            let model_name = routing.resolve(ProcessType::Channel, None).to_string();
+            let model = SpacebotModel::make(&self.deps.llm_manager, &model_name)
+                .with_context(&*self.deps.agent_id, "channel")
+                .with_routing((**routing).clone());
+            let agent = AgentBuilder::new(model)
+                .preamble("you write crisp internal marketing digests. output plain text only.")
+                .default_max_turns(1)
+                .build();
+            let prompt = format!(
+                "summarize this channel's messages from local 00:00 to now.\n\
+                 output exactly in this order:\n\
+                 1) top decisions\n\
+                 2) key convo themes\n\
+                 3) open loops\n\
+                 keep it concise and practical.\n\
+                 if there's no meaningful activity, reply exactly: no material updates today.\n\n\
+                 transcript:\n{transcript}"
+            );
+            match agent.prompt(&prompt).await {
+                Ok(text) => {
+                    let trimmed = text.trim();
+                    if trimmed.is_empty() {
+                        "no material updates today.".to_string()
+                    } else {
+                        trimmed.to_string()
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, channel_id = %self.id, "builtin /digest summarizer failed");
+                    "no material updates today.".to_string()
+                }
+            }
+        };
+
+        self.state.conversation_logger.log_bot_message_with_name(
+            &self.state.channel_id,
+            &reply_text,
+            Some(self.agent_display_name()),
+        );
+        if let Err(error) = self
+            .response_tx
+            .send(OutboundResponse::Text(reply_text))
+            .await
+        {
+            tracing::error!(%error, channel_id = %self.id, "failed to send builtin /digest reply");
+        }
+
+        Ok(true)
     }
 
     /// Run the channel event loop.
@@ -481,6 +806,9 @@ impl Channel {
     /// with a coalesce hint telling the LLM this is a fast-moving conversation.
     #[tracing::instrument(skip(self, messages), fields(channel_id = %self.id, agent_id = %self.deps.agent_id, message_count = messages.len()))]
     async fn handle_message_batch(&mut self, messages: Vec<InboundMessage>) -> Result<()> {
+        // Apply runtime-config updates immediately without requiring a restart.
+        self.sync_listen_only_mode_from_runtime();
+
         let message_count = messages.len();
         let batch_start_timestamp = messages
             .iter()
@@ -545,6 +873,7 @@ impl Channel {
         let mut user_contents: Vec<UserContent> = Vec::new();
         let mut conversation_id = String::new();
         let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
+        let mut batch_has_invoke = false;
 
         for message in &messages {
             if message.source != "system" {
@@ -564,6 +893,13 @@ impl Channel {
                         (message.content.to_string(), Vec::new())
                     }
                 };
+
+                if self.listen_only_mode {
+                    let (invoked_by_command, invoked_by_mention, invoked_by_reply) =
+                        self.compute_listen_mode_invocation(message, &raw_text);
+                    batch_has_invoke |=
+                        invoked_by_command || invoked_by_mention || invoked_by_reply;
+                }
 
                 self.state.conversation_logger.log_user_message(
                     &self.state.channel_id,
@@ -612,6 +948,19 @@ impl Channel {
                 user_contents.push(UserContent::text(formatted_text));
             }
         }
+
+        if self.listen_only_mode && !batch_has_invoke {
+            tracing::debug!(
+                channel_id = %self.id,
+                message_count,
+                "listen-first mode: suppressing unsolicited coalesced batch"
+            );
+            // Keep passive memory capture behavior aligned with single-message flow.
+            self.message_count += message_count;
+            self.check_memory_persistence().await;
+            return Ok(());
+        }
+
         // Separate text and non-text (image/audio) content
         let mut text_parts = Vec::new();
         let mut attachment_parts = Vec::new();
@@ -733,6 +1082,9 @@ impl Channel {
     /// memory_save. The tools act on the channel's shared state directly.
     #[tracing::instrument(skip(self, message), fields(channel_id = %self.id, agent_id = %self.deps.agent_id, message_id = %message.id))]
     async fn handle_message(&mut self, message: InboundMessage) -> Result<()> {
+        // Apply runtime-config updates immediately without requiring a restart.
+        self.sync_listen_only_mode_from_runtime();
+
         tracing::info!(
             channel_id = %self.id,
             message_id = %message.id,
@@ -757,9 +1109,104 @@ impl Channel {
             crate::MessageContent::Interaction { .. } => (message.content.to_string(), Vec::new()),
         };
 
+        // Deterministic built-in command: bypass model output drift for agent identity checks.
+        if message.source != "system" && raw_text.trim() == "/agent-id" {
+            let agent_id = self.deps.agent_id.to_string();
+            self.state.conversation_logger.log_bot_message_with_name(
+                &self.state.channel_id,
+                &agent_id,
+                Some(self.agent_display_name()),
+            );
+            if let Err(error) = self
+                .response_tx
+                .send(OutboundResponse::Text(agent_id))
+                .await
+            {
+                tracing::error!(%error, channel_id = %self.id, "failed to send built-in /agent-id reply");
+            }
+            return Ok(());
+        }
+
+        // Deterministic liveness ping for Telegram mentions.
+        // This avoids model/provider flakiness for simple "you there?" style checks.
+        if message.source == "telegram" && message.source != "system" {
+            let text = raw_text.trim().to_lowercase();
+            let mention = message
+                .metadata
+                .get("telegram_bot_username")
+                .and_then(|v| v.as_str())
+                .map(|u| format!("@{u}"))
+                .unwrap_or_default();
+            let has_mention = !mention.is_empty() && text.contains(&mention);
+            let looks_like_ping = text.contains("you here")
+                || text.contains("ping")
+                || text.ends_with(" yo")
+                || text == "yo"
+                || text.contains("alive")
+                || text.contains("there?");
+
+            if has_mention && looks_like_ping {
+                let ack = "yeah i'm here".to_string();
+                self.state.conversation_logger.log_bot_message_with_name(
+                    &self.state.channel_id,
+                    &ack,
+                    Some(self.agent_display_name()),
+                );
+                if let Err(error) = self.response_tx.send(OutboundResponse::Text(ack)).await {
+                    tracing::error!(%error, channel_id = %self.id, "failed to send built-in telegram ping reply");
+                }
+                return Ok(());
+            }
+        }
+
+        // Deterministic ping ack for Discord quiet-mode mentions/replies to avoid
+        // flaky model behavior (e.g. skipping or over-formatting simple liveness checks).
+        if message.source == "discord" && self.listen_only_mode && message.source != "system" {
+            let text = raw_text.trim().to_lowercase();
+            let directed = message
+                .metadata
+                .get("discord_mentions_or_replies_to_bot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+                || message
+                    .metadata
+                    .get("reply_to_is_bot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+            let looks_like_ping = text.contains("you here")
+                || text.contains("ping")
+                || text.ends_with(" yo")
+                || text == "yo"
+                || text.contains("alive")
+                || text.contains("there?");
+            if directed && looks_like_ping {
+                let ack = "yeah i'm here".to_string();
+                self.state.conversation_logger.log_bot_message_with_name(
+                    &self.state.channel_id,
+                    &ack,
+                    Some(self.agent_display_name()),
+                );
+                if let Err(error) = self.response_tx.send(OutboundResponse::Text(ack)).await {
+                    tracing::error!(%error, channel_id = %self.id, "failed to send built-in discord ping reply");
+                }
+                return Ok(());
+            }
+        }
+
+        let rewritten_text = if message.source == "telegram" {
+            match raw_text.trim() {
+                "/digest" => {
+                    "generate a day digest for this channel for today (from local 00:00 to now), concise and useful. preferred format and order: 1) top decisions (what was decided), 2) key convo themes (high-level discussion summary), 3) open loops (pending calls/questions). keep it short, practical, and non-cringe. if there is no meaningful activity in that window, say exactly: no material updates today.".to_string()
+                }
+                _ => raw_text.clone(),
+            }
+        } else {
+            raw_text.clone()
+        };
+
         let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
         let message_timestamp = temporal_context.format_timestamp(message.timestamp);
-        let user_text = format_user_message(&raw_text, &message, &message_timestamp);
+        let user_text = format_user_message(&rewritten_text, &message, &message_timestamp);
 
         let attachment_content = if !attachments.is_empty() {
             download_attachments(&self.deps, &attachments).await
@@ -804,6 +1251,42 @@ impl Channel {
             )?);
         }
 
+        if self
+            .try_handle_builtin_ops_commands(&raw_text, &message)
+            .await?
+        {
+            return Ok(());
+        }
+
+        if self.try_handle_builtin_digest(&raw_text, &message).await? {
+            return Ok(());
+        }
+
+        let mut invoked_by_command = false;
+        let mut invoked_by_mention = false;
+        let mut invoked_by_reply = false;
+
+        // Listen-first guardrail:
+        // ingest all messages, but only reply when explicitly invoked.
+        if self.listen_only_mode && message.source != "system" {
+            (invoked_by_command, invoked_by_mention, invoked_by_reply) =
+                self.compute_listen_mode_invocation(&message, &raw_text);
+
+            if !invoked_by_command && !invoked_by_mention && !invoked_by_reply {
+                tracing::debug!(
+                    channel_id = %self.id,
+                    source = %message.source,
+                    "listen-first mode: suppressing unsolicited reply"
+                );
+                // In quiet/listen-first mode we still want passive memory capture.
+                // Count suppressed user messages so auto memory persistence branches
+                // continue to run on interval without requiring explicit invokes.
+                self.message_count += 1;
+                self.check_memory_persistence().await;
+                return Ok(());
+            }
+        }
+
         let system_prompt = self.build_system_prompt().await?;
 
         {
@@ -825,6 +1308,33 @@ impl Channel {
 
         self.handle_agent_result(result, &skip_flag, &replied_flag, is_retrigger)
             .await;
+
+        // Safety-net: in quiet mode, explicit mention/reply should never be dropped silently.
+        if self.listen_only_mode
+            && !is_retrigger
+            && !invoked_by_command
+            && (invoked_by_mention || invoked_by_reply)
+            && skip_flag.load(std::sync::atomic::Ordering::Relaxed)
+            && !replied_flag.load(std::sync::atomic::Ordering::Relaxed)
+            && matches!(
+                message.source.as_str(),
+                "discord" | "telegram" | "slack" | "twitch"
+            )
+        {
+            let ack = "yeah i'm here — tell me what you need.".to_string();
+            self.state.conversation_logger.log_bot_message_with_name(
+                &self.state.channel_id,
+                &ack,
+                Some(self.agent_display_name()),
+            );
+            if let Err(error) = self.response_tx.send(OutboundResponse::Text(ack)).await {
+                tracing::error!(
+                    %error,
+                    channel_id = %self.id,
+                    "failed to send quiet-mode explicit invoke fallback"
+                );
+            }
+        }
 
         // After retrigger turns, persist a fallback summary only when we don't
         // already have the LLM's actual relay text in history.
@@ -1421,6 +1931,9 @@ impl Channel {
 
     /// Handle a process event (branch results, worker completions, status updates).
     async fn handle_event(&mut self, event: ProcessEvent) -> Result<()> {
+        // Keep mode aligned with live settings updates while this worker runs.
+        self.sync_listen_only_mode_from_runtime();
+
         // Only process events targeted at this channel
         if !event_is_for_channel(&event, &self.id) {
             return Ok(());

@@ -76,6 +76,11 @@ pub(super) struct BrowserSection {
 }
 
 #[derive(Serialize, Debug)]
+pub(super) struct ChannelSection {
+    listen_only_mode: bool,
+}
+
+#[derive(Serialize, Debug)]
 pub(super) struct SandboxSection {
     mode: String,
     writable_paths: Vec<String>,
@@ -98,6 +103,7 @@ pub(super) struct AgentConfigResponse {
     coalesce: CoalesceSection,
     memory_persistence: MemoryPersistenceSection,
     browser: BrowserSection,
+    channel: ChannelSection,
     sandbox: SandboxSection,
     discord: DiscordSection,
 }
@@ -126,6 +132,8 @@ pub(super) struct AgentConfigUpdateRequest {
     memory_persistence: Option<MemoryPersistenceUpdate>,
     #[serde(default)]
     browser: Option<BrowserUpdate>,
+    #[serde(default)]
+    channel: Option<ChannelUpdate>,
     #[serde(default)]
     sandbox: Option<SandboxUpdate>,
     #[serde(default)]
@@ -202,6 +210,11 @@ pub(super) struct BrowserUpdate {
 }
 
 #[derive(Deserialize, Debug)]
+pub(super) struct ChannelUpdate {
+    listen_only_mode: Option<bool>,
+}
+
+#[derive(Deserialize, Debug)]
 pub(super) struct SandboxUpdate {
     mode: Option<String>,
     writable_paths: Option<Vec<String>>,
@@ -231,6 +244,7 @@ pub(super) async fn get_agent_config(
     let coalesce = rc.coalesce.load();
     let memory_persistence = rc.memory_persistence.load();
     let browser = rc.browser_config.load();
+    let channel = rc.channel_config.load();
     let sandbox = rc.sandbox.load();
 
     let response = AgentConfigResponse {
@@ -286,6 +300,9 @@ pub(super) async fn get_agent_config(
             enabled: browser.enabled,
             headless: browser.headless,
             evaluate_enabled: browser.evaluate_enabled,
+        },
+        channel: ChannelSection {
+            listen_only_mode: channel.listen_only_mode,
         },
         sandbox: SandboxSection {
             mode: match sandbox.mode {
@@ -371,6 +388,9 @@ pub(super) async fn update_agent_config(
     }
     if let Some(browser) = &request.browser {
         update_browser_table(&mut doc, agent_idx, browser)?;
+    }
+    if let Some(channel) = &request.channel {
+        update_channel_table(&mut doc, agent_idx, channel)?;
     }
     if let Some(sandbox) = &request.sandbox {
         update_sandbox_table(&mut doc, agent_idx, sandbox)?;
@@ -671,6 +691,19 @@ fn update_browser_table(
     }
     if let Some(v) = browser.evaluate_enabled {
         table["evaluate_enabled"] = toml_edit::value(v);
+    }
+    Ok(())
+}
+
+fn update_channel_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+    channel: &ChannelUpdate,
+) -> Result<(), StatusCode> {
+    let agent = get_agent_table_mut(doc, agent_idx)?;
+    let table = get_or_create_subtable(agent, "channel")?;
+    if let Some(v) = channel.listen_only_mode {
+        table["listen_only_mode"] = toml_edit::value(v);
     }
     Ok(())
 }

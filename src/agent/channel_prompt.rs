@@ -5,7 +5,7 @@
 //! system prompt from identity, memory bulletin, skills, status, etc.
 
 use crate::error::Result;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use chrono_tz::Tz;
 
 /// Debounce window for retriggers: coalesce rapid branch/worker completions
@@ -121,6 +121,15 @@ impl TemporalContext {
             self.format_timestamp(self.now_utc),
             self.now_utc.format("%Y-%m-%d %H:%M:%S UTC")
         )
+    }
+
+    pub(crate) fn local_date(&self, timestamp: DateTime<Utc>) -> NaiveDate {
+        match &self.timezone {
+            TemporalTimezone::Named { timezone, .. } => {
+                timestamp.with_timezone(timezone).date_naive()
+            }
+            TemporalTimezone::SystemLocal => timestamp.with_timezone(&Local).date_naive(),
+        }
     }
 
     pub(crate) fn worker_task_preamble(
