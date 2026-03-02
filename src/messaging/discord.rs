@@ -726,6 +726,11 @@ impl EventHandler for Handler {
             "discord_mentions_or_replies_to_bot".into(),
             serde_json::Value::Bool(true),
         );
+        metadata.insert(
+            "discord_mentioned_bot".into(),
+            serde_json::Value::Bool(false),
+        );
+        metadata.insert("discord_reply_to_bot".into(), serde_json::Value::Bool(true));
         if let Some(guild_id) = component.guild_id {
             metadata.insert(
                 "discord_guild_id".into(),

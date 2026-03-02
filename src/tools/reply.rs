@@ -427,12 +427,6 @@ impl Tool for ReplyTool {
             ));
         }
 
-        self.conversation_logger.log_bot_message_with_name(
-            &self.channel_id,
-            &converted_content,
-            Some(&self.agent_display_name),
-        );
-
         let thread_name = args
             .thread_name
             .as_ref()
@@ -445,6 +439,12 @@ impl Tool for ReplyTool {
             .as_ref()
             .is_some_and(|elements| !elements.is_empty());
         let poll_requested = args.poll.is_some();
+
+        if thread_name.is_some() && (cards_requested || interactive_requested || poll_requested) {
+            return Err(ReplyError(
+                "thread replies do not support cards, interactive_elements, or polls".into(),
+            ));
+        }
 
         let response = if let Some(name) = thread_name {
             // Cap thread names at 100 characters (Discord limit)
@@ -493,6 +493,12 @@ impl Tool for ReplyTool {
             .send(response)
             .await
             .map_err(|e| ReplyError(format!("failed to send reply: {e}")))?;
+
+        self.conversation_logger.log_bot_message_with_name(
+            &self.channel_id,
+            &converted_content,
+            Some(&self.agent_display_name),
+        );
 
         // Mark the turn as handled so handle_agent_result skips the fallback send.
         self.replied_flag.store(true, Ordering::Relaxed);

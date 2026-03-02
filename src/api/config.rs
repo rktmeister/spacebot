@@ -854,4 +854,51 @@ id = "main"
         let result = update_warmup_table(&mut doc, agent_idx, &update);
         assert_eq!(result, Err(StatusCode::BAD_REQUEST));
     }
+
+    #[test]
+    fn test_update_channel_table_writes_listen_only_mode() {
+        let mut doc: toml_edit::DocumentMut = r#"
+[[agents]]
+id = "main"
+"#
+        .parse()
+        .expect("failed to parse test TOML");
+
+        let agent_idx =
+            find_or_create_agent_table(&mut doc, "main").expect("failed to find/create agent");
+
+        let enable_update = ChannelUpdate {
+            listen_only_mode: Some(true),
+        };
+        update_channel_table(&mut doc, agent_idx, &enable_update)
+            .expect("failed to update channel table with true");
+
+        let agent = doc
+            .get("agents")
+            .and_then(|item| item.as_array_of_tables())
+            .and_then(|agents| agents.get(agent_idx))
+            .expect("missing agent table");
+        let channel = agent
+            .get("channel")
+            .and_then(|item| item.as_table())
+            .expect("missing channel table");
+        assert_eq!(channel["listen_only_mode"].as_bool(), Some(true));
+
+        let disable_update = ChannelUpdate {
+            listen_only_mode: Some(false),
+        };
+        update_channel_table(&mut doc, agent_idx, &disable_update)
+            .expect("failed to update channel table with false");
+
+        let agent = doc
+            .get("agents")
+            .and_then(|item| item.as_array_of_tables())
+            .and_then(|agents| agents.get(agent_idx))
+            .expect("missing agent table");
+        let channel = agent
+            .get("channel")
+            .and_then(|item| item.as_table())
+            .expect("missing channel table");
+        assert_eq!(channel["listen_only_mode"].as_bool(), Some(false));
+    }
 }

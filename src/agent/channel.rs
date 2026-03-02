@@ -333,6 +333,7 @@ impl Channel {
         raw_text: &str,
     ) -> (bool, bool, bool) {
         let text = raw_text.trim();
+        let text_lower = text.to_lowercase();
         let invoked_by_command = text.starts_with('/');
         let invoked_by_mention = match message.source.as_str() {
             "telegram" => message
@@ -340,8 +341,8 @@ impl Channel {
                 .get("telegram_bot_username")
                 .and_then(|v| v.as_str())
                 .map(|username| {
-                    let mention = format!("@{username}");
-                    text.contains(&mention)
+                    let mention = format!("@{username}").to_lowercase();
+                    text_lower.contains(&mention)
                 })
                 .unwrap_or(false),
             "discord" => message
@@ -369,6 +370,22 @@ impl Channel {
                 .get("discord_reply_to_bot")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            "telegram" => {
+                let bot_username = message
+                    .metadata
+                    .get("telegram_bot_username")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_lowercase);
+                let reply_username = message
+                    .metadata
+                    .get("reply_to_username")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_lowercase);
+                match (bot_username, reply_username) {
+                    (Some(bot), Some(reply)) => bot == reply,
+                    _ => false,
+                }
+            }
             _ => message
                 .metadata
                 .get("reply_to_is_bot")
