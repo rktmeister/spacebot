@@ -919,7 +919,7 @@ impl Channel {
         }
 
         // Persist each message to conversation log (individual audit trail)
-        let mut user_contents: Vec<UserContent> = Vec::new();
+        let mut pending_batch_entries: Vec<(String, Vec<_>)> = Vec::new();
         let mut conversation_id = String::new();
         let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
         let mut batch_has_invoke = false;
@@ -986,15 +986,7 @@ impl Channel {
                     &raw_text,
                 );
 
-                // Download attachments for this message
-                if !attachments.is_empty() {
-                    let attachment_content = download_attachments(&self.deps, &attachments).await;
-                    for content in attachment_content {
-                        user_contents.push(content);
-                    }
-                }
-
-                user_contents.push(UserContent::text(formatted_text));
+                pending_batch_entries.push((formatted_text, attachments));
             }
         }
 
@@ -1008,6 +1000,17 @@ impl Channel {
             self.message_count += message_count;
             self.check_memory_persistence().await;
             return Ok(());
+        }
+
+        let mut user_contents: Vec<UserContent> = Vec::new();
+        for (formatted_text, attachments) in pending_batch_entries {
+            if !attachments.is_empty() {
+                let attachment_content = download_attachments(&self.deps, &attachments).await;
+                for content in attachment_content {
+                    user_contents.push(content);
+                }
+            }
+            user_contents.push(UserContent::text(formatted_text));
         }
 
         // Separate text and non-text (image/audio) content
