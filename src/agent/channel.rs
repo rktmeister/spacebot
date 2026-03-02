@@ -397,14 +397,19 @@ impl Channel {
     }
 
     async fn send_builtin_text(&mut self, text: String, log_label: &str) {
+        if let Err(error) = self
+            .response_tx
+            .send(OutboundResponse::Text(text.clone()))
+            .await
+        {
+            tracing::error!(%error, channel_id = %self.id, %log_label, "failed to send built-in reply");
+            return;
+        }
         self.state.conversation_logger.log_bot_message_with_name(
             &self.state.channel_id,
             &text,
             Some(self.agent_display_name()),
         );
-        if let Err(error) = self.response_tx.send(OutboundResponse::Text(text)).await {
-            tracing::error!(%error, channel_id = %self.id, %log_label, "failed to send built-in reply");
-        }
     }
 
     async fn try_handle_builtin_ops_commands(
@@ -644,18 +649,19 @@ impl Channel {
             }
         };
 
+        if let Err(error) = self
+            .response_tx
+            .send(OutboundResponse::Text(reply_text.clone()))
+            .await
+        {
+            tracing::error!(%error, channel_id = %self.id, "failed to send builtin /digest reply");
+            return Ok(true);
+        }
         self.state.conversation_logger.log_bot_message_with_name(
             &self.state.channel_id,
             &reply_text,
             Some(self.agent_display_name()),
         );
-        if let Err(error) = self
-            .response_tx
-            .send(OutboundResponse::Text(reply_text))
-            .await
-        {
-            tracing::error!(%error, channel_id = %self.id, "failed to send builtin /digest reply");
-        }
 
         Ok(true)
     }
@@ -1154,19 +1160,8 @@ impl Channel {
 
         // Deterministic built-in command: bypass model output drift for agent identity checks.
         if message.source != "system" && raw_text.trim() == "/agent-id" {
-            let agent_id = self.deps.agent_id.to_string();
-            self.state.conversation_logger.log_bot_message_with_name(
-                &self.state.channel_id,
-                &agent_id,
-                Some(self.agent_display_name()),
-            );
-            if let Err(error) = self
-                .response_tx
-                .send(OutboundResponse::Text(agent_id))
-                .await
-            {
-                tracing::error!(%error, channel_id = %self.id, "failed to send built-in /agent-id reply");
-            }
+            self.send_builtin_text(self.deps.agent_id.to_string(), "agent-id")
+                .await;
             return Ok(());
         }
 
@@ -1190,15 +1185,8 @@ impl Channel {
                 || text.contains("there?");
 
             if has_mention && looks_like_ping {
-                let ack = "yeah i'm here".to_string();
-                self.state.conversation_logger.log_bot_message_with_name(
-                    &self.state.channel_id,
-                    &ack,
-                    Some(self.agent_display_name()),
-                );
-                if let Err(error) = self.response_tx.send(OutboundResponse::Text(ack)).await {
-                    tracing::error!(%error, channel_id = %self.id, "failed to send built-in telegram ping reply");
-                }
+                self.send_builtin_text("yeah i'm here".to_string(), "telegram-ping")
+                    .await;
                 return Ok(());
             }
         }
@@ -1207,16 +1195,9 @@ impl Channel {
         // flaky model behavior (e.g. skipping or over-formatting simple liveness checks).
         if message.source == "discord" && self.listen_only_mode && message.source != "system" {
             let text = raw_text.trim().to_lowercase();
-            let directed = message
-                .metadata
-                .get("discord_mentions_or_replies_to_bot")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-                || message
-                    .metadata
-                    .get("reply_to_is_bot")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+            let (_, invoked_by_mention, invoked_by_reply) =
+                self.compute_listen_mode_invocation(&message, &raw_text);
+            let directed = invoked_by_mention || invoked_by_reply;
             let looks_like_ping = text.contains("you here")
                 || text.contains("ping")
                 || text.ends_with(" yo")
@@ -1224,29 +1205,13 @@ impl Channel {
                 || text.contains("alive")
                 || text.contains("there?");
             if directed && looks_like_ping {
-                let ack = "yeah i'm here".to_string();
-                self.state.conversation_logger.log_bot_message_with_name(
-                    &self.state.channel_id,
-                    &ack,
-                    Some(self.agent_display_name()),
-                );
-                if let Err(error) = self.response_tx.send(OutboundResponse::Text(ack)).await {
-                    tracing::error!(%error, channel_id = %self.id, "failed to send built-in discord ping reply");
-                }
+                self.send_builtin_text("yeah i'm here".to_string(), "discord-ping")
+                    .await;
                 return Ok(());
             }
         }
 
-        let rewritten_text = if message.source == "telegram" {
-            match raw_text.trim() {
-                "/digest" => {
-                    "generate a day digest for this channel for today (from local 00:00 to now), concise and useful. preferred format and order: 1) top decisions (what was decided), 2) key convo themes (high-level discussion summary), 3) open loops (pending calls/questions). keep it short, practical, and non-cringe. if there is no meaningful activity in that window, say exactly: no material updates today.".to_string()
-                }
-                _ => raw_text.clone(),
-            }
-        } else {
-            raw_text.clone()
-        };
+        let rewritten_text = raw_text.clone();
 
         let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
         let message_timestamp = temporal_context.format_timestamp(message.timestamp);
