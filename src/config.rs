@@ -3125,18 +3125,18 @@ fn resolve_listen_only_mode(
 }
 
 fn resolve_channel_runtime_merge(
-    resolved: ChannelConfig,
+    _resolved: ChannelConfig,
     configured_listen_only: Option<bool>,
     persisted: ChannelConfig,
     default: ChannelConfig,
 ) -> ChannelConfig {
-    let _ = resolved;
     ChannelConfig {
         listen_only_mode: resolve_listen_only_mode(
             configured_listen_only,
             Some(persisted.listen_only_mode),
             default.listen_only_mode,
         ),
+        .._resolved
     }
 }
 
