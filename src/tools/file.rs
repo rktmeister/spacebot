@@ -415,3 +415,104 @@ pub async fn file_list(path: impl AsRef<Path>) -> crate::error::Result<Vec<FileE
         })
         .collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sandbox::{Sandbox, SandboxConfig, SandboxMode};
+    use std::fs;
+
+    fn create_sandbox(mode: SandboxMode, workspace: &Path) -> Arc<Sandbox> {
+        let config = SandboxConfig {
+            mode,
+            ..Default::default()
+        };
+        let config = Arc::new(arc_swap::ArcSwap::from_pointee(config));
+        Arc::new(Sandbox::new_for_test(config, workspace.to_path_buf()))
+    }
+
+    #[tokio::test]
+    async fn sandbox_enabled_rejects_read_outside_workspace() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let outside = temp_dir.path().join("outside");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+        fs::create_dir_all(&outside).expect("failed to create outside dir");
+
+        let file = outside.join("secret.txt");
+        fs::write(&file, "secret data").expect("failed to write file");
+
+        let sandbox = create_sandbox(SandboxMode::Enabled, &workspace);
+        let tool = FileTool::new(workspace, sandbox);
+
+        let result = tool
+            .call(FileArgs {
+                operation: "read".to_string(),
+                path: file.to_string_lossy().into_owned(),
+                content: None,
+                create_dirs: false,
+            })
+            .await;
+
+        let error = result
+            .expect_err("should reject path outside workspace")
+            .to_string();
+        assert!(error.contains("ACCESS DENIED"), "unexpected error: {error}");
+    }
+
+    #[tokio::test]
+    async fn sandbox_disabled_allows_read_outside_workspace() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let outside = temp_dir.path().join("outside");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+        fs::create_dir_all(&outside).expect("failed to create outside dir");
+
+        let file = outside.join("report.txt");
+        fs::write(&file, "public data").expect("failed to write file");
+
+        let sandbox = create_sandbox(SandboxMode::Disabled, &workspace);
+        let tool = FileTool::new(workspace, sandbox);
+
+        let result = tool
+            .call(FileArgs {
+                operation: "read".to_string(),
+                path: file.to_string_lossy().into_owned(),
+                content: None,
+                create_dirs: false,
+            })
+            .await
+            .expect("should succeed when sandbox is disabled");
+
+        assert!(result.success);
+        assert_eq!(result.content.as_deref(), Some("public data"));
+    }
+
+    #[tokio::test]
+    async fn sandbox_disabled_allows_write_outside_workspace() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let outside = temp_dir.path().join("outside");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+        fs::create_dir_all(&outside).expect("failed to create outside dir");
+
+        let file = outside.join("output.txt");
+
+        let sandbox = create_sandbox(SandboxMode::Disabled, &workspace);
+        let tool = FileTool::new(workspace, sandbox);
+
+        let result = tool
+            .call(FileArgs {
+                operation: "write".to_string(),
+                path: file.to_string_lossy().into_owned(),
+                content: Some("written outside workspace".to_string()),
+                create_dirs: false,
+            })
+            .await
+            .expect("should succeed when sandbox is disabled");
+
+        assert!(result.success);
+        let written = fs::read_to_string(&file).expect("failed to read written file");
+        assert_eq!(written, "written outside workspace");
+    }
+}

@@ -288,4 +288,63 @@ mod tests {
             "unexpected error: {error}"
         );
     }
+
+    #[test]
+    fn sandbox_enabled_rejects_file_outside_workspace() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let outside = temp_dir.path().join("outside");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+        fs::create_dir_all(&outside).expect("failed to create outside dir");
+
+        let file = outside.join("secret.txt");
+        fs::write(&file, "secret data").expect("failed to write file");
+
+        let tool = create_tool(workspace);
+        let result = tool.validate_workspace_path(&file);
+
+        assert!(result.is_err(), "should reject path outside workspace");
+        let error = result.expect_err("missing expected error").to_string();
+        assert!(error.contains("ACCESS DENIED"), "unexpected error: {error}");
+    }
+
+    #[tokio::test]
+    async fn sandbox_disabled_allows_file_outside_workspace() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let outside = temp_dir.path().join("outside");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+        fs::create_dir_all(&outside).expect("failed to create outside dir");
+
+        let file = outside.join("report.txt");
+        fs::write(&file, "public data").expect("failed to write file");
+
+        let sandbox = create_sandbox(SandboxMode::Disabled, &workspace);
+        let (response_tx, mut response_rx) = mpsc::channel(1);
+        let tool = SendFileTool::new(response_tx, workspace, sandbox);
+
+        let result = tool
+            .call(SendFileArgs {
+                file_path: file.to_string_lossy().into_owned(),
+                caption: None,
+            })
+            .await
+            .expect("should succeed when sandbox is disabled");
+
+        assert!(result.success);
+        assert_eq!(result.filename, "report.txt");
+        assert_eq!(result.size_bytes, 11);
+
+        // Verify the file data was actually sent through the channel.
+        let response = response_rx
+            .try_recv()
+            .expect("should have received response");
+        match response {
+            crate::OutboundResponse::File { filename, data, .. } => {
+                assert_eq!(filename, "report.txt");
+                assert_eq!(data, b"public data");
+            }
+            other => panic!("expected File response, got {other:?}"),
+        }
+    }
 }
