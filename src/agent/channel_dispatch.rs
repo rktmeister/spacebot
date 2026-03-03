@@ -395,7 +395,7 @@ pub async fn spawn_opencode_worker_from_state(
         )));
     }
 
-    let server_pool = rc.opencode_server_pool.clone();
+    let server_pool = rc.opencode_server_pool.load().clone();
 
     let oc_secrets_store = state.deps.runtime_config.secrets.load().as_ref().clone();
 
