@@ -88,6 +88,7 @@ impl ChannelState {
             .remove(&worker_id)
             .is_some();
         self.worker_inputs.write().await.remove(&worker_id);
+        self.status_block.write().await.remove_worker(worker_id);
 
         if let Some(handle) = handle {
             handle.abort();
