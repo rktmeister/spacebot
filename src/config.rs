@@ -493,9 +493,14 @@ pub(crate) const GEMINI_PROVIDER_BASE_URL: &str =
 
 /// App attribution headers sent with every OpenRouter API request.
 /// See <https://openrouter.ai/docs/app-attribution>.
+///
+/// We send both legacy (`X-Title`) and new (`X-OpenRouter-Title`) header names
+/// because (as of 2026-03-01) OpenRouter's backend still keys on the legacy names for populating
+/// the app listing (title, etc.).
 fn openrouter_extra_headers() -> Vec<(String, String)> {
     vec![
         ("HTTP-Referer".into(), "https://spacebot.sh/".into()),
+        ("X-Title".into(), "Spacebot".into()),
         ("X-OpenRouter-Title".into(), "Spacebot".into()),
         (
             "X-OpenRouter-Categories".into(),
@@ -7023,7 +7028,7 @@ openrouter_key = "legacy-openrouter-key"
         assert_eq!(openrouter_provider.api_type, ApiType::OpenAiCompletions);
         assert_eq!(openrouter_provider.base_url, OPENROUTER_PROVIDER_BASE_URL);
         assert_eq!(openrouter_provider.api_key, "legacy-openrouter-key");
-        assert_eq!(openrouter_provider.extra_headers.len(), 3);
+        assert_eq!(openrouter_provider.extra_headers.len(), 4);
         let find_header = |name: &str| -> Option<&str> {
             openrouter_provider
                 .extra_headers
@@ -7032,6 +7037,7 @@ openrouter_key = "legacy-openrouter-key"
                 .map(|(_, value)| value.as_str())
         };
         assert_eq!(find_header("HTTP-Referer"), Some("https://spacebot.sh/"));
+        assert_eq!(find_header("X-Title"), Some("Spacebot"));
         assert_eq!(find_header("X-OpenRouter-Title"), Some("Spacebot"));
         assert_eq!(
             find_header("X-OpenRouter-Categories"),
@@ -7091,7 +7097,7 @@ name = "My OpenRouter"
         assert_eq!(openrouter_provider.name.as_deref(), Some("My OpenRouter"));
 
         // Verify attribution headers are injected even for explicit TOML config
-        assert_eq!(openrouter_provider.extra_headers.len(), 3);
+        assert_eq!(openrouter_provider.extra_headers.len(), 4);
         let find_header = |name: &str| -> Option<&str> {
             openrouter_provider
                 .extra_headers
@@ -7100,6 +7106,7 @@ name = "My OpenRouter"
                 .map(|(_, value)| value.as_str())
         };
         assert_eq!(find_header("HTTP-Referer"), Some("https://spacebot.sh/"));
+        assert_eq!(find_header("X-Title"), Some("Spacebot"));
         assert_eq!(find_header("X-OpenRouter-Title"), Some("Spacebot"));
         assert_eq!(
             find_header("X-OpenRouter-Categories"),
