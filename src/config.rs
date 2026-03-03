@@ -8400,6 +8400,37 @@ guild_id = "123456"
     }
 
     #[test]
+    fn reload_channel_rcu_merge_uses_current_runtime_snapshot() {
+        let channel_config = arc_swap::ArcSwap::from_pointee(ChannelConfig {
+            listen_only_mode: false,
+        });
+        // Simulate a runtime/DB update landing before reload's rcu merge executes.
+        channel_config.store(Arc::new(ChannelConfig {
+            listen_only_mode: true,
+        }));
+
+        let resolved_channel = ChannelConfig {
+            listen_only_mode: false,
+        };
+        let configured_listen_only: Option<bool> = None;
+        let default_channel = ChannelConfig {
+            listen_only_mode: false,
+        };
+
+        channel_config.rcu(move |current| {
+            let mut next = resolved_channel;
+            next.listen_only_mode = resolve_listen_only_mode(
+                configured_listen_only,
+                Some(current.listen_only_mode),
+                default_channel.listen_only_mode,
+            );
+            Arc::new(next)
+        });
+
+        assert!(channel_config.load().listen_only_mode);
+    }
+
+    #[test]
     fn normalize_adapter_trims_and_clears_empty() {
         assert_eq!(normalize_adapter(None), None);
         assert_eq!(normalize_adapter(Some("".into())), None);
