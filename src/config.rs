@@ -5827,7 +5827,12 @@ impl RuntimeConfig {
         self.max_concurrent_workers
             .store(Arc::new(resolved.max_concurrent_workers));
         self.browser_config.store(Arc::new(resolved.browser));
-        self.channel_config.store(Arc::new(resolved.channel));
+        // Preserve runtime/API-updated listen_only_mode across file reloads.
+        // This maintains effective precedence: env/file defaults < runtime persisted value.
+        let persisted_listen_only_mode = self.channel_config.load().listen_only_mode;
+        self.channel_config.store(Arc::new(ChannelConfig {
+            listen_only_mode: persisted_listen_only_mode,
+        }));
         self.mcp.store(Arc::new(new_mcp.clone()));
         self.history_backfill_count
             .store(Arc::new(resolved.history_backfill_count));
