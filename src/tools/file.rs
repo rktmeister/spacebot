@@ -213,19 +213,22 @@ impl Tool for FileTool {
         match args.operation.as_str() {
             "read" => do_file_read(&path).await,
             "write" => {
-                // Identity files remain readable, but writes must go through
-                // the dedicated identity API to keep update flow consistent.
-                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                const PROTECTED_FILES: &[&str] = &["SOUL.md", "IDENTITY.md", "USER.md"];
-                if PROTECTED_FILES
-                    .iter()
-                    .any(|f| file_name.eq_ignore_ascii_case(f))
-                {
-                    return Err(FileError(
-                        "ACCESS DENIED: Identity files are protected and cannot be modified \
-                         through file operations. Use the identity management API instead."
-                            .to_string(),
-                    ));
+                // When sandbox is enabled, identity files must go through the
+                // dedicated identity API to keep the update flow consistent.
+                // When sandbox is disabled, the user has opted into full access.
+                if self.sandbox.mode_enabled() {
+                    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    const PROTECTED_FILES: &[&str] = &["SOUL.md", "IDENTITY.md", "USER.md"];
+                    if PROTECTED_FILES
+                        .iter()
+                        .any(|f| file_name.eq_ignore_ascii_case(f))
+                    {
+                        return Err(FileError(
+                            "ACCESS DENIED: Identity files are protected and cannot be modified \
+                             through file operations. Use the identity management API instead."
+                                .to_string(),
+                        ));
+                    }
                 }
 
                 let content = args.content.ok_or_else(|| {
@@ -514,5 +517,57 @@ mod tests {
         assert!(result.success);
         let written = fs::read_to_string(&file).expect("failed to read written file");
         assert_eq!(written, "written outside workspace");
+    }
+
+    #[tokio::test]
+    async fn sandbox_enabled_blocks_identity_file_write() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+
+        let sandbox = create_sandbox(SandboxMode::Enabled, &workspace);
+        let tool = FileTool::new(workspace.clone(), sandbox);
+
+        let result = tool
+            .call(FileArgs {
+                operation: "write".to_string(),
+                path: workspace.join("SOUL.md").to_string_lossy().into_owned(),
+                content: Some("overwritten".to_string()),
+                create_dirs: false,
+            })
+            .await;
+
+        let error = result
+            .expect_err("should block identity file write")
+            .to_string();
+        assert!(
+            error.contains("Identity files are protected"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sandbox_disabled_allows_identity_file_write() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+
+        let sandbox = create_sandbox(SandboxMode::Disabled, &workspace);
+        let tool = FileTool::new(workspace.clone(), sandbox);
+
+        let result = tool
+            .call(FileArgs {
+                operation: "write".to_string(),
+                path: workspace.join("IDENTITY.md").to_string_lossy().into_owned(),
+                content: Some("new identity".to_string()),
+                create_dirs: false,
+            })
+            .await
+            .expect("should allow identity file write when sandbox is disabled");
+
+        assert!(result.success);
+        let written =
+            fs::read_to_string(workspace.join("IDENTITY.md")).expect("failed to read file");
+        assert_eq!(written, "new identity");
     }
 }
