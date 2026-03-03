@@ -315,12 +315,11 @@ impl Channel {
 
     fn set_listen_only_mode(&mut self, enabled: bool) {
         self.listen_only_mode = enabled;
-        let mut next = (*self.deps.runtime_config.channel_config.load().as_ref()).clone();
-        next.listen_only_mode = enabled;
-        self.deps
-            .runtime_config
-            .channel_config
-            .store(Arc::new(next));
+        self.deps.runtime_config.channel_config.rcu(|current| {
+            let mut next = (**current).clone();
+            next.listen_only_mode = enabled;
+            Arc::new(next)
+        });
     }
 
     fn suppress_plaintext_fallback(&self) -> bool {
