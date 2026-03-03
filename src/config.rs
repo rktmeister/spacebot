@@ -8364,6 +8364,42 @@ guild_id = "123456"
     }
 
     #[test]
+    fn resolve_listen_only_mode_configured_overrides_persisted() {
+        let resolved = resolve_listen_only_mode(Some(false), Some(true), true);
+        assert!(!resolved);
+    }
+
+    #[test]
+    fn resolve_channel_config_persisted_wins_when_configured_absent() {
+        let resolved = resolve_channel_config(
+            None,
+            Some(ChannelConfig {
+                listen_only_mode: true,
+            }),
+            ChannelConfig {
+                listen_only_mode: false,
+            },
+        );
+        assert!(resolved.listen_only_mode);
+    }
+
+    #[test]
+    fn resolve_channel_config_empty_table_preserves_persisted_runtime_state() {
+        let resolved = resolve_channel_config(
+            Some(TomlChannelConfig {
+                listen_only_mode: None,
+            }),
+            Some(ChannelConfig {
+                listen_only_mode: true,
+            }),
+            ChannelConfig {
+                listen_only_mode: false,
+            },
+        );
+        assert!(resolved.listen_only_mode);
+    }
+
+    #[test]
     fn normalize_adapter_trims_and_clears_empty() {
         assert_eq!(normalize_adapter(None), None);
         assert_eq!(normalize_adapter(Some("".into())), None);
