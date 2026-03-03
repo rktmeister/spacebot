@@ -8433,13 +8433,12 @@ guild_id = "123456"
         };
 
         channel_config.rcu(move |current| {
-            let mut next = resolved_channel;
-            next.listen_only_mode = resolve_listen_only_mode(
+            Arc::new(resolve_channel_runtime_merge(
+                resolved_channel,
                 configured_listen_only,
-                Some(current.listen_only_mode),
-                default_channel.listen_only_mode,
-            );
-            Arc::new(next)
+                **current,
+                default_channel,
+            ))
         });
 
         assert!(channel_config.load().listen_only_mode);
