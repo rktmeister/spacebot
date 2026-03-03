@@ -5091,8 +5091,10 @@ impl Config {
                             .or_else(|| defaults.browser.screenshot_dir.clone()),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
-                    channel: a.channel.map(|channel| {
-                        resolve_channel_config(Some(channel), None, defaults.channel)
+                    channel: a.channel.and_then(|channel| {
+                        channel
+                            .listen_only_mode
+                            .map(|listen_only_mode| ChannelConfig { listen_only_mode })
                     }),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(
