@@ -315,16 +315,47 @@ impl Channel {
 
     fn set_listen_only_mode(&mut self, enabled: bool) {
         self.listen_only_mode = enabled;
+        let mut next = (*self.deps.runtime_config.channel_config.load().as_ref()).clone();
+        next.listen_only_mode = enabled;
         self.deps
             .runtime_config
             .channel_config
-            .store(Arc::new(crate::config::ChannelConfig {
-                listen_only_mode: enabled,
-            }));
+            .store(Arc::new(next));
     }
 
     fn suppress_plaintext_fallback(&self) -> bool {
         matches!(self.current_adapter(), Some("email"))
+    }
+
+    fn rewrite_tool_routed_command_prompt(&self, raw_text: &str) -> Option<String> {
+        match raw_text.trim() {
+            "/tasks" => Some(
+                "use channel tools to fetch my ready tasks (limit 10) and reply exactly with:\n\
+                 - header: tasks (ready):\n\
+                 - each line: - #<task_number> [<priority>] <title>\n\
+                 if no tasks are ready, reply exactly: tasks (ready): none"
+                    .to_string(),
+            ),
+            "/today" => Some(
+                "use channel tools to build a local tasks snapshot and reply exactly in this format:\n\
+                 - first line: today (local tasks snapshot):\n\
+                 - section 1: in-progress tasks (up to 5), each line:   #<task_number> [<priority>] <title>\n\
+                 - section 2: up next ready tasks (up to 5), each line:   #<task_number> [<priority>] <title>\n\
+                 if a section is empty use:\n\
+                 - in progress: none\n\
+                 - up next (ready): none"
+                    .to_string(),
+            ),
+            "/digest" => Some(
+                "using available tools and channel context, generate a concise day digest from local 00:00 to now with exactly this order:\n\
+                 1) top decisions\n\
+                 2) key convo themes\n\
+                 3) open loops\n\
+                 keep it practical and concise; if there are no meaningful updates, reply exactly: no material updates today."
+                    .to_string(),
+            ),
+            _ => None,
+        }
     }
 
     fn compute_listen_mode_invocation(
@@ -486,83 +517,17 @@ impl Channel {
                 .await;
                 return Ok(true);
             }
-            "/tasks" => {
-                let ready = self
-                    .deps
-                    .task_store
-                    .list_ready(self.deps.agent_id.as_ref(), 10)
-                    .await?;
-                let body = if ready.is_empty() {
-                    "tasks (ready): none".to_string()
-                } else {
-                    let mut lines = vec!["tasks (ready):".to_string()];
-                    for task in ready {
-                        lines.push(format!(
-                            "- #{} [{}] {}",
-                            task.task_number, task.priority, task.title
-                        ));
-                    }
-                    lines.join("\n")
-                };
-                self.send_builtin_text(body, "tasks").await;
-                return Ok(true);
-            }
-            "/today" => {
-                let in_progress = self
-                    .deps
-                    .task_store
-                    .list(
-                        self.deps.agent_id.as_ref(),
-                        Some(crate::tasks::TaskStatus::InProgress),
-                        None,
-                        5,
-                    )
-                    .await?;
-                let ready = self
-                    .deps
-                    .task_store
-                    .list_ready(self.deps.agent_id.as_ref(), 5)
-                    .await?;
-
-                let mut lines = vec!["today (local tasks snapshot):".to_string()];
-                if in_progress.is_empty() {
-                    lines.push("- in progress: none".to_string());
-                } else {
-                    lines.push("- in progress:".to_string());
-                    for task in in_progress {
-                        lines.push(format!(
-                            "  #{} [{}] {}",
-                            task.task_number, task.priority, task.title
-                        ));
-                    }
-                }
-                if ready.is_empty() {
-                    lines.push("- up next (ready): none".to_string());
-                } else {
-                    lines.push("- up next (ready):".to_string());
-                    for task in ready {
-                        lines.push(format!(
-                            "  #{} [{}] {}",
-                            task.task_number, task.priority, task.title
-                        ));
-                    }
-                }
-                self.send_builtin_text(lines.join("\n"), "today").await;
-                return Ok(true);
-            }
             "/help" => {
-                let mut lines = vec![
+                let lines = vec![
                     "commands:".to_string(),
                     "- /status: current mode, models, binding snapshot".to_string(),
                     "- /today: in-progress + ready task snapshot".to_string(),
                     "- /tasks: ready task list".to_string(),
+                    "- /digest: one-shot day digest (00:00 -> now)".to_string(),
                     "- /quiet: listen-only mode".to_string(),
                     "- /active: normal reply mode".to_string(),
                     "- /agent-id: runtime agent id".to_string(),
                 ];
-                if message.source == "telegram" {
-                    lines.push("- /digest: one-shot day digest (00:00 -> now)".to_string());
-                }
                 let body = lines.join("\n");
                 self.send_builtin_text(body, "help").await;
                 return Ok(true);
@@ -571,103 +536,6 @@ impl Channel {
         }
 
         Ok(false)
-    }
-
-    async fn try_handle_builtin_digest(
-        &mut self,
-        raw_text: &str,
-        message: &InboundMessage,
-    ) -> Result<bool> {
-        if message.source != "telegram"
-            || message.source == "system"
-            || raw_text.trim() != "/digest"
-        {
-            return Ok(false);
-        }
-
-        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
-        let today_local = temporal_context.local_date(temporal_context.now_utc);
-
-        let all_messages = self
-            .state
-            .conversation_logger
-            .load_recent(&self.state.channel_id, 400)
-            .await?;
-
-        let mut transcript = String::new();
-        for item in all_messages {
-            if item.role != "user" {
-                continue;
-            }
-            if temporal_context.local_date(item.created_at) != today_local {
-                continue;
-            }
-            let sender = item.sender_name.unwrap_or_else(|| "user".to_string());
-            let content = item.content.trim();
-            if content.is_empty() || content.eq_ignore_ascii_case("/digest") {
-                continue;
-            }
-            let ts = temporal_context.format_timestamp(item.created_at);
-            let line = format!("[{}] {}: {}\n", ts, sender, content);
-            if transcript.len() + line.len() > 12000 {
-                break;
-            }
-            transcript.push_str(&line);
-        }
-
-        let reply_text = if transcript.trim().is_empty() {
-            "no material updates today.".to_string()
-        } else {
-            let routing = self.deps.runtime_config.routing.load();
-            let model_name = routing.resolve(ProcessType::Channel, None).to_string();
-            let model = SpacebotModel::make(&self.deps.llm_manager, &model_name)
-                .with_context(&*self.deps.agent_id, "channel")
-                .with_routing((**routing).clone());
-            let agent = AgentBuilder::new(model)
-                .preamble("you write crisp internal marketing digests. output plain text only.")
-                .default_max_turns(1)
-                .build();
-            let prompt = format!(
-                "summarize this channel's messages from local 00:00 to now.\n\
-                 output exactly in this order:\n\
-                 1) top decisions\n\
-                 2) key convo themes\n\
-                 3) open loops\n\
-                 keep it concise and practical.\n\
-                 if there's no meaningful activity, reply exactly: no material updates today.\n\n\
-                 transcript:\n{transcript}"
-            );
-            match agent.prompt(&prompt).await {
-                Ok(text) => {
-                    let trimmed = text.trim();
-                    if trimmed.is_empty() {
-                        "no material updates today.".to_string()
-                    } else {
-                        trimmed.to_string()
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, channel_id = %self.id, "builtin /digest summarizer failed");
-                    "no material updates today.".to_string()
-                }
-            }
-        };
-
-        if let Err(error) = self
-            .response_tx
-            .send(OutboundResponse::Text(reply_text.clone()))
-            .await
-        {
-            tracing::error!(%error, channel_id = %self.id, "failed to send builtin /digest reply");
-            return Ok(true);
-        }
-        self.state.conversation_logger.log_bot_message_with_name(
-            &self.state.channel_id,
-            &reply_text,
-            Some(self.agent_display_name()),
-        );
-
-        Ok(true)
     }
 
     /// Run the channel event loop.
@@ -1218,10 +1086,6 @@ impl Channel {
             }
         }
 
-        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
-        let message_timestamp = temporal_context.format_timestamp(message.timestamp);
-        let user_text = format_user_message(&raw_text, &message, &message_timestamp);
-
         // Persist user messages (skip system re-triggers)
         if message.source != "system" {
             let sender_name = message
@@ -1266,9 +1130,16 @@ impl Channel {
             return Ok(());
         }
 
-        if self.try_handle_builtin_digest(&raw_text, &message).await? {
-            return Ok(());
-        }
+        let rewritten_text = if message.source == "system" {
+            raw_text.clone()
+        } else {
+            self.rewrite_tool_routed_command_prompt(&raw_text)
+                .unwrap_or_else(|| raw_text.clone())
+        };
+
+        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
+        let message_timestamp = temporal_context.format_timestamp(message.timestamp);
+        let user_text = format_user_message(&rewritten_text, &message, &message_timestamp);
 
         let mut invoked_by_command = false;
         let mut invoked_by_mention = false;
