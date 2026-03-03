@@ -3102,6 +3102,19 @@ struct TomlChannelConfig {
     listen_only_mode: Option<bool>,
 }
 
+fn resolve_channel_config(
+    configured: Option<TomlChannelConfig>,
+    default: ChannelConfig,
+) -> ChannelConfig {
+    let mut resolved = default;
+    if let Some(configured) = configured
+        && let Some(listen_only_mode) = configured.listen_only_mode
+    {
+        resolved.listen_only_mode = listen_only_mode;
+    }
+    resolved
+}
+
 fn default_enabled() -> bool {
     true
 }
@@ -4877,15 +4890,7 @@ impl Config {
                         ..base_defaults.browser.clone()
                     })
             },
-            channel: toml
-                .defaults
-                .channel
-                .map(|c| ChannelConfig {
-                    listen_only_mode: c
-                        .listen_only_mode
-                        .unwrap_or(base_defaults.channel.listen_only_mode),
-                })
-                .unwrap_or(base_defaults.channel),
+            channel: resolve_channel_config(toml.defaults.channel, base_defaults.channel),
             mcp: default_mcp,
             brave_search_key: toml
                 .defaults
@@ -5077,11 +5082,9 @@ impl Config {
                             .or_else(|| defaults.browser.screenshot_dir.clone()),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
-                    channel: a.channel.map(|c| ChannelConfig {
-                        listen_only_mode: c
-                            .listen_only_mode
-                            .unwrap_or(defaults.channel.listen_only_mode),
-                    }),
+                    channel: a
+                        .channel
+                        .map(|channel| resolve_channel_config(Some(channel), defaults.channel)),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(
                             mcp_servers
@@ -5827,12 +5830,14 @@ impl RuntimeConfig {
         self.max_concurrent_workers
             .store(Arc::new(resolved.max_concurrent_workers));
         self.browser_config.store(Arc::new(resolved.browser));
-        // Preserve runtime/API-updated listen_only_mode across file reloads.
-        // This maintains effective precedence: env/file defaults < runtime persisted value.
-        let persisted_listen_only_mode = self.channel_config.load().listen_only_mode;
-        self.channel_config.store(Arc::new(ChannelConfig {
-            listen_only_mode: persisted_listen_only_mode,
-        }));
+        // Preserve runtime/API-updated listen_only_mode across reloads without
+        // racing against concurrent channel_config updates.
+        let resolved_channel = resolved.channel;
+        self.channel_config.rcu(move |current| {
+            let mut next = resolved_channel;
+            next.listen_only_mode = current.listen_only_mode;
+            Arc::new(next)
+        });
         self.mcp.store(Arc::new(new_mcp.clone()));
         self.history_backfill_count
             .store(Arc::new(resolved.history_backfill_count));
