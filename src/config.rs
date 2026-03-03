@@ -6724,11 +6724,10 @@ pub fn run_onboarding() -> anyhow::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use std::result::Result as StdResult;
-    use std::sync::{Mutex, OnceLock};
 
-    fn env_test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    fn env_test_lock() -> &'static parking_lot::Mutex<()> {
+        static LOCK: std::sync::OnceLock<parking_lot::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| parking_lot::Mutex::new(()))
     }
 
     struct EnvGuard {
@@ -6738,12 +6737,14 @@ mod tests {
 
     impl EnvGuard {
         fn new() -> Self {
-            const KEYS: [&str; 26] = [
+            // NOTE: Keep in sync with provider env vars that affect test behavior
+            const KEYS: [&str; 27] = [
                 "SPACEBOT_DIR",
                 "SPACEBOT_DEPLOYMENT",
                 "SPACEBOT_CRON_TIMEZONE",
                 "SPACEBOT_USER_TIMEZONE",
                 "ANTHROPIC_API_KEY",
+                "ANTHROPIC_BASE_URL",
                 "ANTHROPIC_OAUTH_TOKEN",
                 "OPENAI_API_KEY",
                 "OPENROUTER_API_KEY",
@@ -6906,7 +6907,7 @@ api_key = "sk-proj-xyz789"
 
     #[test]
     fn test_llm_provider_tables_parse_with_env_and_lowercase_keys() {
-        let _lock = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         let toml = r#"
@@ -6952,6 +6953,9 @@ api_key = "static-provider-key"
 
     #[test]
     fn test_legacy_llm_keys_auto_migrate_to_providers() {
+        let _lock = env_test_lock().lock();
+        let _env = EnvGuard::new();
+
         let toml = r#"
 [llm]
 anthropic_key = "legacy-anthropic-key"
@@ -7082,9 +7086,7 @@ name = "My OpenRouter"
 
     #[test]
     fn test_needs_onboarding_without_config_or_env() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         assert!(Config::needs_onboarding());
@@ -7092,9 +7094,7 @@ name = "My OpenRouter"
 
     #[test]
     fn test_needs_onboarding_with_anthropic_env_key() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         unsafe {
@@ -7106,9 +7106,7 @@ name = "My OpenRouter"
 
     #[test]
     fn test_needs_onboarding_false_with_oauth_credentials() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         // Create an OAuth credentials file in the EnvGuard's temp dir
@@ -7125,9 +7123,7 @@ name = "My OpenRouter"
 
     #[test]
     fn test_needs_onboarding_false_with_openai_oauth_credentials() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         let instance_dir = Config::default_instance_dir();
@@ -7145,9 +7141,7 @@ name = "My OpenRouter"
 
     #[test]
     fn test_load_from_env_populates_legacy_key_and_provider() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         unsafe {
@@ -7169,9 +7163,7 @@ name = "My OpenRouter"
 
     #[test]
     fn test_hosted_deployment_forces_api_bind_from_toml() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         unsafe {
@@ -7191,9 +7183,7 @@ bind = "127.0.0.1"
 
     #[test]
     fn test_hosted_deployment_forces_api_bind_from_env_defaults() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         unsafe {
@@ -7309,9 +7299,7 @@ bind = "127.0.0.1"
 
     #[test]
     fn test_cron_timezone_resolution_precedence() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         unsafe {
@@ -7368,9 +7356,7 @@ id = "main"
 
     #[test]
     fn test_cron_timezone_invalid_falls_back_to_system() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         unsafe {
@@ -7390,9 +7376,7 @@ id = "main"
 
     #[test]
     fn test_cron_timezone_invalid_default_uses_env_fallback() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         unsafe {
@@ -7415,9 +7399,7 @@ id = "main"
 
     #[test]
     fn test_user_timezone_resolution_precedence() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         unsafe {
@@ -7464,9 +7446,7 @@ id = "main"
 
     #[test]
     fn test_user_timezone_falls_back_to_cron_timezone() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         let toml = r#"
@@ -7492,9 +7472,7 @@ id = "main"
 
     #[test]
     fn test_user_timezone_invalid_falls_back_to_cron_timezone() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         let toml = r#"
@@ -7517,9 +7495,7 @@ id = "main"
 
     #[test]
     fn test_user_timezone_invalid_config_uses_env_fallback() {
-        let _lock = env_test_lock()
-            .lock()
-            .expect("failed to lock env test mutex");
+        let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
 
         unsafe {
@@ -7807,6 +7783,9 @@ startup_delay_secs = 2
     /// `LlmConfig` without wiring it up in `load_from_env` / `from_toml`, this test fails.
     #[test]
     fn all_shorthand_keys_register_providers_via_toml() {
+        let _lock = env_test_lock().lock();
+        let _env = EnvGuard::new();
+
         // (toml_key, toml_value, provider_name, expected_base_url_substring)
         let cases: &[(&str, &str, &str, &str)] = &[
             ("anthropic_key", "test-key", "anthropic", "anthropic.com"),
@@ -7871,7 +7850,7 @@ startup_delay_secs = 2
 
     #[test]
     fn all_shorthand_keys_register_providers_via_env() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock().lock();
 
         // (env_var, env_value, provider_name, expected_base_url_substring)
         let cases: &[(&str, &str, &str, &str)] = &[
@@ -8295,7 +8274,7 @@ startup_delay_secs = 2
 
     #[test]
     fn toml_round_trip_with_named_instances() {
-        let _guard = env_test_lock().lock().unwrap();
+        let _guard = env_test_lock().lock();
         let guard = EnvGuard::new();
 
         let toml_content = r#"
@@ -8336,7 +8315,7 @@ chat_id = "-100111"
 
     #[test]
     fn toml_backward_compat_no_adapter_field() {
-        let _guard = env_test_lock().lock().unwrap();
+        let _guard = env_test_lock().lock();
         let guard = EnvGuard::new();
 
         let toml_content = r#"
