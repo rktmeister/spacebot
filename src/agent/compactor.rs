@@ -317,6 +317,8 @@ fn estimate_assistant_content_chars(content: &AssistantContent) -> usize {
                 rig::message::ReasoningContent::Encrypted(data) => data.len(),
                 rig::message::ReasoningContent::Redacted { data } => data.len(),
                 rig::message::ReasoningContent::Summary(summary) => summary.len(),
+                // Future variants default to 0; update this match when new variants are added
+                #[allow(unreachable_patterns)]
                 _ => 0,
             })
             .sum(),

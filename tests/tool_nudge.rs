@@ -80,6 +80,8 @@ fn tool_nudge_policy_for_process_defaults() {
 /// Test that workers are created with the correct default policy.
 #[test]
 fn worker_hook_has_enabled_policy_by_default() {
+    use spacebot::hooks::ToolNudgePolicy;
+
     let (event_tx, _event_rx) = tokio::sync::broadcast::channel(8);
     let hook = spacebot::hooks::SpacebotHook::new(
         std::sync::Arc::from("test-agent"),
@@ -89,6 +91,8 @@ fn worker_hook_has_enabled_policy_by_default() {
         event_tx,
     );
 
+    assert_eq!(hook.tool_nudge_policy(), ToolNudgePolicy::Enabled);
+
     // Clone to verify Clone impl works
     let _cloned = hook.clone();
 }
@@ -96,6 +100,8 @@ fn worker_hook_has_enabled_policy_by_default() {
 /// Test that branches are created with the correct default policy.
 #[test]
 fn branch_hook_has_disabled_policy_by_default() {
+    use spacebot::hooks::ToolNudgePolicy;
+
     let (event_tx, _event_rx) = tokio::sync::broadcast::channel(8);
     let hook = spacebot::hooks::SpacebotHook::new(
         std::sync::Arc::from("test-agent"),
@@ -105,12 +111,16 @@ fn branch_hook_has_disabled_policy_by_default() {
         event_tx,
     );
 
+    assert_eq!(hook.tool_nudge_policy(), ToolNudgePolicy::Disabled);
+
     let _cloned = hook.clone();
 }
 
 /// Test that channels are created with the correct default policy.
 #[test]
 fn channel_hook_has_disabled_policy_by_default() {
+    use spacebot::hooks::ToolNudgePolicy;
+
     let (event_tx, _event_rx) = tokio::sync::broadcast::channel(8);
     let hook = spacebot::hooks::SpacebotHook::new(
         std::sync::Arc::from("test-agent"),
@@ -119,6 +129,8 @@ fn channel_hook_has_disabled_policy_by_default() {
         Some(std::sync::Arc::from("test-channel")),
         event_tx,
     );
+
+    assert_eq!(hook.tool_nudge_policy(), ToolNudgePolicy::Disabled);
 
     let _cloned = hook.clone();
 }

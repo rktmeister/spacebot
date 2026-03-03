@@ -195,14 +195,27 @@ pub fn truncate_output(value: &str, max_bytes: usize) -> String {
 }
 
 /// Truncate to a byte limit and append `...`, preserving UTF-8 boundaries.
+///
+/// The returned string will never exceed `max_bytes`. If there's not enough
+/// room for both content and "...", only the content is returned (truncated
+/// to fit within `max_bytes`).
 pub fn truncate_utf8_ellipsis(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value.to_string();
     }
 
-    let end = truncate_at_char_boundary(value, max_bytes);
+    // Try to leave room for "..." (3 bytes)
+    let available = max_bytes.saturating_sub(3);
+    let end = truncate_at_char_boundary(value, available);
 
-    format!("{}...", &value[..end])
+    // If we have room for "...", append it; otherwise just return truncated content
+    if end > 0 && end + 3 <= max_bytes {
+        format!("{}...", &value[..end])
+    } else {
+        // Not enough room for "...", return as much as fits
+        let end = truncate_at_char_boundary(value, max_bytes);
+        value[..end].to_string()
+    }
 }
 
 /// Returns true when text looks like structured/tool payloads that should never
@@ -596,7 +609,11 @@ mod tests {
     #[test]
     fn truncate_helpers_preserve_utf8_boundaries() {
         let text = "🙂🙂🙂";
-        assert_eq!(truncate_utf8_ellipsis(text, 5), "🙂...");
+        // For max_bytes=5: can fit "🙂" (4 bytes) but not "🙂..." (7 bytes)
+        // So we get just "🙂" without ellipsis since it wouldn't fit
+        assert_eq!(truncate_utf8_ellipsis(text, 5), "🙂");
+        // For larger max_bytes=10: can fit "🙂..." (7 bytes)
+        assert_eq!(truncate_utf8_ellipsis(text, 10), "🙂...");
         assert!(truncate_output(text, 5).starts_with("🙂"));
     }
 }

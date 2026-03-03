@@ -513,7 +513,11 @@ mod tests {
     #[test]
     fn preview_utf8_truncates_on_char_boundary() {
         let text = "🙂🙂🙂";
+        // For max_bytes=5: can fit "🙂" (4 bytes) but not "🙂..." (7 bytes)
         let preview = crate::tools::truncate_utf8_ellipsis(text, 5);
+        assert_eq!(preview, "🙂");
+        // For max_bytes=10: can fit "🙂..." (7 bytes)
+        let preview = crate::tools::truncate_utf8_ellipsis(text, 10);
         assert_eq!(preview, "🙂...");
     }
 

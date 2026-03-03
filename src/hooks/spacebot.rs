@@ -75,6 +75,11 @@ impl SpacebotHook {
         self
     }
 
+    /// Return the current tool nudge policy for this hook.
+    pub fn tool_nudge_policy(&self) -> ToolNudgePolicy {
+        self.tool_nudge_policy
+    }
+
     /// Reset per-prompt tool nudging state.
     pub fn reset_tool_nudge_state(&self) {
         self.completion_calls
