@@ -5842,14 +5842,13 @@ impl RuntimeConfig {
         // Apply the resolved channel config atomically on reload while keeping
         // explicit precedence: configured/env > persisted runtime(DB) > default.
         let resolved_channel = resolved.channel;
-        let persisted_listen_only_mode = self.channel_config.load().listen_only_mode;
         let default_channel = config.defaults.channel;
         let configured_listen_only = agent.channel.map(|channel| channel.listen_only_mode);
-        self.channel_config.rcu(move |_| {
+        self.channel_config.rcu(move |current| {
             let mut next = resolved_channel;
             next.listen_only_mode = resolve_listen_only_mode(
                 configured_listen_only,
-                Some(persisted_listen_only_mode),
+                Some(current.listen_only_mode),
                 default_channel.listen_only_mode,
             );
             Arc::new(next)
