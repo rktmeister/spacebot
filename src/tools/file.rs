@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Tool for file operations within the agent's workspace directory.
+/// Tool for file operations with sandbox-aware path validation.
 ///
 /// When sandbox mode is enabled, file access is restricted to the workspace
 /// boundary. When sandbox is disabled, any path accessible to the process is
