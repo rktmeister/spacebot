@@ -3104,15 +3104,24 @@ struct TomlChannelConfig {
 
 fn resolve_channel_config(
     configured: Option<TomlChannelConfig>,
+    persisted: Option<ChannelConfig>,
     default: ChannelConfig,
 ) -> ChannelConfig {
-    let mut resolved = default;
-    if let Some(configured) = configured
-        && let Some(listen_only_mode) = configured.listen_only_mode
-    {
-        resolved.listen_only_mode = listen_only_mode;
+    ChannelConfig {
+        listen_only_mode: resolve_listen_only_mode(
+            configured.and_then(|config| config.listen_only_mode),
+            persisted.map(|config| config.listen_only_mode),
+            default.listen_only_mode,
+        ),
     }
-    resolved
+}
+
+fn resolve_listen_only_mode(
+    configured: Option<bool>,
+    persisted: Option<bool>,
+    default: bool,
+) -> bool {
+    configured.or(persisted).unwrap_or(default)
 }
 
 fn default_enabled() -> bool {
@@ -4890,7 +4899,7 @@ impl Config {
                         ..base_defaults.browser.clone()
                     })
             },
-            channel: resolve_channel_config(toml.defaults.channel, base_defaults.channel),
+            channel: resolve_channel_config(toml.defaults.channel, None, base_defaults.channel),
             mcp: default_mcp,
             brave_search_key: toml
                 .defaults
@@ -5082,9 +5091,9 @@ impl Config {
                             .or_else(|| defaults.browser.screenshot_dir.clone()),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
-                    channel: a
-                        .channel
-                        .map(|channel| resolve_channel_config(Some(channel), defaults.channel)),
+                    channel: a.channel.map(|channel| {
+                        resolve_channel_config(Some(channel), None, defaults.channel)
+                    }),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(
                             mcp_servers
@@ -5830,9 +5839,21 @@ impl RuntimeConfig {
         self.max_concurrent_workers
             .store(Arc::new(resolved.max_concurrent_workers));
         self.browser_config.store(Arc::new(resolved.browser));
-        // Apply the resolved channel config atomically on reload.
+        // Apply the resolved channel config atomically on reload while keeping
+        // explicit precedence: configured/env > persisted runtime(DB) > default.
         let resolved_channel = resolved.channel;
-        self.channel_config.rcu(move |_| Arc::new(resolved_channel));
+        let persisted_listen_only_mode = self.channel_config.load().listen_only_mode;
+        let default_channel = config.defaults.channel;
+        let configured_listen_only = agent.channel.map(|channel| channel.listen_only_mode);
+        self.channel_config.rcu(move |_| {
+            let mut next = resolved_channel;
+            next.listen_only_mode = resolve_listen_only_mode(
+                configured_listen_only,
+                Some(persisted_listen_only_mode),
+                default_channel.listen_only_mode,
+            );
+            Arc::new(next)
+        });
         self.mcp.store(Arc::new(new_mcp.clone()));
         self.history_backfill_count
             .store(Arc::new(resolved.history_backfill_count));
