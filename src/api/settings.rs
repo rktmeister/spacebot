@@ -333,6 +333,36 @@ pub(super) async fn update_global_settings(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    match crate::config::Config::load_from_path(&config_path) {
+        Ok(new_config) => {
+            let runtime_configs = state.runtime_configs.load();
+            let mcp_managers = state.mcp_managers.load();
+            let reload_targets = runtime_configs
+                .iter()
+                .filter_map(|(agent_id, runtime_config)| {
+                    mcp_managers.get(agent_id).map(|mcp_manager| {
+                        (
+                            agent_id.clone(),
+                            runtime_config.clone(),
+                            mcp_manager.clone(),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            drop(runtime_configs);
+            drop(mcp_managers);
+
+            for (agent_id, runtime_config, mcp_manager) in reload_targets {
+                runtime_config
+                    .reload_config(&new_config, &agent_id, &mcp_manager)
+                    .await;
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "settings written but failed to reload config immediately");
+        }
+    }
+
     let message = if requires_restart {
         "Settings updated. API server changes require a restart to take effect.".to_string()
     } else {

@@ -5791,6 +5791,8 @@ impl RuntimeConfig {
         self.cortex.store(Arc::new(resolved.cortex));
         self.warmup.store(Arc::new(resolved.warmup));
         self.sandbox.store(Arc::new(resolved.sandbox.clone()));
+        self.opencode
+            .store(Arc::new(config.defaults.opencode.clone()));
 
         mcp_manager.reconcile(&old_mcp, &new_mcp).await;
 
