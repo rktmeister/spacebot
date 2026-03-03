@@ -3124,8 +3124,9 @@ fn resolve_listen_only_mode(
     configured.or(persisted).unwrap_or(default)
 }
 
+#[allow(unused_variables)]
 fn resolve_channel_runtime_merge(
-    _resolved: ChannelConfig,
+    resolved_channel: ChannelConfig,
     configured_listen_only: Option<bool>,
     persisted: ChannelConfig,
     default: ChannelConfig,
@@ -3136,7 +3137,7 @@ fn resolve_channel_runtime_merge(
             Some(persisted.listen_only_mode),
             default.listen_only_mode,
         ),
-        .._resolved
+        ..resolved_channel
     }
 }
 
