@@ -333,8 +333,11 @@ pub(super) async fn update_global_settings(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    match crate::config::Config::load_from_path(&config_path) {
-        Ok(new_config) => {
+    let reload_path = config_path.clone();
+    match tokio::task::spawn_blocking(move || crate::config::Config::load_from_path(&reload_path))
+        .await
+    {
+        Ok(Ok(new_config)) => {
             let runtime_configs = state.runtime_configs.load();
             let mcp_managers = state.mcp_managers.load();
             let reload_targets = runtime_configs
@@ -358,8 +361,11 @@ pub(super) async fn update_global_settings(
                     .await;
             }
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             tracing::warn!(%error, "settings written but failed to reload config immediately");
+        }
+        Err(error) => {
+            tracing::warn!(%error, "settings written but config reload task failed");
         }
     }
 
