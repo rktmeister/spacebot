@@ -1,11 +1,13 @@
 //! Send file tool for delivering file attachments to users (channel only).
 
 use crate::OutboundResponse;
+use crate::sandbox::Sandbox;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Tool for sending files to users.
@@ -13,18 +15,25 @@ use tokio::sync::mpsc;
 /// Reads a file from the local filesystem and sends it as an attachment
 /// in the conversation. The channel process creates a response sender per
 /// conversation turn and this tool routes file responses through it.
-/// File access is restricted to the agent's workspace boundary.
+/// When sandbox mode is enabled, file access is restricted to the agent's
+/// workspace boundary. When sandbox is disabled, any readable path is allowed.
 #[derive(Debug, Clone)]
 pub struct SendFileTool {
     response_tx: mpsc::Sender<OutboundResponse>,
     workspace: PathBuf,
+    sandbox: Arc<Sandbox>,
 }
 
 impl SendFileTool {
-    pub fn new(response_tx: mpsc::Sender<OutboundResponse>, workspace: PathBuf) -> Self {
+    pub fn new(
+        response_tx: mpsc::Sender<OutboundResponse>,
+        workspace: PathBuf,
+        sandbox: Arc<Sandbox>,
+    ) -> Self {
         Self {
             response_tx,
             workspace,
+            sandbox,
         }
     }
 
@@ -142,7 +151,16 @@ impl Tool for SendFileTool {
             return Err(SendFileError("file_path must be an absolute path".into()));
         }
 
-        let path = self.validate_workspace_path(&raw_path)?;
+        let path = if self.sandbox.mode_enabled() {
+            self.validate_workspace_path(&raw_path)?
+        } else {
+            raw_path.canonicalize().map_err(|error| {
+                SendFileError(format!(
+                    "can't resolve path '{}': {error}",
+                    raw_path.display()
+                ))
+            })?
+        };
 
         let metadata = tokio::fs::metadata(&path).await.map_err(|error| {
             SendFileError(format!("can't read file '{}': {error}", path.display()))
@@ -207,11 +225,22 @@ impl Tool for SendFileTool {
 mod tests {
     use super::*;
 
+    use crate::sandbox::{SandboxConfig, SandboxMode};
     use std::fs;
 
+    fn create_sandbox(mode: SandboxMode, workspace: &std::path::Path) -> Arc<Sandbox> {
+        let config = SandboxConfig {
+            mode,
+            ..Default::default()
+        };
+        let config = Arc::new(arc_swap::ArcSwap::from_pointee(config));
+        Arc::new(Sandbox::new_for_test(config, workspace.to_path_buf()))
+    }
+
     fn create_tool(workspace: PathBuf) -> SendFileTool {
+        let sandbox = create_sandbox(SandboxMode::Enabled, &workspace);
         let (response_tx, _response_rx) = mpsc::channel(1);
-        SendFileTool::new(response_tx, workspace)
+        SendFileTool::new(response_tx, workspace, sandbox)
     }
 
     #[test]

@@ -1,28 +1,36 @@
 //! File tool for reading/writing/listing files (task workers only).
 
+use crate::sandbox::Sandbox;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-/// Tool for file operations, restricted to the agent's workspace directory.
+/// Tool for file operations within the agent's workspace directory.
+///
+/// When sandbox mode is enabled, file access is restricted to the workspace
+/// boundary. When sandbox is disabled, any path accessible to the process is
+/// allowed (relative paths are still resolved against the workspace root).
 #[derive(Debug, Clone)]
 pub struct FileTool {
     workspace: PathBuf,
+    sandbox: Arc<Sandbox>,
 }
 
 impl FileTool {
-    /// Create a new file tool restricted to the given workspace directory.
-    pub fn new(workspace: PathBuf) -> Self {
-        Self { workspace }
+    /// Create a new file tool with sandbox-aware path validation.
+    pub fn new(workspace: PathBuf, sandbox: Arc<Sandbox>) -> Self {
+        Self { workspace, sandbox }
     }
 
-    /// Resolve and validate a path, ensuring it stays within the workspace boundary.
+    /// Resolve and validate a path.
     ///
-    /// Relative paths are resolved against the workspace root. Absolute paths are
-    /// accepted only if they fall within the workspace. Symlink traversal and `..`
-    /// components are handled via canonicalization.
+    /// Relative paths are resolved against the workspace root. When sandbox mode
+    /// is enabled, absolute paths must fall within the workspace and symlink
+    /// traversal is blocked. When sandbox is disabled, any readable/writable
+    /// path is accepted.
     fn resolve_path(&self, raw: &str) -> Result<PathBuf, FileError> {
         let path = Path::new(raw);
         let resolved = if path.is_absolute() {
@@ -34,6 +42,11 @@ impl FileTool {
         // For writes, the target may not exist yet. Canonicalize the deepest
         // existing ancestor and append the remaining components.
         let canonical = best_effort_canonicalize(&resolved);
+
+        // When sandbox is disabled, skip workspace boundary enforcement.
+        if !self.sandbox.mode_enabled() {
+            return Ok(canonical);
+        }
 
         let workspace_canonical = self
             .workspace

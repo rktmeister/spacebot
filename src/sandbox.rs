@@ -729,6 +729,19 @@ impl Sandbox {
 
         profile
     }
+
+    /// Create a minimal sandbox for unit tests without probing for backends.
+    #[cfg(test)]
+    pub fn new_for_test(config: Arc<ArcSwap<SandboxConfig>>, workspace: PathBuf) -> Self {
+        Self {
+            config,
+            workspace,
+            data_dir: PathBuf::new(),
+            tools_bin: PathBuf::new(),
+            backend: SandboxBackend::None,
+            secrets_store: ArcSwap::from_pointee(None),
+        }
+    }
 }
 
 /// Push a path into a list while preserving order and removing duplicates.
