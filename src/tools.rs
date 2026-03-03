@@ -215,12 +215,19 @@ pub fn should_block_user_visible_text(value: &str) -> bool {
         return false;
     }
 
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+    if trimmed.starts_with('{') || trimmed.starts_with('[') || trimmed.starts_with('(') {
         return true;
     }
 
     let lower = trimmed.to_ascii_lowercase();
     if TOOL_PREFIXES.iter().any(|prefix| lower.starts_with(prefix)) {
+        return true;
+    }
+
+    let punctuation_trimmed = lower.trim_matches(|character: char| {
+        character.is_ascii_punctuation() || character.is_ascii_whitespace()
+    });
+    if punctuation_trimmed == "skip" {
         return true;
     }
 
@@ -287,6 +294,7 @@ pub async fn add_channel_tools(
         .add_tool(SendFileTool::new(
             response_tx.clone(),
             state.deps.runtime_config.workspace_dir.clone(),
+            state.deps.sandbox.clone(),
         ))
         .await?;
     handle.add_tool(CancelTool::new(state)).await?;
@@ -403,7 +411,7 @@ pub fn create_worker_tool_server(
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(ShellTool::new(workspace.clone(), sandbox.clone()))
-        .tool(FileTool::new(workspace.clone()))
+        .tool(FileTool::new(workspace.clone(), sandbox.clone()))
         .tool(ExecTool::new(workspace, sandbox))
         .tool(TaskUpdateTool::for_worker(
             task_store,
@@ -481,7 +489,7 @@ pub fn create_cortex_chat_tool_server(
         .tool(TaskListTool::new(task_store.clone(), agent_id.to_string()))
         .tool(TaskUpdateTool::for_branch(task_store, agent_id.clone()))
         .tool(ShellTool::new(workspace.clone(), sandbox.clone()))
-        .tool(FileTool::new(workspace.clone()))
+        .tool(FileTool::new(workspace.clone(), sandbox.clone()))
         .tool(ExecTool::new(workspace, sandbox));
 
     if browser_config.enabled {
@@ -545,6 +553,14 @@ mod tests {
         assert!(should_block_user_visible_text("{\"content\":\"hello\"}"));
         assert!(should_block_user_visible_text("[\"one\",\"two\"]"));
         assert!(should_block_user_visible_text(
+            "(just commentary - skipping)"
+        ));
+        assert!(should_block_user_visible_text(
+            "(Empty response: {'content': [{'type': 'thinking'}]})"
+        ));
+        assert!(should_block_user_visible_text("skip"));
+        assert!(should_block_user_visible_text("  SKIP  "));
+        assert!(should_block_user_visible_text(
             "[reply]\n{\"content\":\"hello\"}"
         ));
         assert!(should_block_user_visible_text(
@@ -555,6 +571,10 @@ mod tests {
     #[test]
     fn allows_normal_plaintext_output() {
         assert!(!should_block_user_visible_text("hello team"));
+        assert!(!should_block_user_visible_text("skipping for now"));
+        assert!(!should_block_user_visible_text(
+            "I can skip that if you want."
+        ));
         assert!(!should_block_user_visible_text("- first\n- second"));
     }
 }
