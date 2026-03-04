@@ -174,7 +174,7 @@ src/
 │   ├── react.rs        — add emoji reaction (channel only)
 │   ├── memory_save.rs  — write memory to store (branch + cortex + compactor)
 │   ├── memory_recall.rs— search + curate memories (branch only)
-│   ├── channel_recall.rs— retrieve transcript from other channels (branch only)
+│   ├── channel_recall.rs— retrieve transcript from any channel (branch only)
 │   ├── set_status.rs   — update worker status (workers only)
 │   ├── shell.rs        — execute shell commands (task workers)
 │   ├── file.rs         — read/write/list files (task workers)
