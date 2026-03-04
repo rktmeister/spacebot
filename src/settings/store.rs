@@ -11,6 +11,8 @@ const SETTINGS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("settin
 
 /// Default key for worker log mode setting.
 pub const WORKER_LOG_MODE_KEY: &str = "worker_log_mode";
+/// Key for channel listen-only mode setting.
+pub const CHANNEL_LISTEN_ONLY_MODE_KEY: &str = "channel_listen_only_mode";
 
 /// How worker execution logs are stored.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -159,6 +161,22 @@ impl SettingsStore {
     /// Set the worker log mode setting.
     pub fn set_worker_log_mode(&self, mode: WorkerLogMode) -> Result<()> {
         self.set_raw(WORKER_LOG_MODE_KEY, &mode.to_string())
+    }
+
+    /// Get the channel listen-only mode, if explicitly persisted.
+    pub fn channel_listen_only_mode(&self) -> Option<bool> {
+        match self.get_raw(CHANNEL_LISTEN_ONLY_MODE_KEY) {
+            Ok(raw) => raw.parse::<bool>().ok(),
+            Err(_) => None,
+        }
+    }
+
+    /// Persist channel listen-only mode.
+    pub fn set_channel_listen_only_mode(&self, enabled: bool) -> Result<()> {
+        self.set_raw(
+            CHANNEL_LISTEN_ONLY_MODE_KEY,
+            if enabled { "true" } else { "false" },
+        )
     }
 }
 

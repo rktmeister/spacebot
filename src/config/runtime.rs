@@ -134,7 +134,15 @@ impl RuntimeConfig {
 
     /// Set the settings store after initialization.
     pub fn set_settings(&self, settings: Arc<crate::settings::SettingsStore>) {
+        let persisted_listen_only = settings.channel_listen_only_mode();
         self.settings.store(Arc::new(Some(settings)));
+        if let Some(enabled) = persisted_listen_only {
+            self.channel_config.rcu(move |current| {
+                let mut next = **current;
+                next.listen_only_mode = enabled;
+                Arc::new(next)
+            });
+        }
     }
 
     /// Set the secrets store after initialization.
@@ -184,9 +192,17 @@ impl RuntimeConfig {
         self.ingestion.store(Arc::new(resolved.ingestion));
         let resolved_channel = resolved.channel;
         let configured_listen_only = agent.channel.map(|c| c.listen_only_mode);
-        self.channel_config.rcu(move |current| {
+        let persisted_listen_only = self
+            .settings
+            .load()
+            .as_ref()
+            .as_ref()
+            .and_then(|settings| settings.channel_listen_only_mode());
+        self.channel_config.rcu(move |_current| {
             let mut next = resolved_channel;
-            next.listen_only_mode = configured_listen_only.unwrap_or(current.listen_only_mode);
+            next.listen_only_mode = configured_listen_only
+                .or(persisted_listen_only)
+                .unwrap_or(next.listen_only_mode);
             Arc::new(next)
         });
         self.max_turns.store(Arc::new(resolved.max_turns));

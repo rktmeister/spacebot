@@ -321,6 +321,44 @@ impl Channel {
             next.listen_only_mode = enabled;
             Arc::new(next)
         });
+        if let Some(settings_store) = self
+            .deps
+            .runtime_config
+            .settings
+            .load()
+            .as_ref()
+            .as_ref()
+            .cloned()
+            && let Err(error) = settings_store.set_channel_listen_only_mode(enabled)
+        {
+            tracing::warn!(
+                %error,
+                channel_id = %self.id,
+                listen_only_mode = enabled,
+                "failed to persist listen_only_mode setting"
+            );
+        }
+    }
+
+    fn persist_inbound_user_message(&self, message: &InboundMessage, raw_text: &str) {
+        if message.source == "system" {
+            return;
+        }
+        let sender_name = message
+            .metadata
+            .get("sender_display_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&message.sender_id);
+        self.state.conversation_logger.log_user_message(
+            &self.state.channel_id,
+            sender_name,
+            &message.sender_id,
+            raw_text,
+            &message.metadata,
+        );
+        self.state
+            .channel_store
+            .upsert(&message.conversation_id, &message.metadata);
     }
 
     fn suppress_plaintext_fallback(&self) -> bool {
@@ -1033,6 +1071,8 @@ impl Channel {
             crate::MessageContent::Interaction { .. } => (message.content.to_string(), Vec::new()),
         };
 
+        self.persist_inbound_user_message(&message, &raw_text);
+
         // Deterministic built-in command: bypass model output drift for agent identity checks.
         if message.source != "system" && raw_text.trim() == "/agent-id" {
             self.send_builtin_text(self.deps.agent_id.to_string(), "agent-id")
@@ -1084,25 +1124,6 @@ impl Channel {
                     .await;
                 return Ok(());
             }
-        }
-
-        // Persist user messages (skip system re-triggers)
-        if message.source != "system" {
-            let sender_name = message
-                .metadata
-                .get("sender_display_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&message.sender_id);
-            self.state.conversation_logger.log_user_message(
-                &self.state.channel_id,
-                sender_name,
-                &message.sender_id,
-                &raw_text,
-                &message.metadata,
-            );
-            self.state
-                .channel_store
-                .upsert(&message.conversation_id, &message.metadata);
         }
 
         // Capture conversation context from the first message (platform, channel, server)
