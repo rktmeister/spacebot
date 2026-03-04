@@ -800,8 +800,10 @@ fn open_imap_session(config: &EmailPollConfig) -> anyhow::Result<ImapSession> {
             ));
         }
 
-        // Plain TCP (no TLS) — used by local bridges like Proton Bridge
-        let address = (config.imap_host.as_str(), config.imap_port)
+        // Plain TCP (no TLS) — used by local bridges like Proton Bridge.
+        // Iterate all resolved addresses so dual-stack localhost (IPv4 + IPv6) works
+        // even when the bridge only listens on one address family.
+        let addresses: Vec<std::net::SocketAddr> = (config.imap_host.as_str(), config.imap_port)
             .to_socket_addrs()
             .with_context(|| {
                 format!(
@@ -809,16 +811,36 @@ fn open_imap_session(config: &EmailPollConfig) -> anyhow::Result<ImapSession> {
                     config.imap_host, config.imap_port
                 )
             })?
-            .next()
-            .context("no IMAP socket addresses resolved")?;
+            .collect();
+        if addresses.is_empty() {
+            return Err(anyhow::anyhow!(
+                "no IMAP socket addresses resolved for '{}:{}'",
+                config.imap_host,
+                config.imap_port
+            ));
+        }
 
-        let tcp = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(10))
-            .with_context(|| {
-                format!(
-                    "failed to connect to IMAP server '{}:{}'",
-                    config.imap_host, config.imap_port
-                )
-            })?;
+        let mut last_error = None;
+        let mut tcp = None;
+        for address in &addresses {
+            match std::net::TcpStream::connect_timeout(address, Duration::from_secs(10)) {
+                Ok(stream) => {
+                    tcp = Some(stream);
+                    break;
+                }
+                Err(error) => {
+                    last_error = Some((*address, error));
+                }
+            }
+        }
+        let tcp = tcp.ok_or_else(|| {
+            let (address, error) = last_error.expect("addresses is non-empty");
+            anyhow::anyhow!(
+                "failed to connect to IMAP server '{}:{}' (last tried {address}: {error})",
+                config.imap_host,
+                config.imap_port,
+            )
+        })?;
         tcp.set_read_timeout(Some(Duration::from_secs(30)))
             .context("failed to set IMAP read timeout")?;
         tcp.set_write_timeout(Some(Duration::from_secs(30)))
