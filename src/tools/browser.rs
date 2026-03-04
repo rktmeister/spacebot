@@ -594,7 +594,12 @@ impl BrowserTool {
             // the browser we just created and return success.
             drop(browser);
             handler_task.abort();
-            let _ = std::fs::remove_dir_all(&user_data_dir);
+            // Clean up the temp user data dir asynchronously so we don't block
+            // while holding the shared mutex.
+            let dir = user_data_dir;
+            tokio::spawn(async move {
+                let _ = tokio::fs::remove_dir_all(&dir).await;
+            });
 
             if self.config.persist_session {
                 return self.reconnect_existing_tabs(&mut state).await;
@@ -610,10 +615,17 @@ impl BrowserTool {
         Ok(BrowserOutput::success("Browser launched successfully"))
     }
 
-    /// Discover existing tabs from the browser and populate the page map.
+    /// Discover existing tabs from the browser and rebuild the page map.
     ///
     /// Called when a worker connects to an already-running persistent browser.
-    /// Returns tab info so the LLM knows what's already open.
+    /// Rebuilds `state.pages` from `browser.pages()` so stale entries (tabs
+    /// closed externally) are pruned. Validates that `active_target` still
+    /// points to a live page.
+    ///
+    /// Note: holds the mutex across CDP calls. `Browser::pages()` and the
+    /// per-tab title/url queries are quick CDP round-trips, and concurrent
+    /// browser use during reconnect is rare (workers typically call `launch`
+    /// once at the start of their run).
     async fn reconnect_existing_tabs(
         &self,
         state: &mut BrowserState,
@@ -627,20 +639,26 @@ impl BrowserTool {
             BrowserError::new(format!("failed to enumerate existing tabs: {error}"))
         })?;
 
-        let mut discovered = 0usize;
+        // Rebuild the page map from the live browser, pruning stale entries.
+        let previous_ids: std::collections::HashSet<String> = state.pages.keys().cloned().collect();
+        let mut refreshed_pages = HashMap::with_capacity(pages.len());
         for page in pages {
             let target_id = page_target_id(&page);
-            if !state.pages.contains_key(&target_id) {
-                state.pages.insert(target_id.clone(), page);
-                discovered += 1;
-            }
+            refreshed_pages.insert(target_id, page);
         }
+        let discovered = refreshed_pages
+            .keys()
+            .filter(|id| !previous_ids.contains(*id))
+            .count();
+        state.pages = refreshed_pages;
 
-        // If there's no active target but we have pages, pick the first one.
-        if state.active_target.is_none()
-            && let Some(id) = state.pages.keys().next().cloned()
-        {
-            state.active_target = Some(id);
+        // Ensure active_target points to a valid page.
+        let active_valid = state
+            .active_target
+            .as_ref()
+            .is_some_and(|id| state.pages.contains_key(id));
+        if !active_valid {
+            state.active_target = state.pages.keys().next().cloned();
         }
 
         let tab_count = state.pages.len();
@@ -1125,30 +1143,48 @@ impl BrowserTool {
     async fn handle_close(&self) -> Result<BrowserOutput, BrowserError> {
         use crate::config::ClosePolicy;
 
-        let mut state = self.state.lock().await;
-
         match self.config.close_policy {
             ClosePolicy::Detach => {
-                // Just clear per-worker state (element refs, active target)
-                // but leave the browser, tabs, and handler alive.
+                let mut state = self.state.lock().await;
+                // Clear per-worker element refs but preserve tabs, browser,
+                // handler, and active_target so the next worker picks up
+                // exactly where this one left off.
                 state.element_refs.clear();
                 state.next_ref = 0;
-                state.active_target = None;
                 tracing::info!(policy = "detach", "worker detached from browser");
                 Ok(BrowserOutput::success(
                     "Detached from browser (tabs and session preserved)",
                 ))
             }
             ClosePolicy::CloseTabs => {
-                // Close all tracked tabs but keep the browser process alive.
-                for (id, page) in state.pages.drain() {
+                // Drain pages under the lock, then close them outside it so
+                // other workers aren't blocked by CDP round-trips.
+                let pages_to_close: Vec<(String, chromiumoxide::Page)> = {
+                    let mut state = self.state.lock().await;
+                    let pages = state.pages.drain().collect();
+                    state.active_target = None;
+                    state.element_refs.clear();
+                    state.next_ref = 0;
+                    pages
+                };
+
+                let mut close_errors = Vec::new();
+                for (id, page) in pages_to_close {
                     if let Err(error) = page.close().await {
-                        tracing::debug!(target_id = %id, %error, "failed to close tab");
+                        close_errors.push(format!("{id}: {error}"));
                     }
                 }
-                state.active_target = None;
-                state.element_refs.clear();
-                state.next_ref = 0;
+
+                if !close_errors.is_empty() {
+                    let message = format!(
+                        "failed to close {} tab(s): {}",
+                        close_errors.len(),
+                        close_errors.join("; ")
+                    );
+                    tracing::warn!(policy = "close_tabs", %message);
+                    return Err(BrowserError::new(message));
+                }
+
                 tracing::info!(
                     policy = "close_tabs",
                     "closed all tabs, browser still running"
@@ -1158,30 +1194,43 @@ impl BrowserTool {
                 ))
             }
             ClosePolicy::CloseBrowser => {
-                // Full teardown — kill the browser process and clean up everything.
-                if let Some(mut browser) = state.browser.take()
-                    && let Err(error) = browser.close().await
-                {
-                    tracing::warn!(%error, "browser close returned error");
-                }
+                // Take everything out of state under the lock, then do the
+                // actual teardown outside it.
+                let (browser, handler_task, user_data_dir) = {
+                    let mut state = self.state.lock().await;
+                    let browser = state.browser.take();
+                    let handler_task = state._handler_task.take();
+                    let user_data_dir = state.user_data_dir.take();
+                    state.pages.clear();
+                    state.active_target = None;
+                    state.element_refs.clear();
+                    state.next_ref = 0;
+                    (browser, handler_task, user_data_dir)
+                };
 
-                state.pages.clear();
-                state.active_target = None;
-                state.element_refs.clear();
-                state.next_ref = 0;
-                if let Some(task) = state._handler_task.take() {
+                if let Some(task) = handler_task {
                     task.abort();
                 }
 
-                // Clean up the per-launch user data dir to free disk space.
-                if let Some(dir) = state.user_data_dir.take()
-                    && let Err(error) = tokio::fs::remove_dir_all(&dir).await
+                if let Some(mut browser) = browser
+                    && let Err(error) = browser.close().await
                 {
-                    tracing::debug!(
-                        path = %dir.display(),
-                        %error,
-                        "failed to clean up browser user data dir"
-                    );
+                    let message = format!("failed to close browser: {error}");
+                    tracing::warn!(policy = "close_browser", %message);
+                    return Err(BrowserError::new(message));
+                }
+
+                // Clean up the per-launch user data dir to free disk space.
+                if let Some(dir) = user_data_dir {
+                    tokio::spawn(async move {
+                        if let Err(error) = tokio::fs::remove_dir_all(&dir).await {
+                            tracing::debug!(
+                                path = %dir.display(),
+                                %error,
+                                "failed to clean up browser user data dir"
+                            );
+                        }
+                    });
                 }
 
                 tracing::info!(policy = "close_browser", "browser closed");

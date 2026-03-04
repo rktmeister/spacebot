@@ -460,7 +460,11 @@ pub fn create_worker_tool_server(
     }
 
     if browser_config.enabled {
-        let browser_tool = if let Some(shared) = &runtime_config.shared_browser {
+        let browser_tool = if let Some(shared) = runtime_config
+            .shared_browser
+            .as_ref()
+            .filter(|_| browser_config.persist_session)
+        {
             BrowserTool::new_shared(shared.clone(), browser_config, screenshot_dir)
         } else {
             BrowserTool::new(browser_config, screenshot_dir)
@@ -527,11 +531,12 @@ pub fn create_cortex_chat_tool_server(
         .tool(ExecTool::new(workspace, sandbox));
 
     if browser_config.enabled {
-        let browser_tool = if let Some(shared) = shared_browser {
-            BrowserTool::new_shared(shared, browser_config, screenshot_dir)
-        } else {
-            BrowserTool::new(browser_config, screenshot_dir)
-        };
+        let browser_tool =
+            if let Some(shared) = shared_browser.filter(|_| browser_config.persist_session) {
+                BrowserTool::new_shared(shared, browser_config, screenshot_dir)
+            } else {
+                BrowserTool::new(browser_config, screenshot_dir)
+            };
         server = server.tool(browser_tool);
     }
 

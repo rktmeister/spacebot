@@ -153,7 +153,7 @@ When `enabled = false`, the browser tool is not registered on worker ToolServers
 
 ### Close Policy
 
-Controls what happens when a worker calls `close` or finishes:
+Controls what happens when a worker calls `close`:
 
 | Policy | Behavior |
 |--------|----------|
@@ -228,5 +228,5 @@ Element resolution: refs map to CSS selectors built from `[role='...']` and `[ar
 - **No file upload/download** -- chromiumoxide doesn't expose file chooser interception. Use `shell` + `curl` for downloads.
 - **No network interception** -- request blocking and response modification aren't exposed through the tool, though chromiumoxide supports it via raw CDP commands.
 - **No cookie/storage management** -- not exposed as tool actions. Could be added if needed.
-- **Single browser per worker** -- each worker gets one Chrome process. No connection pooling across workers.
+- **Single browser per worker by default** -- with `persist_session = false` (default), each worker gets its own Chrome process. With `persist_session = true`, all workers for an agent share one browser and reconnect to existing tabs on `launch`.
 - **Selector fragility** -- the `[role][aria-label]` selector strategy works for well-structured pages but can fail on pages with missing ARIA attributes. The `content` action + `evaluate` (when enabled) serve as fallbacks.

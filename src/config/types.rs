@@ -698,7 +698,7 @@ impl Default for IngestionConfig {
     }
 }
 
-/// What happens when a worker finishes or explicitly calls "close" on the browser.
+/// What happens when a worker explicitly calls "close" on the browser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClosePolicy {

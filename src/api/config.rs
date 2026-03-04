@@ -1,4 +1,5 @@
 use super::state::ApiState;
+use crate::config::ClosePolicy;
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -202,7 +203,7 @@ pub(super) struct BrowserUpdate {
     headless: Option<bool>,
     evaluate_enabled: Option<bool>,
     persist_session: Option<bool>,
-    close_policy: Option<String>,
+    close_policy: Option<ClosePolicy>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -681,7 +682,7 @@ fn update_browser_table(
     if let Some(v) = browser.persist_session {
         table["persist_session"] = toml_edit::value(v);
     }
-    if let Some(ref v) = browser.close_policy {
+    if let Some(v) = browser.close_policy {
         table["close_policy"] = toml_edit::value(v.as_str());
     }
     Ok(())
