@@ -4,9 +4,9 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 use super::{
-    BrowserConfig, CoalesceConfig, CompactionConfig, Config, CortexConfig, DefaultsConfig,
-    IngestionConfig, McpServerConfig, MemoryPersistenceConfig, OpenCodeConfig, ResolvedAgentConfig,
-    WarmupConfig, WarmupStatus, WorkReadiness, evaluate_work_readiness,
+    BrowserConfig, ChannelConfig, CoalesceConfig, CompactionConfig, Config, CortexConfig,
+    DefaultsConfig, IngestionConfig, McpServerConfig, MemoryPersistenceConfig, OpenCodeConfig,
+    ResolvedAgentConfig, WarmupConfig, WarmupStatus, WorkReadiness, evaluate_work_readiness,
 };
 use crate::llm::routing::RoutingConfig;
 
@@ -25,6 +25,7 @@ pub struct RuntimeConfig {
     pub memory_persistence: ArcSwap<MemoryPersistenceConfig>,
     pub coalesce: ArcSwap<CoalesceConfig>,
     pub ingestion: ArcSwap<IngestionConfig>,
+    pub channel_config: ArcSwap<ChannelConfig>,
     pub max_turns: ArcSwap<usize>,
     pub branch_max_turns: ArcSwap<usize>,
     pub context_window: ArcSwap<usize>,
@@ -91,6 +92,7 @@ impl RuntimeConfig {
             memory_persistence: ArcSwap::from_pointee(agent_config.memory_persistence),
             coalesce: ArcSwap::from_pointee(agent_config.coalesce),
             ingestion: ArcSwap::from_pointee(agent_config.ingestion),
+            channel_config: ArcSwap::from_pointee(agent_config.channel),
             max_turns: ArcSwap::from_pointee(agent_config.max_turns),
             branch_max_turns: ArcSwap::from_pointee(agent_config.branch_max_turns),
             context_window: ArcSwap::from_pointee(agent_config.context_window),
@@ -180,6 +182,13 @@ impl RuntimeConfig {
             .store(Arc::new(resolved.memory_persistence));
         self.coalesce.store(Arc::new(resolved.coalesce));
         self.ingestion.store(Arc::new(resolved.ingestion));
+        let resolved_channel = resolved.channel;
+        let configured_listen_only = agent.channel.map(|c| c.listen_only_mode);
+        self.channel_config.rcu(move |current| {
+            let mut next = resolved_channel;
+            next.listen_only_mode = configured_listen_only.unwrap_or(current.listen_only_mode);
+            Arc::new(next)
+        });
         self.max_turns.store(Arc::new(resolved.max_turns));
         self.branch_max_turns
             .store(Arc::new(resolved.branch_max_turns));

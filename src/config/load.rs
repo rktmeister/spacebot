@@ -10,13 +10,14 @@ use super::providers::{
 };
 use super::toml_schema::*;
 use super::{
-    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, CoalesceConfig, CompactionConfig,
-    Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig, DiscordInstanceConfig,
-    EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig, LinkDef, LlmConfig,
-    McpServerConfig, McpTransport, MemoryPersistenceConfig, MessagingConfig, MetricsConfig,
-    OpenCodeConfig, ProviderConfig, SlackCommandConfig, SlackConfig, SlackInstanceConfig,
-    TelegramConfig, TelegramInstanceConfig, TelemetryConfig, TwitchConfig, TwitchInstanceConfig,
-    WarmupConfig, WebhookConfig, normalize_adapter, validate_named_messaging_adapters,
+    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, ChannelConfig, CoalesceConfig,
+    CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
+    DiscordInstanceConfig, EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig,
+    LinkDef, LlmConfig, McpServerConfig, McpTransport, MemoryPersistenceConfig, MessagingConfig,
+    MetricsConfig, OpenCodeConfig, ProviderConfig, SlackCommandConfig, SlackConfig,
+    SlackInstanceConfig, TelegramConfig, TelegramInstanceConfig, TelemetryConfig, TwitchConfig,
+    TwitchInstanceConfig, WarmupConfig, WebhookConfig, normalize_adapter,
+    validate_named_messaging_adapters,
 };
 use crate::error::{ConfigError, Result};
 
@@ -730,6 +731,7 @@ impl Config {
             cortex: None,
             warmup: None,
             browser: None,
+            channel: None,
             mcp: None,
             brave_search_key: None,
             cron_timezone: None,
@@ -1401,6 +1403,15 @@ impl Config {
                         ..base_defaults.browser.clone()
                     })
             },
+            channel: toml
+                .defaults
+                .channel
+                .map(|c| ChannelConfig {
+                    listen_only_mode: c
+                        .listen_only_mode
+                        .unwrap_or(base_defaults.channel.listen_only_mode),
+                })
+                .unwrap_or(base_defaults.channel),
             mcp: default_mcp,
             brave_search_key: toml
                 .defaults
@@ -1592,6 +1603,11 @@ impl Config {
                             .or_else(|| defaults.browser.screenshot_dir.clone()),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
+                    channel: a.channel.map(|c| ChannelConfig {
+                        listen_only_mode: c
+                            .listen_only_mode
+                            .unwrap_or(defaults.channel.listen_only_mode),
+                    }),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(
                             mcp_servers
@@ -1630,6 +1646,7 @@ impl Config {
                 cortex: None,
                 warmup: None,
                 browser: None,
+                channel: None,
                 mcp: None,
                 brave_search_key: None,
                 cron_timezone: None,

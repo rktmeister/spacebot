@@ -511,6 +511,7 @@ pub struct DefaultsConfig {
     pub cortex: CortexConfig,
     pub warmup: WarmupConfig,
     pub browser: BrowserConfig,
+    pub channel: ChannelConfig,
     pub mcp: Vec<McpServerConfig>,
     /// Brave Search API key for web search tool. Supports "env:VAR_NAME" references.
     pub brave_search_key: Option<String>,
@@ -541,6 +542,7 @@ impl std::fmt::Debug for DefaultsConfig {
             .field("cortex", &self.cortex)
             .field("warmup", &self.warmup)
             .field("browser", &self.browser)
+            .field("channel", &self.channel)
             .field("mcp", &self.mcp)
             .field(
                 "brave_search_key",
@@ -727,6 +729,13 @@ impl Default for BrowserConfig {
             chrome_cache_dir: PathBuf::from("chrome_cache"),
         }
     }
+}
+
+/// Channel behavior configuration.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChannelConfig {
+    /// When true, unsolicited chat messages are ignored unless command/mention/reply.
+    pub listen_only_mode: bool,
 }
 
 /// OpenCode subprocess worker configuration.
@@ -952,6 +961,7 @@ pub struct AgentConfig {
     pub cortex: Option<CortexConfig>,
     pub warmup: Option<WarmupConfig>,
     pub browser: Option<BrowserConfig>,
+    pub channel: Option<ChannelConfig>,
     pub mcp: Option<Vec<McpServerConfig>>,
     /// Per-agent Brave Search API key override. None inherits from defaults.
     pub brave_search_key: Option<String>,
@@ -1007,6 +1017,7 @@ pub struct ResolvedAgentConfig {
     pub cortex: CortexConfig,
     pub warmup: WarmupConfig,
     pub browser: BrowserConfig,
+    pub channel: ChannelConfig,
     pub mcp: Vec<McpServerConfig>,
     pub brave_search_key: Option<String>,
     pub cron_timezone: Option<String>,
@@ -1034,6 +1045,7 @@ impl Default for DefaultsConfig {
             cortex: CortexConfig::default(),
             warmup: WarmupConfig::default(),
             browser: BrowserConfig::default(),
+            channel: ChannelConfig::default(),
             mcp: Vec::new(),
             brave_search_key: None,
             cron_timezone: None,
@@ -1097,6 +1109,7 @@ impl AgentConfig {
                 .browser
                 .clone()
                 .unwrap_or_else(|| defaults.browser.clone()),
+            channel: self.channel.unwrap_or(defaults.channel),
             mcp: resolve_mcp_configs(&defaults.mcp, self.mcp.as_deref()),
             brave_search_key: self
                 .brave_search_key
