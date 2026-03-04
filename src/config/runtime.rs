@@ -215,11 +215,11 @@ impl RuntimeConfig {
                 }
             }
         });
-        self.channel_config.rcu(move |current| {
+        self.channel_config.rcu(move |_current| {
             let mut next = resolved_channel;
             next.listen_only_mode = configured_listen_only
                 .or(persisted_listen_only)
-                .unwrap_or(current.as_ref().listen_only_mode);
+                .unwrap_or(next.listen_only_mode);
             Arc::new(next)
         });
         self.max_turns.store(Arc::new(resolved.max_turns));

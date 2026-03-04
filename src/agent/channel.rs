@@ -253,6 +253,25 @@ impl Channel {
 
         let self_tx = message_tx.clone();
         let default_listen_only_mode = deps.runtime_config.channel_config.load().listen_only_mode;
+        let persisted_listen_only_mode = deps
+            .runtime_config
+            .settings
+            .load()
+            .as_ref()
+            .as_ref()
+            .and_then(
+                |settings| match settings.channel_listen_only_mode_for(id.as_ref()) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            channel_id = %id,
+                            "failed to load channel-scoped listen_only_mode setting"
+                        );
+                        None
+                    }
+                },
+            );
         let channel = Self {
             id: id.clone(),
             title: None,
@@ -279,7 +298,7 @@ impl Channel {
             retrigger_deadline: None,
             pending_results: Vec::new(),
             send_agent_message_tool,
-            listen_only_mode: default_listen_only_mode,
+            listen_only_mode: persisted_listen_only_mode.unwrap_or(default_listen_only_mode),
         };
 
         (channel, message_tx)
@@ -306,12 +325,36 @@ impl Channel {
     }
 
     fn sync_listen_only_mode_from_runtime(&mut self) {
-        self.listen_only_mode = self
+        let runtime_default = self
             .deps
             .runtime_config
             .channel_config
             .load()
             .listen_only_mode;
+        let settings_store = self
+            .deps
+            .runtime_config
+            .settings
+            .load()
+            .as_ref()
+            .as_ref()
+            .cloned();
+        self.listen_only_mode = if let Some(settings_store) = settings_store {
+            match settings_store.channel_listen_only_mode_for(self.id.as_ref()) {
+                Ok(Some(enabled)) => enabled,
+                Ok(None) => runtime_default,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        channel_id = %self.id,
+                        "failed to sync channel-scoped listen_only_mode setting"
+                    );
+                    runtime_default
+                }
+            }
+        } else {
+            runtime_default
+        };
     }
 
     fn set_listen_only_mode(&mut self, enabled: bool) -> bool {
@@ -325,7 +368,7 @@ impl Channel {
             .as_ref()
             .cloned();
         if let Some(settings_store) = settings_store {
-            match settings_store.set_channel_listen_only_mode(enabled) {
+            match settings_store.set_channel_listen_only_mode_for(self.id.as_ref(), enabled) {
                 Ok(()) => persisted = true,
                 Err(error) => {
                     tracing::warn!(
@@ -345,11 +388,6 @@ impl Channel {
         }
 
         self.listen_only_mode = enabled;
-        self.deps.runtime_config.channel_config.rcu(|current| {
-            let mut next = **current;
-            next.listen_only_mode = enabled;
-            Arc::new(next)
-        });
         persisted
     }
 
