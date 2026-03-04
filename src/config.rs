@@ -973,6 +973,7 @@ impl Default for OpenCodeConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct CortexConfig {
     pub tick_interval_secs: u64,
+    pub maintenance_interval_secs: u64,
     pub worker_timeout_secs: u64,
     pub branch_timeout_secs: u64,
     pub detached_worker_timeout_retry_limit: u8,
@@ -992,12 +993,17 @@ pub struct CortexConfig {
     pub association_updates_threshold: f32,
     /// Max associations to create per pass (rate limit).
     pub association_max_per_pass: usize,
+    pub maintenance_decay_rate: f32,
+    pub maintenance_prune_threshold: f32,
+    pub maintenance_min_age_days: i64,
+    pub maintenance_merge_similarity_threshold: f32,
 }
 
 impl Default for CortexConfig {
     fn default() -> Self {
         Self {
             tick_interval_secs: 30,
+            maintenance_interval_secs: 3600,
             worker_timeout_secs: 300,
             branch_timeout_secs: 60,
             detached_worker_timeout_retry_limit: 2,
@@ -1010,6 +1016,10 @@ impl Default for CortexConfig {
             association_similarity_threshold: 0.85,
             association_updates_threshold: 0.95,
             association_max_per_pass: 100,
+            maintenance_decay_rate: 0.05,
+            maintenance_prune_threshold: 0.1,
+            maintenance_min_age_days: 30,
+            maintenance_merge_similarity_threshold: 0.95,
         }
     }
 }
@@ -3017,6 +3027,7 @@ struct TomlCompactionConfig {
 #[derive(Deserialize)]
 struct TomlCortexConfig {
     tick_interval_secs: Option<u64>,
+    maintenance_interval_secs: Option<u64>,
     worker_timeout_secs: Option<u64>,
     branch_timeout_secs: Option<u64>,
     detached_worker_timeout_retry_limit: Option<u8>,
@@ -3029,6 +3040,10 @@ struct TomlCortexConfig {
     association_similarity_threshold: Option<f32>,
     association_updates_threshold: Option<f32>,
     association_max_per_pass: Option<usize>,
+    maintenance_decay_rate: Option<f32>,
+    maintenance_prune_threshold: Option<f32>,
+    maintenance_min_age_days: Option<i64>,
+    maintenance_merge_similarity_threshold: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -4838,6 +4853,9 @@ impl Config {
                     tick_interval_secs: c
                         .tick_interval_secs
                         .unwrap_or(base_defaults.cortex.tick_interval_secs),
+                    maintenance_interval_secs: c
+                        .maintenance_interval_secs
+                        .unwrap_or(base_defaults.cortex.maintenance_interval_secs),
                     worker_timeout_secs: c
                         .worker_timeout_secs
                         .unwrap_or(base_defaults.cortex.worker_timeout_secs),
@@ -4874,6 +4892,18 @@ impl Config {
                     association_max_per_pass: c
                         .association_max_per_pass
                         .unwrap_or(base_defaults.cortex.association_max_per_pass),
+                    maintenance_decay_rate: c
+                        .maintenance_decay_rate
+                        .unwrap_or(base_defaults.cortex.maintenance_decay_rate),
+                    maintenance_prune_threshold: c
+                        .maintenance_prune_threshold
+                        .unwrap_or(base_defaults.cortex.maintenance_prune_threshold),
+                    maintenance_min_age_days: c
+                        .maintenance_min_age_days
+                        .unwrap_or(base_defaults.cortex.maintenance_min_age_days),
+                    maintenance_merge_similarity_threshold: c
+                        .maintenance_merge_similarity_threshold
+                        .unwrap_or(base_defaults.cortex.maintenance_merge_similarity_threshold),
                 })
                 .unwrap_or(base_defaults.cortex),
             warmup: toml
@@ -5050,6 +5080,9 @@ impl Config {
                         tick_interval_secs: c
                             .tick_interval_secs
                             .unwrap_or(defaults.cortex.tick_interval_secs),
+                        maintenance_interval_secs: c
+                            .maintenance_interval_secs
+                            .unwrap_or(defaults.cortex.maintenance_interval_secs),
                         worker_timeout_secs: c
                             .worker_timeout_secs
                             .unwrap_or(defaults.cortex.worker_timeout_secs),
@@ -5086,6 +5119,18 @@ impl Config {
                         association_max_per_pass: c
                             .association_max_per_pass
                             .unwrap_or(defaults.cortex.association_max_per_pass),
+                        maintenance_decay_rate: c
+                            .maintenance_decay_rate
+                            .unwrap_or(defaults.cortex.maintenance_decay_rate),
+                        maintenance_prune_threshold: c
+                            .maintenance_prune_threshold
+                            .unwrap_or(defaults.cortex.maintenance_prune_threshold),
+                        maintenance_min_age_days: c
+                            .maintenance_min_age_days
+                            .unwrap_or(defaults.cortex.maintenance_min_age_days),
+                        maintenance_merge_similarity_threshold: c
+                            .maintenance_merge_similarity_threshold
+                            .unwrap_or(defaults.cortex.maintenance_merge_similarity_threshold),
                     }),
                     warmup: a.warmup.map(|w| WarmupConfig {
                         enabled: w.enabled.unwrap_or(defaults.warmup.enabled),
@@ -7563,6 +7608,55 @@ id = "main"
         let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
         let resolved = config.agents[0].resolve(&config.instance_dir, &config.defaults);
         assert_eq!(resolved.user_timezone.as_deref(), Some("Asia/Tokyo"));
+    }
+
+    #[test]
+    fn test_cortex_maintenance_config_resolution() {
+        let _lock = env_test_lock().lock();
+        let _env = EnvGuard::new();
+
+        let toml = r#"
+[defaults]
+
+[defaults.cortex]
+maintenance_interval_secs = 1200
+maintenance_decay_rate = 0.11
+maintenance_prune_threshold = 0.21
+maintenance_min_age_days = 17
+maintenance_merge_similarity_threshold = 0.97
+
+[[agents]]
+id = "main"
+"#;
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+        let resolved = config.agents[0].resolve(&config.instance_dir, &config.defaults);
+        assert_eq!(resolved.cortex.maintenance_interval_secs, 1200);
+        assert_eq!(resolved.cortex.maintenance_decay_rate, 0.11);
+        assert_eq!(resolved.cortex.maintenance_prune_threshold, 0.21);
+        assert_eq!(resolved.cortex.maintenance_min_age_days, 17);
+        assert_eq!(resolved.cortex.maintenance_merge_similarity_threshold, 0.97);
+
+        let toml_override = r#"
+[[agents]]
+id = "main"
+cortex = { maintenance_interval_secs = 300, maintenance_decay_rate = 0.33 }
+"#;
+        let parsed_override: TomlConfig =
+            toml::from_str(toml_override).expect("failed to parse override TOML");
+        let config_override = Config::from_toml(parsed_override, PathBuf::from("."))
+            .expect("failed to build override config");
+        let resolved_override = config_override.agents[0]
+            .resolve(&config_override.instance_dir, &config_override.defaults);
+        assert_eq!(resolved_override.cortex.maintenance_interval_secs, 300);
+        assert_eq!(resolved_override.cortex.maintenance_decay_rate, 0.33);
+        assert_eq!(resolved_override.cortex.maintenance_min_age_days, 30);
+        assert_eq!(
+            resolved_override
+                .cortex
+                .maintenance_merge_similarity_threshold,
+            0.95
+        );
     }
 
     #[test]
