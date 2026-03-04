@@ -10,13 +10,14 @@ use super::providers::{
 };
 use super::toml_schema::*;
 use super::{
-    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, CoalesceConfig, CompactionConfig,
-    Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig, DiscordInstanceConfig,
-    EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig, LinkDef, LlmConfig,
-    McpServerConfig, McpTransport, MemoryPersistenceConfig, MessagingConfig, MetricsConfig,
-    OpenCodeConfig, ProviderConfig, SlackCommandConfig, SlackConfig, SlackInstanceConfig,
-    TelegramConfig, TelegramInstanceConfig, TelemetryConfig, TwitchConfig, TwitchInstanceConfig,
-    WarmupConfig, WebhookConfig, normalize_adapter, validate_named_messaging_adapters,
+    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, ClosePolicy, CoalesceConfig,
+    CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
+    DiscordInstanceConfig, EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig,
+    LinkDef, LlmConfig, McpServerConfig, McpTransport, MemoryPersistenceConfig, MessagingConfig,
+    MetricsConfig, OpenCodeConfig, ProviderConfig, SlackCommandConfig, SlackConfig,
+    SlackInstanceConfig, TelegramConfig, TelegramInstanceConfig, TelemetryConfig, TwitchConfig,
+    TwitchInstanceConfig, WarmupConfig, WebhookConfig, normalize_adapter,
+    validate_named_messaging_adapters,
 };
 use crate::error::{ConfigError, Result};
 
@@ -106,6 +107,21 @@ pub(super) fn warn_unknown_config_keys(content: &str) {
                  it will be silently ignored by the parser. Check for typos \
                  or consult the configuration reference."
             );
+        }
+    }
+}
+
+fn parse_close_policy(value: Option<&str>) -> Option<ClosePolicy> {
+    match value? {
+        "close_browser" => Some(ClosePolicy::CloseBrowser),
+        "close_tabs" => Some(ClosePolicy::CloseTabs),
+        "detach" => Some(ClosePolicy::Detach),
+        other => {
+            tracing::warn!(
+                value = other,
+                "unknown close_policy value, expected one of: close_browser, close_tabs, detach"
+            );
+            None
         }
     }
 }
@@ -1393,6 +1409,9 @@ impl Config {
                                 .screenshot_dir
                                 .map(PathBuf::from)
                                 .or_else(|| base.screenshot_dir.clone()),
+                            persist_session: b.persist_session.unwrap_or(base.persist_session),
+                            close_policy: parse_close_policy(b.close_policy.as_deref())
+                                .unwrap_or(base.close_policy),
                             chrome_cache_dir: chrome_cache_dir.clone(),
                         }
                     })
@@ -1590,6 +1609,11 @@ impl Config {
                             .screenshot_dir
                             .map(PathBuf::from)
                             .or_else(|| defaults.browser.screenshot_dir.clone()),
+                        persist_session: b
+                            .persist_session
+                            .unwrap_or(defaults.browser.persist_session),
+                        close_policy: parse_close_policy(b.close_policy.as_deref())
+                            .unwrap_or(defaults.browser.close_policy),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
                     mcp: match a.mcp {

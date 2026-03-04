@@ -1260,9 +1260,22 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
     let links = deps.links.clone();
     let agent_names = deps.agent_names.clone();
     let sqlite_pool = deps.sqlite_pool.clone();
+    let secrets_snapshot = deps.runtime_config.secrets.load().clone();
     tokio::spawn(async move {
+        // Helper closure: scrub both known secrets (Layer 1) and unknown leak
+        // patterns (Layer 2) from text before it reaches channels or events.
+        let scrub = |text: String| -> String {
+            let scrubbed = if let Some(store) = secrets_snapshot.as_ref() {
+                crate::secrets::scrub::scrub_with_store(&text, store)
+            } else {
+                text
+            };
+            crate::secrets::scrub::scrub_leaks(&scrubbed)
+        };
+
         match worker.run().await {
-            Ok(result_text) => {
+            Ok(raw_result) => {
+                let result_text = scrub(raw_result);
                 let db_updated = task_store
                     .update(
                         &agent_id,
@@ -1325,7 +1338,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
             }
             Err(error) => {
                 let (error_message, notify, success) = map_worker_completion_result(Err(
-                    WorkerCompletionError::failed(error.to_string()),
+                    WorkerCompletionError::failed(scrub(error.to_string())),
                 ));
                 run_logger.log_worker_completed(worker_id, &error_message, false);
 
