@@ -44,7 +44,15 @@ pub fn agents_manifest() -> &'static str {
 
 /// Most recent release notes extracted from `CHANGELOG.md`.
 pub fn changelog_highlights() -> String {
-    latest_release_notes(CHANGELOG_DOC, 3).unwrap_or_else(|| CHANGELOG_DOC.to_string())
+pub fn changelog_highlights() -> String {
+    latest_release_notes(CHANGELOG_DOC, 3).unwrap_or_else(|| {
+        CHANGELOG_DOC
+            .lines()
+            .take(200)
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
 }
 
 /// Pretty JSON snapshot of the current live runtime config (redacted).
