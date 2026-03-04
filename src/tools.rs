@@ -13,6 +13,7 @@
 //!
 //! **Branch ToolServer** (one per branch, isolated):
 //! - `memory_save` + `memory_recall` + `memory_delete` + `channel_recall`
+//! - `spacebot_docs` for embedded self-documentation lookup
 //! - `task_create` + `task_list` + `task_update`
 //! - `spawn_worker` is included for channel-originated branches only
 //!
@@ -23,11 +24,15 @@
 //!
 //! **Cortex ToolServer** (one per agent):
 //! - `memory_save` — registered at startup
+//!
+//! **Cortex Chat ToolServer** (interactive admin chat):
+//! - branch + worker tool superset plus `spacebot_docs` and `config_inspect`
 
 pub mod branch_tool;
 pub mod browser;
 pub mod cancel;
 pub mod channel_recall;
+pub mod config_inspect;
 pub mod cron;
 pub mod email_search;
 pub mod exec;
@@ -47,6 +52,7 @@ pub mod send_message_to_another_channel;
 pub mod set_status;
 pub mod shell;
 pub mod skip;
+pub mod spacebot_docs;
 pub mod spawn_worker;
 pub mod task_create;
 pub mod task_list;
@@ -62,6 +68,9 @@ pub use browser::{
 pub use cancel::{CancelArgs, CancelError, CancelOutput, CancelTool};
 pub use channel_recall::{
     ChannelRecallArgs, ChannelRecallError, ChannelRecallOutput, ChannelRecallTool,
+};
+pub use config_inspect::{
+    ConfigInspectArgs, ConfigInspectError, ConfigInspectOutput, ConfigInspectTool,
 };
 pub use cron::{CronArgs, CronError, CronOutput, CronTool};
 pub use email_search::{EmailSearchArgs, EmailSearchError, EmailSearchOutput, EmailSearchTool};
@@ -92,6 +101,9 @@ pub use send_message_to_another_channel::{
 pub use set_status::{SetStatusArgs, SetStatusError, SetStatusOutput, SetStatusTool};
 pub use shell::{ShellArgs, ShellError, ShellOutput, ShellResult, ShellTool};
 pub use skip::{SkipArgs, SkipError, SkipFlag, SkipOutput, SkipTool, new_skip_flag};
+pub use spacebot_docs::{
+    SpacebotDocContent, SpacebotDocsArgs, SpacebotDocsError, SpacebotDocsOutput, SpacebotDocsTool,
+};
 pub use spawn_worker::{SpawnWorkerArgs, SpawnWorkerError, SpawnWorkerOutput, SpawnWorkerTool};
 pub use task_create::{TaskCreateArgs, TaskCreateError, TaskCreateOutput, TaskCreateTool};
 pub use task_list::{TaskListArgs, TaskListError, TaskListOutput, TaskListTool};
@@ -379,8 +391,8 @@ pub async fn remove_channel_tools(
 /// Create a per-branch ToolServer with memory tools.
 ///
 /// Each branch gets its own isolated ToolServer so `memory_recall` is never
-/// visible to the channel. Both `memory_save` and `memory_recall` are
-/// registered at creation.
+/// visible to the channel. Includes memory tools, task-board tools, and
+/// `spacebot_docs` for on-demand self-documentation lookup.
 #[allow(clippy::too_many_arguments)]
 pub fn create_branch_tool_server(
     state: Option<ChannelState>,
@@ -397,6 +409,7 @@ pub fn create_branch_tool_server(
         .tool(MemoryRecallTool::new(memory_search.clone()))
         .tool(MemoryDeleteTool::new(memory_search))
         .tool(ChannelRecallTool::new(conversation_logger, channel_store))
+        .tool(SpacebotDocsTool::new())
         .tool(EmailSearchTool::new(runtime_config))
         .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
         .tool(TaskCreateTool::new(
@@ -489,6 +502,8 @@ pub fn create_cortex_tool_server(memory_search: Arc<MemorySearch>) -> ToolServer
 /// Combines branch tools (memory) with worker tools (shell, file, exec) to give
 /// the interactive cortex full capabilities. Does not include channel-specific
 /// tools (reply, react, skip) since the cortex chat doesn't talk to platforms.
+/// Adds `config_inspect` for live runtime config introspection and
+/// `spacebot_docs` for embedded docs/changelog retrieval.
 #[allow(clippy::too_many_arguments)]
 pub fn create_cortex_chat_tool_server(
     agent_id: AgentId,
@@ -502,12 +517,15 @@ pub fn create_cortex_chat_tool_server(
     brave_search_key: Option<String>,
     workspace: PathBuf,
     sandbox: Arc<Sandbox>,
+    runtime_config: Arc<RuntimeConfig>,
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(MemorySaveTool::new(memory_search.clone()))
         .tool(MemoryRecallTool::new(memory_search.clone()))
         .tool(MemoryDeleteTool::new(memory_search))
         .tool(ChannelRecallTool::new(conversation_logger, channel_store))
+        .tool(SpacebotDocsTool::new())
+        .tool(ConfigInspectTool::new(agent_id.to_string(), runtime_config))
         .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
         .tool(TaskCreateTool::new(
             task_store.clone(),
