@@ -21,6 +21,10 @@ const CHANGELOG_DOC: &str = include_str!("../CHANGELOG.md");
 const DOCS_README_DOC: &str = include_str!("../docs/README.md");
 const DOCS_DOCKER_DOC: &str = include_str!("../docs/docker.md");
 const DOCS_METRICS_DOC: &str = include_str!("../docs/metrics.md");
+const CORTEX_AGENTS_MAX_LINES: usize = 220;
+const CORTEX_AGENTS_MAX_CHARS: usize = 24_000;
+const CORTEX_CHANGELOG_MAX_LINES: usize = 220;
+const CORTEX_CHANGELOG_MAX_CHARS: usize = 24_000;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EmbeddedDocSummary {
@@ -42,17 +46,32 @@ pub fn agents_manifest() -> &'static str {
     AGENTS_DOC
 }
 
+/// Prompt-sized `AGENTS.md` content for cortex chat.
+pub fn agents_manifest_for_prompt() -> String {
+    truncate_for_prompt(
+        AGENTS_DOC,
+        CORTEX_AGENTS_MAX_LINES,
+        CORTEX_AGENTS_MAX_CHARS,
+        "AGENTS.md",
+    )
+}
+
 /// Most recent release notes extracted from `CHANGELOG.md`.
 pub fn changelog_highlights() -> String {
-pub fn changelog_highlights() -> String {
-    latest_release_notes(CHANGELOG_DOC, 3).unwrap_or_else(|| {
+    let highlights = latest_release_notes(CHANGELOG_DOC, 3).unwrap_or_else(|| {
         CHANGELOG_DOC
             .lines()
             .take(200)
             .collect::<Vec<_>>()
             .join("\n")
-    })
-}
+    });
+
+    truncate_for_prompt(
+        &highlights,
+        CORTEX_CHANGELOG_MAX_LINES,
+        CORTEX_CHANGELOG_MAX_CHARS,
+        "CHANGELOG.md",
+    )
 }
 
 /// Pretty JSON snapshot of the current live runtime config (redacted).
@@ -87,7 +106,7 @@ pub fn runtime_snapshot_value(agent_id: &str, runtime_config: &RuntimeConfig) ->
                     json!({
                         "kind": "stdio",
                         "command": command,
-                        "args": args,
+                        "args_count": args.len(),
                         "env_keys": env_keys,
                     })
                 }
@@ -562,6 +581,25 @@ fn normalize_lookup(value: &str) -> String {
     value.trim().trim_start_matches('/').to_ascii_lowercase()
 }
 
+fn truncate_for_prompt(content: &str, max_lines: usize, max_chars: usize, label: &str) -> String {
+    let limited_lines = content.lines().take(max_lines).collect::<Vec<_>>();
+    let mut output = limited_lines.join("\n");
+    let mut truncated = content.lines().count() > limited_lines.len();
+
+    if output.chars().count() > max_chars {
+        output = output.chars().take(max_chars).collect::<String>();
+        truncated = true;
+    }
+
+    if truncated {
+        output.push_str(&format!(
+            "\n\n_[{label} truncated in prompt; use `spacebot_docs` for full content.]_"
+        ));
+    }
+
+    output
+}
+
 fn deployment_label(deployment: crate::update::Deployment) -> &'static str {
     match deployment {
         crate::update::Deployment::Docker => "docker",
@@ -583,6 +621,14 @@ mod tests {
         assert!(section.contains("## v2.0.0"));
         assert!(!section.contains("## v1.0.0"));
         assert!(section.contains("## What's Changed"));
+    }
+
+    #[test]
+    fn truncate_for_prompt_adds_notice_when_content_is_trimmed() {
+        let text = "line1\nline2\nline3\nline4";
+        let output = truncate_for_prompt(text, 2, 500, "test.md");
+        assert!(output.contains("line1\nline2"));
+        assert!(output.contains("truncated in prompt"));
     }
 
     #[test]

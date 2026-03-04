@@ -222,8 +222,7 @@ fn unknown_doc_error(requested_id: &str) -> SpacebotDocsError {
 }
 
 fn slice_lines(content: &str, start_line: usize, max_lines: usize) -> (String, usize, usize, bool) {
-    let lines = content.lines().collect::<Vec<_>>();
-    let total_lines = lines.len();
+    let total_lines = content.lines().count();
 
     if total_lines == 0 {
         return (String::new(), 0, 0, false);
@@ -236,7 +235,12 @@ fn slice_lines(content: &str, start_line: usize, max_lines: usize) -> (String, u
     let start_index = start_line.saturating_sub(1);
     let end_index = (start_index + max_lines).min(total_lines);
     let has_more = end_index < total_lines;
-    let content = lines[start_index..end_index].join("\n");
+    let content = content
+        .lines()
+        .skip(start_index)
+        .take(end_index - start_index)
+        .collect::<Vec<_>>()
+        .join("\n");
 
     (content, end_index, total_lines, has_more)
 }

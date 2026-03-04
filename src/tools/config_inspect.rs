@@ -98,18 +98,18 @@ fn select_section(
     section: &str,
 ) -> Result<serde_json::Value, ConfigInspectError> {
     match section {
-        "binary_version" => Ok(snapshot
+        "binary_version" => snapshot
             .get("binary_version")
             .cloned()
-            .unwrap_or(serde_json::Value::Null)),
-        "deployment" => Ok(snapshot
+            .ok_or_else(|| unknown_section_error("binary_version")),
+        "deployment" => snapshot
             .get("deployment")
             .cloned()
-            .unwrap_or(serde_json::Value::Null)),
-        "mcp" => Ok(snapshot
+            .ok_or_else(|| unknown_section_error("deployment")),
+        "mcp" => snapshot
             .get("mcp_servers")
             .cloned()
-            .unwrap_or(serde_json::Value::Null)),
+            .ok_or_else(|| unknown_section_error("mcp")),
         other => snapshot
             .get(other)
             .cloned()

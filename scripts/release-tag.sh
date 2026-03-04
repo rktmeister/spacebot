@@ -106,7 +106,7 @@ generate_release_notes_body() {
   local notes_json
   notes_json="$(mktemp)"
   local target_commitish
-  target_commitish="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"
+  target_commitish="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 
   if [ -n "$previous_tag" ]; then
     gh api -X POST "repos/$repo_slug/releases/generate-notes" \
@@ -225,6 +225,7 @@ while IFS= read -r file; do
 
   if [ "$file" != "$CARGO_TOML_RELATIVE" ] \
     && [ "$file" != "$CARGO_LOCK_RELATIVE" ] \
+    && [ "$file" != "$CHANGELOG_RELATIVE" ] \
     && { [ -z "$marketing_copy_allowed_relative" ] || [ "$file" != "$marketing_copy_allowed_relative" ]; }
   then
     disallowed_changes+=("$file")

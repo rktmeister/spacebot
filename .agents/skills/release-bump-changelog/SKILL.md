@@ -29,7 +29,7 @@ Create a version bump commit where each release section includes both:
      - `### Release Story` (from your marketing file)
      - GitHub-generated notes body
    - The script includes `CHANGELOG.md` in the release commit.
-3. Verify results:
+4. Verify results:
    - `git show --name-only --stat`
    - Confirm commit contains `Cargo.toml`, `Cargo.lock` (if present), and `CHANGELOG.md`.
    - Confirm tag was created (`git tag --list "v*" --sort=-v:refname | head -n 5`).

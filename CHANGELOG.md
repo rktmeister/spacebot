@@ -347,16 +347,6 @@ v0.1.12 includes those intended changes plus additional fixes.
 
 **Full Changelog**: https://github.com/spacedriveapp/spacebot/compare/v0.1.4...v0.1.5
 
-## What's Changed
-* Fix broken documentation links in README by @joseph-lozano in https://github.com/spacedriveapp/spacebot/pull/11
-* fix: IPv6 socket address parsing for Docker deployments by @pablopunk in https://github.com/spacedriveapp/spacebot/pull/14
-
-## New Contributors
-* @joseph-lozano made their first contribution in https://github.com/spacedriveapp/spacebot/pull/11
-* @pablopunk made their first contribution in https://github.com/spacedriveapp/spacebot/pull/14
-
-**Full Changelog**: https://github.com/spacedriveapp/spacebot/compare/v0.1.4...v0.1.5
-
 ## v0.1.4
 
 - Tag: `v0.1.4`
