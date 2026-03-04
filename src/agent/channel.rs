@@ -88,6 +88,7 @@ impl ChannelState {
             .remove(&worker_id)
             .is_some();
         self.worker_inputs.write().await.remove(&worker_id);
+        self.status_block.write().await.remove_worker(worker_id);
 
         if let Some(handle) = handle {
             handle.abort();
@@ -1632,6 +1633,12 @@ impl Channel {
                                 channel_id = %self.id,
                                 "blocked retrigger fallback output containing structured or tool syntax"
                             );
+                        } else if let Some(leak) = crate::secrets::scrub::scan_for_leaks(text) {
+                            tracing::warn!(
+                                channel_id = %self.id,
+                                leak_prefix = %&leak[..leak.len().min(8)],
+                                "blocked retrigger fallback output matching secret pattern"
+                            );
                         } else if suppress_plaintext_fallback {
                             tracing::info!(
                                 channel_id = %self.id,
@@ -1691,6 +1698,12 @@ impl Channel {
                                 channel_id = %self.id,
                                 "blocked retrigger output containing structured or tool syntax"
                             );
+                        } else if let Some(leak) = crate::secrets::scrub::scan_for_leaks(text) {
+                            tracing::warn!(
+                                channel_id = %self.id,
+                                leak_prefix = %&leak[..leak.len().min(8)],
+                                "blocked retrigger output matching secret pattern"
+                            );
                         } else if suppress_plaintext_fallback {
                             tracing::info!(
                                 channel_id = %self.id,
@@ -1742,6 +1755,12 @@ impl Channel {
                         tracing::warn!(
                             channel_id = %self.id,
                             "blocked fallback output containing structured or tool syntax"
+                        );
+                    } else if let Some(leak) = crate::secrets::scrub::scan_for_leaks(text) {
+                        tracing::warn!(
+                            channel_id = %self.id,
+                            leak_prefix = %&leak[..leak.len().min(8)],
+                            "blocked fallback output matching secret pattern"
                         );
                     } else if suppress_plaintext_fallback {
                         tracing::info!(

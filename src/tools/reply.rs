@@ -433,6 +433,17 @@ impl Tool for ReplyTool {
             .map(|name| name.trim())
             .filter(|name| !name.is_empty());
 
+        if let Some(leak) = crate::secrets::scrub::scan_for_leaks(&converted_content) {
+            tracing::error!(
+                conversation_id = %self.conversation_id,
+                leak_prefix = %&leak[..leak.len().min(8)],
+                "reply tool blocked content matching secret pattern"
+            );
+            return Err(ReplyError(
+                "blocked reply content: potential secret detected".into(),
+            ));
+        }
+
         let cards_requested = args.cards.as_ref().is_some_and(|cards| !cards.is_empty());
         let interactive_requested = args
             .interactive_elements
