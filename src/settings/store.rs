@@ -164,10 +164,20 @@ impl SettingsStore {
     }
 
     /// Get the channel listen-only mode, if explicitly persisted.
-    pub fn channel_listen_only_mode(&self) -> Option<bool> {
+    pub fn channel_listen_only_mode(&self) -> Result<Option<bool>> {
         match self.get_raw(CHANNEL_LISTEN_ONLY_MODE_KEY) {
-            Ok(raw) => raw.parse::<bool>().ok(),
-            Err(_) => None,
+            Ok(raw) => raw.parse::<bool>().map(Some).map_err(|error| {
+                SettingsError::ReadFailed {
+                    key: CHANNEL_LISTEN_ONLY_MODE_KEY.to_string(),
+                    details: format!("invalid boolean value '{raw}': {error}"),
+                }
+                .into()
+            }),
+            Err(crate::error::Error::Settings(settings_error)) => match *settings_error {
+                SettingsError::NotFound { .. } => Ok(None),
+                other => Err(other.into()),
+            },
+            Err(other) => Err(other),
         }
     }
 

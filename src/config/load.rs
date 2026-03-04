@@ -1406,8 +1406,8 @@ impl Config {
             channel: toml
                 .defaults
                 .channel
-                .map(|c| ChannelConfig {
-                    listen_only_mode: c
+                .map(|channel_config| ChannelConfig {
+                    listen_only_mode: channel_config
                         .listen_only_mode
                         .unwrap_or(base_defaults.channel.listen_only_mode),
                 })
@@ -1603,10 +1603,10 @@ impl Config {
                             .or_else(|| defaults.browser.screenshot_dir.clone()),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
-                    channel: a.channel.map(|c| ChannelConfig {
-                        listen_only_mode: c
+                    channel: a.channel.and_then(|channel_config| {
+                        channel_config
                             .listen_only_mode
-                            .unwrap_or(defaults.channel.listen_only_mode),
+                            .map(|listen_only_mode| ChannelConfig { listen_only_mode })
                     }),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(
