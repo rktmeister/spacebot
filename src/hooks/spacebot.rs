@@ -264,10 +264,23 @@ impl SpacebotHook {
                     // Their egress paths (worker results, branch conclusions,
                     // status updates) scrub secrets before content reaches the
                     // channel. Log and continue rather than killing the process.
+                    //
+                    // Avoid logging any fragment of the matched secret. Only log
+                    // the encoding kind (plaintext/url/base64/hex) and length.
+                    let kind = if leak.starts_with("url-encoded:") {
+                        "url-encoded"
+                    } else if leak.starts_with("base64-encoded:") {
+                        "base64-encoded"
+                    } else if leak.starts_with("hex-encoded:") {
+                        "hex-encoded"
+                    } else {
+                        "plaintext"
+                    };
                     tracing::warn!(
                         process_id = %self.process_id,
                         tool_name = %tool_name,
-                        leak_prefix = %&leak[..leak.len().min(8)],
+                        leak_kind = kind,
+                        leak_len = leak.len(),
                         "secret detected in tool output (non-channel process, continuing)"
                     );
                 }
@@ -532,8 +545,17 @@ where
         }
 
         // Cap the result stored in the broadcast event to avoid blowing up
-        // event subscribers with multi-MB tool results.
-        self.emit_tool_completed_event(tool_name, result);
+        // event subscribers with multi-MB tool results. For worker/branch
+        // processes, scrub leak patterns from the event payload so secrets
+        // don't reach the SSE dashboard.
+        if matches!(self.process_type, ProcessType::Worker | ProcessType::Branch) {
+            let scrubbed = crate::secrets::scrub::scrub_leaks(result);
+            let capped =
+                crate::tools::truncate_output(&scrubbed, crate::tools::MAX_TOOL_OUTPUT_BYTES);
+            self.emit_tool_completed_event_from_capped(tool_name, capped);
+        } else {
+            self.emit_tool_completed_event(tool_name, result);
+        }
 
         tracing::debug!(
             process_id = %self.process_id,
