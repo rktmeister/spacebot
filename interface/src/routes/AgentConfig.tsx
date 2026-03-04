@@ -15,7 +15,7 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 		|| id.includes("sonnet-4-6") || id.includes("sonnet-4.6");
 }
 
-type SectionId = "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "sandbox";
+type SectionId = "soul" | "identity" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "sandbox";
 
 const SECTIONS: {
 	id: SectionId;
@@ -26,7 +26,6 @@ const SECTIONS: {
 }[] = [
 	{ id: "soul", label: "Soul", group: "identity", description: "SOUL.md", detail: "Defines the agent's personality, values, communication style, and behavioral boundaries. This is the core of who the agent is." },
 	{ id: "identity", label: "Identity", group: "identity", description: "IDENTITY.md", detail: "The agent's name, nature, and purpose. How it introduces itself and what it understands its role to be." },
-	{ id: "user", label: "User", group: "identity", description: "USER.md", detail: "Information about the human this agent interacts with. Name, preferences, context, and anything that helps the agent personalize responses." },
 	{ id: "routing", label: "Model Routing", group: "config", description: "Which models each process uses", detail: "Controls which LLM model is used for each process type. Channels handle user-facing conversation, branches do thinking, workers execute tasks, the compactor summarizes context, cortex observes system state, and voice transcribes audio attachments before the channel turn." },
 	{ id: "tuning", label: "Tuning", group: "config", description: "Turn limits, context window, branches", detail: "Core limits that control how much work the agent does per message. Max turns caps LLM iterations per channel message. Context window sets the token budget. Branch limits control parallel thinking." },
 	{ id: "compaction", label: "Compaction", group: "config", description: "Context compaction thresholds", detail: "Thresholds that trigger context summarization as the conversation grows. Background kicks in early, aggressive compresses harder, and emergency truncates without LLM involvement. All values are fractions of the context window." },
@@ -41,11 +40,11 @@ interface AgentConfigProps {
 	agentId: string;
 }
 
-const isIdentityField = (id: SectionId): id is "soul" | "identity" | "user" => {
-	return id === "soul" || id === "identity" || id === "user";
+const isIdentityField = (id: SectionId): id is "soul" | "identity" => {
+	return id === "soul" || id === "identity";
 };
 
-const getIdentityField = (data: { soul: string | null; identity: string | null; user: string | null }, field: SectionId): string | null => {
+const getIdentityField = (data: { soul: string | null; identity: string | null }, field: SectionId): string | null => {
 	if (isIdentityField(field)) {
 		return data[field];
 	}
@@ -64,7 +63,7 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 	// Sync activeSection with URL search param
 	useEffect(() => {
 		if (search.tab) {
-			const validSections: SectionId[] = ["soul", "identity", "user", "routing", "tuning", "compaction", "cortex", "coalesce", "memory", "browser", "sandbox"];
+			const validSections: SectionId[] = ["soul", "identity", "routing", "tuning", "compaction", "cortex", "coalesce", "memory", "browser", "sandbox"];
 			if (validSections.includes(search.tab as SectionId)) {
 				setActiveSection(search.tab as SectionId);
 			}
@@ -89,7 +88,7 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 	});
 
 	const identityMutation = useMutation({
-		mutationFn: (update: { field: "soul" | "identity" | "user"; content: string }) =>
+		mutationFn: (update: { field: "soul" | "identity"; content: string }) =>
 			api.updateIdentity({
 				agent_id: agentId,
 				[update.field]: update.content,

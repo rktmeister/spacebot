@@ -495,14 +495,12 @@ export type CortexChatSSEEvent =
 export interface IdentityFiles {
 	soul: string | null;
 	identity: string | null;
-	user: string | null;
 }
 
 export interface IdentityUpdateRequest {
 	agent_id: string;
 	soul?: string | null;
 	identity?: string | null;
-	user?: string | null;
 }
 
 // -- Agent Config Types --
@@ -1202,6 +1200,7 @@ export interface TopologyHuman {
 	display_name?: string;
 	role?: string;
 	bio?: string;
+	description?: string;
 }
 
 export interface TopologyResponse {
@@ -1216,12 +1215,14 @@ export interface CreateHumanRequest {
 	display_name?: string;
 	role?: string;
 	bio?: string;
+	description?: string;
 }
 
 export interface UpdateHumanRequest {
 	display_name?: string;
 	role?: string;
 	bio?: string;
+	description?: string;
 }
 
 export interface CreateGroupRequest {
