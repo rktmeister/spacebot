@@ -13,6 +13,9 @@ tests/
 scripts/
 
 # Exclude docs except what's needed for self_awareness.rs embeds
+docs/node_modules/
+docs/.next/
+docs/out/
 docs/app/
 docs/components/
 docs/lib/
