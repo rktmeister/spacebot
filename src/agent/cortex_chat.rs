@@ -425,6 +425,12 @@ impl CortexChatSession {
 
         let identity_context = runtime_config.identity.load().render();
         let memory_bulletin = runtime_config.memory_bulletin.load();
+        let agents_manifest = crate::self_awareness::agents_manifest_for_prompt();
+        let changelog_highlights = crate::self_awareness::changelog_highlights();
+        let runtime_config_snapshot = crate::self_awareness::runtime_snapshot_pretty(
+            self.deps.agent_id.as_ref(),
+            runtime_config,
+        );
 
         let browser_enabled = runtime_config.browser_config.load().enabled;
         let web_search_enabled = runtime_config.brave_search_key.load().is_some();
@@ -448,6 +454,9 @@ impl CortexChatSession {
             empty_to_none(identity_context),
             empty_to_none(memory_bulletin.to_string()),
             channel_transcript,
+            empty_to_none(agents_manifest),
+            empty_to_none(changelog_highlights),
+            empty_to_none(runtime_config_snapshot),
             worker_capabilities,
         )
     }
