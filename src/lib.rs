@@ -21,6 +21,7 @@ pub mod opencode;
 pub mod prompts;
 pub mod sandbox;
 pub mod secrets;
+pub mod self_awareness;
 pub mod settings;
 pub mod skills;
 pub mod tasks;
@@ -195,6 +196,13 @@ pub enum ProcessEvent {
         status: String,
         /// "created", "updated", or "deleted".
         action: String,
+    },
+    TextDelta {
+        agent_id: AgentId,
+        process_id: ProcessId,
+        channel_id: Option<ChannelId>,
+        text_delta: String,
+        aggregated_text: String,
     },
 }
 

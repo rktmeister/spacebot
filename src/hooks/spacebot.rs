@@ -405,6 +405,23 @@ where
         HookAction::Continue
     }
 
+    async fn on_text_delta(&self, text_delta: &str, aggregated_text: &str) -> HookAction {
+        if self.process_type == ProcessType::Channel
+            && let Some(channel_id) = self.channel_id.clone()
+        {
+            let event = ProcessEvent::TextDelta {
+                agent_id: self.agent_id.clone(),
+                process_id: self.process_id.clone(),
+                channel_id: Some(channel_id),
+                text_delta: text_delta.to_string(),
+                aggregated_text: aggregated_text.to_string(),
+            };
+            self.event_tx.send(event).ok();
+        }
+
+        HookAction::Continue
+    }
+
     async fn on_tool_call(
         &self,
         tool_name: &str,
@@ -519,6 +536,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{SpacebotHook, ToolNudgePolicy};
+    use crate::ProcessEvent;
     use crate::llm::SpacebotModel;
     use crate::llm::model::RawResponse;
     use crate::{ProcessId, ProcessType};
@@ -824,5 +842,31 @@ mod tests {
 
         assert_eq!(history.len(), base_len + 1);
         assert!(matches!(history[base_len], Message::Assistant { .. }));
+    }
+
+    #[tokio::test]
+    async fn channel_text_delta_emits_process_event() {
+        let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(8);
+        let hook = SpacebotHook::new(
+            std::sync::Arc::<str>::from("agent"),
+            ProcessId::Channel(std::sync::Arc::<str>::from("channel")),
+            ProcessType::Channel,
+            Some(std::sync::Arc::<str>::from("channel")),
+            event_tx,
+        );
+
+        let action =
+            <SpacebotHook as PromptHook<SpacebotModel>>::on_text_delta(&hook, "hi", "hi").await;
+        assert!(matches!(action, HookAction::Continue));
+
+        let event = event_rx.recv().await.expect("text delta event");
+        assert!(matches!(
+            event,
+            ProcessEvent::TextDelta {
+                ref text_delta,
+                ref aggregated_text,
+                ..
+            } if text_delta == "hi" && aggregated_text == "hi"
+        ));
     }
 }
