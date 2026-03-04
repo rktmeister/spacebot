@@ -483,11 +483,10 @@ impl Channel {
                     .get("reply_to_username")
                     .and_then(|v| v.as_str())
                     .map(str::to_lowercase);
-                match (reply_username, bot_username) {
-                    (Some(reply), Some(bot)) => reply_to_is_bot && bot == reply,
-                    (Some(_reply), None) => reply_to_is_bot,
-                    _ => false,
-                }
+                reply_to_is_bot
+                    && reply_username
+                        .zip(bot_username)
+                        .is_some_and(|(reply, bot)| bot == reply)
             }
             _ => message
                 .metadata

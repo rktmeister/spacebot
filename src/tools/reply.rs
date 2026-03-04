@@ -473,6 +473,8 @@ impl Tool for ReplyTool {
             let supports_cards = matches!(source, "discord");
             let supports_interactive = matches!(source, "discord");
             let supports_poll = matches!(source, "discord");
+            const DISCORD_MAX_CARDS: usize = 10;
+            const DISCORD_MAX_INTERACTIVE_ELEMENTS: usize = 5;
             let mut unsupported = Vec::new();
             if cards_requested && !supports_cards {
                 unsupported.push("cards");
@@ -488,6 +490,20 @@ impl Tool for ReplyTool {
                     "unsupported rich payload for source '{source}': requested unsupported fields [{}]",
                     unsupported.join(", ")
                 )));
+            }
+            if source == "discord" {
+                let card_count = args.cards.as_ref().map_or(0, Vec::len);
+                if card_count > DISCORD_MAX_CARDS {
+                    return Err(ReplyError(format!(
+                        "discord rich payload limit exceeded: cards={card_count} (max {DISCORD_MAX_CARDS})"
+                    )));
+                }
+                let interactive_count = args.interactive_elements.as_ref().map_or(0, Vec::len);
+                if interactive_count > DISCORD_MAX_INTERACTIVE_ELEMENTS {
+                    return Err(ReplyError(format!(
+                        "discord rich payload limit exceeded: interactive_elements={interactive_count} (max {DISCORD_MAX_INTERACTIVE_ELEMENTS})"
+                    )));
+                }
             }
 
             OutboundResponse::RichMessage {
