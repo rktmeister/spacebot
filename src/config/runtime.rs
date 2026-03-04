@@ -58,6 +58,9 @@ pub struct RuntimeConfig {
     pub cron_scheduler: ArcSwap<Option<Arc<crate::cron::Scheduler>>>,
     /// Settings store for agent-specific configuration.
     pub settings: ArcSwap<Option<Arc<crate::settings::SettingsStore>>>,
+    /// Tracks whether listen_only_mode is explicitly configured via agent/env.
+    /// When set, channel-local persisted values must not override it.
+    pub channel_listen_only_explicit: ArcSwap<Option<bool>>,
     /// Secrets store for encrypted credential storage.
     pub secrets: ArcSwap<Option<Arc<crate::secrets::store::SecretsStore>>>,
     /// Sandbox configuration for process containment.
@@ -117,6 +120,7 @@ impl RuntimeConfig {
             cron_store: ArcSwap::from_pointee(None),
             cron_scheduler: ArcSwap::from_pointee(None),
             settings: ArcSwap::from_pointee(None),
+            channel_listen_only_explicit: ArcSwap::from_pointee(None),
             secrets: ArcSwap::from_pointee(None),
             sandbox: Arc::new(ArcSwap::from_pointee(agent_config.sandbox.clone())),
         }
@@ -139,6 +143,8 @@ impl RuntimeConfig {
         explicit_listen_only: Option<bool>,
     ) {
         self.settings.store(Arc::new(Some(settings.clone())));
+        self.channel_listen_only_explicit
+            .store(Arc::new(explicit_listen_only));
         if explicit_listen_only.is_none() {
             match settings.channel_listen_only_mode() {
                 Ok(Some(enabled)) => {
@@ -203,6 +209,8 @@ impl RuntimeConfig {
         self.ingestion.store(Arc::new(resolved.ingestion));
         let resolved_channel = resolved.channel;
         let configured_listen_only = agent.channel.map(|channel| channel.listen_only_mode);
+        self.channel_listen_only_explicit
+            .store(Arc::new(configured_listen_only));
         let persisted_listen_only = self.settings.load().as_ref().as_ref().and_then(|settings| {
             match settings.channel_listen_only_mode() {
                 Ok(value) => value,
@@ -215,11 +223,11 @@ impl RuntimeConfig {
                 }
             }
         });
-        self.channel_config.rcu(move |_current| {
+        self.channel_config.rcu(move |current| {
             let mut next = resolved_channel;
             next.listen_only_mode = configured_listen_only
                 .or(persisted_listen_only)
-                .unwrap_or(next.listen_only_mode);
+                .unwrap_or(current.as_ref().listen_only_mode);
             Arc::new(next)
         });
         self.max_turns.store(Arc::new(resolved.max_turns));

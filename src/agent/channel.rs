@@ -177,6 +177,8 @@ pub struct Channel {
     /// Channel-local reply mode toggle.
     /// When true, suppress unsolicited replies unless explicitly invoked.
     listen_only_mode: bool,
+    /// Session-scoped override used when persistence is unavailable/failed.
+    listen_only_session_override: Option<bool>,
 }
 
 impl Channel {
@@ -252,26 +254,7 @@ impl Channel {
         };
 
         let self_tx = message_tx.clone();
-        let default_listen_only_mode = deps.runtime_config.channel_config.load().listen_only_mode;
-        let persisted_listen_only_mode = deps
-            .runtime_config
-            .settings
-            .load()
-            .as_ref()
-            .as_ref()
-            .and_then(
-                |settings| match settings.channel_listen_only_mode_for(id.as_ref()) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        tracing::warn!(
-                            %error,
-                            channel_id = %id,
-                            "failed to load channel-scoped listen_only_mode setting"
-                        );
-                        None
-                    }
-                },
-            );
+        let resolved_listen_only_mode = deps.runtime_config.channel_config.load().listen_only_mode;
         let channel = Self {
             id: id.clone(),
             title: None,
@@ -298,7 +281,8 @@ impl Channel {
             retrigger_deadline: None,
             pending_results: Vec::new(),
             send_agent_message_tool,
-            listen_only_mode: persisted_listen_only_mode.unwrap_or(default_listen_only_mode),
+            listen_only_mode: resolved_listen_only_mode,
+            listen_only_session_override: None,
         };
 
         (channel, message_tx)
@@ -325,12 +309,17 @@ impl Channel {
     }
 
     fn sync_listen_only_mode_from_runtime(&mut self) {
+        if let Some(override_mode) = self.listen_only_session_override {
+            self.listen_only_mode = override_mode;
+            return;
+        }
         let runtime_default = self
             .deps
             .runtime_config
             .channel_config
             .load()
             .listen_only_mode;
+        let explicit_listen_only = **self.deps.runtime_config.channel_listen_only_explicit.load();
         let settings_store = self
             .deps
             .runtime_config
@@ -339,7 +328,9 @@ impl Channel {
             .as_ref()
             .as_ref()
             .cloned();
-        self.listen_only_mode = if let Some(settings_store) = settings_store {
+        self.listen_only_mode = if explicit_listen_only.is_some() {
+            runtime_default
+        } else if let Some(settings_store) = settings_store {
             match settings_store.channel_listen_only_mode_for(self.id.as_ref()) {
                 Ok(Some(enabled)) => enabled,
                 Ok(None) => runtime_default,
@@ -388,6 +379,7 @@ impl Channel {
         }
 
         self.listen_only_mode = enabled;
+        self.listen_only_session_override = if persisted { None } else { Some(enabled) };
         persisted
     }
 

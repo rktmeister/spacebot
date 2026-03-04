@@ -46,6 +46,7 @@ pub struct ReplyTool {
     channel_id: ChannelId,
     replied_flag: RepliedFlag,
     agent_display_name: String,
+    // Captured for planned per-agent style transforms in enforce_agent_style.
     agent_id: String,
 }
 
@@ -73,7 +74,7 @@ impl ReplyTool {
 }
 
 fn enforce_agent_style(_agent_id: &str, content: &str) -> String {
-    // TODO: apply per-agent style/voice transforms when rules are defined.
+    // TODO: enforce_agent_style should use _agent_id for per-agent voice rules.
     content.to_string()
 }
 
