@@ -50,7 +50,7 @@ pub struct RuntimeConfig {
     pub skills: ArcSwap<crate::skills::SkillSet>,
     pub opencode: ArcSwap<OpenCodeConfig>,
     /// Shared pool of OpenCode server processes. Lazily initialized on first use.
-    pub opencode_server_pool: Arc<crate::opencode::OpenCodeServerPool>,
+    pub opencode_server_pool: ArcSwap<crate::opencode::OpenCodeServerPool>,
     /// Cron store, set after agent initialization.
     pub cron_store: ArcSwap<Option<Arc<crate::cron::CronStore>>>,
     /// Cron scheduler, set after agent initialization.
@@ -111,7 +111,7 @@ impl RuntimeConfig {
             identity: ArcSwap::from_pointee(identity),
             skills: ArcSwap::from_pointee(skills),
             opencode: ArcSwap::from_pointee(defaults.opencode.clone()),
-            opencode_server_pool: Arc::new(server_pool),
+            opencode_server_pool: ArcSwap::from_pointee(server_pool),
             cron_store: ArcSwap::from_pointee(None),
             cron_scheduler: ArcSwap::from_pointee(None),
             settings: ArcSwap::from_pointee(None),
@@ -199,6 +199,26 @@ impl RuntimeConfig {
         self.cortex.store(Arc::new(resolved.cortex));
         self.warmup.store(Arc::new(resolved.warmup));
         self.sandbox.store(Arc::new(resolved.sandbox.clone()));
+
+        let old_opencode = self.opencode.load().as_ref().clone();
+        let new_opencode = config.defaults.opencode.clone();
+        self.opencode.store(Arc::new(new_opencode.clone()));
+
+        let should_rebuild_opencode_pool = old_opencode.path != new_opencode.path
+            || old_opencode.max_servers != new_opencode.max_servers
+            || old_opencode.permissions != new_opencode.permissions;
+        if should_rebuild_opencode_pool {
+            let new_pool = crate::opencode::OpenCodeServerPool::new(
+                new_opencode.path.clone(),
+                new_opencode.permissions.clone(),
+                new_opencode.max_servers,
+            );
+            self.opencode_server_pool.store(Arc::new(new_pool));
+            tracing::info!(
+                agent_id,
+                "reloaded opencode server pool with updated path/permissions/limits"
+            );
+        }
 
         mcp_manager.reconcile(&old_mcp, &new_mcp).await;
 

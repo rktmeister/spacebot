@@ -730,7 +730,7 @@ impl Default for BrowserConfig {
 }
 
 /// OpenCode subprocess worker configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenCodeConfig {
     /// Whether OpenCode workers are available.
     pub enabled: bool,

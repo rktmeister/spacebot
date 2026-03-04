@@ -64,6 +64,52 @@ pub fn set_resolve_secrets_store(store: std::sync::Arc<crate::secrets::store::Se
     RESOLVE_SECRETS_STORE.store(std::sync::Arc::new(Some(store)));
 }
 
+/// Known top-level keys in config.toml (must match `TomlConfig` field names).
+const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
+    "llm",
+    "defaults",
+    "agents",
+    "links",
+    "groups",
+    "humans",
+    "messaging",
+    "bindings",
+    "api",
+    "metrics",
+    "telemetry",
+];
+
+/// Pre-parse check that warns about unrecognised top-level keys in a config
+/// file.  Serde's default behaviour silently drops unknown fields, which leads
+/// to confusing "my setting does nothing" bugs (see issue #221).
+pub(super) fn warn_unknown_config_keys(content: &str) {
+    let table: toml::Table = match content.parse() {
+        Ok(t) => t,
+        Err(_) => return, // the typed parse will report the real error
+    };
+
+    for key in table.keys() {
+        if KNOWN_TOP_LEVEL_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+
+        if key == "mcp_servers" || key == "mcp" {
+            tracing::warn!(
+                "config.toml contains top-level key `{key}` which is not recognised \
+                 and will be ignored. MCP servers should be defined under [defaults] \
+                 as [[defaults.mcp]] (or per-agent under [[agents.mcp]]). \
+                 See docs/design-docs/mcp.md for the correct format."
+            );
+        } else {
+            tracing::warn!(
+                "config.toml contains unknown top-level key `{key}` — \
+                 it will be silently ignored by the parser. Check for typos \
+                 or consult the configuration reference."
+            );
+        }
+    }
+}
+
 fn parse_otlp_headers(value: Option<String>) -> Result<HashMap<String, String>> {
     let Some(raw) = value else {
         return Ok(HashMap::new());
@@ -246,6 +292,8 @@ impl Config {
 
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config from {}", path.display()))?;
+
+        warn_unknown_config_keys(&content);
 
         let toml_config: TomlConfig = toml::from_str(&content)
             .with_context(|| format!("failed to parse config from {}", path.display()))?;
@@ -726,6 +774,8 @@ impl Config {
     /// Validate a raw TOML string as a valid Spacebot config.
     /// Returns Ok(()) if the config is structurally valid, or an error describing what's wrong.
     pub fn validate_toml(content: &str) -> Result<()> {
+        warn_unknown_config_keys(content);
+
         let toml_config: TomlConfig =
             toml::from_str(content).context("failed to parse config TOML")?;
         // Run full conversion to catch semantic errors (env resolution, defaults, etc.)
