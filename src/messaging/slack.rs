@@ -32,6 +32,7 @@ use slack_morphism::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
+use tokio::time::{Duration, timeout};
 
 /// State shared with socket mode callbacks via `SlackClientEventsUserState`.
 struct SlackAdapterState {
@@ -274,19 +275,31 @@ async fn handle_message_event(
         // For threaded replies, treat as explicit invoke only when the thread
         // root message belongs to this bot.
         if thread_ts.0 != ts {
-            let req = SlackApiConversationsRepliesRequest::new(
+            let thread_replies_request = SlackApiConversationsRepliesRequest::new(
                 SlackChannelId(channel_id.clone()),
                 thread_ts.clone(),
             )
             .with_limit(1);
-            match session.conversations_replies(&req).await {
-                Ok(response) => response
+            match timeout(
+                Duration::from_secs(2),
+                session.conversations_replies(&thread_replies_request),
+            )
+            .await
+            {
+                Ok(Ok(response)) => response
                     .messages
                     .first()
                     .and_then(|message| message.sender.user.as_ref())
                     .is_some_and(|user| user.0 == adapter_state.bot_user_id),
-                Err(error) => {
+                Ok(Err(error)) => {
                     tracing::debug!(%error, "failed to resolve slack thread parent for reply invoke");
+                    false
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        "timed out resolving slack thread parent for reply invoke"
+                    );
                     false
                 }
             }

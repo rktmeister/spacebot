@@ -315,23 +315,32 @@ impl Channel {
     }
 
     fn set_listen_only_mode(&mut self, enabled: bool) -> bool {
-        let mut persisted = true;
-        if let Some(settings_store) = self
+        let mut persisted = false;
+        let settings_store = self
             .deps
             .runtime_config
             .settings
             .load()
             .as_ref()
             .as_ref()
-            .cloned()
-            && let Err(error) = settings_store.set_channel_listen_only_mode(enabled)
-        {
-            persisted = false;
+            .cloned();
+        if let Some(settings_store) = settings_store {
+            match settings_store.set_channel_listen_only_mode(enabled) {
+                Ok(()) => persisted = true,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        channel_id = %self.id,
+                        listen_only_mode = enabled,
+                        "failed to persist listen_only_mode setting"
+                    );
+                }
+            }
+        } else {
             tracing::warn!(
-                %error,
                 channel_id = %self.id,
                 listen_only_mode = enabled,
-                "failed to persist listen_only_mode setting"
+                "settings store unavailable; listen_only_mode is session-scoped"
             );
         }
 
