@@ -820,6 +820,29 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 							value={localValues.evaluate_enabled as boolean}
 							onChange={(v) => handleChange("evaluate_enabled", v)}
 						/>
+						<ConfigToggleField
+							label="Persist Session"
+							description="Keep the browser alive across worker lifetimes. Cookies, tabs, and login sessions survive between tasks. Requires agent restart to take effect."
+							value={localValues.persist_session as boolean}
+							onChange={(v) => handleChange("persist_session", v)}
+						/>
+						<div className="flex flex-col gap-1.5">
+							<label className="text-sm font-medium text-ink">Close Policy</label>
+							<p className="text-tiny text-ink-faint">What happens when a worker calls &quot;close&quot; or finishes.</p>
+							<Select
+								value={localValues.close_policy as string}
+								onValueChange={(v) => handleChange("close_policy", v)}
+							>
+								<SelectTrigger className="border-app-line/50 bg-app-darkBox/30">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="close_browser">Close Browser</SelectItem>
+									<SelectItem value="close_tabs">Close Tabs</SelectItem>
+									<SelectItem value="detach">Detach</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
 					</div>
 				);
 			case "sandbox":
