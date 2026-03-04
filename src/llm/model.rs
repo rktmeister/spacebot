@@ -1867,17 +1867,32 @@ fn process_openai_chat_stream_event(
                 .and_then(serde_json::Value::as_array)
             {
                 for (index, tool_call) in message_tool_calls.iter().enumerate() {
-                    pending_tool_calls.remove(&index);
-                    if let Some(tool_call) =
-                        parse_openai_tool_call(tool_call, format!("tool_call_{index}"))
-                    {
+                    let pending_tool_call = pending_tool_calls.remove(&index);
+                    let fallback_id = pending_tool_call
+                        .as_ref()
+                        .and_then(|pending| {
+                            if pending.id.is_empty() {
+                                None
+                            } else {
+                                Some(pending.id.clone())
+                            }
+                        })
+                        .unwrap_or_else(|| format!("tool_call_{index}"));
+                    if let Some(tool_call) = parse_openai_tool_call(tool_call, fallback_id) {
+                        let internal_call_id = pending_tool_call
+                            .as_ref()
+                            .map(|pending| pending.internal_call_id.clone())
+                            .unwrap_or_else(|| {
+                                if tool_call.id.is_empty() {
+                                    uuid::Uuid::new_v4().to_string()
+                                } else {
+                                    tool_call.id.clone()
+                                }
+                            });
+
                         events.push(RawStreamingChoice::ToolCall(RawStreamingToolCall {
                             id: tool_call.id.clone(),
-                            internal_call_id: if tool_call.id.is_empty() {
-                                uuid::Uuid::new_v4().to_string()
-                            } else {
-                                tool_call.id.clone()
-                            },
+                            internal_call_id,
                             call_id: tool_call.call_id,
                             name: tool_call.function.name,
                             arguments: tool_call.function.arguments,
@@ -3021,8 +3036,17 @@ mod tests {
         });
 
         let mut pending = BTreeMap::new();
-        process_openai_chat_stream_event(&delta_event, &mut pending)
+        let delta_events = process_openai_chat_stream_event(&delta_event, &mut pending)
             .expect("delta event should parse");
+        let delta_internal_call_id = delta_events
+            .iter()
+            .find_map(|event| match event {
+                RawStreamingChoice::ToolCallDelta {
+                    internal_call_id, ..
+                } => Some(internal_call_id.clone()),
+                _ => None,
+            })
+            .expect("missing tool-call delta internal id");
         assert_eq!(pending.len(), 1);
 
         let events = process_openai_chat_stream_event(&message_event, &mut pending)
@@ -3038,6 +3062,7 @@ mod tests {
         assert_eq!(tool_calls.len(), 1, "tool call should not be duplicated");
         assert_eq!(tool_calls[0].id, "call_1");
         assert_eq!(tool_calls[0].name, "file");
+        assert_eq!(tool_calls[0].internal_call_id, delta_internal_call_id);
     }
 
     #[test]
