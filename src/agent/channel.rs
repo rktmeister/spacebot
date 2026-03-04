@@ -468,6 +468,11 @@ impl Channel {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
             "telegram" => {
+                let reply_to_is_bot = message
+                    .metadata
+                    .get("reply_to_is_bot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let bot_username = message
                     .metadata
                     .get("telegram_bot_username")
@@ -478,9 +483,10 @@ impl Channel {
                     .get("reply_to_username")
                     .and_then(|v| v.as_str())
                     .map(str::to_lowercase);
-                match reply_username {
-                    Some(reply) => bot_username.is_none_or(|bot| bot == reply),
-                    None => false,
+                match (reply_username, bot_username) {
+                    (Some(reply), Some(bot)) => reply_to_is_bot && bot == reply,
+                    (Some(_reply), None) => reply_to_is_bot,
+                    _ => false,
                 }
             }
             _ => message
@@ -1114,14 +1120,7 @@ impl Channel {
         // This avoids model/provider flakiness for simple "you there?" style checks.
         if message.source == "telegram" {
             let text = raw_text.trim().to_lowercase();
-            let mention = message
-                .metadata
-                .get("telegram_bot_username")
-                .and_then(|v| v.as_str())
-                .map(|u| format!("@{u}"))
-                .unwrap_or_default()
-                .to_lowercase();
-            let has_mention = !mention.is_empty() && text.contains(&mention);
+            let (_, has_mention, _) = self.compute_listen_mode_invocation(&message, &raw_text);
             let looks_like_ping = text.contains("you here")
                 || text.contains("ping")
                 || text.ends_with(" yo")

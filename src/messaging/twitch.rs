@@ -314,9 +314,9 @@ impl Messaging for TwitchAdapter {
                             .source
                             .tags
                             .0
-                            .get("reply-parent-msg-id")
+                            .get("reply-parent-user-login")
                             .and_then(|value| value.as_ref())
-                            .is_some_and(|value| !value.is_empty());
+                            .is_some_and(|login| login.eq_ignore_ascii_case(&bot_username));
                         metadata.insert(
                             "twitch_mentions_or_replies_to_bot".into(),
                             serde_json::Value::Bool(mentions_bot || replies_to_bot),
