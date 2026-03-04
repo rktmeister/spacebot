@@ -469,8 +469,8 @@ impl Tool for ReplyTool {
                 text: converted_content.clone(),
             }
         } else if cards_requested || interactive_requested || poll_requested {
-            let supports_cards = matches!(source, "discord" | "slack");
-            let supports_interactive = matches!(source, "discord" | "slack");
+            let supports_cards = matches!(source, "discord");
+            let supports_interactive = matches!(source, "discord");
             let supports_poll = matches!(source, "discord" | "telegram");
             let mut unsupported = Vec::new();
             if cards_requested && !supports_cards {

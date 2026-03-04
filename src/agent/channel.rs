@@ -174,8 +174,8 @@ pub struct Channel {
     pending_results: Vec<PendingResult>,
     /// Optional send_agent_message tool (only when agent has active links).
     send_agent_message_tool: Option<crate::tools::SendAgentMessageTool>,
-    /// Channel-local reply mode toggle for telegram marketing intel.
-    /// true = listen-only unless explicit invoke, false = respond normally.
+    /// Channel-local reply mode toggle.
+    /// When true, suppress unsolicited replies unless explicitly invoked.
     listen_only_mode: bool,
 }
 
@@ -402,18 +402,20 @@ impl Channel {
         raw_text: &str,
     ) -> (bool, bool, bool) {
         let text = raw_text.trim();
-        let text_lower = text.to_lowercase();
         let invoked_by_command = text.starts_with('/');
         let invoked_by_mention = match message.source.as_str() {
-            "telegram" => message
-                .metadata
-                .get("telegram_bot_username")
-                .and_then(|v| v.as_str())
-                .map(|username| {
-                    let mention = format!("@{username}").to_lowercase();
-                    text_lower.contains(&mention)
-                })
-                .unwrap_or(false),
+            "telegram" => {
+                let text_lower = text.to_lowercase();
+                message
+                    .metadata
+                    .get("telegram_bot_username")
+                    .and_then(|v| v.as_str())
+                    .map(|username| {
+                        let mention = format!("@{username}").to_lowercase();
+                        text_lower.contains(&mention)
+                    })
+                    .unwrap_or(false)
+            }
             "discord" => message
                 .metadata
                 .get("discord_mentioned_bot")

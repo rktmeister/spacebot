@@ -296,10 +296,9 @@ impl Messaging for TwitchAdapter {
                             "sender_display_name".into(),
                             serde_json::Value::String(privmsg.sender.name.clone()),
                         );
-                        let mentions_bot = privmsg
-                            .message_text
-                            .to_lowercase()
-                            .contains(&format!("@{bot_username}"));
+                        let message_lower = privmsg.message_text.to_lowercase();
+                        let bot_login = bot_username.to_lowercase();
+                        let mentions_bot = message_lower.contains(&format!("@{bot_login}"));
                         metadata.insert(
                             "twitch_mentions_or_replies_to_bot".into(),
                             serde_json::Value::Bool(mentions_bot),
