@@ -379,7 +379,7 @@ pub async fn spawn_opencode_worker_from_state(
     check_worker_limit(state).await?;
     ensure_dispatch_readiness(state, "opencode_worker");
     let task = task.into();
-    let directory = std::path::PathBuf::from(directory);
+    let directory = expand_tilde(directory);
 
     let rc = &state.deps.runtime_config;
     let prompt_engine = rc.prompts.load();
@@ -568,4 +568,22 @@ where
             success,
         });
     })
+}
+
+/// Expand a leading `~` or `~/` in a path to the user's home directory.
+///
+/// LLMs consistently produce tilde-prefixed paths because that's what appears
+/// in conversation context. `std::path::Path::canonicalize()` doesn't expand
+/// tildes (that's a shell feature), so paths like `~/Projects/foo` fail with
+/// "directory does not exist". This handles the common cases.
+fn expand_tilde(path: &str) -> std::path::PathBuf {
+    if path == "~" {
+        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/"))
+            .join(rest)
+    } else {
+        std::path::PathBuf::from(path)
+    }
 }
