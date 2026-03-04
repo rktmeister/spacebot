@@ -316,7 +316,7 @@ impl Channel {
     fn set_listen_only_mode(&mut self, enabled: bool) {
         self.listen_only_mode = enabled;
         self.deps.runtime_config.channel_config.rcu(|current| {
-            let mut next = (**current).clone();
+            let mut next = **current;
             next.listen_only_mode = enabled;
             Arc::new(next)
         });
@@ -517,7 +517,7 @@ impl Channel {
                 return Ok(true);
             }
             "/help" => {
-                let lines = vec![
+                let lines = [
                     "commands:".to_string(),
                     "- /status: current mode, models, binding snapshot".to_string(),
                     "- /today: in-progress + ready task snapshot".to_string(),

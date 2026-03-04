@@ -936,18 +936,10 @@ impl Default for BrowserConfig {
 }
 
 /// Channel behavior configuration.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ChannelConfig {
     /// When true, unsolicited chat messages are ignored unless command/mention/reply.
     pub listen_only_mode: bool,
-}
-
-impl Default for ChannelConfig {
-    fn default() -> Self {
-        Self {
-            listen_only_mode: false,
-        }
-    }
 }
 
 /// OpenCode subprocess worker configuration.
@@ -3124,21 +3116,19 @@ fn resolve_listen_only_mode(
     configured.or(persisted).unwrap_or(default)
 }
 
-#[allow(unused_variables)]
 fn resolve_channel_runtime_merge(
     resolved_channel: ChannelConfig,
     configured_listen_only: Option<bool>,
     persisted: ChannelConfig,
     default: ChannelConfig,
 ) -> ChannelConfig {
-    ChannelConfig {
-        listen_only_mode: resolve_listen_only_mode(
-            configured_listen_only,
-            Some(persisted.listen_only_mode),
-            default.listen_only_mode,
-        ),
-        ..resolved_channel
-    }
+    let mut merged = resolved_channel;
+    merged.listen_only_mode = resolve_listen_only_mode(
+        configured_listen_only,
+        Some(persisted.listen_only_mode),
+        default.listen_only_mode,
+    );
+    merged
 }
 
 fn default_enabled() -> bool {
