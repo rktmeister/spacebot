@@ -119,7 +119,7 @@ pub(super) async fn opencode_proxy(request: Request) -> Response {
     // Stream the response body (supports SSE)
     let body_stream = upstream_response
         .bytes_stream()
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error));
+        .map_err(std::io::Error::other);
 
     match response_builder.body(Body::from_stream(body_stream)) {
         Ok(response) => response,
