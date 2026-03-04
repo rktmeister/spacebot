@@ -364,6 +364,8 @@ pub(super) struct TomlBrowserConfig {
     pub(super) evaluate_enabled: Option<bool>,
     pub(super) executable_path: Option<String>,
     pub(super) screenshot_dir: Option<String>,
+    pub(super) persist_session: Option<bool>,
+    pub(super) close_policy: Option<String>,
 }
 
 #[derive(Deserialize)]
