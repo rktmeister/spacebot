@@ -4,6 +4,7 @@ import {
 	type BranchCompletedEvent,
 	type BranchStartedEvent,
 	type InboundMessageEvent,
+	type OutboundMessageDeltaEvent,
 	type OutboundMessageEvent,
 	type TimelineItem,
 	type ToolCompletedEvent,
@@ -38,6 +39,7 @@ export interface ChannelLiveState {
 	timeline: TimelineItem[];
 	workers: Record<string, ActiveWorker>;
 	branches: Record<string, ActiveBranch>;
+	streamingMessageId: string | null;
 	historyLoaded: boolean;
 	hasMore: boolean;
 	loadingMore: boolean;
@@ -46,7 +48,16 @@ export interface ChannelLiveState {
 const PAGE_SIZE = 50;
 
 function emptyLiveState(): ChannelLiveState {
-	return { isTyping: false, timeline: [], workers: {}, branches: {}, historyLoaded: false, hasMore: true, loadingMore: false };
+	return {
+		isTyping: false,
+		timeline: [],
+		workers: {},
+		branches: {},
+		streamingMessageId: null,
+		historyLoaded: false,
+		hasMore: true,
+		loadingMore: false,
+	};
 }
 
 /** Get a sortable timestamp from any timeline item. */
@@ -202,20 +213,80 @@ export function useChannelLiveState(channels: ChannelInfo[]) {
 
 	const handleOutboundMessage = useCallback((data: unknown) => {
 		const event = data as OutboundMessageEvent;
-		pushItem(event.channel_id, {
-			type: "message",
-			id: `out-${Date.now()}-${crypto.randomUUID()}`,
-			role: "assistant",
-			sender_name: event.agent_id,
-			sender_id: null,
-			content: event.text,
-			created_at: new Date().toISOString(),
-		});
 		setLiveStates((prev) => {
 			const existing = getOrCreate(prev, event.channel_id);
-			return { ...prev, [event.channel_id]: { ...existing, isTyping: false } };
+			const streamingMessageId = existing.streamingMessageId;
+			if (streamingMessageId) {
+				const timeline = existing.timeline.map((item) => {
+					if (item.type !== "message" || item.id !== streamingMessageId) return item;
+					return { ...item, content: event.text };
+				});
+				return {
+					...prev,
+					[event.channel_id]: {
+						...existing,
+						timeline,
+						streamingMessageId: null,
+						isTyping: false,
+					},
+				};
+			}
+
+			return {
+				...prev,
+				[event.channel_id]: {
+					...existing,
+					timeline: [...existing.timeline, {
+						type: "message",
+						id: `out-${Date.now()}-${crypto.randomUUID()}`,
+						role: "assistant",
+						sender_name: event.agent_id,
+						sender_id: null,
+						content: event.text,
+						created_at: new Date().toISOString(),
+					}],
+					isTyping: false,
+				},
+			};
 		});
-	}, [pushItem]);
+	}, []);
+
+	const handleOutboundMessageDelta = useCallback((data: unknown) => {
+		const event = data as OutboundMessageDeltaEvent;
+		setLiveStates((prev) => {
+			const existing = getOrCreate(prev, event.channel_id);
+			const streamMessageId = existing.streamingMessageId;
+
+			if (streamMessageId) {
+				const timeline = existing.timeline.map((item) => {
+					if (item.type !== "message" || item.id !== streamMessageId) return item;
+					return { ...item, content: event.aggregated_text };
+				});
+				return {
+					...prev,
+					[event.channel_id]: { ...existing, timeline },
+				};
+			}
+
+			const messageId = `stream-${Date.now()}-${crypto.randomUUID()}`;
+			return {
+				...prev,
+				[event.channel_id]: {
+					...existing,
+					timeline: [...existing.timeline, {
+						type: "message",
+						id: messageId,
+						role: "assistant",
+						sender_name: event.agent_id,
+						sender_id: null,
+						content: event.aggregated_text,
+						created_at: new Date().toISOString(),
+					}],
+					streamingMessageId: messageId,
+				},
+			};
+		});
+	}, []);
 
 	const handleTypingState = useCallback((data: unknown) => {
 		const event = data as TypingStateEvent;
@@ -613,6 +684,7 @@ export function useChannelLiveState(channels: ChannelInfo[]) {
 	const handlers = {
 		inbound_message: handleInboundMessage,
 		outbound_message: handleOutboundMessage,
+		outbound_message_delta: handleOutboundMessageDelta,
 		typing_state: handleTypingState,
 		worker_started: handleWorkerStarted,
 		worker_status: handleWorkerStatus,
