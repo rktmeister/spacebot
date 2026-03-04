@@ -125,6 +125,17 @@ fn is_v4_mapped_blocked(ip: Ipv6Addr) -> bool {
     }
 }
 
+/// Opaque handle to shared browser state that persists across worker lifetimes.
+///
+/// Held by `RuntimeConfig` when `persist_session = true`. All workers for the
+/// same agent clone this handle and share a single browser process / tab set.
+pub type SharedBrowserHandle = Arc<Mutex<BrowserState>>;
+
+/// Create a new shared browser handle for use in `RuntimeConfig`.
+pub fn new_shared_browser_handle() -> SharedBrowserHandle {
+    Arc::new(Mutex::new(BrowserState::new()))
+}
+
 /// Tool for browser automation (worker-only).
 #[derive(Debug, Clone)]
 pub struct BrowserTool {
@@ -133,8 +144,12 @@ pub struct BrowserTool {
     screenshot_dir: PathBuf,
 }
 
-/// Internal browser state managed across tool invocations within a single worker.
-struct BrowserState {
+/// Internal browser state managed across tool invocations.
+///
+/// When `persist_session` is enabled this struct lives in `RuntimeConfig` (via
+/// `SharedBrowserHandle`) and is shared across worker lifetimes. Otherwise each
+/// `BrowserTool` owns its own instance.
+pub struct BrowserState {
     browser: Option<Browser>,
     /// Background task driving the CDP WebSocket handler.
     _handler_task: Option<JoinHandle<()>>,
@@ -149,6 +164,20 @@ struct BrowserState {
     /// Per-launch temp directory for Chrome's user data. Cleaned up on drop to
     /// prevent stale singleton locks from blocking subsequent launches.
     user_data_dir: Option<PathBuf>,
+}
+
+impl BrowserState {
+    fn new() -> Self {
+        Self {
+            browser: None,
+            _handler_task: None,
+            pages: HashMap::new(),
+            active_target: None,
+            element_refs: HashMap::new(),
+            next_ref: 0,
+            user_data_dir: None,
+        }
+    }
 }
 
 impl Drop for BrowserState {
@@ -200,17 +229,27 @@ struct ElementRef {
 }
 
 impl BrowserTool {
+    /// Create a tool with its own isolated browser state (default, non-persistent).
     pub fn new(config: BrowserConfig, screenshot_dir: PathBuf) -> Self {
         Self {
-            state: Arc::new(Mutex::new(BrowserState {
-                browser: None,
-                _handler_task: None,
-                pages: HashMap::new(),
-                active_target: None,
-                element_refs: HashMap::new(),
-                next_ref: 0,
-                user_data_dir: None,
-            })),
+            state: Arc::new(Mutex::new(BrowserState::new())),
+            config,
+            screenshot_dir,
+        }
+    }
+
+    /// Create a tool backed by a shared browser state handle.
+    ///
+    /// Used when `persist_session = true`. Multiple workers share the same
+    /// `SharedBrowserHandle`, so the browser process and tabs survive across
+    /// worker lifetimes.
+    pub fn new_shared(
+        shared_state: SharedBrowserHandle,
+        config: BrowserConfig,
+        screenshot_dir: PathBuf,
+    ) -> Self {
+        Self {
+            state: shared_state,
             config,
             screenshot_dir,
         }
@@ -496,11 +535,14 @@ impl Tool for BrowserTool {
 
 impl BrowserTool {
     async fn handle_launch(&self) -> Result<BrowserOutput, BrowserError> {
-        // Quick check under the lock — don't hold it across the potentially
-        // long resolve + launch sequence.
+        // Quick check under the lock — if a browser is already running and
+        // we're in persistent mode, reconnect to existing tabs.
         {
-            let state = self.state.lock().await;
+            let mut state = self.state.lock().await;
             if state.browser.is_some() {
+                if self.config.persist_session {
+                    return self.reconnect_existing_tabs(&mut state).await;
+                }
                 return Ok(BrowserOutput::success("Browser already running"));
             }
         }
@@ -551,7 +593,12 @@ impl BrowserTool {
             // Another call launched while we were downloading/starting. Clean up
             // the browser we just created and return success.
             drop(browser);
+            handler_task.abort();
             let _ = std::fs::remove_dir_all(&user_data_dir);
+
+            if self.config.persist_session {
+                return self.reconnect_existing_tabs(&mut state).await;
+            }
             return Ok(BrowserOutput::success("Browser already running"));
         }
 
@@ -561,6 +608,71 @@ impl BrowserTool {
 
         tracing::info!("browser launched");
         Ok(BrowserOutput::success("Browser launched successfully"))
+    }
+
+    /// Discover existing tabs from the browser and populate the page map.
+    ///
+    /// Called when a worker connects to an already-running persistent browser.
+    /// Returns tab info so the LLM knows what's already open.
+    async fn reconnect_existing_tabs(
+        &self,
+        state: &mut BrowserState,
+    ) -> Result<BrowserOutput, BrowserError> {
+        let browser = state
+            .browser
+            .as_ref()
+            .ok_or_else(|| BrowserError::new("browser not launched"))?;
+
+        let pages = browser.pages().await.map_err(|error| {
+            BrowserError::new(format!("failed to enumerate existing tabs: {error}"))
+        })?;
+
+        let mut discovered = 0usize;
+        for page in pages {
+            let target_id = page_target_id(&page);
+            if !state.pages.contains_key(&target_id) {
+                state.pages.insert(target_id.clone(), page);
+                discovered += 1;
+            }
+        }
+
+        // If there's no active target but we have pages, pick the first one.
+        if state.active_target.is_none()
+            && let Some(id) = state.pages.keys().next().cloned()
+        {
+            state.active_target = Some(id);
+        }
+
+        let tab_count = state.pages.len();
+        let mut tabs = Vec::with_capacity(tab_count);
+        for (id, page) in &state.pages {
+            let title = page.get_title().await.ok().flatten();
+            let url = page.url().await.ok().flatten();
+            let is_active = state.active_target.as_deref() == Some(id);
+            tabs.push(TabInfo {
+                target_id: id.clone(),
+                url,
+                title,
+                active: is_active,
+            });
+        }
+
+        tracing::info!(tab_count, discovered, "reconnected to persistent browser");
+
+        Ok(BrowserOutput {
+            success: true,
+            message: format!(
+                "Connected to persistent browser ({tab_count} tab{} open, {discovered} newly discovered)",
+                if tab_count == 1 { "" } else { "s" }
+            ),
+            url: None,
+            title: None,
+            elements: None,
+            tabs: Some(tabs),
+            screenshot_path: None,
+            eval_result: None,
+            content: None,
+        })
     }
 
     async fn handle_navigate(&self, url: Option<String>) -> Result<BrowserOutput, BrowserError> {
@@ -1011,33 +1123,71 @@ impl BrowserTool {
     }
 
     async fn handle_close(&self) -> Result<BrowserOutput, BrowserError> {
+        use crate::config::ClosePolicy;
+
         let mut state = self.state.lock().await;
 
-        if let Some(mut browser) = state.browser.take()
-            && let Err(error) = browser.close().await
-        {
-            tracing::warn!(%error, "browser close returned error");
+        match self.config.close_policy {
+            ClosePolicy::Detach => {
+                // Just clear per-worker state (element refs, active target)
+                // but leave the browser, tabs, and handler alive.
+                state.element_refs.clear();
+                state.next_ref = 0;
+                state.active_target = None;
+                tracing::info!(policy = "detach", "worker detached from browser");
+                Ok(BrowserOutput::success(
+                    "Detached from browser (tabs and session preserved)",
+                ))
+            }
+            ClosePolicy::CloseTabs => {
+                // Close all tracked tabs but keep the browser process alive.
+                for (id, page) in state.pages.drain() {
+                    if let Err(error) = page.close().await {
+                        tracing::debug!(target_id = %id, %error, "failed to close tab");
+                    }
+                }
+                state.active_target = None;
+                state.element_refs.clear();
+                state.next_ref = 0;
+                tracing::info!(
+                    policy = "close_tabs",
+                    "closed all tabs, browser still running"
+                );
+                Ok(BrowserOutput::success(
+                    "All tabs closed (browser still running)",
+                ))
+            }
+            ClosePolicy::CloseBrowser => {
+                // Full teardown — kill the browser process and clean up everything.
+                if let Some(mut browser) = state.browser.take()
+                    && let Err(error) = browser.close().await
+                {
+                    tracing::warn!(%error, "browser close returned error");
+                }
+
+                state.pages.clear();
+                state.active_target = None;
+                state.element_refs.clear();
+                state.next_ref = 0;
+                if let Some(task) = state._handler_task.take() {
+                    task.abort();
+                }
+
+                // Clean up the per-launch user data dir to free disk space.
+                if let Some(dir) = state.user_data_dir.take()
+                    && let Err(error) = tokio::fs::remove_dir_all(&dir).await
+                {
+                    tracing::debug!(
+                        path = %dir.display(),
+                        %error,
+                        "failed to clean up browser user data dir"
+                    );
+                }
+
+                tracing::info!(policy = "close_browser", "browser closed");
+                Ok(BrowserOutput::success("Browser closed"))
+            }
         }
-
-        state.pages.clear();
-        state.active_target = None;
-        state.element_refs.clear();
-        state.next_ref = 0;
-        state._handler_task = None;
-
-        // Clean up the per-launch user data dir to free disk space.
-        if let Some(dir) = state.user_data_dir.take()
-            && let Err(error) = tokio::fs::remove_dir_all(&dir).await
-        {
-            tracing::debug!(
-                path = %dir.display(),
-                %error,
-                "failed to clean up browser user data dir"
-            );
-        }
-
-        tracing::info!("browser closed");
-        Ok(BrowserOutput::success("Browser closed"))
     }
 
     /// Get the active page, or create a first one if the browser has no pages yet.

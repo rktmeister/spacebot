@@ -564,6 +564,8 @@ export interface BrowserSection {
 	enabled: boolean;
 	headless: boolean;
 	evaluate_enabled: boolean;
+	persist_session: boolean;
+	close_policy: "close_browser" | "close_tabs" | "detach";
 }
 
 export interface SandboxSection {
@@ -646,6 +648,8 @@ export interface BrowserUpdate {
 	enabled?: boolean;
 	headless?: boolean;
 	evaluate_enabled?: boolean;
+	persist_session?: boolean;
+	close_policy?: "close_browser" | "close_tabs" | "detach";
 }
 
 export interface SandboxUpdate {

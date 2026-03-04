@@ -9,6 +9,7 @@ use super::{
     WarmupConfig, WarmupStatus, WorkReadiness, evaluate_work_readiness,
 };
 use crate::llm::routing::RoutingConfig;
+use crate::tools::browser::SharedBrowserHandle;
 
 /// Live configuration that can be hot-reloaded without restarting.
 ///
@@ -64,6 +65,12 @@ pub struct RuntimeConfig {
     /// Wrapped in `Arc` so it can be shared with the `Sandbox` struct, which
     /// reads the current mode dynamically on every `wrap()` call.
     pub sandbox: Arc<ArcSwap<crate::sandbox::SandboxConfig>>,
+    /// Shared browser state for persistent sessions.
+    ///
+    /// When `browser.persist_session = true`, all workers share this handle so
+    /// the browser process and tabs survive across worker lifetimes. When
+    /// `persist_session = false` this is `None` and each worker creates its own.
+    pub shared_browser: Option<SharedBrowserHandle>,
 }
 
 impl RuntimeConfig {
@@ -117,6 +124,11 @@ impl RuntimeConfig {
             settings: ArcSwap::from_pointee(None),
             secrets: ArcSwap::from_pointee(None),
             sandbox: Arc::new(ArcSwap::from_pointee(agent_config.sandbox.clone())),
+            shared_browser: if agent_config.browser.persist_session {
+                Some(crate::tools::browser::new_shared_browser_handle())
+            } else {
+                None
+            },
         }
     }
 
@@ -188,6 +200,16 @@ impl RuntimeConfig {
             .store(Arc::new(resolved.max_concurrent_branches));
         self.max_concurrent_workers
             .store(Arc::new(resolved.max_concurrent_workers));
+        let old_persist = self.browser_config.load().persist_session;
+        let new_persist = resolved.browser.persist_session;
+        if old_persist != new_persist {
+            tracing::warn!(
+                agent_id,
+                old = old_persist,
+                new = new_persist,
+                "persist_session changed — restart the agent for this to take effect"
+            );
+        }
         self.browser_config.store(Arc::new(resolved.browser));
         self.mcp.store(Arc::new(new_mcp.clone()));
         self.history_backfill_count

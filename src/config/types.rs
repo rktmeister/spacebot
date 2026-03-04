@@ -698,6 +698,35 @@ impl Default for IngestionConfig {
     }
 }
 
+/// What happens when a worker finishes or explicitly calls "close" on the browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosePolicy {
+    /// Kill the browser process and reset all state (current default behavior).
+    #[default]
+    CloseBrowser,
+    /// Close all tabs but leave the browser process running.
+    CloseTabs,
+    /// Disconnect from the browser without touching tabs or the process.
+    Detach,
+}
+
+impl ClosePolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CloseBrowser => "close_browser",
+            Self::CloseTabs => "close_tabs",
+            Self::Detach => "detach",
+        }
+    }
+}
+
+impl std::fmt::Display for ClosePolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Browser automation configuration for workers.
 #[derive(Debug, Clone)]
 pub struct BrowserConfig {
@@ -711,6 +740,12 @@ pub struct BrowserConfig {
     pub executable_path: Option<String>,
     /// Directory for storing screenshots and other browser artifacts.
     pub screenshot_dir: Option<PathBuf>,
+    /// Keep the browser alive across worker lifetimes. When true, all workers
+    /// for this agent share a single browser connection and tabs survive between
+    /// worker runs. Cookies, localStorage, and login sessions persist.
+    pub persist_session: bool,
+    /// Controls what happens when a worker calls "close" or finishes.
+    pub close_policy: ClosePolicy,
     /// Directory for caching a fetcher-downloaded Chromium binary.
     /// Populated from `{instance_dir}/chrome_cache` during config resolution.
     pub chrome_cache_dir: PathBuf,
@@ -724,6 +759,8 @@ impl Default for BrowserConfig {
             evaluate_enabled: false,
             executable_path: None,
             screenshot_dir: None,
+            persist_session: false,
+            close_policy: ClosePolicy::default(),
             chrome_cache_dir: PathBuf::from("chrome_cache"),
         }
     }

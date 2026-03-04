@@ -57,7 +57,7 @@ pub mod worker_inspect;
 pub use branch_tool::{BranchArgs, BranchError, BranchOutput, BranchTool};
 pub use browser::{
     ActKind, BrowserAction, BrowserArgs, BrowserError, BrowserOutput, BrowserTool, ElementSummary,
-    TabInfo,
+    SharedBrowserHandle, TabInfo,
 };
 pub use cancel::{CancelArgs, CancelError, CancelOutput, CancelTool};
 pub use channel_recall::{
@@ -432,7 +432,12 @@ pub fn create_worker_tool_server(
     }
 
     if browser_config.enabled {
-        server = server.tool(BrowserTool::new(browser_config, screenshot_dir));
+        let browser_tool = if let Some(shared) = &runtime_config.shared_browser {
+            BrowserTool::new_shared(shared.clone(), browser_config, screenshot_dir)
+        } else {
+            BrowserTool::new(browser_config, screenshot_dir)
+        };
+        server = server.tool(browser_tool);
     }
 
     if let Some(key) = brave_search_key {
@@ -474,6 +479,7 @@ pub fn create_cortex_chat_tool_server(
     brave_search_key: Option<String>,
     workspace: PathBuf,
     sandbox: Arc<Sandbox>,
+    shared_browser: Option<SharedBrowserHandle>,
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(MemorySaveTool::new(memory_search.clone()))
@@ -493,7 +499,12 @@ pub fn create_cortex_chat_tool_server(
         .tool(ExecTool::new(workspace, sandbox));
 
     if browser_config.enabled {
-        server = server.tool(BrowserTool::new(browser_config, screenshot_dir));
+        let browser_tool = if let Some(shared) = shared_browser {
+            BrowserTool::new_shared(shared, browser_config, screenshot_dir)
+        } else {
+            BrowserTool::new(browser_config, screenshot_dir)
+        };
+        server = server.tool(browser_tool);
     }
 
     if let Some(key) = brave_search_key {

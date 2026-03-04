@@ -73,6 +73,8 @@ pub(super) struct BrowserSection {
     enabled: bool,
     headless: bool,
     evaluate_enabled: bool,
+    persist_session: bool,
+    close_policy: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -199,6 +201,8 @@ pub(super) struct BrowserUpdate {
     enabled: Option<bool>,
     headless: Option<bool>,
     evaluate_enabled: Option<bool>,
+    persist_session: Option<bool>,
+    close_policy: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -286,6 +290,8 @@ pub(super) async fn get_agent_config(
             enabled: browser.enabled,
             headless: browser.headless,
             evaluate_enabled: browser.evaluate_enabled,
+            persist_session: browser.persist_session,
+            close_policy: browser.close_policy.as_str().to_string(),
         },
         sandbox: SandboxSection {
             mode: match sandbox.mode {
@@ -671,6 +677,12 @@ fn update_browser_table(
     }
     if let Some(v) = browser.evaluate_enabled {
         table["evaluate_enabled"] = toml_edit::value(v);
+    }
+    if let Some(v) = browser.persist_session {
+        table["persist_session"] = toml_edit::value(v);
+    }
+    if let Some(ref v) = browser.close_policy {
+        table["close_policy"] = toml_edit::value(v.as_str());
     }
     Ok(())
 }
