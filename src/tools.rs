@@ -63,7 +63,7 @@ pub mod worker_inspect;
 pub use branch_tool::{BranchArgs, BranchError, BranchOutput, BranchTool};
 pub use browser::{
     ActKind, BrowserAction, BrowserArgs, BrowserError, BrowserOutput, BrowserTool, ElementSummary,
-    TabInfo,
+    SharedBrowserHandle, TabInfo,
 };
 pub use cancel::{CancelArgs, CancelError, CancelOutput, CancelTool};
 pub use channel_recall::{
@@ -473,7 +473,16 @@ pub fn create_worker_tool_server(
     }
 
     if browser_config.enabled {
-        server = server.tool(BrowserTool::new(browser_config, screenshot_dir));
+        let browser_tool = if let Some(shared) = runtime_config
+            .shared_browser
+            .as_ref()
+            .filter(|_| browser_config.persist_session)
+        {
+            BrowserTool::new_shared(shared.clone(), browser_config, screenshot_dir)
+        } else {
+            BrowserTool::new(browser_config, screenshot_dir)
+        };
+        server = server.tool(browser_tool);
     }
 
     if let Some(key) = brave_search_key {
@@ -525,7 +534,10 @@ pub fn create_cortex_chat_tool_server(
         .tool(MemoryDeleteTool::new(memory_search))
         .tool(ChannelRecallTool::new(conversation_logger, channel_store))
         .tool(SpacebotDocsTool::new())
-        .tool(ConfigInspectTool::new(agent_id.to_string(), runtime_config))
+        .tool(ConfigInspectTool::new(
+            agent_id.to_string(),
+            runtime_config.clone(),
+        ))
         .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
         .tool(TaskCreateTool::new(
             task_store.clone(),
@@ -539,7 +551,16 @@ pub fn create_cortex_chat_tool_server(
         .tool(ExecTool::new(workspace, sandbox));
 
     if browser_config.enabled {
-        server = server.tool(BrowserTool::new(browser_config, screenshot_dir));
+        let browser_tool = if let Some(shared) = runtime_config
+            .shared_browser
+            .as_ref()
+            .filter(|_| browser_config.persist_session)
+        {
+            BrowserTool::new_shared(shared.clone(), browser_config, screenshot_dir)
+        } else {
+            BrowserTool::new(browser_config, screenshot_dir)
+        };
+        server = server.tool(browser_tool);
     }
 
     if let Some(key) = brave_search_key {
