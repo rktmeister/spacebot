@@ -268,6 +268,8 @@ async fn handle_message_event(
         .and_then(|content| content.text.as_ref())
         .map(|text| text.contains(&bot_mention))
         .unwrap_or(false);
+    let token = SlackApiToken::new(SlackApiTokenValue(adapter_state.bot_token.clone()));
+    let session = client.open_session(&token);
     let replied_to_bot = if let Some(thread_ts) = msg_event.origin.thread_ts.as_ref() {
         // For threaded replies, treat as explicit invoke only when the thread
         // root message belongs to this bot.
@@ -277,13 +279,7 @@ async fn handle_message_event(
                 thread_ts.clone(),
             )
             .with_limit(1);
-            match client
-                .open_session(&SlackApiToken::new(SlackApiTokenValue(
-                    adapter_state.bot_token.clone(),
-                )))
-                .conversations_replies(&req)
-                .await
-            {
+            match session.conversations_replies(&req).await {
                 Ok(response) => response
                     .messages
                     .first()
