@@ -25,21 +25,19 @@ pub use watcher::spawn_file_watcher;
 // (GEMINI_PROVIDER_BASE_URL is only used within config submodules, no re-export needed.)
 
 // Make toml_schema types and internal helpers visible to tests in this module.
-#[allow(unused_imports)]
-use load::resolve_env_value;
-#[allow(unused_imports)]
+#[cfg(test)]
 use load::warn_unknown_config_keys;
-#[allow(unused_imports)]
+#[cfg(test)]
 use providers::ANTHROPIC_PROVIDER_BASE_URL;
-#[allow(unused_imports)]
+#[cfg(test)]
 use providers::OPENAI_PROVIDER_BASE_URL;
-#[allow(unused_imports)]
+#[cfg(test)]
 use providers::OPENROUTER_PROVIDER_BASE_URL;
-#[allow(unused_imports)]
+#[cfg(test)]
 use toml_schema::*;
-#[allow(unused_imports)]
+#[cfg(test)]
 use types::binding_adapter_matches;
-#[allow(unused_imports)]
+#[cfg(test)]
 use types::validate_instance_names;
 
 #[cfg(test)]

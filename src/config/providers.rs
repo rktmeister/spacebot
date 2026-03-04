@@ -1,4 +1,5 @@
-use super::{ApiType, ProviderConfig, TomlRoutingConfig};
+use super::toml_schema::TomlRoutingConfig;
+use super::{ApiType, ProviderConfig};
 use crate::llm::routing::RoutingConfig;
 
 use std::collections::HashMap;
