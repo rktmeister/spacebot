@@ -197,6 +197,13 @@ pub enum ProcessEvent {
         /// "created", "updated", or "deleted".
         action: String,
     },
+    TextDelta {
+        agent_id: AgentId,
+        process_id: ProcessId,
+        channel_id: Option<ChannelId>,
+        text_delta: String,
+        aggregated_text: String,
+    },
 }
 
 /// A message to be injected into a specific channel from outside the normal
