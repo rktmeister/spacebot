@@ -1715,6 +1715,87 @@ fn extract_sse_data_payload(block: &str) -> Option<String> {
     }
 }
 
+fn escape_control_characters_in_json_strings(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for character in input.chars() {
+        if in_string {
+            if escape_next {
+                escaped.push(character);
+                escape_next = false;
+                continue;
+            }
+
+            match character {
+                '\\' => {
+                    escaped.push(character);
+                    escape_next = true;
+                }
+                '"' => {
+                    escaped.push(character);
+                    in_string = false;
+                }
+                '\u{0008}' => escaped.push_str("\\b"),
+                '\t' => escaped.push_str("\\t"),
+                '\n' => escaped.push_str("\\n"),
+                '\u{000c}' => escaped.push_str("\\f"),
+                '\r' => escaped.push_str("\\r"),
+                '\u{0000}'..='\u{001f}' => {
+                    let codepoint = character as u32;
+                    escaped.push_str(&format!("\\u{codepoint:04x}"));
+                }
+                _ => escaped.push(character),
+            }
+            continue;
+        }
+
+        if character == '"' {
+            in_string = true;
+        }
+        escaped.push(character);
+    }
+
+    escaped
+}
+
+fn parse_streamed_tool_arguments(
+    tool_name: &str,
+    raw_arguments: &str,
+) -> Result<serde_json::Value, CompletionError> {
+    if raw_arguments.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+
+    let direct_parse_error = match serde_json::from_str::<serde_json::Value>(raw_arguments) {
+        Ok(arguments) => return Ok(arguments),
+        Err(error) => error,
+    };
+
+    let sanitized_arguments = escape_control_characters_in_json_strings(raw_arguments);
+    if sanitized_arguments != raw_arguments {
+        match serde_json::from_str::<serde_json::Value>(&sanitized_arguments) {
+            Ok(arguments) => {
+                tracing::warn!(
+                    tool_name,
+                    "normalized control characters in streamed tool arguments"
+                );
+                return Ok(arguments);
+            }
+            Err(sanitized_parse_error) => {
+                return Err(CompletionError::ProviderError(format!(
+                    "invalid streamed tool arguments for '{tool_name}': {direct_parse_error}; after sanitization: {sanitized_parse_error}"
+                )));
+            }
+        }
+    }
+
+    Err(CompletionError::ProviderError(format!(
+        "invalid streamed tool arguments for '{tool_name}': {direct_parse_error}"
+    )))
+}
+
 fn flush_openai_streaming_tool_calls(
     pending_tool_calls: &mut BTreeMap<usize, OpenAiStreamingToolCall>,
 ) -> Result<Vec<RawStreamingChoice<RawStreamingResponse>>, CompletionError> {
@@ -1731,16 +1812,7 @@ fn flush_openai_streaming_tool_calls(
             tool_call.id
         };
 
-        let arguments = if tool_call.arguments.trim().is_empty() {
-            serde_json::json!({})
-        } else {
-            serde_json::from_str::<serde_json::Value>(&tool_call.arguments).map_err(|error| {
-                CompletionError::ProviderError(format!(
-                    "invalid streamed tool arguments for '{}': {error}",
-                    tool_call.name
-                ))
-            })?
-        };
+        let arguments = parse_streamed_tool_arguments(&tool_call.name, &tool_call.arguments)?;
 
         flushed.push(RawStreamingChoice::ToolCall(RawStreamingToolCall {
             id,
@@ -3089,6 +3161,35 @@ mod tests {
                 .contains("invalid streamed tool arguments for 'file'"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn flush_openai_streaming_tool_calls_sanitizes_control_chars_in_string_arguments() {
+        let mut pending = BTreeMap::new();
+        pending.insert(
+            0,
+            OpenAiStreamingToolCall {
+                id: "call_1".to_string(),
+                internal_call_id: "internal_1".to_string(),
+                name: "file".to_string(),
+                arguments: "{\"operation\":\"write\",\"content\":\"line1\nline2\"}".to_string(),
+            },
+        );
+
+        let events = flush_openai_streaming_tool_calls(&mut pending)
+            .expect("control-char recovery should parse");
+        let tool_calls: Vec<_> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                RawStreamingChoice::ToolCall(tool_call) => Some(tool_call),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].name, "file");
+        assert_eq!(tool_calls[0].arguments["operation"], "write");
+        assert_eq!(tool_calls[0].arguments["content"], "line1\nline2");
     }
 
     #[test]
