@@ -76,6 +76,7 @@ pub struct SpacebotDocsOutput {
     pub success: bool,
     pub action: String,
     pub message: String,
+    pub error: Option<String>,
     pub docs: Vec<crate::self_awareness::EmbeddedDocSummary>,
     pub document: Option<SpacebotDocContent>,
 }
@@ -148,6 +149,7 @@ impl Tool for SpacebotDocsTool {
                             .map(|query| format!(" (filtered by '{query}')"))
                             .unwrap_or_default()
                     ),
+                    error: None,
                     docs,
                     document: None,
                 })
@@ -158,15 +160,17 @@ impl Tool for SpacebotDocsTool {
                     .as_deref()
                     .or(args.query.as_deref())
                     .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        SpacebotDocsError(
-                            "`doc_id` is required for action=read. Call with action=list first if you need IDs.".to_string(),
-                        )
-                    })?;
+                    .filter(|value| !value.is_empty());
 
-                let document = crate::self_awareness::get_embedded_doc(requested_id)
-                    .ok_or_else(|| unknown_doc_error(requested_id))?;
+                let Some(requested_id) = requested_id else {
+                    let error =
+                        "`doc_id` is required for action=read. Call with action=list first if you need IDs.".to_string();
+                    return Ok(failure_output(&action, error));
+                };
+
+                let Some(document) = crate::self_awareness::get_embedded_doc(requested_id) else {
+                    return Ok(failure_output(&action, unknown_doc_message(requested_id)));
+                };
 
                 let requested_start_line = args.start_line.max(1);
                 let max_lines = args.max_lines.clamp(1, 2000);
@@ -191,6 +195,7 @@ impl Tool for SpacebotDocsTool {
                     success: true,
                     action,
                     message,
+                    error: None,
                     docs: Vec::new(),
                     document: Some(SpacebotDocContent {
                         id: document.summary.id,
@@ -205,19 +210,31 @@ impl Tool for SpacebotDocsTool {
                     }),
                 })
             }
-            other => Err(SpacebotDocsError(format!(
-                "invalid action '{other}'. valid actions: list, read"
-            ))),
+            other => Ok(failure_output(
+                &action,
+                format!("invalid action '{other}'. valid actions: list, read"),
+            )),
         }
     }
 }
 
-fn unknown_doc_error(requested_id: &str) -> SpacebotDocsError {
+fn failure_output(action: &str, error: String) -> SpacebotDocsOutput {
+    SpacebotDocsOutput {
+        success: false,
+        action: action.to_string(),
+        message: error.clone(),
+        error: Some(error),
+        docs: Vec::new(),
+        document: None,
+    }
+}
+
+fn unknown_doc_message(requested_id: &str) -> String {
     let matches = crate::self_awareness::search_embedded_docs(requested_id);
     if matches.is_empty() {
-        return SpacebotDocsError(format!(
+        return format!(
             "document '{requested_id}' not found. Use action=list to see available IDs."
-        ));
+        );
     }
 
     let suggestions = matches
@@ -227,9 +244,9 @@ fn unknown_doc_error(requested_id: &str) -> SpacebotDocsError {
         .collect::<Vec<_>>()
         .join(", ");
 
-    SpacebotDocsError(format!(
+    format!(
         "document '{requested_id}' is ambiguous or not an exact match. Try one of: {suggestions}"
-    ))
+    )
 }
 
 fn slice_lines(content: &str, start_line: usize, max_lines: usize) -> (String, usize, usize, bool) {
@@ -285,5 +302,59 @@ mod tests {
         assert_eq!(end_line, 3);
         assert_eq!(total_lines, 3);
         assert!(!has_more);
+    }
+
+    #[tokio::test]
+    async fn read_without_doc_id_returns_structured_failure() {
+        let output = SpacebotDocsTool::new()
+            .call(SpacebotDocsArgs {
+                action: "read".to_string(),
+                doc_id: None,
+                query: None,
+                start_line: 1,
+                max_lines: 100,
+            })
+            .await
+            .expect("tool call should not error");
+
+        assert!(!output.success);
+        assert!(output.error.is_some());
+        assert!(output.document.is_none());
+    }
+
+    #[tokio::test]
+    async fn invalid_action_returns_structured_failure() {
+        let output = SpacebotDocsTool::new()
+            .call(SpacebotDocsArgs {
+                action: "nope".to_string(),
+                doc_id: None,
+                query: None,
+                start_line: 1,
+                max_lines: 100,
+            })
+            .await
+            .expect("tool call should not error");
+
+        assert!(!output.success);
+        assert!(output.error.is_some());
+        assert!(output.error.unwrap().contains("invalid action"));
+    }
+
+    #[tokio::test]
+    async fn unknown_doc_returns_structured_failure() {
+        let output = SpacebotDocsTool::new()
+            .call(SpacebotDocsArgs {
+                action: "read".to_string(),
+                doc_id: Some("definitely-not-a-real-doc-id".to_string()),
+                query: None,
+                start_line: 1,
+                max_lines: 100,
+            })
+            .await
+            .expect("tool call should not error");
+
+        assert!(!output.success);
+        assert!(output.error.is_some());
+        assert!(output.document.is_none());
     }
 }
