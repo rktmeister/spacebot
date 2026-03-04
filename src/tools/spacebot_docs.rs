@@ -168,18 +168,29 @@ impl Tool for SpacebotDocsTool {
                 let document = crate::self_awareness::get_embedded_doc(requested_id)
                     .ok_or_else(|| unknown_doc_error(requested_id))?;
 
-                let start_line = args.start_line.max(1);
+                let requested_start_line = args.start_line.max(1);
                 let max_lines = args.max_lines.clamp(1, 2000);
                 let (content, end_line, total_lines, has_more) =
-                    slice_lines(&document.content, start_line, max_lines);
+                    slice_lines(&document.content, requested_start_line, max_lines);
+                let start_line = normalize_start_line(requested_start_line, total_lines);
+                let message = if total_lines == 0 {
+                    format!("read '{}' empty document", document.summary.id)
+                } else if requested_start_line > total_lines {
+                    format!(
+                        "read '{}' start_line {} past EOF; normalized to {} of {}",
+                        document.summary.id, requested_start_line, total_lines, total_lines
+                    )
+                } else {
+                    format!(
+                        "read '{}' lines {}-{} of {}",
+                        document.summary.id, start_line, end_line, total_lines
+                    )
+                };
 
                 Ok(SpacebotDocsOutput {
                     success: true,
                     action,
-                    message: format!(
-                        "read '{}' lines {}-{} of {}",
-                        document.summary.id, start_line, end_line, total_lines
-                    ),
+                    message,
                     docs: Vec::new(),
                     document: Some(SpacebotDocContent {
                         id: document.summary.id,
@@ -243,4 +254,36 @@ fn slice_lines(content: &str, start_line: usize, max_lines: usize) -> (String, u
         .join("\n");
 
     (content, end_index, total_lines, has_more)
+}
+
+fn normalize_start_line(requested_start_line: usize, total_lines: usize) -> usize {
+    if total_lines == 0 {
+        0
+    } else {
+        requested_start_line.min(total_lines)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_start_line_caps_to_total_lines() {
+        assert_eq!(normalize_start_line(20, 5), 5);
+    }
+
+    #[test]
+    fn normalize_start_line_for_empty_doc_is_zero() {
+        assert_eq!(normalize_start_line(1, 0), 0);
+    }
+
+    #[test]
+    fn slice_lines_past_eof_returns_empty_at_eof() {
+        let (content, end_line, total_lines, has_more) = slice_lines("a\nb\nc", 10, 100);
+        assert!(content.is_empty());
+        assert_eq!(end_line, 3);
+        assert_eq!(total_lines, 3);
+        assert!(!has_more);
+    }
 }
