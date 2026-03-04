@@ -138,10 +138,9 @@ impl RuntimeConfig {
         settings: Arc<crate::settings::SettingsStore>,
         explicit_listen_only: Option<bool>,
     ) {
-        let persisted_listen_only = settings.channel_listen_only_mode();
-        self.settings.store(Arc::new(Some(settings)));
+        self.settings.store(Arc::new(Some(settings.clone())));
         if explicit_listen_only.is_none() {
-            match persisted_listen_only {
+            match settings.channel_listen_only_mode() {
                 Ok(Some(enabled)) => {
                     self.channel_config.rcu(move |current| {
                         let mut next = **current;

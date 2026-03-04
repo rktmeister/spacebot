@@ -465,9 +465,9 @@ impl Channel {
                     .get("reply_to_username")
                     .and_then(|v| v.as_str())
                     .map(str::to_lowercase);
-                match (bot_username, reply_username) {
-                    (Some(bot), Some(reply)) => bot == reply,
-                    _ => false,
+                match reply_username {
+                    Some(reply) => bot_username.is_none_or(|bot| bot == reply),
+                    None => false,
                 }
             }
             _ => message

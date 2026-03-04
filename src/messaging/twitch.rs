@@ -297,7 +297,7 @@ impl Messaging for TwitchAdapter {
                             serde_json::Value::String(privmsg.sender.name.clone()),
                         );
                         let message_lower = privmsg.message_text.to_lowercase();
-                        let mention = format!("@{}", bot_username.to_lowercase());
+                        let mention = format!("@{bot_username}");
                         let is_login_char = |character: char| {
                             character.is_ascii_lowercase()
                                 || character.is_ascii_digit()

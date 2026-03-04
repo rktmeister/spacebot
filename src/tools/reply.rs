@@ -73,6 +73,7 @@ impl ReplyTool {
 }
 
 fn enforce_agent_style(_agent_id: &str, content: &str) -> String {
+    // TODO: apply per-agent style/voice transforms when rules are defined.
     content.to_string()
 }
 
@@ -471,7 +472,7 @@ impl Tool for ReplyTool {
         } else if cards_requested || interactive_requested || poll_requested {
             let supports_cards = matches!(source, "discord");
             let supports_interactive = matches!(source, "discord");
-            let supports_poll = matches!(source, "discord" | "telegram");
+            let supports_poll = matches!(source, "discord");
             let mut unsupported = Vec::new();
             if cards_requested && !supports_cards {
                 unsupported.push("cards");

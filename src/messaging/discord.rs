@@ -722,15 +722,14 @@ impl EventHandler for Handler {
             "discord_message_id".into(),
             serde_json::Value::Number(component.message.id.get().into()),
         );
+        let discord_mentioned_bot = false;
+        let discord_reply_to_bot = true;
+        metadata.insert("discord_mentioned_bot".into(), discord_mentioned_bot.into());
+        metadata.insert("discord_reply_to_bot".into(), discord_reply_to_bot.into());
         metadata.insert(
             "discord_mentions_or_replies_to_bot".into(),
-            serde_json::Value::Bool(true),
+            (discord_mentioned_bot || discord_reply_to_bot).into(),
         );
-        metadata.insert(
-            "discord_mentioned_bot".into(),
-            serde_json::Value::Bool(false),
-        );
-        metadata.insert("discord_reply_to_bot".into(), serde_json::Value::Bool(true));
         if let Some(guild_id) = component.guild_id {
             metadata.insert(
                 "discord_guild_id".into(),
