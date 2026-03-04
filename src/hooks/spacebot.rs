@@ -250,18 +250,54 @@ impl SpacebotHook {
     }
 
     /// Apply shared safety checks for tool output before any downstream handling.
+    ///
+    /// For channels, a detected secret terminates the agent immediately to prevent
+    /// exfiltration via the `reply` tool. For workers and branches, secrets are
+    /// logged but execution continues — these processes cannot communicate with
+    /// users directly, and their egress paths (worker results, branch conclusions,
+    /// status updates) apply scrubbing before content reaches the channel.
     pub(crate) fn guard_tool_result(&self, tool_name: &str, result: &str) -> HookAction {
         if let Some(leak) = self.scan_for_leaks(result) {
-            tracing::error!(
-                process_id = %self.process_id,
-                tool_name = %tool_name,
-                leak_prefix = %&leak[..leak.len().min(8)],
-                "secret leak detected in tool output, terminating agent"
-            );
-            return HookAction::Terminate {
-                reason: "Tool output contained a secret. Agent terminated to prevent exfiltration."
-                    .into(),
-            };
+            match self.process_type {
+                ProcessType::Worker | ProcessType::Branch => {
+                    // Workers and branches cannot communicate with users directly.
+                    // Their egress paths (worker results, branch conclusions,
+                    // status updates) scrub secrets before content reaches the
+                    // channel. Log and continue rather than killing the process.
+                    //
+                    // Avoid logging any fragment of the matched secret. Only log
+                    // the encoding kind (plaintext/url/base64/hex) and length.
+                    let kind = if leak.starts_with("url-encoded:") {
+                        "url-encoded"
+                    } else if leak.starts_with("base64-encoded:") {
+                        "base64-encoded"
+                    } else if leak.starts_with("hex-encoded:") {
+                        "hex-encoded"
+                    } else {
+                        "plaintext"
+                    };
+                    tracing::warn!(
+                        process_id = %self.process_id,
+                        tool_name = %tool_name,
+                        leak_kind = kind,
+                        leak_len = leak.len(),
+                        "secret detected in tool output (non-channel process, continuing)"
+                    );
+                }
+                ProcessType::Channel | ProcessType::Compactor | ProcessType::Cortex => {
+                    tracing::error!(
+                        process_id = %self.process_id,
+                        tool_name = %tool_name,
+                        leak_prefix = %&leak[..leak.len().min(8)],
+                        "secret leak detected in tool output, terminating agent"
+                    );
+                    return HookAction::Terminate {
+                        reason:
+                            "Tool output contained a secret. Agent terminated to prevent exfiltration."
+                                .into(),
+                    };
+                }
+            }
         }
 
         HookAction::Continue
@@ -488,9 +524,10 @@ where
             return guard_action;
         }
 
-        // Only enforce hard-stop leak blocking on channel egress (`reply`).
-        // Worker and branch tool outputs are internal and should not terminate
-        // long-running jobs.
+        // Belt-and-suspenders check specifically for `reply` tool results on
+        // channels. `guard_tool_result` already terminates channels on any tool
+        // leak, but this catches any edge case where the reply content itself
+        // has a different leak than the raw tool output.
         if self.process_type == ProcessType::Channel
             && tool_name == "reply"
             && let Some(leak) = self.scan_for_leaks(result)
@@ -508,8 +545,17 @@ where
         }
 
         // Cap the result stored in the broadcast event to avoid blowing up
-        // event subscribers with multi-MB tool results.
-        self.emit_tool_completed_event(tool_name, result);
+        // event subscribers with multi-MB tool results. For worker/branch
+        // processes, scrub leak patterns from the event payload so secrets
+        // don't reach the SSE dashboard.
+        if matches!(self.process_type, ProcessType::Worker | ProcessType::Branch) {
+            let scrubbed = crate::secrets::scrub::scrub_leaks(result);
+            let capped =
+                crate::tools::truncate_output(&scrubbed, crate::tools::MAX_TOOL_OUTPUT_BYTES);
+            self.emit_tool_completed_event_from_capped(tool_name, capped);
+        } else {
+            self.emit_tool_completed_event(tool_name, result);
+        }
 
         tracing::debug!(
             process_id = %self.process_id,
