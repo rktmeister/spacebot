@@ -1353,6 +1353,12 @@ impl Config {
                     branch_timeout_secs: c
                         .branch_timeout_secs
                         .unwrap_or(base_defaults.cortex.branch_timeout_secs),
+                    detached_worker_timeout_retry_limit: c
+                        .detached_worker_timeout_retry_limit
+                        .unwrap_or(base_defaults.cortex.detached_worker_timeout_retry_limit),
+                    supervisor_kill_budget_per_tick: c
+                        .supervisor_kill_budget_per_tick
+                        .unwrap_or(base_defaults.cortex.supervisor_kill_budget_per_tick),
                     circuit_breaker_threshold: c
                         .circuit_breaker_threshold
                         .unwrap_or(base_defaults.cortex.circuit_breaker_threshold),
@@ -1571,6 +1577,12 @@ impl Config {
                         branch_timeout_secs: c
                             .branch_timeout_secs
                             .unwrap_or(defaults.cortex.branch_timeout_secs),
+                        detached_worker_timeout_retry_limit: c
+                            .detached_worker_timeout_retry_limit
+                            .unwrap_or(defaults.cortex.detached_worker_timeout_retry_limit),
+                        supervisor_kill_budget_per_tick: c
+                            .supervisor_kill_budget_per_tick
+                            .unwrap_or(defaults.cortex.supervisor_kill_budget_per_tick),
                         circuit_breaker_threshold: c
                             .circuit_breaker_threshold
                             .unwrap_or(defaults.cortex.circuit_breaker_threshold),

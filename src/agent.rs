@@ -12,6 +12,7 @@ pub mod cortex_chat;
 pub mod ingestion;
 #[cfg(test)]
 mod invariant_harness;
+pub mod process_control;
 pub mod status;
 pub mod worker;
 
