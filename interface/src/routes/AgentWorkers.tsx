@@ -17,7 +17,7 @@ import {useLiveContext} from "@/hooks/useLiveContext";
 import {cx} from "@/ui/utils";
 
 /** RFC 4648 base64url encoding (no padding), matching OpenCode's directory encoding. */
-function base64UrlEncode(value: string): string {
+export function base64UrlEncode(value: string): string {
 	const bytes = new TextEncoder().encode(value);
 	const binary = Array.from(bytes, (b) => String.fromCharCode(b)).join("");
 	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
