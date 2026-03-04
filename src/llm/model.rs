@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+const STREAM_REQUEST_TIMEOUT_SECS: u64 = 30 * 60;
+
 /// Raw provider response. Wraps the JSON so Rig can carry it through.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawResponse {
@@ -1022,6 +1024,7 @@ impl SpacebotModel {
         let stream_request_body = with_streaming_enabled(&request_body);
         let response = build_request(&stream_request_body)
             .header("accept-encoding", "identity")
+            .timeout(std::time::Duration::from_secs(STREAM_REQUEST_TIMEOUT_SECS))
             .send()
             .await
             .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
