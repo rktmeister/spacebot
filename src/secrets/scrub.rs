@@ -222,6 +222,26 @@ pub fn scrub_with_store(text: &str, store: &crate::secrets::store::SecretsStore)
     scrub_secrets(text, &pairs)
 }
 
+/// Replace all detected leak patterns in `content` with a redaction marker.
+///
+/// Unlike `scan_for_leaks()` which returns the first match, this function
+/// replaces **all** plaintext matches of known API key patterns with
+/// `[LEAKED_SECRET_REDACTED]`. Used on egress paths (worker results, branch
+/// conclusions, status updates) to sanitize content that may contain secrets
+/// the LLM encountered during tool execution.
+///
+/// Does NOT check encoded forms (base64, hex, URL-encoded) — those are
+/// unlikely to appear in LLM-generated output text.
+pub fn scrub_leaks(content: &str) -> String {
+    let mut result = content.to_string();
+    for pattern in LEAK_PATTERNS.iter() {
+        result = pattern
+            .replace_all(&result, "[LEAKED_SECRET_REDACTED]")
+            .into_owned();
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,5 +303,44 @@ mod tests {
     fn leak_detection_ignores_normal_text() {
         let result = scan_for_leaks("this is normal output with no secrets");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn scrub_leaks_redacts_anthropic_key() {
+        let input = "found key sk-ant-abc123456789012345678 in config";
+        let result = scrub_leaks(input);
+        assert!(
+            !result.contains("sk-ant-abc123456789012345678"),
+            "secret should be redacted in: {result}"
+        );
+        assert!(
+            result.contains("[LEAKED_SECRET_REDACTED]"),
+            "redaction marker missing in: {result}"
+        );
+        assert!(
+            result.contains("found key"),
+            "surrounding text should be preserved in: {result}"
+        );
+    }
+
+    #[test]
+    fn scrub_leaks_redacts_multiple_secrets() {
+        let input =
+            "keys: sk-ant-abc123456789012345678 and ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+        let result = scrub_leaks(input);
+        assert!(
+            !result.contains("sk-ant-"),
+            "first secret should be redacted in: {result}"
+        );
+        assert!(
+            !result.contains("ghp_"),
+            "second secret should be redacted in: {result}"
+        );
+    }
+
+    #[test]
+    fn scrub_leaks_passes_through_clean_text() {
+        let input = "this is normal output with no secrets";
+        assert_eq!(scrub_leaks(input), input);
     }
 }
