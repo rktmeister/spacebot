@@ -10,5 +10,6 @@ pub mod compactor;
 pub mod cortex;
 pub mod cortex_chat;
 pub mod ingestion;
+pub mod process_control;
 pub mod status;
 pub mod worker;
