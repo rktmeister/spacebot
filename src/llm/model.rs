@@ -1060,7 +1060,9 @@ impl SpacebotModel {
                 };
 
                 let chunk_text = String::from_utf8_lossy(&chunk).to_string();
-                raw_text.push_str(&chunk_text);
+                if !saw_data_event {
+                    raw_text.push_str(&chunk_text);
+                }
                 block_buffer.push_str(&chunk_text);
 
                 while let Some(block) = extract_sse_block(&mut block_buffer) {
@@ -1121,8 +1123,16 @@ impl SpacebotModel {
                 }
             }
 
-            for event in flush_openai_streaming_tool_calls(&mut pending_tool_calls) {
-                yield Ok(event);
+            match flush_openai_streaming_tool_calls(&mut pending_tool_calls) {
+                Ok(events) => {
+                    for event in events {
+                        yield Ok(event);
+                    }
+                }
+                Err(error) => {
+                    yield Err(error);
+                    return;
+                }
             }
 
             if saw_data_event {
@@ -1704,7 +1714,7 @@ fn extract_sse_data_payload(block: &str) -> Option<String> {
 
 fn flush_openai_streaming_tool_calls(
     pending_tool_calls: &mut BTreeMap<usize, OpenAiStreamingToolCall>,
-) -> Vec<RawStreamingChoice<RawStreamingResponse>> {
+) -> Result<Vec<RawStreamingChoice<RawStreamingResponse>>, CompletionError> {
     let mut flushed = Vec::new();
 
     for (index, tool_call) in std::mem::take(pending_tool_calls) {
@@ -1718,18 +1728,29 @@ fn flush_openai_streaming_tool_calls(
             tool_call.id
         };
 
+        let arguments = if tool_call.arguments.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str::<serde_json::Value>(&tool_call.arguments).map_err(|error| {
+                CompletionError::ProviderError(format!(
+                    "invalid streamed tool arguments for '{}': {error}",
+                    tool_call.name
+                ))
+            })?
+        };
+
         flushed.push(RawStreamingChoice::ToolCall(RawStreamingToolCall {
             id,
             internal_call_id: tool_call.internal_call_id,
             call_id: None,
             name: tool_call.name,
-            arguments: parse_openai_tool_arguments(&serde_json::Value::String(tool_call.arguments)),
+            arguments,
             signature: None,
             additional_params: None,
         }));
     }
 
-    flushed
+    Ok(flushed)
 }
 
 fn process_openai_chat_stream_event(
@@ -1846,6 +1867,7 @@ fn process_openai_chat_stream_event(
                 .and_then(serde_json::Value::as_array)
             {
                 for (index, tool_call) in message_tool_calls.iter().enumerate() {
+                    pending_tool_calls.remove(&index);
                     if let Some(tool_call) =
                         parse_openai_tool_call(tool_call, format!("tool_call_{index}"))
                     {
@@ -1872,7 +1894,7 @@ fn process_openai_chat_stream_event(
             .and_then(serde_json::Value::as_str)
             && matches!(finish_reason, "tool_calls" | "function_call")
         {
-            events.extend(flush_openai_streaming_tool_calls(pending_tool_calls));
+            events.extend(flush_openai_streaming_tool_calls(pending_tool_calls)?);
         }
     }
 
@@ -1890,20 +1912,16 @@ fn parse_openai_chat_sse_response(
     let mut finish_reason = None;
     let mut saw_data_event = false;
 
-    for line in response_text.lines() {
-        let Some(data) = line.trim_start().strip_prefix("data:") else {
-            continue;
-        };
-
-        let data = data.trim_start();
+    let mut process_payload = |payload: &str| -> Result<(), CompletionError> {
+        let data = payload.trim();
         if data.is_empty() || data == "[DONE]" {
-            continue;
+            return Ok(());
         }
 
         saw_data_event = true;
 
         let Ok(event_body) = serde_json::from_str::<serde_json::Value>(data) else {
-            continue;
+            return Ok(());
         };
 
         if let Some(error_body) = event_body.get("error") {
@@ -1923,7 +1941,7 @@ fn parse_openai_chat_sse_response(
             .get("choices")
             .and_then(serde_json::Value::as_array)
         else {
-            continue;
+            return Ok(());
         };
 
         for choice in choices {
@@ -2028,6 +2046,20 @@ fn parse_openai_chat_sse_response(
                 }
             }
         }
+
+        Ok(())
+    };
+
+    let mut block_buffer = response_text.to_string();
+    while let Some(block) = extract_sse_block(&mut block_buffer) {
+        if let Some(payload) = extract_sse_data_payload(&block) {
+            process_payload(&payload)?;
+        }
+    }
+    if !block_buffer.trim().is_empty()
+        && let Some(payload) = extract_sse_data_payload(&block_buffer)
+    {
+        process_payload(&payload)?;
     }
 
     if !saw_data_event {
@@ -2855,11 +2887,11 @@ mod tests {
     #[test]
     fn parse_openai_chat_sse_response_reconstructs_tool_calls() {
         let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"Found \"},\"finish_reason\":null}]}\n",
-            "data: {\"choices\":[{\"delta\":{\"content\":\"files\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"file\",\"arguments\":\"{\\\"operation\\\":\\\"list\\\"\"}}]},\"finish_reason\":null}]}\n",
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\",\\\"path\\\":\\\".\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n",
-            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":8}}\n",
-            "data: [DONE]\n"
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Found \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"files\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"file\",\"arguments\":\"{\\\"operation\\\":\\\"list\\\"\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\",\\\"path\\\":\\\".\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":8}}\n\n",
+            "data: [DONE]\n\n"
         );
 
         let parsed = parse_openai_chat_sse_response(sse, "OpenRouter").expect("valid SSE");
@@ -2953,6 +2985,96 @@ mod tests {
         assert_eq!(tool_calls[0].name, "file");
         assert_eq!(tool_calls[0].arguments["operation"], "list");
         assert_eq!(tool_calls[0].arguments["path"], ".");
+    }
+
+    #[test]
+    fn process_openai_chat_stream_event_does_not_duplicate_message_tool_calls() {
+        let delta_event = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_1",
+                        "function": {
+                            "name": "file",
+                            "arguments": "{\"operation\":\"list\",\"path\":\".\"}"
+                        }
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+
+        let message_event = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "function": {
+                            "name": "file",
+                            "arguments": "{\"operation\":\"list\",\"path\":\".\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let mut pending = BTreeMap::new();
+        process_openai_chat_stream_event(&delta_event, &mut pending)
+            .expect("delta event should parse");
+        assert_eq!(pending.len(), 1);
+
+        let events = process_openai_chat_stream_event(&message_event, &mut pending)
+            .expect("message event should parse");
+        let tool_calls: Vec<_> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                RawStreamingChoice::ToolCall(tool_call) => Some(tool_call),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(tool_calls.len(), 1, "tool call should not be duplicated");
+        assert_eq!(tool_calls[0].id, "call_1");
+        assert_eq!(tool_calls[0].name, "file");
+    }
+
+    #[test]
+    fn flush_openai_streaming_tool_calls_errors_on_invalid_arguments() {
+        let mut pending = BTreeMap::new();
+        pending.insert(
+            0,
+            OpenAiStreamingToolCall {
+                id: "call_1".to_string(),
+                internal_call_id: "internal_1".to_string(),
+                name: "file".to_string(),
+                arguments: "{\"operation\":\"list\"".to_string(),
+            },
+        );
+
+        let error = flush_openai_streaming_tool_calls(&mut pending)
+            .expect_err("invalid JSON arguments should error");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid streamed tool arguments for 'file'"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_openai_chat_sse_response_merges_multiline_data_blocks() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\n",
+            "data: \"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let parsed = parse_openai_chat_sse_response(sse, "OpenRouter").expect("valid SSE");
+        assert_eq!(parsed["choices"][0]["message"]["content"], "Hello");
+        assert_eq!(parsed["usage"]["prompt_tokens"], 2);
     }
 
     #[test]

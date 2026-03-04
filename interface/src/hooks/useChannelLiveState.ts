@@ -73,6 +73,22 @@ function itemKey(item: TimelineItem): string {
 	return `${item.type}:${item.id}`;
 }
 
+function assistantMessageItem(
+	id: string,
+	agentId: string,
+	content: string,
+): TimelineItem {
+	return {
+		type: "message",
+		id,
+		role: "assistant",
+		sender_name: agentId,
+		sender_id: null,
+		content,
+		created_at: new Date().toISOString(),
+	};
+}
+
 /**
  * Manages all live channel state from SSE events, message history loading,
  * and status snapshot fetching. Returns the state map and SSE event handlers.
@@ -217,10 +233,26 @@ export function useChannelLiveState(channels: ChannelInfo[]) {
 			const existing = getOrCreate(prev, event.channel_id);
 			const streamingMessageId = existing.streamingMessageId;
 			if (streamingMessageId) {
-				const timeline = existing.timeline.map((item) => {
-					if (item.type !== "message" || item.id !== streamingMessageId) return item;
-					return { ...item, content: event.text };
-				});
+				const streamIndex = existing.timeline.findIndex(
+					(item) => item.type === "message" && item.id === streamingMessageId,
+				);
+
+				const timeline = [...existing.timeline];
+				if (streamIndex >= 0) {
+					const streamItem = timeline[streamIndex];
+					if (streamItem.type === "message") {
+						timeline[streamIndex] = { ...streamItem, content: event.text };
+					}
+				} else {
+					timeline.push(
+						assistantMessageItem(
+							`out-${Date.now()}-${crypto.randomUUID()}`,
+							event.agent_id,
+							event.text,
+						),
+					);
+				}
+
 				return {
 					...prev,
 					[event.channel_id]: {
@@ -236,15 +268,14 @@ export function useChannelLiveState(channels: ChannelInfo[]) {
 				...prev,
 				[event.channel_id]: {
 					...existing,
-					timeline: [...existing.timeline, {
-						type: "message",
-						id: `out-${Date.now()}-${crypto.randomUUID()}`,
-						role: "assistant",
-						sender_name: event.agent_id,
-						sender_id: null,
-						content: event.text,
-						created_at: new Date().toISOString(),
-					}],
+					timeline: [
+						...existing.timeline,
+						assistantMessageItem(
+							`out-${Date.now()}-${crypto.randomUUID()}`,
+							event.agent_id,
+							event.text,
+						),
+					],
 					isTyping: false,
 				},
 			};
@@ -258,13 +289,40 @@ export function useChannelLiveState(channels: ChannelInfo[]) {
 			const streamMessageId = existing.streamingMessageId;
 
 			if (streamMessageId) {
-				const timeline = existing.timeline.map((item) => {
-					if (item.type !== "message" || item.id !== streamMessageId) return item;
-					return { ...item, content: event.aggregated_text };
-				});
+				const streamIndex = existing.timeline.findIndex(
+					(item) => item.type === "message" && item.id === streamMessageId,
+				);
+
+				if (streamIndex >= 0) {
+					const timeline = [...existing.timeline];
+					const streamItem = timeline[streamIndex];
+					if (streamItem.type === "message") {
+						timeline[streamIndex] = {
+							...streamItem,
+							content: event.aggregated_text,
+						};
+					}
+					return {
+						...prev,
+						[event.channel_id]: { ...existing, timeline },
+					};
+				}
+
+				const messageId = `stream-${Date.now()}-${crypto.randomUUID()}`;
 				return {
 					...prev,
-					[event.channel_id]: { ...existing, timeline },
+					[event.channel_id]: {
+						...existing,
+						timeline: [
+							...existing.timeline,
+							assistantMessageItem(
+								messageId,
+								event.agent_id,
+								event.aggregated_text,
+							),
+						],
+						streamingMessageId: messageId,
+					},
 				};
 			}
 
@@ -273,15 +331,14 @@ export function useChannelLiveState(channels: ChannelInfo[]) {
 				...prev,
 				[event.channel_id]: {
 					...existing,
-					timeline: [...existing.timeline, {
-						type: "message",
-						id: messageId,
-						role: "assistant",
-						sender_name: event.agent_id,
-						sender_id: null,
-						content: event.aggregated_text,
-						created_at: new Date().toISOString(),
-					}],
+					timeline: [
+						...existing.timeline,
+						assistantMessageItem(
+							messageId,
+							event.agent_id,
+							event.aggregated_text,
+						),
+					],
 					streamingMessageId: messageId,
 				},
 			};
