@@ -2619,4 +2619,49 @@ mod tests {
 
         assert!(should_process_event_for_channel(&event, &channel_id));
     }
+
+    #[test]
+    fn worker_complete_event_matches_own_channel() {
+        let channel_id: ChannelId = Arc::from("channel-a");
+        let event = ProcessEvent::WorkerComplete {
+            agent_id: Arc::from("agent"),
+            worker_id: uuid::Uuid::new_v4(),
+            channel_id: Some(channel_id.clone()),
+            result: "done".to_string(),
+            notify: true,
+            success: true,
+        };
+
+        assert!(should_process_event_for_channel(&event, &channel_id));
+    }
+
+    #[test]
+    fn worker_complete_event_ignored_for_other_channel() {
+        let channel_id: ChannelId = Arc::from("channel-a");
+        let event = ProcessEvent::WorkerComplete {
+            agent_id: Arc::from("agent"),
+            worker_id: uuid::Uuid::new_v4(),
+            channel_id: Some(Arc::from("channel-b")),
+            result: "done".to_string(),
+            notify: true,
+            success: true,
+        };
+
+        assert!(!should_process_event_for_channel(&event, &channel_id));
+    }
+
+    #[test]
+    fn worker_complete_event_ignored_when_no_channel() {
+        let channel_id: ChannelId = Arc::from("channel-a");
+        let event = ProcessEvent::WorkerComplete {
+            agent_id: Arc::from("agent"),
+            worker_id: uuid::Uuid::new_v4(),
+            channel_id: None,
+            result: "done".to_string(),
+            notify: true,
+            success: true,
+        };
+
+        assert!(!should_process_event_for_channel(&event, &channel_id));
+    }
 }
