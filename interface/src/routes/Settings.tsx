@@ -16,12 +16,6 @@ type SectionId = "appearance" | "providers" | "channels" | "api-keys" | "secrets
 
 const SECTIONS = [
 	{
-		id: "appearance" as const,
-		label: "Appearance",
-		group: "general" as const,
-		description: "Theme and display settings",
-	},
-	{
 		id: "providers" as const,
 		label: "Providers",
 		group: "general" as const,
@@ -68,6 +62,12 @@ const SECTIONS = [
 		label: "Updates",
 		group: "system" as const,
 		description: "Release checks and update controls",
+	},
+	{
+		id: "appearance" as const,
+		label: "Appearance",
+		group: "general" as const,
+		description: "Theme and display settings",
 	},
 	{
 		id: "config-file" as const,
@@ -251,7 +251,7 @@ export function Settings() {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const search = useSearch({ from: "/settings" }) as { tab?: string };
-	const [activeSection, setActiveSection] = useState<SectionId>("appearance");
+	const [activeSection, setActiveSection] = useState<SectionId>("providers");
 
 	// Sync activeSection with URL search param
 	useEffect(() => {
