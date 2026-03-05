@@ -41,19 +41,13 @@ struct McpClientHandler {
 
 impl McpClientHandler {
     fn new(tool_list_changed: Arc<AtomicBool>) -> Self {
-        let client_info = rmcp::model::ClientInfo {
-            meta: None,
-            protocol_version: rmcp::model::ProtocolVersion::default(),
-            capabilities: rmcp::model::ClientCapabilities::default(),
-            client_info: rmcp::model::Implementation {
-                name: "spacebot".to_string(),
-                title: None,
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description: Some("Spacebot MCP client".to_string()),
-                icons: None,
-                website_url: None,
-            },
-        };
+        let implementation = rmcp::model::Implementation::new("spacebot", env!("CARGO_PKG_VERSION"))
+            .with_description("Spacebot MCP client");
+
+        let client_info = rmcp::model::ClientInfo::new(
+            rmcp::model::ClientCapabilities::default(),
+            implementation,
+        );
 
         Self {
             tool_list_changed,
@@ -261,12 +255,12 @@ impl McpConnection {
             return Err(anyhow!("mcp server '{}' is not connected", self.name));
         };
 
-        let params = rmcp::model::CallToolRequestParams {
-            meta: None,
-            name: Cow::Owned(tool_name.to_string()),
-            arguments,
-            task: None,
-        };
+        let mut params = rmcp::model::CallToolRequestParams::new(
+            Cow::Owned(tool_name.to_string()),
+        );
+        if let Some(args) = arguments {
+            params = params.with_arguments(args);
+        }
 
         client
             .call_tool(params)
@@ -370,7 +364,14 @@ impl McpConnection {
                     .custom_headers(custom_headers);
 
                 if let Some(auth_value) = auth_header_value {
-                    transport_config = transport_config.auth_header(auth_value);
+                    // rmcp uses reqwest's .bearer_auth() which adds
+                    // "Bearer " automatically, so strip the prefix if
+                    // the user included it in their config.
+                    let token = auth_value
+                        .strip_prefix("Bearer ")
+                        .or_else(|| auth_value.strip_prefix("bearer "))
+                        .unwrap_or(&auth_value);
+                    transport_config = transport_config.auth_header(token);
                 }
 
                 let transport =
