@@ -204,6 +204,13 @@ pub enum ProcessEvent {
         session_id: String,
         port: u16,
     },
+    /// A finalized content part from an OpenCode worker session. Emitted on every
+    /// `message.part.updated` SSE event so the frontend can build a live transcript.
+    OpenCodePartUpdated {
+        agent_id: AgentId,
+        worker_id: WorkerId,
+        part: crate::opencode::types::OpenCodePart,
+    },
     /// An interactive worker's initial task completed. The worker remains alive
     /// for follow-ups, but the channel should retrigger to deliver this result.
     /// Unlike `WorkerComplete`, the worker is NOT removed from the active set.

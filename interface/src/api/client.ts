@@ -117,6 +117,27 @@ export interface ToolCompletedEvent {
 	result: string;
 }
 
+// -- OpenCode live transcript part types --
+
+export type OpenCodeToolState =
+	| { status: "pending" }
+	| { status: "running"; title?: string; input?: string }
+	| { status: "completed"; title?: string; input?: string; output?: string }
+	| { status: "error"; error?: string };
+
+export type OpenCodePart =
+	| { type: "text"; id: string; text: string }
+	| { type: "tool"; id: string; tool: string } & OpenCodeToolState
+	| { type: "step_start"; id: string }
+	| { type: "step_finish"; id: string; reason?: string };
+
+export interface OpenCodePartUpdatedEvent {
+	type: "opencode_part_updated";
+	agent_id: string;
+	worker_id: string;
+	part: OpenCodePart;
+}
+
 export type ApiEvent =
 	| InboundMessageEvent
 	| OutboundMessageEvent
@@ -128,7 +149,8 @@ export type ApiEvent =
 	| BranchStartedEvent
 	| BranchCompletedEvent
 	| ToolStartedEvent
-	| ToolCompletedEvent;
+	| ToolCompletedEvent
+	| OpenCodePartUpdatedEvent;
 
 async function fetchJson<T>(path: string): Promise<T> {
 	const response = await fetch(`${API_BASE}${path}`);

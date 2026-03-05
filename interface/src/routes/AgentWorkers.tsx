@@ -9,6 +9,7 @@ import {
 	type WorkerDetailResponse,
 	type TranscriptStep,
 	type ActionContent,
+	type OpenCodePart,
 } from "@/api/client";
 import {Badge} from "@/ui/Badge";
 import {formatTimeAgo, formatDuration} from "@/lib/format";
@@ -65,7 +66,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 	const navigate = useNavigate();
 	const routeSearch = useSearch({strict: false}) as {worker?: string};
 	const selectedWorkerId = routeSearch.worker ?? null;
-	const {activeWorkers, workerEventVersion, liveTranscripts} = useLiveContext();
+	const {activeWorkers, workerEventVersion, liveTranscripts, liveOpenCodeParts} = useLiveContext();
 
 	// Invalidate worker queries when SSE events fire
 	const prevVersion = useRef(workerEventVersion);
@@ -262,6 +263,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 						detail={mergedDetail}
 						liveWorker={scopedActiveWorkers[selectedWorkerId]}
 						liveTranscript={liveTranscripts[selectedWorkerId]}
+						liveOpenCodeParts={liveOpenCodeParts[selectedWorkerId]}
 					/>
 				) : (
 					<div className="flex flex-1 items-center justify-center">
@@ -355,10 +357,12 @@ function WorkerDetail({
 	detail,
 	liveWorker,
 	liveTranscript,
+	liveOpenCodeParts,
 }: {
 	detail: WorkerDetailResponse;
 	liveWorker?: LiveWorker;
 	liveTranscript?: TranscriptStep[];
+	liveOpenCodeParts?: Map<string, OpenCodePart>;
 }) {
 	const isRunning = detail.status === "running" || !!liveWorker;
 	const duration = durationBetween(detail.started_at, detail.completed_at);
@@ -366,10 +370,17 @@ function WorkerDetail({
 	const currentTool = liveWorker?.currentTool;
 	const toolCalls = liveWorker?.toolCalls ?? detail.tool_calls ?? 0;
 
+	const isOpenCode = detail.worker_type === "opencode";
 	const hasOpenCodeEmbed =
-		detail.worker_type === "opencode" &&
+		isOpenCode &&
 		detail.opencode_port != null &&
 		detail.opencode_session_id != null;
+
+	// Convert the insertion-ordered Map to an array for rendering
+	const openCodeParts: OpenCodePart[] = useMemo(
+		() => (liveOpenCodeParts ? Array.from(liveOpenCodeParts.values()) : []),
+		[liveOpenCodeParts],
+	);
 
 	const [activeTab, setActiveTab] = useState<DetailTab>(
 		hasOpenCodeEmbed ? "opencode" : "transcript",
@@ -519,8 +530,32 @@ function WorkerDetail({
 						</div>
 					)}
 
-					{/* Transcript section */}
-					{transcript && transcript.length > 0 ? (
+					{/* OpenCode live parts (for running OpenCode workers) */}
+					{isOpenCode && isRunning && openCodeParts.length > 0 ? (
+						<div className="px-6 py-4">
+							<h3 className="mb-3 text-tiny font-medium uppercase tracking-wider text-ink-faint">
+								Live Transcript
+							</h3>
+							<div className="flex flex-col gap-3">
+								{openCodeParts.map((part) => (
+									<motion.div
+										key={part.id}
+										initial={{opacity: 0, y: 6}}
+										animate={{opacity: 1, y: 0}}
+										transition={{duration: 0.2, ease: "easeOut"}}
+									>
+										<OpenCodePartView part={part} />
+									</motion.div>
+								))}
+								{isRunning && currentTool && (
+									<div className="flex items-center gap-2 py-2 text-tiny text-accent">
+										<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+										Running {currentTool}...
+									</div>
+								)}
+							</div>
+						</div>
+					) : transcript && transcript.length > 0 ? (
 						<div className="px-6 py-4">
 							<h3 className="mb-3 text-tiny font-medium uppercase tracking-wider text-ink-faint">
 								{isRunning ? "Live Transcript" : "Transcript"}
@@ -741,6 +776,132 @@ function ToolResultView({
 				>
 					{expanded ? "Collapse" : "Show full output"}
 				</button>
+			)}
+		</div>
+	);
+}
+
+// -- OpenCode-native part renderers --
+
+function OpenCodePartView({part}: {part: OpenCodePart}) {
+	switch (part.type) {
+		case "text":
+			return (
+				<div className="text-xs text-ink">
+					<Markdown>{part.text}</Markdown>
+				</div>
+			);
+		case "tool":
+			return <OpenCodeToolPartView part={part} />;
+		case "step_start":
+			return (
+				<div className="flex items-center gap-2 border-t border-app-line/20 pt-3">
+					<div className="h-px flex-1 bg-app-line/30" />
+					<span className="text-tiny text-ink-faint">Step</span>
+					<div className="h-px flex-1 bg-app-line/30" />
+				</div>
+			);
+		case "step_finish":
+			return (
+				<div className="flex items-center gap-2 border-b border-app-line/20 pb-3">
+					<div className="h-px flex-1 bg-app-line/30" />
+					<span className="text-tiny text-ink-faint">
+						{part.reason ? `End: ${part.reason}` : "End step"}
+					</span>
+					<div className="h-px flex-1 bg-app-line/30" />
+				</div>
+			);
+		default:
+			return null;
+	}
+}
+
+function OpenCodeToolPartView({
+	part,
+}: {
+	part: Extract<OpenCodePart, {type: "tool"}>;
+}) {
+	const [expanded, setExpanded] = useState(false);
+	const isRunning = part.status === "running";
+	const isCompleted = part.status === "completed";
+	const isError = part.status === "error";
+
+	const statusIcon = isCompleted
+		? "\u2713"
+		: isError
+			? "\u2717"
+			: isRunning
+				? "\u25B6"
+				: "\u25CB";
+
+	const statusColor = isCompleted
+		? "text-emerald-500"
+		: isError
+			? "text-red-400"
+			: isRunning
+				? "text-accent"
+				: "text-ink-faint";
+
+	const title =
+		(part.status === "running" || part.status === "completed")
+			? (part as any).title
+			: undefined;
+
+	const input =
+		(part.status === "running" || part.status === "completed")
+			? (part as any).input
+			: undefined;
+
+	const output = part.status === "completed" ? (part as any).output : undefined;
+	const error = part.status === "error" ? (part as any).error : undefined;
+
+	return (
+		<div className="rounded-md border border-app-line/50 bg-app-darkBox/30">
+			<button
+				onClick={() => setExpanded(!expanded)}
+				className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs"
+			>
+				<span className={cx(statusColor, isRunning ? "animate-pulse" : "")}>
+					{statusIcon}
+				</span>
+				<span className="font-medium text-ink-dull">{part.tool}</span>
+				{title && (
+					<span className="flex-1 truncate text-ink-faint">{title}</span>
+				)}
+				{!title && !expanded && input && (
+					<span className="flex-1 truncate text-ink-faint">
+						{input.slice(0, 80)}
+					</span>
+				)}
+				{isRunning && (
+					<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+				)}
+			</button>
+			{expanded && (
+				<div className="border-t border-app-line/30">
+					{input && (
+						<div className="border-b border-app-line/20 px-3 py-2">
+							<p className="mb-1 text-tiny font-medium text-ink-faint">Input</p>
+							<pre className="max-h-40 overflow-auto font-mono text-tiny text-ink-dull">
+								{input}
+							</pre>
+						</div>
+					)}
+					{output && (
+						<div className="px-3 py-2">
+							<p className="mb-1 text-tiny font-medium text-ink-faint">Output</p>
+							<pre className="max-h-60 overflow-auto whitespace-pre-wrap font-mono text-tiny text-ink-dull">
+								{output.length > 500 ? output.slice(0, 500) + "..." : output}
+							</pre>
+						</div>
+					)}
+					{error && (
+						<div className="px-3 py-2">
+							<p className="mb-1 text-tiny font-medium text-red-400">Error</p>
+							<pre className="font-mono text-tiny text-red-300">{error}</pre>
+						</div>
+					)}
+				</div>
 			)}
 		</div>
 	);

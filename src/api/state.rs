@@ -227,6 +227,12 @@ pub enum ApiEvent {
         /// "created", "updated", or "deleted".
         action: String,
     },
+    /// A finalized content part from an OpenCode worker session.
+    OpenCodePartUpdated {
+        agent_id: String,
+        worker_id: String,
+        part: crate::opencode::types::OpenCodePart,
+    },
 }
 
 impl ApiState {
@@ -498,6 +504,17 @@ impl ApiState {
                                         channel_id: channel_id.to_string(),
                                         text_delta: text_delta.clone(),
                                         aggregated_text: aggregated_text.clone(),
+                                    })
+                                    .ok();
+                            }
+                            ProcessEvent::OpenCodePartUpdated {
+                                worker_id, part, ..
+                            } => {
+                                api_tx
+                                    .send(ApiEvent::OpenCodePartUpdated {
+                                        agent_id: agent_id.clone(),
+                                        worker_id: worker_id.to_string(),
+                                        part: part.clone(),
                                     })
                                     .ok();
                             }
