@@ -2244,15 +2244,15 @@ impl Channel {
                 success,
                 ..
             } => {
-                let mut workers = self.state.active_workers.write().await;
-                if workers.remove(worker_id).is_none() {
+                // Use worker_handles as the source of truth for active workers.
+                // (active_workers is never populated because Worker is consumed by .run())
+                if self.state.worker_handles.write().await.remove(worker_id).is_none() {
                     return Ok(());
                 }
-                drop(workers);
 
                 run_logger.log_worker_completed(*worker_id, result, *success);
 
-                self.state.worker_handles.write().await.remove(worker_id);
+                self.state.active_workers.write().await.remove(worker_id);
                 self.state.worker_inputs.write().await.remove(worker_id);
 
                 if *notify {
