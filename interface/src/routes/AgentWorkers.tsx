@@ -24,10 +24,10 @@ export function base64UrlEncode(value: string): string {
 	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
-const STATUS_FILTERS = ["all", "running", "done", "failed"] as const;
+const STATUS_FILTERS = ["all", "running", "idle", "done", "failed"] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
-const KNOWN_STATUSES = new Set(["running", "done", "failed"]);
+const KNOWN_STATUSES = new Set(["running", "idle", "done", "failed"]);
 
 function normalizeStatus(status: string): string {
 	if (KNOWN_STATUSES.has(status)) return status;
@@ -40,6 +40,8 @@ function statusBadgeVariant(status: string) {
 	switch (status) {
 		case "running":
 			return "amber" as const;
+		case "idle":
+			return "blue" as const;
 		case "failed":
 			return "red" as const;
 		default:
@@ -126,7 +128,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 			if (!live) return worker;
 			return {
 				...worker,
-				status: "running",
+				status: live.isIdle ? "idle" : "running",
 				live_status: live.status,
 				tool_calls: live.toolCalls,
 			};
@@ -138,7 +140,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 			.map((live) => ({
 				id: live.id,
 				task: live.task,
-				status: "running",
+				status: live.isIdle ? "idle" : "running",
 				worker_type: "builtin",
 				channel_id: live.channelId ?? null,
 				channel_name: null,
@@ -169,7 +171,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 		if (detailData) {
 			// DB data exists — overlay live status if worker is still running
 			if (!live) return detailData;
-			return { ...detailData, status: "running" };
+			return { ...detailData, status: live.isIdle ? "idle" : "running" };
 		}
 
 		// No DB data yet — synthesize from SSE state
@@ -178,7 +180,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 			id: live.id,
 			task: live.task,
 			result: null,
-			status: "running",
+			status: live.isIdle ? "idle" : "running",
 			worker_type: "builtin",
 			channel_id: live.channelId ?? null,
 			channel_name: null,
@@ -284,6 +286,7 @@ interface LiveWorker {
 	startedAt: number;
 	toolCalls: number;
 	currentTool: string | null;
+	isIdle: boolean;
 }
 
 function WorkerCard({
@@ -297,7 +300,9 @@ function WorkerCard({
 	selected: boolean;
 	onClick: () => void;
 }) {
-	const isRunning = worker.status === "running" || !!liveWorker;
+	const isLive = worker.status === "running" || !!liveWorker;
+	const isIdle = liveWorker?.isIdle ?? worker.status === "idle";
+	const displayStatus = isIdle ? "idle" : isLive ? "running" : normalizeStatus(worker.status);
 	const toolCalls = liveWorker?.toolCalls ?? worker.tool_calls;
 
 	return (
@@ -313,14 +318,14 @@ function WorkerCard({
 					{worker.task}
 				</p>
 				<Badge
-					variant={statusBadgeVariant(isRunning ? "running" : worker.status)}
+					variant={statusBadgeVariant(displayStatus)}
 					size="sm"
-					className={!isRunning && worker.status === "done" ? "hover:border-app-line hover:text-ink-dull" : undefined}
+					className={!isLive && worker.status === "done" ? "hover:border-app-line hover:text-ink-dull" : undefined}
 				>
-					{isRunning && (
+					{isLive && !isIdle && (
 						<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
 					)}
-					{isRunning ? "running" : normalizeStatus(worker.status)}
+					{displayStatus}
 				</Badge>
 			</div>
 			<div className="flex items-center gap-2 text-tiny text-ink-faint">
@@ -330,7 +335,7 @@ function WorkerCard({
 				{worker.channel_name && <span>·</span>}
 				<span>{worker.worker_type}</span>
 				<span>·</span>
-				{isRunning ? (
+				{isLive && !isIdle ? (
 					<LiveDuration
 						startMs={
 							liveWorker?.startedAt ??
@@ -364,7 +369,8 @@ function WorkerDetail({
 	liveTranscript?: TranscriptStep[];
 	liveOpenCodeParts?: Map<string, OpenCodePart>;
 }) {
-	const isRunning = detail.status === "running" || !!liveWorker;
+	const isLive = detail.status === "running" || !!liveWorker;
+	const isIdle = liveWorker?.isIdle ?? detail.status === "idle";
 	const duration = durationBetween(detail.started_at, detail.completed_at);
 	const displayStatus = liveWorker?.status;
 	const currentTool = liveWorker?.currentTool;
@@ -393,7 +399,7 @@ function WorkerDetail({
 
 	// Use persisted transcript if available, otherwise fall back to live SSE transcript.
 	// Strip the final action step if it duplicates the result text shown above.
-	const rawTranscript = detail.transcript ?? (isRunning ? liveTranscript : null);
+	const rawTranscript = detail.transcript ?? (isLive ? liveTranscript : null);
 	const transcript = useMemo(() => {
 		if (!rawTranscript || !detail.result) return rawTranscript;
 		const last = rawTranscript[rawTranscript.length - 1];
@@ -409,7 +415,8 @@ function WorkerDetail({
 	}, [rawTranscript, detail.result]);
 	const transcriptRef = useRef<HTMLDivElement>(null);
 
-	// Auto-scroll to latest transcript step for running workers
+	// Auto-scroll to latest transcript step for running workers (not idle)
+	const isRunning = isLive && !isIdle;
 	useEffect(() => {
 		if (isRunning && activeTab === "transcript" && transcriptRef.current) {
 			transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
@@ -423,7 +430,7 @@ function WorkerDetail({
 				<div className="flex items-start justify-between gap-3">
 					<TaskText text={detail.task} />
 					<div className="flex items-center gap-2">
-						{isRunning && detail.channel_id && (
+						{isLive && detail.channel_id && (
 							<CancelWorkerButton
 								channelId={detail.channel_id}
 								workerId={detail.id}
@@ -437,14 +444,14 @@ function WorkerDetail({
 						</Badge>
 						<Badge
 							variant={statusBadgeVariant(
-								isRunning ? "running" : normalizeStatus(detail.status),
+								isIdle ? "idle" : isLive ? "running" : normalizeStatus(detail.status),
 							)}
 							size="sm"
 						>
-							{isRunning && (
+							{isLive && !isIdle && (
 								<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
 							)}
-							{isRunning ? "running" : normalizeStatus(detail.status)}
+							{isIdle ? "idle" : isLive ? "running" : normalizeStatus(detail.status)}
 						</Badge>
 					</div>
 				</div>
@@ -460,10 +467,12 @@ function WorkerDetail({
 								}
 							/>
 						</span>
+					) : isIdle ? (
+						<span className="text-blue-500">Idle — waiting for follow-up</span>
 					) : (
 						duration && <span>{duration}</span>
 					)}
-					{!isRunning && <span>{formatTimeAgo(detail.started_at)}</span>}
+					{!isLive && <span>{formatTimeAgo(detail.started_at)}</span>}
 					{toolCalls > 0 && (
 						<span>{toolCalls} tool calls</span>
 					)}
@@ -530,11 +539,11 @@ function WorkerDetail({
 						</div>
 					)}
 
-					{/* OpenCode live parts (for running OpenCode workers) */}
-					{isOpenCode && isRunning && openCodeParts.length > 0 ? (
+					{/* OpenCode live parts (for running/idle OpenCode workers) */}
+					{isOpenCode && isLive && openCodeParts.length > 0 ? (
 						<div className="px-6 py-4">
 							<h3 className="mb-3 text-tiny font-medium uppercase tracking-wider text-ink-faint">
-								Live Transcript
+								{isIdle ? "Transcript" : "Live Transcript"}
 							</h3>
 							<div className="flex flex-col gap-3">
 								{openCodeParts.map((part) => (
@@ -553,12 +562,17 @@ function WorkerDetail({
 										Running {currentTool}...
 									</div>
 								)}
+								{isIdle && (
+									<div className="flex items-center gap-2 py-2 text-tiny text-blue-500">
+										Waiting for follow-up input...
+									</div>
+								)}
 							</div>
 						</div>
 					) : transcript && transcript.length > 0 ? (
 						<div className="px-6 py-4">
 							<h3 className="mb-3 text-tiny font-medium uppercase tracking-wider text-ink-faint">
-								{isRunning ? "Live Transcript" : "Transcript"}
+								{isLive && !isIdle ? "Live Transcript" : "Transcript"}
 							</h3>
 							<div className="flex flex-col gap-3">
 								{transcript.map((step, index) => (
@@ -577,9 +591,14 @@ function WorkerDetail({
 										Running {currentTool}...
 									</div>
 								)}
+								{isIdle && (
+									<div className="flex items-center gap-2 py-2 text-tiny text-blue-500">
+										Waiting for follow-up input...
+									</div>
+								)}
 							</div>
 						</div>
-					) : isRunning ? (
+					) : isLive && !isIdle ? (
 						<div className="flex flex-col items-center justify-center gap-2 py-12 text-ink-faint">
 							<div className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
 							<p className="text-xs">Waiting for first tool call...</p>

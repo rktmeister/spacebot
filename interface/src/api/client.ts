@@ -72,6 +72,13 @@ export interface WorkerStatusEvent {
 	status: string;
 }
 
+export interface WorkerIdleEvent {
+	type: "worker_idle";
+	agent_id: string;
+	channel_id: string | null;
+	worker_id: string;
+}
+
 export interface WorkerCompletedEvent {
 	type: "worker_completed";
 	agent_id: string;
@@ -145,6 +152,7 @@ export type ApiEvent =
 	| TypingStateEvent
 	| WorkerStartedEvent
 	| WorkerStatusEvent
+	| WorkerIdleEvent
 	| WorkerCompletedEvent
 	| BranchStartedEvent
 	| BranchCompletedEvent

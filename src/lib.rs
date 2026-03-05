@@ -126,6 +126,14 @@ pub enum ProcessEvent {
         channel_id: Option<ChannelId>,
         status: String,
     },
+    /// An interactive worker has entered the idle state (waiting for follow-up
+    /// input). Persisted to the DB so the frontend can show an "idle" badge
+    /// instead of "running". The worker remains in the active set.
+    WorkerIdle {
+        agent_id: AgentId,
+        worker_id: WorkerId,
+        channel_id: Option<ChannelId>,
+    },
     WorkerComplete {
         agent_id: AgentId,
         worker_id: WorkerId,

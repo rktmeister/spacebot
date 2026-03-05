@@ -162,6 +162,11 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 		bumpWorkerVersion();
 	}, [channelHandlers, bumpWorkerVersion]);
 
+	const wrappedWorkerIdle = useCallback((data: unknown) => {
+		channelHandlers.worker_idle(data);
+		bumpWorkerVersion();
+	}, [channelHandlers, bumpWorkerVersion]);
+
 	const wrappedWorkerCompleted = useCallback((data: unknown) => {
 		channelHandlers.worker_completed(data);
 		const event = data as { worker_id: string };
@@ -250,6 +255,7 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 			...channelHandlers,
 			worker_started: wrappedWorkerStarted,
 			worker_status: wrappedWorkerStatus,
+			worker_idle: wrappedWorkerIdle,
 			worker_completed: wrappedWorkerCompleted,
 			tool_started: wrappedToolStarted,
 			tool_completed: wrappedToolCompleted,
@@ -258,7 +264,7 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 			agent_message_received: handleAgentMessage,
 			task_updated: bumpTaskVersion,
 		}),
-		[channelHandlers, wrappedWorkerStarted, wrappedWorkerStatus, wrappedWorkerCompleted, wrappedToolStarted, wrappedToolCompleted, handleOpenCodePartUpdated, handleAgentMessage, bumpTaskVersion],
+		[channelHandlers, wrappedWorkerStarted, wrappedWorkerStatus, wrappedWorkerIdle, wrappedWorkerCompleted, wrappedToolStarted, wrappedToolCompleted, handleOpenCodePartUpdated, handleAgentMessage, bumpTaskVersion],
 	);
 
 	const onReconnect = useCallback(() => {

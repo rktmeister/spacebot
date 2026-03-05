@@ -163,6 +163,12 @@ pub enum ApiEvent {
         worker_id: String,
         status: String,
     },
+    /// A worker entered the idle state (waiting for follow-up input).
+    WorkerIdle {
+        agent_id: String,
+        channel_id: Option<String>,
+        worker_id: String,
+    },
     /// A worker completed.
     WorkerCompleted {
         agent_id: String,
@@ -372,6 +378,19 @@ impl ApiState {
                                         channel_id: channel_id.as_deref().map(|s| s.to_string()),
                                         worker_id: worker_id.to_string(),
                                         status: status.clone(),
+                                    })
+                                    .ok();
+                            }
+                            ProcessEvent::WorkerIdle {
+                                worker_id,
+                                channel_id,
+                                ..
+                            } => {
+                                api_tx
+                                    .send(ApiEvent::WorkerIdle {
+                                        agent_id: agent_id.clone(),
+                                        channel_id: channel_id.as_deref().map(|s| s.to_string()),
+                                        worker_id: worker_id.to_string(),
                                     })
                                     .ok();
                             }

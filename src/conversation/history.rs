@@ -367,14 +367,53 @@ impl ProcessRunLogger {
     }
 
     /// Update a worker's status. Fire-and-forget.
-    /// Worker status text updates are transient — they're available via the
+    /// Most status text updates are transient — they're available via the
     /// in-memory StatusBlock for live workers and don't need to be persisted.
-    /// The `status` column is reserved for the state enum (running/done/failed).
-    pub fn log_worker_status(&self, _worker_id: WorkerId, _status: &str) {
-        // Intentionally a no-op. Status text was previously written to the
-        // `status` column, overwriting the state enum with free-text like
-        // "Searching for weather in Germany" which broke badge rendering
-        // and status filtering.
+    /// The `status` column is reserved for the state enum (running/idle/done/failed).
+    ///
+    /// The one exception: when an idle worker resumes (status contains
+    /// "processing follow-up" or similar active-work indicators), we persist
+    /// `running` to the DB so the frontend doesn't show stale "idle" state.
+    pub fn log_worker_status(&self, worker_id: WorkerId, status: &str) {
+        // Detect when an idle worker resumes active work and persist the
+        // transition. All other status text is transient.
+        if status.starts_with("processing") || status == "running" {
+            self.log_worker_resumed(worker_id);
+        }
+    }
+
+    /// Mark an interactive worker as idle (waiting for follow-up input).
+    /// Persisted so the frontend shows "idle" instead of "running".
+    pub fn log_worker_idle(&self, worker_id: WorkerId) {
+        let pool = self.pool.clone();
+        let id = worker_id.to_string();
+
+        tokio::spawn(async move {
+            if let Err(error) = sqlx::query("UPDATE worker_runs SET status = 'idle' WHERE id = ?")
+                .bind(&id)
+                .execute(&pool)
+                .await
+            {
+                tracing::warn!(%error, worker_id = %id, "failed to persist worker idle state");
+            }
+        });
+    }
+
+    /// Mark an idle worker as running again (follow-up received).
+    pub fn log_worker_resumed(&self, worker_id: WorkerId) {
+        let pool = self.pool.clone();
+        let id = worker_id.to_string();
+
+        tokio::spawn(async move {
+            if let Err(error) =
+                sqlx::query("UPDATE worker_runs SET status = 'running' WHERE id = ?")
+                    .bind(&id)
+                    .execute(&pool)
+                    .await
+            {
+                tracing::warn!(%error, worker_id = %id, "failed to persist worker resumed state");
+            }
+        });
     }
 
     /// Record a worker completing with its result. Fire-and-forget.
@@ -423,10 +462,10 @@ impl ProcessRunLogger {
         });
     }
 
-    /// Mark all orphaned running workers as failed for an agent.
+    /// Mark all orphaned running/idle workers as failed for an agent.
     ///
-    /// Called at startup to reconcile rows that were left in `running` when the
-    /// process exited before a `WorkerComplete` event was persisted.
+    /// Called at startup to reconcile rows that were left in `running` or `idle`
+    /// when the process exited before a `WorkerComplete` event was persisted.
     pub async fn reconcile_running_workers_for_agent(
         &self,
         agent_id: &str,
@@ -440,7 +479,7 @@ impl ProcessRunLogger {
                      WHEN result IS NULL OR result = '' THEN ? \
                      ELSE result \
                  END \
-             WHERE status = 'running' AND (agent_id = ? OR agent_id IS NULL)",
+             WHERE status IN ('running', 'idle') AND (agent_id = ? OR agent_id IS NULL)",
         )
         .bind(failure_message)
         .bind(agent_id)

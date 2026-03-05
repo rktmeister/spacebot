@@ -241,6 +241,7 @@ impl OpenCodeWorker {
             });
 
             self.send_status("waiting for follow-up");
+            self.send_idle();
 
             while let Some(follow_up) = input_rx.recv().await {
                 self.send_status("processing follow-up");
@@ -274,6 +275,7 @@ impl OpenCodeWorker {
                 {
                     Ok(_) => {
                         self.send_status("waiting for follow-up");
+                        self.send_idle();
                     }
                     Err(error) => {
                         tracing::error!(
@@ -682,6 +684,15 @@ impl OpenCodeWorker {
             worker_id: self.id,
             channel_id: self.channel_id.clone(),
             status: status.to_string(),
+        });
+    }
+
+    /// Send an idle event to mark this worker as waiting for follow-up input.
+    fn send_idle(&self) {
+        let _ = self.event_tx.send(ProcessEvent::WorkerIdle {
+            agent_id: self.agent_id.clone(),
+            worker_id: self.id,
+            channel_id: self.channel_id.clone(),
         });
     }
 }
