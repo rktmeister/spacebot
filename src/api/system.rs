@@ -104,16 +104,17 @@ pub(super) async fn events_sse(
                     }
                 }
                 Err(error) => {
-                    if let crate::agent::EventRecvDisposition::Continue { lagged_count } =
-                        crate::agent::classify_event_recv_error(&error)
-                    {
-                        let count = lagged_count.unwrap_or(0);
-                        tracing::debug!(count, "SSE client lagged");
-                        yield Ok(axum::response::sse::Event::default()
-                            .event("lagged")
-                            .data(format!("{{\"skipped\":{count}}}")));
-                    } else {
-                        break;
+                    match crate::classify_broadcast_recv_result::<ApiEvent>(Err(error)) {
+                        crate::BroadcastRecvResult::Lagged(count) => {
+                            tracing::debug!(count, "SSE client lagged");
+                            yield Ok(axum::response::sse::Event::default()
+                                .event("lagged")
+                                .data(format!("{{\"skipped\":{count}}}")));
+                        }
+                        crate::BroadcastRecvResult::Closed => break,
+                        crate::BroadcastRecvResult::Event(_) => unreachable!(
+                            "classifying an Err recv result should never produce Event"
+                        ),
                     }
                 }
             }
