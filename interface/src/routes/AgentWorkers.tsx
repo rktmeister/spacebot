@@ -598,14 +598,14 @@ function WorkerDetail({
 								)}
 							</div>
 						</div>
-					) : isLive && !isIdle ? (
+					) : liveWorker && !isIdle ? (
 						<div className="flex flex-col items-center justify-center gap-2 py-12 text-ink-faint">
 							<div className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
 							<p className="text-xs">Waiting for first tool call...</p>
 						</div>
 					) : (
 						<div className="px-6 py-8 text-center text-xs text-ink-faint">
-							Full transcript not available for this worker
+							No transcript available for this worker
 						</div>
 					)}
 				</div>

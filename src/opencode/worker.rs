@@ -46,6 +46,9 @@ struct EventState {
     /// Guards: don't treat session.idle as completion until we've seen real work.
     has_received_event: bool,
     has_assistant_message: bool,
+    /// Accumulated OpenCode parts from SSE events, used as a fallback transcript
+    /// source when the post-completion `get_messages()` API call fails.
+    accumulated_parts: Vec<OpenCodePart>,
 }
 
 impl EventState {
@@ -56,6 +59,7 @@ impl EventState {
             tool_calls: 0,
             has_received_event: false,
             has_assistant_message: false,
+            accumulated_parts: Vec::new(),
         }
     }
 }
@@ -312,12 +316,20 @@ impl OpenCodeWorker {
                     )
                 }
                 Err(error) => {
+                    // API call failed (server recycled, process exited, etc.).
+                    // Fall back to the OpenCodeParts accumulated from SSE events
+                    // during the session — better than losing the transcript entirely.
+                    let fallback_steps =
+                        crate::conversation::worker_transcript::convert_opencode_parts(
+                            &event_state.accumulated_parts,
+                        );
                     tracing::warn!(
                         worker_id = %self.id,
                         %error,
+                        fallback_steps = fallback_steps.len(),
                         "failed to fetch OpenCode messages for transcript, using SSE fallback"
                     );
-                    (Vec::new(), None)
+                    (fallback_steps, None)
                 }
             };
 
@@ -424,12 +436,14 @@ impl OpenCodeWorker {
                 }
 
                 // Emit OpenCodePartUpdated for the frontend live transcript
+                // and accumulate for fallback transcript persistence.
                 if let Some(opencode_part) = part_to_opencode_part(part) {
                     let _ = self.event_tx.send(ProcessEvent::OpenCodePartUpdated {
                         agent_id: self.agent_id.clone(),
                         worker_id: self.id,
-                        part: opencode_part,
+                        part: opencode_part.clone(),
                     });
+                    state.accumulated_parts.push(opencode_part);
                 }
 
                 // Continue processing for status updates and state tracking

@@ -192,6 +192,111 @@ pub fn convert_opencode_messages(messages: &[serde_json::Value]) -> (Vec<Transcr
     (steps, all_text)
 }
 
+/// Convert SSE-accumulated `OpenCodePart`s into transcript steps.
+///
+/// This is the fallback path used when the post-completion `get_messages()` API
+/// call to the OpenCode server fails (e.g. because the server was recycled).
+/// The parts were collected during SSE streaming and contain the same data,
+/// just in a different structure.
+///
+/// Parts are upserted by ID during SSE streaming (a tool part transitions
+/// through Pending → Running → Completed with the same ID), so we deduplicate
+/// by keeping only the latest version of each part before converting.
+pub fn convert_opencode_parts(
+    parts: &[crate::opencode::types::OpenCodePart],
+) -> Vec<TranscriptStep> {
+    use crate::opencode::types::{OpenCodePart, OpenCodeToolState};
+
+    // Deduplicate: keep insertion order, but replace earlier versions with later ones.
+    let mut seen = std::collections::HashMap::<String, usize>::new();
+    let mut deduped: Vec<&OpenCodePart> = Vec::new();
+    for part in parts {
+        let id = part.id().to_string();
+        if let Some(&index) = seen.get(&id) {
+            deduped[index] = part;
+        } else {
+            seen.insert(id, deduped.len());
+            deduped.push(part);
+        }
+    }
+
+    let mut steps = Vec::new();
+    for part in deduped {
+        match part {
+            OpenCodePart::Text { text, .. } => {
+                if !text.is_empty() {
+                    steps.push(TranscriptStep::Action {
+                        content: vec![ActionContent::Text { text: text.clone() }],
+                    });
+                }
+            }
+            OpenCodePart::Tool { id, tool, state } => {
+                match state {
+                    OpenCodeToolState::Running { input, .. }
+                    | OpenCodeToolState::Completed { input, .. } => {
+                        let args = input.clone().unwrap_or_default();
+                        let args = if args.len() > MAX_TOOL_ARGS_BYTES {
+                            truncate_output(&args, MAX_TOOL_ARGS_BYTES)
+                        } else {
+                            args
+                        };
+                        steps.push(TranscriptStep::Action {
+                            content: vec![ActionContent::ToolCall {
+                                id: id.clone(),
+                                name: tool.clone(),
+                                args,
+                            }],
+                        });
+                    }
+                    OpenCodeToolState::Pending => {
+                        steps.push(TranscriptStep::Action {
+                            content: vec![ActionContent::ToolCall {
+                                id: id.clone(),
+                                name: tool.clone(),
+                                args: String::new(),
+                            }],
+                        });
+                    }
+                    OpenCodeToolState::Error { .. } => {
+                        steps.push(TranscriptStep::Action {
+                            content: vec![ActionContent::ToolCall {
+                                id: id.clone(),
+                                name: tool.clone(),
+                                args: String::new(),
+                            }],
+                        });
+                    }
+                }
+
+                // Add result for completed/error states
+                match state {
+                    OpenCodeToolState::Completed { output, .. } => {
+                        let text = output.as_deref().unwrap_or("");
+                        let truncated = truncate_output(text, MAX_TOOL_OUTPUT_BYTES);
+                        steps.push(TranscriptStep::ToolResult {
+                            call_id: id.clone(),
+                            name: tool.clone(),
+                            text: truncated,
+                        });
+                    }
+                    OpenCodeToolState::Error { error } => {
+                        let error_text = error.as_deref().unwrap_or("unknown error");
+                        steps.push(TranscriptStep::ToolResult {
+                            call_id: id.clone(),
+                            name: tool.clone(),
+                            text: format!("Error: {error_text}"),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            // step_start/step_finish are visual separators, skip for transcript
+            OpenCodePart::StepStart { .. } | OpenCodePart::StepFinish { .. } => {}
+        }
+    }
+    steps
+}
+
 /// Convert Rig `Vec<Message>` to `Vec<TranscriptStep>`.
 fn convert_history(history: &[rig::message::Message]) -> Vec<TranscriptStep> {
     let mut steps = Vec::new();
