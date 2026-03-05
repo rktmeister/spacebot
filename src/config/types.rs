@@ -511,6 +511,7 @@ pub struct DefaultsConfig {
     pub cortex: CortexConfig,
     pub warmup: WarmupConfig,
     pub browser: BrowserConfig,
+    pub channel: ChannelConfig,
     pub mcp: Vec<McpServerConfig>,
     /// Brave Search API key for web search tool. Supports "env:VAR_NAME" references.
     pub brave_search_key: Option<String>,
@@ -541,6 +542,7 @@ impl std::fmt::Debug for DefaultsConfig {
             .field("cortex", &self.cortex)
             .field("warmup", &self.warmup)
             .field("browser", &self.browser)
+            .field("channel", &self.channel)
             .field("mcp", &self.mcp)
             .field(
                 "brave_search_key",
@@ -766,6 +768,13 @@ impl Default for BrowserConfig {
     }
 }
 
+/// Channel behavior configuration.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChannelConfig {
+    /// When true, unsolicited chat messages are ignored unless command/mention/reply.
+    pub listen_only_mode: bool,
+}
+
 /// OpenCode subprocess worker configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenCodeConfig {
@@ -803,6 +812,8 @@ pub struct CortexConfig {
     pub tick_interval_secs: u64,
     pub worker_timeout_secs: u64,
     pub branch_timeout_secs: u64,
+    pub detached_worker_timeout_retry_limit: u8,
+    pub supervisor_kill_budget_per_tick: usize,
     pub circuit_breaker_threshold: u8,
     /// Interval in seconds between memory bulletin refreshes.
     pub bulletin_interval_secs: u64,
@@ -826,6 +837,8 @@ impl Default for CortexConfig {
             tick_interval_secs: 30,
             worker_timeout_secs: 300,
             branch_timeout_secs: 60,
+            detached_worker_timeout_retry_limit: 2,
+            supervisor_kill_budget_per_tick: 8,
             circuit_breaker_threshold: 3,
             bulletin_interval_secs: 3600,
             bulletin_max_words: 1500,
@@ -989,6 +1002,7 @@ pub struct AgentConfig {
     pub cortex: Option<CortexConfig>,
     pub warmup: Option<WarmupConfig>,
     pub browser: Option<BrowserConfig>,
+    pub channel: Option<ChannelConfig>,
     pub mcp: Option<Vec<McpServerConfig>>,
     /// Per-agent Brave Search API key override. None inherits from defaults.
     pub brave_search_key: Option<String>,
@@ -1044,6 +1058,7 @@ pub struct ResolvedAgentConfig {
     pub cortex: CortexConfig,
     pub warmup: WarmupConfig,
     pub browser: BrowserConfig,
+    pub channel: ChannelConfig,
     pub mcp: Vec<McpServerConfig>,
     pub brave_search_key: Option<String>,
     pub cron_timezone: Option<String>,
@@ -1071,6 +1086,7 @@ impl Default for DefaultsConfig {
             cortex: CortexConfig::default(),
             warmup: WarmupConfig::default(),
             browser: BrowserConfig::default(),
+            channel: ChannelConfig::default(),
             mcp: Vec::new(),
             brave_search_key: None,
             cron_timezone: None,
@@ -1134,6 +1150,7 @@ impl AgentConfig {
                 .browser
                 .clone()
                 .unwrap_or_else(|| defaults.browser.clone()),
+            channel: self.channel.unwrap_or(defaults.channel),
             mcp: resolve_mcp_configs(&defaults.mcp, self.mcp.as_deref()),
             brave_search_key: self
                 .brave_search_key

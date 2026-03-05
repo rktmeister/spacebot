@@ -224,6 +224,7 @@ async fn spawn_branch(
         state.deps.task_store.clone(),
         state.deps.memory_search.clone(),
         state.deps.runtime_config.clone(),
+        state.deps.memory_event_tx.clone(),
         state.conversation_logger.clone(),
         state.channel_store.clone(),
         crate::conversation::ProcessRunLogger::new(state.deps.sqlite_pool.clone()),
@@ -655,11 +656,7 @@ where
                 }
             }
             Err(panic_payload) => {
-                let panic_message = panic_payload
-                    .downcast_ref::<&str>()
-                    .map(|message| (*message).to_string())
-                    .or_else(|| panic_payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "unknown panic payload".to_string());
+                let panic_message = crate::agent::panic_payload_to_string(&*panic_payload);
                 tracing::error!(
                     worker_id = %worker_id,
                     panic_message = %panic_message,
