@@ -95,11 +95,11 @@ Each worker gets its own isolated ToolServer, created at spawn time via `create_
 │   set_status  (agent_id, worker_id, ...) │
 │   browser     (if browser.enabled)       │
 │   web_search  (if configured)            │
-│   mcp_*       (one per connected MCP tool) │
+│   mcp_*       (registered at worker startup for MCP tools connected at that time) │
 └──────────────────────────────────────────┘
 ```
 
-`shell` and `exec` hold a shared `Sandbox` reference that wraps commands in OS-level containment (bubblewrap on Linux, sandbox-exec on macOS). `file` validates paths against the workspace boundary. `set_status` is bound to a specific worker's ID so status updates route to the right place in the channel's status block. `browser` is conditionally registered based on the agent's `browser.enabled` config. MCP tools are fetched at worker start and registered as additional worker tools when MCP servers are connected.
+`shell` and `exec` hold a shared `Sandbox` reference that wraps commands in OS-level containment (bubblewrap on Linux, sandbox-exec on macOS). `file` validates paths against the workspace boundary. `set_status` is bound to a specific worker's ID so status updates route to the right place in the channel's status block. `browser` is conditionally registered based on the agent's `browser.enabled` config. MCP tools are fetched and registered once at worker startup for servers connected at that time.
 
 Workers don't get memory tools or channel tools. They can't talk to the user, can't recall memories, can't spawn branches. They execute their task and report status.
 
