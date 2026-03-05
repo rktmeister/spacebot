@@ -364,9 +364,22 @@ impl McpConnection {
                     .custom_headers(custom_headers);
 
                 if let Some(auth_value) = auth_header_value {
-                    // rmcp uses reqwest's .bearer_auth() which adds
-                    // "Bearer " automatically, so strip the prefix if
-                    // the user included it in their config.
+                    // rmcp's auth_header() uses reqwest's .bearer_auth()
+                    // which always prepends "Bearer ". Reject non-Bearer
+                    // schemes (e.g. "Basic ...") that would produce a
+                    // malformed "Bearer Basic ..." header.
+                    let has_scheme = auth_value.contains(' ')
+                        && !auth_value.starts_with("Bearer ")
+                        && !auth_value.starts_with("bearer ");
+                    if has_scheme {
+                        anyhow::bail!(
+                            "unsupported Authorization scheme for mcp server '{}': \
+                             only Bearer tokens are supported (rmcp always sends \
+                             Bearer auth). Remove the scheme prefix or use a \
+                             Bearer token.",
+                            self.name
+                        );
+                    }
                     let token = auth_value
                         .strip_prefix("Bearer ")
                         .or_else(|| auth_value.strip_prefix("bearer "))

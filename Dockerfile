@@ -60,9 +60,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gh \
     bubblewrap \
     openssh-server \
-    # System Chromium — works on both amd64 and arm64, avoids the built-in
-    # fetcher which only supports x86_64.
-    chromium \
+    # Chrome runtime dependencies — required whether Chrome is system-installed
+    # or downloaded by the built-in fetcher. The fetcher provides the browser
+    # binary; these are the shared libraries it links against.
     fonts-liberation \
     libnss3 \
     libatk-bridge2.0-0 \
