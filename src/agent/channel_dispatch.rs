@@ -249,6 +249,7 @@ async fn spawn_branch(
     let event_tx = state.deps.event_tx.clone();
     let agent_id = state.deps.agent_id.clone();
     let channel_id = state.channel_id.clone();
+    let secrets_snapshot = state.deps.runtime_config.secrets.load().clone();
 
     let branch_span = tracing::info_span!(
         "branch.run",
@@ -260,11 +261,22 @@ async fn spawn_branch(
         async move {
             if let Err(error) = branch.run(&prompt).await {
                 tracing::error!(branch_id = %branch_id, %error, "branch failed");
+                // Scrub the failure message in case the error contains secrets
+                // (e.g. from failed tool calls echoing back prompt content).
+                // Layer 1: exact-match redaction of known secrets from the store.
+                // Layer 2: regex-based redaction of unknown secret patterns.
+                let raw = format!("Branch failed: {error}");
+                let conclusion = if let Some(store) = secrets_snapshot.as_ref() {
+                    crate::secrets::scrub::scrub_with_store(&raw, store)
+                } else {
+                    raw
+                };
+                let conclusion = crate::secrets::scrub::scrub_leaks(&conclusion);
                 let _ = event_tx.send(crate::ProcessEvent::BranchResult {
                     agent_id,
                     branch_id,
                     channel_id,
-                    conclusion: format!("Branch failed: {error}"),
+                    conclusion,
                 });
             }
         }
@@ -591,11 +603,14 @@ where
             Ok(Ok(text)) => {
                 // Scrub tool secret values from the result before it reaches
                 // the channel. The channel never sees raw secret values.
+                // Layer 1: exact-match redaction of known secrets from the store.
+                // Layer 2: regex-based redaction of unknown secret patterns.
                 let scrubbed = if let Some(store) = &secrets_store {
                     crate::secrets::scrub::scrub_with_store(&text, store)
                 } else {
                     text
                 };
+                let scrubbed = crate::secrets::scrub::scrub_leaks(&scrubbed);
                 Ok(scrubbed)
             }
             Ok(Err(error)) => {
@@ -608,6 +623,7 @@ where
                         } else {
                             message
                         };
+                        let scrubbed = crate::secrets::scrub::scrub_leaks(&scrubbed);
                         Err(WorkerCompletionError::Failed { message: scrubbed })
                     }
                 }

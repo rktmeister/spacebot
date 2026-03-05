@@ -250,18 +250,54 @@ impl SpacebotHook {
     }
 
     /// Apply shared safety checks for tool output before any downstream handling.
+    ///
+    /// For channels, a detected secret terminates the agent immediately to prevent
+    /// exfiltration via the `reply` tool. For workers and branches, secrets are
+    /// logged but execution continues — these processes cannot communicate with
+    /// users directly, and their egress paths (worker results, branch conclusions,
+    /// status updates) apply scrubbing before content reaches the channel.
     pub(crate) fn guard_tool_result(&self, tool_name: &str, result: &str) -> HookAction {
         if let Some(leak) = self.scan_for_leaks(result) {
-            tracing::error!(
-                process_id = %self.process_id,
-                tool_name = %tool_name,
-                leak_prefix = %&leak[..leak.len().min(8)],
-                "secret leak detected in tool output, terminating agent"
-            );
-            return HookAction::Terminate {
-                reason: "Tool output contained a secret. Agent terminated to prevent exfiltration."
-                    .into(),
-            };
+            match self.process_type {
+                ProcessType::Worker | ProcessType::Branch => {
+                    // Workers and branches cannot communicate with users directly.
+                    // Their egress paths (worker results, branch conclusions,
+                    // status updates) scrub secrets before content reaches the
+                    // channel. Log and continue rather than killing the process.
+                    //
+                    // Avoid logging any fragment of the matched secret. Only log
+                    // the encoding kind (plaintext/url/base64/hex) and length.
+                    let kind = if leak.starts_with("url-encoded:") {
+                        "url-encoded"
+                    } else if leak.starts_with("base64-encoded:") {
+                        "base64-encoded"
+                    } else if leak.starts_with("hex-encoded:") {
+                        "hex-encoded"
+                    } else {
+                        "plaintext"
+                    };
+                    tracing::warn!(
+                        process_id = %self.process_id,
+                        tool_name = %tool_name,
+                        leak_kind = kind,
+                        leak_len = leak.len(),
+                        "secret detected in tool output (non-channel process, continuing)"
+                    );
+                }
+                ProcessType::Channel | ProcessType::Compactor | ProcessType::Cortex => {
+                    tracing::error!(
+                        process_id = %self.process_id,
+                        tool_name = %tool_name,
+                        leak_prefix = %&leak[..leak.len().min(8)],
+                        "secret leak detected in tool output, terminating agent"
+                    );
+                    return HookAction::Terminate {
+                        reason:
+                            "Tool output contained a secret. Agent terminated to prevent exfiltration."
+                                .into(),
+                    };
+                }
+            }
         }
 
         HookAction::Continue
@@ -405,6 +441,23 @@ where
         HookAction::Continue
     }
 
+    async fn on_text_delta(&self, text_delta: &str, aggregated_text: &str) -> HookAction {
+        if self.process_type == ProcessType::Channel
+            && let Some(channel_id) = self.channel_id.clone()
+        {
+            let event = ProcessEvent::TextDelta {
+                agent_id: self.agent_id.clone(),
+                process_id: self.process_id.clone(),
+                channel_id: Some(channel_id),
+                text_delta: text_delta.to_string(),
+                aggregated_text: aggregated_text.to_string(),
+            };
+            self.event_tx.send(event).ok();
+        }
+
+        HookAction::Continue
+    }
+
     async fn on_tool_call(
         &self,
         tool_name: &str,
@@ -471,9 +524,10 @@ where
             return guard_action;
         }
 
-        // Only enforce hard-stop leak blocking on channel egress (`reply`).
-        // Worker and branch tool outputs are internal and should not terminate
-        // long-running jobs.
+        // Belt-and-suspenders check specifically for `reply` tool results on
+        // channels. `guard_tool_result` already terminates channels on any tool
+        // leak, but this catches any edge case where the reply content itself
+        // has a different leak than the raw tool output.
         if self.process_type == ProcessType::Channel
             && tool_name == "reply"
             && let Some(leak) = self.scan_for_leaks(result)
@@ -491,8 +545,17 @@ where
         }
 
         // Cap the result stored in the broadcast event to avoid blowing up
-        // event subscribers with multi-MB tool results.
-        self.emit_tool_completed_event(tool_name, result);
+        // event subscribers with multi-MB tool results. For worker/branch
+        // processes, scrub leak patterns from the event payload so secrets
+        // don't reach the SSE dashboard.
+        if matches!(self.process_type, ProcessType::Worker | ProcessType::Branch) {
+            let scrubbed = crate::secrets::scrub::scrub_leaks(result);
+            let capped =
+                crate::tools::truncate_output(&scrubbed, crate::tools::MAX_TOOL_OUTPUT_BYTES);
+            self.emit_tool_completed_event_from_capped(tool_name, capped);
+        } else {
+            self.emit_tool_completed_event(tool_name, result);
+        }
 
         tracing::debug!(
             process_id = %self.process_id,
@@ -519,6 +582,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{SpacebotHook, ToolNudgePolicy};
+    use crate::ProcessEvent;
     use crate::llm::SpacebotModel;
     use crate::llm::model::RawResponse;
     use crate::{ProcessId, ProcessType};
@@ -824,5 +888,31 @@ mod tests {
 
         assert_eq!(history.len(), base_len + 1);
         assert!(matches!(history[base_len], Message::Assistant { .. }));
+    }
+
+    #[tokio::test]
+    async fn channel_text_delta_emits_process_event() {
+        let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(8);
+        let hook = SpacebotHook::new(
+            std::sync::Arc::<str>::from("agent"),
+            ProcessId::Channel(std::sync::Arc::<str>::from("channel")),
+            ProcessType::Channel,
+            Some(std::sync::Arc::<str>::from("channel")),
+            event_tx,
+        );
+
+        let action =
+            <SpacebotHook as PromptHook<SpacebotModel>>::on_text_delta(&hook, "hi", "hi").await;
+        assert!(matches!(action, HookAction::Continue));
+
+        let event = event_rx.recv().await.expect("text delta event");
+        assert!(matches!(
+            event,
+            ProcessEvent::TextDelta {
+                ref text_delta,
+                ref aggregated_text,
+                ..
+            } if text_delta == "hi" && aggregated_text == "hi"
+        ));
     }
 }

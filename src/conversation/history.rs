@@ -172,24 +172,52 @@ impl ConversationLogger {
         Ok(messages)
     }
 
-    /// Load recent messages from any channel (not just the current one).
+    /// Load messages from any channel (not just the current one).
+    ///
+    /// Supports optional temporal filtering via `before` and `after` (RFC 3339 strings)
+    /// and ordering via `oldest_first`. When `oldest_first` is true, returns the earliest
+    /// matching messages instead of the most recent.
     pub async fn load_channel_transcript(
         &self,
         channel_id: &str,
         limit: i64,
+        before: Option<&str>,
+        after: Option<&str>,
+        oldest_first: bool,
     ) -> crate::error::Result<Vec<ConversationMessage>> {
-        let rows = sqlx::query(
+        let mut sql = String::from(
             "SELECT id, channel_id, role, sender_name, sender_id, content, metadata, created_at \
              FROM conversation_messages \
-             WHERE channel_id = ? \
-             ORDER BY created_at DESC \
-             LIMIT ?",
-        )
-        .bind(channel_id)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| anyhow::anyhow!(e))?;
+             WHERE channel_id = ?",
+        );
+
+        if before.is_some() {
+            sql.push_str(" AND created_at < ?");
+        }
+        if after.is_some() {
+            sql.push_str(" AND created_at > ?");
+        }
+
+        if oldest_first {
+            sql.push_str(" ORDER BY created_at ASC");
+        } else {
+            sql.push_str(" ORDER BY created_at DESC");
+        }
+        sql.push_str(" LIMIT ?");
+
+        let mut query = sqlx::query(&sql).bind(channel_id);
+        if let Some(before) = before {
+            query = query.bind(before);
+        }
+        if let Some(after) = after {
+            query = query.bind(after);
+        }
+        query = query.bind(limit);
+
+        let rows = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
 
         let mut messages: Vec<ConversationMessage> = rows
             .into_iter()
@@ -207,7 +235,10 @@ impl ConversationLogger {
             })
             .collect();
 
-        messages.reverse();
+        // When fetching newest-first, reverse to chronological for the caller
+        if !oldest_first {
+            messages.reverse();
+        }
         Ok(messages)
     }
 }

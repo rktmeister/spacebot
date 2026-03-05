@@ -364,6 +364,10 @@ pub(crate) fn event_is_for_channel(event: &ProcessEvent, channel_id: &ChannelId)
             channel_id: event_channel,
             ..
         } => event_channel.as_ref() == Some(channel_id),
+        ProcessEvent::TextDelta {
+            channel_id: event_channel,
+            ..
+        } => event_channel.as_ref() == Some(channel_id),
         // Status block updates, tool events, etc. — match on agent_id which
         // is already filtered by the event bus subscription. Let them through.
         _ => true,
@@ -372,7 +376,8 @@ pub(crate) fn event_is_for_channel(event: &ProcessEvent, channel_id: &ChannelId)
 
 #[cfg(test)]
 mod tests {
-    use super::apply_history_after_turn;
+    use super::{apply_history_after_turn, event_is_for_channel};
+    use crate::ProcessEvent;
     use rig::completion::{CompletionError, PromptError};
     use rig::message::Message;
     use rig::tool::ToolSetError;
@@ -1021,5 +1026,37 @@ mod tests {
             formatted.contains("[attachment or empty message]"),
             "batched formatting should use placeholder for empty/whitespace text"
         );
+    }
+
+    #[test]
+    fn text_delta_events_are_filtered_by_channel_id() {
+        let target_channel: crate::ChannelId = std::sync::Arc::from("webchat:target");
+
+        let matching_event = ProcessEvent::TextDelta {
+            agent_id: std::sync::Arc::from("agent"),
+            process_id: crate::ProcessId::Channel(target_channel.clone()),
+            channel_id: Some(target_channel.clone()),
+            text_delta: "hel".to_string(),
+            aggregated_text: "hel".to_string(),
+        };
+        assert!(event_is_for_channel(&matching_event, &target_channel));
+
+        let other_event = ProcessEvent::TextDelta {
+            agent_id: std::sync::Arc::from("agent"),
+            process_id: crate::ProcessId::Channel(std::sync::Arc::from("webchat:other")),
+            channel_id: Some(std::sync::Arc::from("webchat:other")),
+            text_delta: "hel".to_string(),
+            aggregated_text: "hello".to_string(),
+        };
+        assert!(!event_is_for_channel(&other_event, &target_channel));
+
+        let unscoped_event = ProcessEvent::TextDelta {
+            agent_id: std::sync::Arc::from("agent"),
+            process_id: crate::ProcessId::Channel(std::sync::Arc::from("webchat:none")),
+            channel_id: None,
+            text_delta: "hel".to_string(),
+            aggregated_text: "hello".to_string(),
+        };
+        assert!(!event_is_for_channel(&unscoped_event, &target_channel));
     }
 }
