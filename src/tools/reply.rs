@@ -46,8 +46,6 @@ pub struct ReplyTool {
     channel_id: ChannelId,
     replied_flag: RepliedFlag,
     agent_display_name: String,
-    // Captured for planned per-agent style transforms in enforce_agent_style.
-    agent_id: String,
 }
 
 impl ReplyTool {
@@ -58,7 +56,6 @@ impl ReplyTool {
         conversation_logger: ConversationLogger,
         channel_id: ChannelId,
         replied_flag: RepliedFlag,
-        agent_id: impl Into<String>,
         agent_display_name: impl Into<String>,
     ) -> Self {
         Self {
@@ -67,48 +64,9 @@ impl ReplyTool {
             conversation_logger,
             channel_id,
             replied_flag,
-            agent_id: agent_id.into(),
             agent_display_name: agent_display_name.into(),
         }
     }
-}
-
-fn enforce_agent_style(_agent_id: &str, content: &str) -> String {
-    // TODO: enforce_agent_style should use _agent_id for per-agent voice rules.
-    content.to_string()
-}
-
-fn cards_to_text(cards: &[crate::Card]) -> String {
-    let mut sections = Vec::new();
-    for card in cards {
-        let mut lines = Vec::new();
-        if let Some(title) = &card.title
-            && !title.trim().is_empty()
-        {
-            lines.push(title.trim().to_string());
-        }
-        if let Some(description) = &card.description
-            && !description.trim().is_empty()
-        {
-            lines.push(description.trim().to_string());
-        }
-        for field in &card.fields {
-            let name = field.name.trim();
-            let value = field.value.trim();
-            if !name.is_empty() || !value.is_empty() {
-                lines.push(format!("{name}\n{value}").trim().to_string());
-            }
-        }
-        if let Some(footer) = &card.footer
-            && !footer.trim().is_empty()
-        {
-            lines.push(footer.trim().to_string());
-        }
-        if !lines.is_empty() {
-            sections.push(lines.join("\n\n"));
-        }
-    }
-    sections.join("\n\n")
 }
 
 /// Error type for reply tool.
@@ -403,21 +361,6 @@ impl Tool for ReplyTool {
             source,
         )
         .await;
-        let mut converted_content = enforce_agent_style(&self.agent_id, &converted_content);
-
-        // Some adapters/models emit card-only payloads with empty content.
-        // Derive a readable plaintext fallback from cards to avoid empty-message errors.
-        if converted_content.trim().is_empty()
-            && let Some(cards) = &args.cards
-        {
-            let from_cards = cards_to_text(cards);
-            if !from_cards.trim().is_empty() {
-                converted_content = enforce_agent_style(&self.agent_id, &from_cards);
-            }
-        }
-        if converted_content.trim().is_empty() {
-            converted_content = "noted.".to_string();
-        }
 
         if crate::tools::should_block_user_visible_text(&converted_content) {
             tracing::warn!(
@@ -446,19 +389,6 @@ impl Tool for ReplyTool {
             ));
         }
 
-        let cards_requested = args.cards.as_ref().is_some_and(|cards| !cards.is_empty());
-        let interactive_requested = args
-            .interactive_elements
-            .as_ref()
-            .is_some_and(|elements| !elements.is_empty());
-        let poll_requested = args.poll.is_some();
-
-        if thread_name.is_some() && (cards_requested || interactive_requested || poll_requested) {
-            return Err(ReplyError(
-                "thread replies do not support cards, interactive_elements, or polls".into(),
-            ));
-        }
-
         let response = if let Some(name) = thread_name {
             // Cap thread names at 100 characters (Discord limit)
             let thread_name = if name.len() > 100 {
@@ -470,46 +400,11 @@ impl Tool for ReplyTool {
                 thread_name,
                 text: converted_content.clone(),
             }
-        } else if cards_requested || interactive_requested || poll_requested {
-            let supports_cards = matches!(source, "discord");
-            let supports_interactive = matches!(source, "discord");
-            let supports_poll = matches!(source, "discord");
-            const DISCORD_MAX_CARDS: usize = 10;
-            const DISCORD_MAX_INTERACTIVE_ELEMENTS: usize = 5;
-            let mut unsupported = Vec::new();
-            if cards_requested && !supports_cards {
-                unsupported.push("cards");
-            }
-            if interactive_requested && !supports_interactive {
-                unsupported.push("interactive_elements");
-            }
-            if poll_requested && !supports_poll {
-                unsupported.push("poll");
-            }
-            if !unsupported.is_empty() {
-                return Err(ReplyError(format!(
-                    "unsupported rich payload for source '{source}': requested unsupported fields [{}]",
-                    unsupported.join(", ")
-                )));
-            }
-            if source == "discord" {
-                let card_count = args.cards.as_ref().map_or(0, Vec::len);
-                if card_count > DISCORD_MAX_CARDS {
-                    return Err(ReplyError(format!(
-                        "discord rich payload limit exceeded: cards={card_count} (max {DISCORD_MAX_CARDS})"
-                    )));
-                }
-                let interactive_count = args.interactive_elements.as_ref().map_or(0, Vec::len);
-                if interactive_count > DISCORD_MAX_INTERACTIVE_ELEMENTS {
-                    return Err(ReplyError(format!(
-                        "discord rich payload limit exceeded: interactive_elements={interactive_count} (max {DISCORD_MAX_INTERACTIVE_ELEMENTS})"
-                    )));
-                }
-            }
-
+        } else if args.cards.is_some() || args.interactive_elements.is_some() || args.poll.is_some()
+        {
             OutboundResponse::RichMessage {
                 text: converted_content.clone(),
-                blocks: vec![], // No block generation for now; Slack adapters will fall back to text
+                blocks: vec![],
                 cards: args.cards.unwrap_or_default(),
                 interactive_elements: args.interactive_elements.unwrap_or_default(),
                 poll: args.poll,

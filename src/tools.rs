@@ -307,7 +307,6 @@ pub async fn add_channel_tools(
                 state.conversation_logger.clone(),
                 state.channel_id.clone(),
                 replied_flag.clone(),
-                state.deps.agent_id.to_string(),
                 agent_display_name,
             ))
             .await?;

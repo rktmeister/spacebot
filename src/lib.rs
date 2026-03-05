@@ -475,6 +475,62 @@ pub enum OutboundResponse {
     Status(StatusUpdate),
 }
 
+impl OutboundResponse {
+    /// Ensure `RichMessage` variants have a non-empty `text` fallback.
+    ///
+    /// Some LLMs emit card-only payloads with empty content. This derives a
+    /// readable plaintext fallback from cards so adapters that don't support
+    /// rich formatting (or use `text` for notifications) always have content.
+    pub fn ensure_text_fallback(&mut self) {
+        if let OutboundResponse::RichMessage { text, cards, .. } = self {
+            if text.trim().is_empty() {
+                let derived = Self::text_from_cards(cards);
+                if !derived.trim().is_empty() {
+                    *text = derived;
+                }
+            }
+        }
+    }
+
+    /// Derive a plaintext representation from a slice of [`Card`]s.
+    ///
+    /// Used as a fallback when the LLM provides cards but no text content.
+    /// Adapters can call this directly when they destructure `RichMessage`
+    /// and need a text fallback without reconstructing the enum.
+    pub fn text_from_cards(cards: &[Card]) -> String {
+        let mut sections = Vec::new();
+        for card in cards {
+            let mut lines = Vec::new();
+            if let Some(title) = &card.title
+                && !title.trim().is_empty()
+            {
+                lines.push(title.trim().to_string());
+            }
+            if let Some(description) = &card.description
+                && !description.trim().is_empty()
+            {
+                lines.push(description.trim().to_string());
+            }
+            for field in &card.fields {
+                let name = field.name.trim();
+                let value = field.value.trim();
+                if !name.is_empty() || !value.is_empty() {
+                    lines.push(format!("{name}\n{value}").trim().to_string());
+                }
+            }
+            if let Some(footer) = &card.footer
+                && !footer.trim().is_empty()
+            {
+                lines.push(footer.trim().to_string());
+            }
+            if !lines.is_empty() {
+                sections.push(lines.join("\n\n"));
+            }
+        }
+        sections.join("\n\n")
+    }
+}
+
 /// A generic rich-formatted card (maps to Embeds in Discord).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct Card {

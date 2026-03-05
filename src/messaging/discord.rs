@@ -164,7 +164,7 @@ impl Messaging for DiscordAdapter {
                 }
             }
             OutboundResponse::RichMessage {
-                text,
+                mut text,
                 cards,
                 interactive_elements,
                 poll,
@@ -172,6 +172,35 @@ impl Messaging for DiscordAdapter {
             } => {
                 self.stop_typing(message).await;
                 let reply_to = Self::extract_reply_message_id(message);
+
+                // Derive a plaintext fallback from cards when text is empty so
+                // the message is never blank (notifications, logging, etc.).
+                if text.trim().is_empty() {
+                    let derived = crate::OutboundResponse::text_from_cards(&cards);
+                    if !derived.trim().is_empty() {
+                        text = derived;
+                    }
+                }
+
+                // Enforce Discord API limits: max 10 embeds, 5 action rows.
+                let cards = if cards.len() > 10 {
+                    tracing::warn!(
+                        count = cards.len(),
+                        "truncating cards to Discord embed limit (10)"
+                    );
+                    &cards[..10]
+                } else {
+                    &cards
+                };
+                let interactive_elements = if interactive_elements.len() > 5 {
+                    tracing::warn!(
+                        count = interactive_elements.len(),
+                        "truncating interactive elements to Discord action row limit (5)"
+                    );
+                    &interactive_elements[..5]
+                } else {
+                    &interactive_elements
+                };
 
                 let chunks = split_message(&text, 2000);
                 for (i, chunk) in chunks.iter().enumerate() {
@@ -183,16 +212,13 @@ impl Messaging for DiscordAdapter {
 
                     // Attach rich content only to the final chunk
                     if is_last {
-                        let embeds: Vec<_> = cards.iter().take(10).map(build_embed).collect();
+                        let embeds: Vec<_> = cards.iter().map(build_embed).collect();
                         if !embeds.is_empty() {
                             msg = msg.embeds(embeds);
                         }
 
-                        let components: Vec<_> = interactive_elements
-                            .iter()
-                            .take(5)
-                            .map(build_action_row)
-                            .collect();
+                        let components: Vec<_> =
+                            interactive_elements.iter().map(build_action_row).collect();
                         if !components.is_empty() {
                             msg = msg.components(components);
                         }
@@ -422,13 +448,41 @@ impl Messaging for DiscordAdapter {
                     .context("failed to broadcast discord message")?;
             }
         } else if let OutboundResponse::RichMessage {
-            text,
+            mut text,
             cards,
             interactive_elements,
             poll,
             ..
         } = response
         {
+            // Derive a plaintext fallback from cards when text is empty.
+            if text.trim().is_empty() {
+                let derived = crate::OutboundResponse::text_from_cards(&cards);
+                if !derived.trim().is_empty() {
+                    text = derived;
+                }
+            }
+
+            // Enforce Discord API limits: max 10 embeds, 5 action rows.
+            let cards = if cards.len() > 10 {
+                tracing::warn!(
+                    count = cards.len(),
+                    "truncating cards to Discord embed limit (10)"
+                );
+                &cards[..10]
+            } else {
+                &cards
+            };
+            let interactive_elements = if interactive_elements.len() > 5 {
+                tracing::warn!(
+                    count = interactive_elements.len(),
+                    "truncating interactive elements to Discord action row limit (5)"
+                );
+                &interactive_elements[..5]
+            } else {
+                &interactive_elements
+            };
+
             let chunks = split_message(&text, 2000);
             for (i, chunk) in chunks.iter().enumerate() {
                 let is_last = i == chunks.len() - 1;
@@ -439,16 +493,13 @@ impl Messaging for DiscordAdapter {
 
                 // Attach rich content only to the final chunk
                 if is_last {
-                    let embeds: Vec<_> = cards.iter().take(10).map(build_embed).collect();
+                    let embeds: Vec<_> = cards.iter().map(build_embed).collect();
                     if !embeds.is_empty() {
                         msg = msg.embeds(embeds);
                     }
 
-                    let components: Vec<_> = interactive_elements
-                        .iter()
-                        .take(5)
-                        .map(build_action_row)
-                        .collect();
+                    let components: Vec<_> =
+                        interactive_elements.iter().map(build_action_row).collect();
                     if !components.is_empty() {
                         msg = msg.components(components);
                     }
