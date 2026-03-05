@@ -2246,7 +2246,14 @@ impl Channel {
             } => {
                 // Use worker_handles as the source of truth for active workers.
                 // (active_workers is never populated because Worker is consumed by .run())
-                if self.state.worker_handles.write().await.remove(worker_id).is_none() {
+                if self
+                    .state
+                    .worker_handles
+                    .write()
+                    .await
+                    .remove(worker_id)
+                    .is_none()
+                {
                     return Ok(());
                 }
 
