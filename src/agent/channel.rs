@@ -2353,11 +2353,13 @@ mod tests {
         let process_id = ProcessId::Channel(channel_id);
 
         for status in ["one", "two", "three"] {
-            let _ = event_tx.send(ProcessEvent::StatusUpdate {
-                agent_id: agent_id.clone(),
-                process_id: process_id.clone(),
-                status: status.to_string(),
-            });
+            event_tx
+                .send(ProcessEvent::StatusUpdate {
+                    agent_id: agent_id.clone(),
+                    process_id: process_id.clone(),
+                    status: status.to_string(),
+                })
+                .ok();
         }
 
         let first = recv_channel_event(&mut event_rx).await;

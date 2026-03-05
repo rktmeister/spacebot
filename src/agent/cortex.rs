@@ -79,6 +79,8 @@ fn should_generate_bulletin_from_bulletin_loop(
 const SIGNAL_BUFFER_CAPACITY: usize = 100;
 const BULLETIN_REFRESH_FAILURE_BACKOFF_BASE_SECS: u64 = 30;
 const BULLETIN_REFRESH_FAILURE_BACKOFF_MAX_SECS: u64 = 600;
+const BULLETIN_REFRESH_CIRCUIT_OPEN_THRESHOLD: u32 = 3;
+const BULLETIN_REFRESH_CIRCUIT_OPEN_SECS: u64 = 1800;
 
 fn bulletin_refresh_failure_backoff(consecutive_failures: u32) -> Duration {
     let exponent = consecutive_failures.saturating_sub(1).min(5);
@@ -87,6 +89,48 @@ fn bulletin_refresh_failure_backoff(consecutive_failures: u32) -> Duration {
         .saturating_mul(multiplier)
         .min(BULLETIN_REFRESH_FAILURE_BACKOFF_MAX_SECS);
     Duration::from_secs(seconds)
+}
+
+fn record_bulletin_refresh_failure(
+    bulletin_refresh_failures: &mut u32,
+    bulletin_refresh_circuit_open: &mut bool,
+    next_bulletin_refresh_allowed_at: &mut Instant,
+    now: Instant,
+) -> (Duration, bool) {
+    *bulletin_refresh_failures = bulletin_refresh_failures.saturating_add(1);
+    let backoff = bulletin_refresh_failure_backoff(*bulletin_refresh_failures);
+    *next_bulletin_refresh_allowed_at = now + backoff;
+
+    let mut circuit_opened = false;
+    if *bulletin_refresh_failures >= BULLETIN_REFRESH_CIRCUIT_OPEN_THRESHOLD {
+        if !*bulletin_refresh_circuit_open {
+            *bulletin_refresh_circuit_open = true;
+            circuit_opened = true;
+        }
+        let circuit_cooldown = Duration::from_secs(BULLETIN_REFRESH_CIRCUIT_OPEN_SECS);
+        let circuit_recovery_at = now + circuit_cooldown;
+        if circuit_recovery_at > *next_bulletin_refresh_allowed_at {
+            *next_bulletin_refresh_allowed_at = circuit_recovery_at;
+        }
+    }
+
+    (backoff, circuit_opened)
+}
+
+fn maybe_close_bulletin_refresh_circuit(
+    bulletin_refresh_failures: &mut u32,
+    bulletin_refresh_circuit_open: &mut bool,
+    next_bulletin_refresh_allowed_at: &mut Instant,
+    now: Instant,
+) -> bool {
+    if !*bulletin_refresh_circuit_open || now < *next_bulletin_refresh_allowed_at {
+        return false;
+    }
+
+    *bulletin_refresh_failures = 0;
+    *bulletin_refresh_circuit_open = false;
+    *next_bulletin_refresh_allowed_at = now;
+    true
 }
 
 fn has_completed_initial_warmup(status: &crate::config::WarmupStatus) -> bool {
@@ -1058,6 +1102,7 @@ async fn run_cortex_loop(
     let mut memory_event_stream_open = true;
     let mut refresh_task: Option<tokio::task::JoinHandle<BulletinRefreshOutcome>> = None;
     let mut bulletin_refresh_failures: u32 = 0;
+    let mut bulletin_refresh_circuit_open = false;
     let mut next_bulletin_refresh_allowed_at = Instant::now();
 
     loop {
@@ -1136,36 +1181,78 @@ async fn run_cortex_loop(
                             if outcome.is_success() {
                                 last_bulletin_refresh = now;
                                 bulletin_refresh_failures = 0;
+                                bulletin_refresh_circuit_open = false;
                                 next_bulletin_refresh_allowed_at = now;
                             } else {
-                                bulletin_refresh_failures =
-                                    bulletin_refresh_failures.saturating_add(1);
-                                let backoff =
-                                    bulletin_refresh_failure_backoff(bulletin_refresh_failures);
-                                next_bulletin_refresh_allowed_at = now + backoff;
-                                tracing::warn!(
-                                    failures = bulletin_refresh_failures,
-                                    backoff_secs = backoff.as_secs(),
-                                    "cortex bulletin refresh failed; applying retry backoff"
+                                let (backoff, circuit_opened) = record_bulletin_refresh_failure(
+                                    &mut bulletin_refresh_failures,
+                                    &mut bulletin_refresh_circuit_open,
+                                    &mut next_bulletin_refresh_allowed_at,
+                                    now,
                                 );
+                                if circuit_opened {
+                                    let cooldown_secs =
+                                        next_bulletin_refresh_allowed_at.duration_since(now).as_secs();
+                                    tracing::warn!(
+                                        failures = bulletin_refresh_failures,
+                                        cooldown_secs,
+                                        backoff_secs = backoff.as_secs(),
+                                        "cortex bulletin refresh circuit opened after consecutive failures"
+                                    );
+                                } else {
+                                    tracing::warn!(
+                                        failures = bulletin_refresh_failures,
+                                        backoff_secs = backoff.as_secs(),
+                                        "cortex bulletin refresh failed; applying retry backoff"
+                                    );
+                                }
                             }
                         }
                         Err(error) => {
                             let now = Instant::now();
-                            bulletin_refresh_failures = bulletin_refresh_failures.saturating_add(1);
-                            let backoff =
-                                bulletin_refresh_failure_backoff(bulletin_refresh_failures);
-                            next_bulletin_refresh_allowed_at = now + backoff;
-                            tracing::warn!(%error, "cortex bulletin refresh task failed");
+                            let (backoff, circuit_opened) = record_bulletin_refresh_failure(
+                                &mut bulletin_refresh_failures,
+                                &mut bulletin_refresh_circuit_open,
+                                &mut next_bulletin_refresh_allowed_at,
+                                now,
+                            );
+                            if circuit_opened {
+                                let cooldown_secs =
+                                    next_bulletin_refresh_allowed_at.duration_since(now).as_secs();
+                                tracing::warn!(
+                                    %error,
+                                    failures = bulletin_refresh_failures,
+                                    cooldown_secs,
+                                    backoff_secs = backoff.as_secs(),
+                                    "cortex bulletin refresh circuit opened after task failure"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    %error,
+                                    failures = bulletin_refresh_failures,
+                                    backoff_secs = backoff.as_secs(),
+                                    "cortex bulletin refresh task failed"
+                                );
+                            }
                         }
                     }
                 }
 
                 let cortex_config = **cortex.deps.runtime_config.cortex.load();
                 let bulletin_interval = Duration::from_secs(cortex_config.bulletin_interval_secs.max(1));
+                let now = Instant::now();
+                if maybe_close_bulletin_refresh_circuit(
+                    &mut bulletin_refresh_failures,
+                    &mut bulletin_refresh_circuit_open,
+                    &mut next_bulletin_refresh_allowed_at,
+                    now,
+                ) {
+                    tracing::info!("cortex bulletin refresh circuit closed; retries re-enabled");
+                }
                 if refresh_task.is_none()
+                    && !bulletin_refresh_circuit_open
                     && last_bulletin_refresh.elapsed() >= bulletin_interval
-                    && Instant::now() >= next_bulletin_refresh_allowed_at
+                    && now >= next_bulletin_refresh_allowed_at
                 {
                     refresh_task = Some(spawn_bulletin_refresh_task(
                         cortex.deps.clone(),
@@ -2261,9 +2348,11 @@ async fn fetch_memories_for_association(
 #[cfg(test)]
 mod tests {
     use super::{
+        BULLETIN_REFRESH_CIRCUIT_OPEN_SECS, BULLETIN_REFRESH_CIRCUIT_OPEN_THRESHOLD,
         BulletinRefreshOutcome, CortexReceiverOutcome, ReceiverClosedBehavior, Signal,
         apply_cancelled_warmup_status, handle_cortex_receiver_result, has_completed_initial_warmup,
-        maybe_generate_bulletin_under_lock, push_signal_into_buffer, should_execute_warmup,
+        maybe_close_bulletin_refresh_circuit, maybe_generate_bulletin_under_lock,
+        push_signal_into_buffer, record_bulletin_refresh_failure, should_execute_warmup,
         should_generate_bulletin_from_bulletin_loop, signal_from_event, summarize_signal_text,
     };
     use crate::ProcessEvent;
@@ -2715,6 +2804,74 @@ mod tests {
             CortexReceiverOutcome::Lagged { dropped: 7 }
         ));
         assert_eq!(lagged_since_last_warning, 7);
+    }
+
+    #[test]
+    fn bulletin_refresh_failure_opens_circuit_at_threshold() {
+        let mut failures = 0_u32;
+        let mut circuit_open = false;
+        let mut next_allowed_at = Instant::now();
+        let now = Instant::now();
+
+        let (_, opened_first) = record_bulletin_refresh_failure(
+            &mut failures,
+            &mut circuit_open,
+            &mut next_allowed_at,
+            now,
+        );
+        assert!(!opened_first);
+        assert!(!circuit_open);
+
+        let (_, opened_second) = record_bulletin_refresh_failure(
+            &mut failures,
+            &mut circuit_open,
+            &mut next_allowed_at,
+            now,
+        );
+        assert!(!opened_second);
+        assert!(!circuit_open);
+
+        let (_, opened_third) = record_bulletin_refresh_failure(
+            &mut failures,
+            &mut circuit_open,
+            &mut next_allowed_at,
+            now,
+        );
+        assert!(opened_third);
+        assert!(circuit_open);
+        assert_eq!(failures, BULLETIN_REFRESH_CIRCUIT_OPEN_THRESHOLD);
+        assert!(
+            next_allowed_at
+                >= now + std::time::Duration::from_secs(BULLETIN_REFRESH_CIRCUIT_OPEN_SECS),
+            "circuit-open cooldown should dominate retry window"
+        );
+    }
+
+    #[test]
+    fn bulletin_refresh_circuit_closes_after_cooldown() {
+        let mut failures = BULLETIN_REFRESH_CIRCUIT_OPEN_THRESHOLD;
+        let mut circuit_open = true;
+        let now = Instant::now();
+        let mut next_allowed_at = now + std::time::Duration::from_millis(5);
+
+        let closed_early = maybe_close_bulletin_refresh_circuit(
+            &mut failures,
+            &mut circuit_open,
+            &mut next_allowed_at,
+            now,
+        );
+        assert!(!closed_early);
+        assert!(circuit_open);
+
+        let closed = maybe_close_bulletin_refresh_circuit(
+            &mut failures,
+            &mut circuit_open,
+            &mut next_allowed_at,
+            now + std::time::Duration::from_millis(10),
+        );
+        assert!(closed);
+        assert!(!circuit_open);
+        assert_eq!(failures, 0);
     }
 
     #[tokio::test]
