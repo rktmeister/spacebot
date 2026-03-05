@@ -10,8 +10,8 @@ use super::providers::{
 };
 use super::toml_schema::*;
 use super::{
-    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, ClosePolicy, CoalesceConfig,
-    CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
+    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, ChannelConfig, ClosePolicy,
+    CoalesceConfig, CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
     DiscordInstanceConfig, EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig,
     LinkDef, LlmConfig, McpServerConfig, McpTransport, MemoryPersistenceConfig, MessagingConfig,
     MetricsConfig, OpenCodeConfig, ProviderConfig, SlackCommandConfig, SlackConfig,
