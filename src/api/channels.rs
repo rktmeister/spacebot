@@ -290,16 +290,37 @@ pub(super) async fn cancel_process(
                 states.get(&request.channel_id).cloned()
             };
 
-            if let Some(channel_state) = channel_state
-                && channel_state
+            if let Some(channel_state) = channel_state {
+                match channel_state
                     .cancel_worker_with_reason(worker_id, "cancelled via API")
                     .await
-                    .is_ok()
-            {
-                return Ok(Json(CancelProcessResponse {
-                    success: true,
-                    message: format!("Worker {} cancelled", request.process_id),
-                }));
+                {
+                    Ok(()) => {
+                        return Ok(Json(CancelProcessResponse {
+                            success: true,
+                            message: format!("Worker {} cancelled", request.process_id),
+                        }));
+                    }
+                    Err(error) => {
+                        let not_found = error.to_ascii_lowercase().contains("not found");
+                        if not_found {
+                            tracing::debug!(
+                                channel_id = %request.channel_id,
+                                worker_id = %worker_id,
+                                %error,
+                                "worker not found in active channel state; attempting detached fallback"
+                            );
+                        } else {
+                            tracing::warn!(
+                                channel_id = %request.channel_id,
+                                worker_id = %worker_id,
+                                %error,
+                                "failed to cancel worker in channel state"
+                            );
+                            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                        }
+                    }
+                }
             }
 
             // Fallback for detached workers (for example after restart): no live

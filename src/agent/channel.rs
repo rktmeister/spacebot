@@ -2161,6 +2161,7 @@ impl Channel {
                 conclusion,
                 ..
             } => {
+                let reply_target_message_id = self.branch_reply_targets.remove(branch_id);
                 let was_active = self
                     .state
                     .active_branches
@@ -2169,7 +2170,6 @@ impl Channel {
                     .remove(branch_id)
                     .is_some();
                 let was_memory_persistence = self.memory_persistence_branches.remove(branch_id);
-                let _ = self.branch_reply_targets.remove(branch_id);
                 if !was_active {
                     if was_memory_persistence {
                         tracing::info!(
@@ -2205,7 +2205,7 @@ impl Channel {
                     });
                     should_retrigger = true;
 
-                    if let Some(message_id) = self.branch_reply_targets.remove(branch_id) {
+                    if let Some(message_id) = reply_target_message_id {
                         retrigger_metadata.insert(
                             crate::metadata_keys::REPLY_TO_MESSAGE_ID.to_string(),
                             serde_json::Value::from(message_id),
