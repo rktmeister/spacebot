@@ -434,7 +434,7 @@ pub async fn spawn_worker_from_state(
 
     {
         let mut status = state.status_block.write().await;
-        status.add_worker(worker_id, &task, false);
+        status.add_worker(worker_id, &task, false, interactive);
     }
 
     state
@@ -446,10 +446,11 @@ pub async fn spawn_worker_from_state(
             channel_id: Some(state.channel_id.clone()),
             task: task.clone(),
             worker_type: "builtin".into(),
+            interactive,
         })
         .ok();
 
-    tracing::info!(worker_id = %worker_id, task = %task, "worker spawned");
+    tracing::info!(worker_id = %worker_id, task = %task, interactive, "worker spawned");
 
     Ok(worker_id)
 }
@@ -575,7 +576,7 @@ pub async fn spawn_opencode_worker_from_state(
     let opencode_task = format!("[opencode] {task}");
     {
         let mut status = state.status_block.write().await;
-        status.add_worker(worker_id, &opencode_task, false);
+        status.add_worker(worker_id, &opencode_task, false, interactive);
     }
 
     state
@@ -587,10 +588,11 @@ pub async fn spawn_opencode_worker_from_state(
             channel_id: Some(state.channel_id.clone()),
             task: opencode_task,
             worker_type: "opencode".into(),
+            interactive,
         })
         .ok();
 
-    tracing::info!(worker_id = %worker_id, task = %task, "OpenCode worker spawned");
+    tracing::info!(worker_id = %worker_id, task = %task, interactive, "OpenCode worker spawned");
 
     Ok(worker_id)
 }

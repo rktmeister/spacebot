@@ -62,6 +62,7 @@ export interface WorkerStartedEvent {
 	worker_id: string;
 	task: string;
 	worker_type?: string;
+	interactive?: boolean;
 }
 
 export interface WorkerStatusEvent {
@@ -211,6 +212,7 @@ export interface WorkerStatusInfo {
 	started_at: string;
 	notify_on_complete: boolean;
 	tool_calls: number;
+	interactive: boolean;
 }
 
 export interface BranchStatusInfo {
@@ -259,6 +261,7 @@ export interface WorkerRunInfo {
 	live_status: string | null;
 	tool_calls: number;
 	opencode_port: number | null;
+	interactive: boolean;
 }
 
 export interface WorkerDetailResponse {
@@ -275,6 +278,7 @@ export interface WorkerDetailResponse {
 	tool_calls: number;
 	opencode_session_id: string | null;
 	opencode_port: number | null;
+	interactive: boolean;
 }
 
 export interface WorkerListResponse {

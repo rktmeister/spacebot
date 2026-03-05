@@ -2478,12 +2478,20 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         channel_id: None,
         task: task_description.clone(),
         worker_type: "task".to_string(),
+        interactive: false,
     });
 
     // Log to worker_runs directly — task workers have no parent channel, so the
     // channel event handler won't persist them.
     let run_logger = crate::conversation::history::ProcessRunLogger::new(deps.sqlite_pool.clone());
-    run_logger.log_worker_started(None, worker_id, &task_description, "task", &deps.agent_id);
+    run_logger.log_worker_started(
+        None,
+        worker_id,
+        &task_description,
+        "task",
+        &deps.agent_id,
+        false,
+    );
 
     let task_store = deps.task_store.clone();
     let agent_id = deps.agent_id.to_string();
@@ -3509,6 +3517,7 @@ mod tests {
                 channel_id: Some(channel_id.clone()),
                 task: "do work".to_string(),
                 worker_type: "shell".to_string(),
+                interactive: false,
             },
             ProcessEvent::WorkerStatus {
                 agent_id: agent_id.clone(),

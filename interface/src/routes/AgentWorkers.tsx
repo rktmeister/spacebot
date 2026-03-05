@@ -141,7 +141,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 				id: live.id,
 				task: live.task,
 				status: live.isIdle ? "idle" : "running",
-				worker_type: "builtin",
+				worker_type: live.workerType ?? "builtin",
 				channel_id: live.channelId ?? null,
 				channel_name: null,
 				started_at: new Date(live.startedAt).toISOString(),
@@ -150,6 +150,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 				live_status: live.status,
 				tool_calls: live.toolCalls,
 				opencode_port: null,
+				interactive: live.interactive,
 			}));
 
 		return [...synthetic, ...merged];
@@ -181,7 +182,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 			task: live.task,
 			result: null,
 			status: live.isIdle ? "idle" : "running",
-			worker_type: "builtin",
+			worker_type: live.workerType ?? "builtin",
 			channel_id: live.channelId ?? null,
 			channel_name: null,
 			started_at: new Date(live.startedAt).toISOString(),
@@ -190,6 +191,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 			tool_calls: live.toolCalls,
 			opencode_session_id: null,
 			opencode_port: null,
+			interactive: live.interactive,
 		};
 	}, [detailData, scopedActiveWorkers, selectedWorkerId]);
 
@@ -287,6 +289,8 @@ interface LiveWorker {
 	toolCalls: number;
 	currentTool: string | null;
 	isIdle: boolean;
+	interactive: boolean;
+	workerType: string;
 }
 
 function WorkerCard({
@@ -302,6 +306,7 @@ function WorkerCard({
 }) {
 	const isLive = worker.status === "running" || !!liveWorker;
 	const isIdle = liveWorker?.isIdle ?? worker.status === "idle";
+	const isInteractive = liveWorker?.interactive ?? worker.interactive;
 	const displayStatus = isIdle ? "idle" : isLive ? "running" : normalizeStatus(worker.status);
 	const toolCalls = liveWorker?.toolCalls ?? worker.tool_calls;
 
@@ -317,16 +322,23 @@ function WorkerCard({
 				<p className={cx("line-clamp-2 flex-1 text-xs font-medium", selected ? "text-ink" : "text-ink-dull")}>
 					{worker.task}
 				</p>
-				<Badge
-					variant={statusBadgeVariant(displayStatus)}
-					size="sm"
-					className={!isLive && worker.status === "done" ? "hover:border-app-line hover:text-ink-dull" : undefined}
-				>
-					{isLive && !isIdle && (
-						<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+				<div className="flex items-center gap-1.5">
+					{isInteractive && (
+						<Badge variant="outline" size="sm">
+							interactive
+						</Badge>
 					)}
-					{displayStatus}
-				</Badge>
+					<Badge
+						variant={statusBadgeVariant(displayStatus)}
+						size="sm"
+						className={!isLive && worker.status === "done" ? "hover:border-app-line hover:text-ink-dull" : undefined}
+					>
+						{isLive && !isIdle && (
+							<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+						)}
+						{displayStatus}
+					</Badge>
+				</div>
 			</div>
 			<div className="flex items-center gap-2 text-tiny text-ink-faint">
 				{worker.channel_name && (
@@ -435,6 +447,11 @@ function WorkerDetail({
 								channelId={detail.channel_id}
 								workerId={detail.id}
 							/>
+						)}
+						{detail.interactive && (
+							<Badge variant="outline" size="sm">
+								interactive
+							</Badge>
 						)}
 						<Badge
 							variant={workerTypeBadgeVariant(detail.worker_type)}

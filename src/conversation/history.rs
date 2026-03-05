@@ -340,6 +340,7 @@ impl ProcessRunLogger {
         task: &str,
         worker_type: &str,
         agent_id: &crate::AgentId,
+        interactive: bool,
     ) {
         let pool = self.pool.clone();
         let id = worker_id.to_string();
@@ -350,14 +351,15 @@ impl ProcessRunLogger {
 
         tokio::spawn(async move {
             if let Err(error) = sqlx::query(
-                "INSERT OR IGNORE INTO worker_runs (id, channel_id, task, worker_type, agent_id) \
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO worker_runs (id, channel_id, task, worker_type, agent_id, interactive) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(&channel_id)
             .bind(&task)
             .bind(&worker_type)
             .bind(&agent_id)
+            .bind(interactive)
             .execute(&pool)
             .await
             {
@@ -668,7 +670,8 @@ impl ProcessRunLogger {
         let list_query = format!(
             "SELECT w.id, w.task, w.status, w.worker_type, w.channel_id, w.started_at, \
                     w.completed_at, w.transcript IS NOT NULL as has_transcript, \
-                    w.tool_calls, w.opencode_port, c.display_name as channel_name \
+                    w.tool_calls, w.opencode_port, w.interactive, \
+                    c.display_name as channel_name \
              FROM worker_runs w \
              LEFT JOIN channels c ON w.channel_id = c.id \
              {list_where_clause} \
@@ -721,6 +724,7 @@ impl ProcessRunLogger {
                 has_transcript: row.try_get::<bool, _>("has_transcript").unwrap_or(false),
                 tool_calls: row.try_get::<i64, _>("tool_calls").unwrap_or(0),
                 opencode_port: row.try_get::<i32, _>("opencode_port").ok(),
+                interactive: row.try_get::<bool, _>("interactive").unwrap_or(false),
             })
             .collect();
 
@@ -736,7 +740,7 @@ impl ProcessRunLogger {
         let row = sqlx::query(
             "SELECT w.id, w.task, w.result, w.status, w.worker_type, w.channel_id, \
                     w.started_at, w.completed_at, w.transcript, w.tool_calls, \
-                    w.opencode_session_id, w.opencode_port, \
+                    w.opencode_session_id, w.opencode_port, w.interactive, \
                     c.display_name as channel_name \
              FROM worker_runs w \
              LEFT JOIN channels c ON w.channel_id = c.id \
@@ -770,6 +774,7 @@ impl ProcessRunLogger {
             tool_calls: row.try_get::<i64, _>("tool_calls").unwrap_or(0),
             opencode_session_id: row.try_get("opencode_session_id").ok(),
             opencode_port: row.try_get::<i32, _>("opencode_port").ok(),
+            interactive: row.try_get::<bool, _>("interactive").unwrap_or(false),
         }))
     }
 }
@@ -788,6 +793,7 @@ pub struct WorkerRunRow {
     pub has_transcript: bool,
     pub tool_calls: i64,
     pub opencode_port: Option<i32>,
+    pub interactive: bool,
 }
 
 /// A worker run row with full detail including the transcript blob.
@@ -806,6 +812,7 @@ pub struct WorkerDetailRow {
     pub tool_calls: i64,
     pub opencode_session_id: Option<String>,
     pub opencode_port: Option<i32>,
+    pub interactive: bool,
 }
 
 #[cfg(test)]

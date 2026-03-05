@@ -33,6 +33,8 @@ pub struct WorkerStatus {
     pub started_at: DateTime<Utc>,
     pub notify_on_complete: bool,
     pub tool_calls: usize,
+    /// Whether this worker accepts follow-up input via route.
+    pub interactive: bool,
 }
 
 /// Recently completed work item.
@@ -150,7 +152,13 @@ impl StatusBlock {
     }
 
     /// Add a new active worker.
-    pub fn add_worker(&mut self, id: WorkerId, task: impl Into<String>, notify_on_complete: bool) {
+    pub fn add_worker(
+        &mut self,
+        id: WorkerId,
+        task: impl Into<String>,
+        notify_on_complete: bool,
+        interactive: bool,
+    ) {
         self.active_workers.push(WorkerStatus {
             id,
             task: task.into(),
@@ -158,6 +166,7 @@ impl StatusBlock {
             started_at: Utc::now(),
             notify_on_complete,
             tool_calls: 0,
+            interactive,
         });
     }
 

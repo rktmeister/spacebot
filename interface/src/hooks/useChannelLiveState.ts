@@ -27,6 +27,15 @@ export interface ActiveWorker {
 	currentTool: string | null;
 	/** Whether the worker is idle (waiting for follow-up input). */
 	isIdle: boolean;
+	/** Whether this worker accepts follow-up input via route. */
+	interactive: boolean;
+	/** Worker type: "builtin", "opencode", "task", etc. */
+	workerType: string;
+}
+
+/** Check whether a worker is an opencode worker (by type or task prefix). */
+export function isOpenCodeWorker(worker: { workerType?: string; task?: string }): boolean {
+	return worker.workerType === "opencode" || (worker.task?.startsWith("[opencode]") ?? false);
 }
 
 export interface ActiveBranch {
@@ -160,6 +169,8 @@ export function useChannelLiveState(channels: ChannelInfo[]) {
 							toolCalls: w.tool_calls,
 							currentTool: existingWorker?.currentTool ?? null,
 							isIdle: w.status === "idle",
+							interactive: w.interactive,
+							workerType: existingWorker?.workerType ?? (w.task.startsWith("[opencode]") ? "opencode" : "builtin"),
 						};
 					}
 					const branches: Record<string, ActiveBranch> = {};
@@ -380,6 +391,8 @@ export function useChannelLiveState(channels: ChannelInfo[]) {
 						toolCalls: 0,
 						currentTool: null,
 						isIdle: false,
+						interactive: event.interactive ?? false,
+						workerType: event.worker_type ?? "builtin",
 					},
 					},
 				},

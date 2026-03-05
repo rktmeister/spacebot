@@ -155,6 +155,7 @@ pub enum ApiEvent {
         worker_id: String,
         task: String,
         worker_type: String,
+        interactive: bool,
     },
     /// A worker's status changed.
     WorkerStatusUpdate {
@@ -339,6 +340,7 @@ impl ApiState {
                                 channel_id,
                                 task,
                                 worker_type,
+                                interactive,
                                 ..
                             } => {
                                 api_tx
@@ -348,6 +350,7 @@ impl ApiState {
                                         worker_id: worker_id.to_string(),
                                         task: task.clone(),
                                         worker_type: worker_type.clone(),
+                                        interactive: *interactive,
                                     })
                                     .ok();
                             }

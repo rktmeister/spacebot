@@ -2222,6 +2222,7 @@ impl Channel {
                 channel_id,
                 task,
                 worker_type,
+                interactive,
                 ..
             } => {
                 run_logger.log_worker_started(
@@ -2230,6 +2231,7 @@ impl Channel {
                     task,
                     worker_type,
                     &self.deps.agent_id,
+                    *interactive,
                 );
             }
             ProcessEvent::WorkerStatus {

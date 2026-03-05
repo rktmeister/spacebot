@@ -164,6 +164,7 @@ pub enum ProcessEvent {
         channel_id: Option<ChannelId>,
         task: String,
         worker_type: String,
+        interactive: bool,
     },
     WorkerStatus {
         agent_id: AgentId,
