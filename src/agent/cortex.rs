@@ -258,6 +258,7 @@ struct WorkerTracker {
     channel_id: Option<ChannelId>,
     worker_type: String,
     started_at: Instant,
+    last_activity_at: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -302,15 +303,23 @@ impl HealthRuntimeState {
         channel_id: Option<ChannelId>,
         worker_type: String,
     ) {
+        let now = Instant::now();
         self.worker_trackers.insert(
             worker_id,
             WorkerTracker {
                 worker_id,
                 channel_id,
                 worker_type,
-                started_at: Instant::now(),
+                started_at: now,
+                last_activity_at: now,
             },
         );
+    }
+
+    fn track_worker_activity(&mut self, worker_id: WorkerId) {
+        if let Some(tracker) = self.worker_trackers.get_mut(&worker_id) {
+            tracker.last_activity_at = Instant::now();
+        }
     }
 
     fn track_worker_complete(&mut self, worker_id: WorkerId, success: bool, threshold: u8) {
@@ -398,9 +407,9 @@ fn parse_structured_success_flag(result: &str) -> Option<bool> {
     object.get("ok").and_then(|value| value.as_bool())
 }
 
-fn kill_target_started_at(target: &KillTarget) -> Instant {
+fn kill_target_last_activity(target: &KillTarget) -> Instant {
     match target {
-        KillTarget::Worker(tracker) => tracker.started_at,
+        KillTarget::Worker(tracker) => tracker.last_activity_at,
         KillTarget::Branch(tracker) => tracker.started_at,
     }
 }
@@ -420,12 +429,12 @@ fn build_kill_targets(
     targets.extend(overdue_workers.into_iter().map(KillTarget::Worker));
     targets.extend(overdue_branches.into_iter().map(KillTarget::Branch));
     targets.sort_by(|left, right| {
-        let left_started = kill_target_started_at(left);
-        let right_started = kill_target_started_at(right);
-        if left_started == right_started {
+        let left_activity = kill_target_last_activity(left);
+        let right_activity = kill_target_last_activity(right);
+        if left_activity == right_activity {
             kill_target_id(left).cmp(&kill_target_id(right))
         } else {
-            left_started.cmp(&right_started)
+            left_activity.cmp(&right_activity)
         }
     });
     targets
@@ -821,15 +830,32 @@ impl Cortex {
             ProcessEvent::WorkerComplete {
                 worker_id, success, ..
             } => state.track_worker_complete(*worker_id, *success, threshold),
+            ProcessEvent::WorkerStatus { worker_id, .. } => {
+                state.track_worker_activity(*worker_id);
+            }
+            ProcessEvent::ToolStarted {
+                process_id: ProcessId::Worker(worker_id),
+                ..
+            } => {
+                state.track_worker_activity(*worker_id);
+            }
+            ProcessEvent::ToolCompleted {
+                process_id,
+                tool_name,
+                result,
+                ..
+            } => {
+                if let ProcessId::Worker(worker_id) = process_id {
+                    state.track_worker_activity(*worker_id);
+                }
+                state.track_tool_completed(tool_name, result, threshold);
+            }
             ProcessEvent::BranchStarted {
                 branch_id,
                 channel_id,
                 ..
             } => state.track_branch_start(*branch_id, channel_id.clone()),
             ProcessEvent::BranchResult { branch_id, .. } => state.track_branch_complete(*branch_id),
-            ProcessEvent::ToolCompleted {
-                tool_name, result, ..
-            } => state.track_tool_completed(tool_name, result, threshold),
             _ => {}
         }
     }
@@ -868,7 +894,9 @@ impl Cortex {
                 state
                     .worker_trackers
                     .values()
-                    .filter(|tracker| now.duration_since(tracker.started_at) >= worker_timeout)
+                    .filter(|tracker| {
+                        now.duration_since(tracker.last_activity_at) >= worker_timeout
+                    })
                     .cloned()
                     .collect()
             };
@@ -929,8 +957,12 @@ impl Cortex {
             kill_attempts = kill_attempts.saturating_add(1);
             let result = match target.clone() {
                 KillTarget::Worker(tracker) => {
-                    let reason =
-                        format!("timed out after {}s (supervisor)", worker_timeout.as_secs());
+                    let idle_secs = now.duration_since(tracker.last_activity_at).as_secs();
+                    let reason = format!(
+                        "idle for {}s, exceeded {}s timeout (supervisor)",
+                        idle_secs,
+                        worker_timeout.as_secs()
+                    );
                     if let Some(channel_id) = &tracker.channel_id {
                         self.deps
                             .process_control_registry
@@ -961,14 +993,18 @@ impl Cortex {
                 KillTarget::Worker(tracker) => {
                     terminal_worker_ids.push(tracker.worker_id);
                     if is_cancelled_control_result(result) {
+                        let idle_secs = now.duration_since(tracker.last_activity_at).as_secs();
+                        let lifetime_secs = now.duration_since(tracker.started_at).as_secs();
                         logger.log(
                             "worker_killed",
                             &format!("Worker {} cancelled by supervisor", tracker.worker_id),
                             Some(serde_json::json!({
                                 "worker_id": tracker.worker_id.to_string(),
                                 "channel_id": tracker.channel_id.as_deref(),
+                                "idle_secs": idle_secs,
+                                "lifetime_secs": lifetime_secs,
                                 "timeout_secs": worker_timeout.as_secs(),
-                                "reason": "timeout",
+                                "reason": "idle_timeout",
                             })),
                         );
                         kill_actions = kill_actions.saturating_add(1);
@@ -1627,6 +1663,7 @@ async fn run_cortex_loop(
 
     loop {
         tokio::select! {
+            biased;
             event = event_rx.recv() => {
                 match handle_cortex_receiver_result(
                     event,
@@ -3999,6 +4036,7 @@ mod tests {
             channel_id: Some(Arc::from("channel-a")),
             worker_type: "builtin".to_string(),
             started_at: shared_start,
+            last_activity_at: shared_start,
         };
         let worker_b = WorkerTracker {
             worker_id: uuid::Uuid::parse_str("00000000-0000-0000-0000-00000000000b")
@@ -4006,6 +4044,7 @@ mod tests {
             channel_id: Some(Arc::from("channel-a")),
             worker_type: "builtin".to_string(),
             started_at: shared_start,
+            last_activity_at: shared_start,
         };
         let branch_oldest = BranchTracker {
             branch_id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001")
@@ -4042,6 +4081,35 @@ mod tests {
                 branch_newest.branch_id.to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn worker_activity_resets_idle_clock() {
+        let mut state = HealthRuntimeState::default();
+        let worker_id = uuid::Uuid::new_v4();
+        state.track_worker_start(worker_id, Some(Arc::from("ch")), "builtin".to_string());
+
+        let tracker_before = state.worker_trackers.get(&worker_id).unwrap().clone();
+        // Simulate time passing by checking that activity updates the timestamp.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        state.track_worker_activity(worker_id);
+
+        let tracker_after = state.worker_trackers.get(&worker_id).unwrap();
+        assert!(
+            tracker_after.last_activity_at > tracker_before.last_activity_at,
+            "last_activity_at should advance after track_worker_activity"
+        );
+        assert_eq!(
+            tracker_after.started_at, tracker_before.started_at,
+            "started_at should not change"
+        );
+    }
+
+    #[test]
+    fn worker_activity_noop_for_unknown_worker() {
+        let mut state = HealthRuntimeState::default();
+        // Should not panic on unknown worker ID.
+        state.track_worker_activity(uuid::Uuid::new_v4());
     }
 
     #[test]
