@@ -336,7 +336,12 @@ impl McpConnection {
                     .collect::<HashMap<_, _>>();
 
                 let mut custom_headers = HashMap::new();
+                let mut auth_header_value = None;
                 for (header_name, header_value) in resolved_headers {
+                    if header_name.eq_ignore_ascii_case("authorization") {
+                        auth_header_value = Some(header_value);
+                        continue;
+                    }
                     let parsed_name = HeaderName::from_str(&header_name).with_context(|| {
                         format!(
                             "invalid mcp header name '{}' for server '{}'",
@@ -352,11 +357,15 @@ impl McpConnection {
                     custom_headers.insert(parsed_name, parsed_value);
                 }
 
-                let transport_config =
+                let mut transport_config =
                     rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(
                         resolved_url,
                     )
                     .custom_headers(custom_headers);
+
+                if let Some(auth_value) = auth_header_value {
+                    transport_config = transport_config.auth_header(auth_value);
+                }
 
                 let transport =
                     rmcp::transport::StreamableHttpClientTransport::from_config(transport_config);
