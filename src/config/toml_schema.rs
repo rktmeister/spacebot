@@ -277,6 +277,7 @@ pub(super) struct TomlDefaultsConfig {
     pub(super) cortex: Option<TomlCortexConfig>,
     pub(super) warmup: Option<TomlWarmupConfig>,
     pub(super) browser: Option<TomlBrowserConfig>,
+    pub(super) channel: Option<TomlChannelConfig>,
     #[serde(default)]
     pub(super) mcp: Vec<TomlMcpServerConfig>,
     pub(super) brave_search_key: Option<String>,
@@ -369,6 +370,11 @@ pub(super) struct TomlBrowserConfig {
 }
 
 #[derive(Deserialize)]
+pub(super) struct TomlChannelConfig {
+    pub(super) listen_only_mode: Option<bool>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct TomlOpenCodeConfig {
     pub(super) enabled: Option<bool>,
     pub(super) path: Option<String>,
@@ -426,6 +432,7 @@ pub(super) struct TomlAgentConfig {
     pub(super) cortex: Option<TomlCortexConfig>,
     pub(super) warmup: Option<TomlWarmupConfig>,
     pub(super) browser: Option<TomlBrowserConfig>,
+    pub(super) channel: Option<TomlChannelConfig>,
     pub(super) mcp: Option<Vec<TomlMcpServerConfig>>,
     pub(super) brave_search_key: Option<String>,
     pub(super) cron_timezone: Option<String>,

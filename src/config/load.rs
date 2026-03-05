@@ -10,8 +10,8 @@ use super::providers::{
 };
 use super::toml_schema::*;
 use super::{
-    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, ClosePolicy, CoalesceConfig,
-    CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
+    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, ChannelConfig, ClosePolicy,
+    CoalesceConfig, CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
     DiscordInstanceConfig, EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig,
     LinkDef, LlmConfig, McpServerConfig, McpTransport, MemoryPersistenceConfig, MessagingConfig,
     MetricsConfig, OpenCodeConfig, ProviderConfig, SlackCommandConfig, SlackConfig,
@@ -746,6 +746,7 @@ impl Config {
             cortex: None,
             warmup: None,
             browser: None,
+            channel: None,
             mcp: None,
             brave_search_key: None,
             cron_timezone: None,
@@ -1420,6 +1421,15 @@ impl Config {
                         ..base_defaults.browser.clone()
                     })
             },
+            channel: toml
+                .defaults
+                .channel
+                .map(|channel_config| ChannelConfig {
+                    listen_only_mode: channel_config
+                        .listen_only_mode
+                        .unwrap_or(base_defaults.channel.listen_only_mode),
+                })
+                .unwrap_or(base_defaults.channel),
             mcp: default_mcp,
             brave_search_key: toml
                 .defaults
@@ -1616,6 +1626,11 @@ impl Config {
                             .unwrap_or(defaults.browser.close_policy),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
+                    channel: a.channel.and_then(|channel_config| {
+                        channel_config
+                            .listen_only_mode
+                            .map(|listen_only_mode| ChannelConfig { listen_only_mode })
+                    }),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(
                             mcp_servers
@@ -1654,6 +1669,7 @@ impl Config {
                 cortex: None,
                 warmup: None,
                 browser: None,
+                channel: None,
                 mcp: None,
                 brave_search_key: None,
                 cron_timezone: None,

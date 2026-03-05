@@ -577,6 +577,10 @@ export interface BrowserSection {
 	close_policy: "close_browser" | "close_tabs" | "detach";
 }
 
+export interface ChannelSection {
+	listen_only_mode: boolean;
+}
+
 export interface SandboxSection {
 	mode: "enabled" | "disabled";
 	writable_paths: string[];
@@ -595,6 +599,7 @@ export interface AgentConfigResponse {
 	coalesce: CoalesceSection;
 	memory_persistence: MemoryPersistenceSection;
 	browser: BrowserSection;
+	channel: ChannelSection;
 	discord: DiscordSection;
 	sandbox: SandboxSection;
 }
@@ -661,6 +666,10 @@ export interface BrowserUpdate {
 	close_policy?: "close_browser" | "close_tabs" | "detach";
 }
 
+export interface ChannelUpdate {
+	listen_only_mode?: boolean;
+}
+
 export interface SandboxUpdate {
 	mode?: "enabled" | "disabled";
 	writable_paths?: string[];
@@ -679,6 +688,7 @@ export interface AgentConfigUpdateRequest {
 	coalesce?: CoalesceUpdate;
 	memory_persistence?: MemoryPersistenceUpdate;
 	browser?: BrowserUpdate;
+	channel?: ChannelUpdate;
 	discord?: DiscordUpdate;
 	sandbox?: SandboxUpdate;
 }

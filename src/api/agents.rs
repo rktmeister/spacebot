@@ -562,6 +562,7 @@ pub(super) async fn create_agent(
         cortex: None,
         warmup: None,
         browser: None,
+        channel: None,
         mcp: None,
         brave_search_key: None,
         cron_timezone: None,
@@ -676,7 +677,8 @@ pub(super) async fn create_agent(
         identity,
         skills,
     ));
-    runtime_config.set_settings(settings_store.clone());
+    let explicit_listen_only = raw_config.channel.map(|channel| channel.listen_only_mode);
+    runtime_config.set_settings(settings_store.clone(), explicit_listen_only);
 
     let llm_manager = {
         let guard = state.llm_manager.read().await;

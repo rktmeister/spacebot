@@ -174,6 +174,11 @@ pub struct Channel {
     pending_results: Vec<PendingResult>,
     /// Optional send_agent_message tool (only when agent has active links).
     send_agent_message_tool: Option<crate::tools::SendAgentMessageTool>,
+    /// Channel-local reply mode toggle.
+    /// When true, suppress unsolicited replies unless explicitly invoked.
+    listen_only_mode: bool,
+    /// Session-scoped override used when persistence is unavailable/failed.
+    listen_only_session_override: Option<bool>,
 }
 
 impl Channel {
@@ -249,6 +254,7 @@ impl Channel {
         };
 
         let self_tx = message_tx.clone();
+        let resolved_listen_only_mode = deps.runtime_config.channel_config.load().listen_only_mode;
         let channel = Self {
             id: id.clone(),
             title: None,
@@ -275,6 +281,8 @@ impl Channel {
             retrigger_deadline: None,
             pending_results: Vec::new(),
             send_agent_message_tool,
+            listen_only_mode: resolved_listen_only_mode,
+            listen_only_session_override: None,
         };
 
         (channel, message_tx)
@@ -300,8 +308,337 @@ impl Channel {
             .filter(|adapter| !adapter.is_empty())
     }
 
+    fn sync_listen_only_mode_from_runtime(&mut self) {
+        if let Some(override_mode) = self.listen_only_session_override {
+            self.listen_only_mode = override_mode;
+            return;
+        }
+        let runtime_default = self
+            .deps
+            .runtime_config
+            .channel_config
+            .load()
+            .listen_only_mode;
+        let explicit_listen_only = **self.deps.runtime_config.channel_listen_only_explicit.load();
+        let settings_store = self
+            .deps
+            .runtime_config
+            .settings
+            .load()
+            .as_ref()
+            .as_ref()
+            .cloned();
+        self.listen_only_mode = if explicit_listen_only.is_some() {
+            runtime_default
+        } else if let Some(settings_store) = settings_store {
+            match settings_store.channel_listen_only_mode_for(self.id.as_ref()) {
+                Ok(Some(enabled)) => enabled,
+                Ok(None) => runtime_default,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        channel_id = %self.id,
+                        "failed to sync channel-scoped listen_only_mode setting"
+                    );
+                    runtime_default
+                }
+            }
+        } else {
+            runtime_default
+        };
+    }
+
+    fn set_listen_only_mode(&mut self, enabled: bool) -> bool {
+        let mut persisted = false;
+        let settings_store = self
+            .deps
+            .runtime_config
+            .settings
+            .load()
+            .as_ref()
+            .as_ref()
+            .cloned();
+        if let Some(settings_store) = settings_store {
+            match settings_store.set_channel_listen_only_mode_for(self.id.as_ref(), enabled) {
+                Ok(()) => persisted = true,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        channel_id = %self.id,
+                        listen_only_mode = enabled,
+                        "failed to persist listen_only_mode setting"
+                    );
+                }
+            }
+        } else {
+            tracing::warn!(
+                channel_id = %self.id,
+                listen_only_mode = enabled,
+                "settings store unavailable; listen_only_mode is session-scoped"
+            );
+        }
+
+        self.listen_only_mode = enabled;
+        self.listen_only_session_override = if persisted { None } else { Some(enabled) };
+        persisted
+    }
+
+    fn persist_inbound_user_message(&self, message: &InboundMessage, raw_text: &str) {
+        if message.source == "system" {
+            return;
+        }
+        let sender_name = message
+            .metadata
+            .get("sender_display_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&message.sender_id);
+        self.state.conversation_logger.log_user_message(
+            &self.state.channel_id,
+            sender_name,
+            &message.sender_id,
+            raw_text,
+            &message.metadata,
+        );
+        self.state
+            .channel_store
+            .upsert(&message.conversation_id, &message.metadata);
+    }
+
     fn suppress_plaintext_fallback(&self) -> bool {
         matches!(self.current_adapter(), Some("email"))
+    }
+
+    fn rewrite_tool_routed_command_prompt(&self, raw_text: &str) -> Option<String> {
+        match raw_text.trim() {
+            "/tasks" => Some(
+                "use channel tools to fetch my ready tasks (limit 10) and reply exactly with:\n\
+                 - header: tasks (ready):\n\
+                 - each line: - #<task_number> [<priority>] <title>\n\
+                 if no tasks are ready, reply exactly: tasks (ready): none"
+                    .to_string(),
+            ),
+            "/today" => Some(
+                "use channel tools to build a local tasks snapshot and reply exactly in this format:\n\
+                 - first line: today (local tasks snapshot):\n\
+                 - section 1: in-progress tasks (up to 5), each line:   #<task_number> [<priority>] <title>\n\
+                 - section 2: up next ready tasks (up to 5), each line:   #<task_number> [<priority>] <title>\n\
+                 if a section is empty use:\n\
+                 - in progress: none\n\
+                 - up next (ready): none"
+                    .to_string(),
+            ),
+            "/digest" => Some(
+                "using available tools and channel context, generate a concise day digest from local 00:00 to now with exactly this order:\n\
+                 1) top decisions\n\
+                 2) key convo themes\n\
+                 3) open loops\n\
+                 keep it practical and concise; if there are no meaningful updates, reply exactly: no material updates today."
+                    .to_string(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn compute_listen_mode_invocation(
+        &self,
+        message: &InboundMessage,
+        raw_text: &str,
+    ) -> (bool, bool, bool) {
+        let text = raw_text.trim();
+        let invoked_by_command = text.starts_with('/');
+        let invoked_by_mention = match message.source.as_str() {
+            "telegram" => {
+                let text_lower = text.to_lowercase();
+                message
+                    .metadata
+                    .get("telegram_bot_username")
+                    .and_then(|v| v.as_str())
+                    .map(|username| {
+                        let mention = format!("@{}", username.to_lowercase());
+                        text_lower.match_indices(&mention).any(|(start, _)| {
+                            let end = start + mention.len();
+                            let before_ok = start == 0
+                                || text_lower[..start].chars().next_back().is_none_or(
+                                    |character| {
+                                        !(character.is_ascii_alphanumeric() || character == '_')
+                                    },
+                                );
+                            let after_ok = end == text_lower.len()
+                                || text_lower[end..].chars().next().is_none_or(|character| {
+                                    !(character.is_ascii_alphanumeric() || character == '_')
+                                });
+                            before_ok && after_ok
+                        })
+                    })
+                    .unwrap_or(false)
+            }
+            "discord" => message
+                .metadata
+                .get("discord_mentioned_bot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            "slack" => message
+                .metadata
+                .get("slack_mentions_or_replies_to_bot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            "twitch" => message
+                .metadata
+                .get("twitch_mentions_or_replies_to_bot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            _ => false,
+        };
+        let invoked_by_reply = match message.source.as_str() {
+            // Use bot-specific reply metadata; generic reply_to_is_bot can
+            // match unrelated bots and cause false invokes.
+            "discord" => message
+                .metadata
+                .get("discord_reply_to_bot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            "telegram" => {
+                let reply_to_is_bot = message
+                    .metadata
+                    .get("reply_to_is_bot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let bot_username = message
+                    .metadata
+                    .get("telegram_bot_username")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_lowercase);
+                let reply_username = message
+                    .metadata
+                    .get("reply_to_username")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_lowercase);
+                reply_to_is_bot
+                    && reply_username
+                        .zip(bot_username)
+                        .is_some_and(|(reply, bot)| bot == reply)
+            }
+            _ => message
+                .metadata
+                .get("reply_to_is_bot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        };
+
+        (invoked_by_command, invoked_by_mention, invoked_by_reply)
+    }
+
+    async fn send_builtin_text(&mut self, text: String, log_label: &str) {
+        if let Err(error) = self
+            .response_tx
+            .send(OutboundResponse::Text(text.clone()))
+            .await
+        {
+            tracing::error!(%error, channel_id = %self.id, %log_label, "failed to send built-in reply");
+            return;
+        }
+        self.state.conversation_logger.log_bot_message_with_name(
+            &self.state.channel_id,
+            &text,
+            Some(self.agent_display_name()),
+        );
+    }
+
+    async fn try_handle_builtin_ops_commands(
+        &mut self,
+        raw_text: &str,
+        message: &InboundMessage,
+    ) -> Result<bool> {
+        if message.source == "system" {
+            return Ok(false);
+        }
+        let supported_source = matches!(
+            message.source.as_str(),
+            "telegram" | "discord" | "slack" | "twitch"
+        );
+        if !supported_source {
+            return Ok(false);
+        }
+
+        let text = raw_text.trim();
+        if !text.starts_with('/') {
+            return Ok(false);
+        }
+
+        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
+        let now_line = temporal_context.current_time_line();
+
+        match text {
+            "/status" => {
+                let routing = self.deps.runtime_config.routing.load();
+                let channel_model = routing.resolve(ProcessType::Channel, None).to_string();
+                let branch_model = routing.resolve(ProcessType::Branch, None).to_string();
+                let mode = if self.listen_only_mode {
+                    "quiet"
+                } else {
+                    "active"
+                };
+                let adapter = self.current_adapter().unwrap_or("unknown");
+                let body = format!(
+                    "status\n\
+                     - agent: {}\n\
+                     - channel: {}\n\
+                     - adapter: {}\n\
+                     - mode: {} (quiet => only command/@mention/reply-to-bot)\n\
+                     - channel model: {}\n\
+                     - branch model: {}\n\
+                     - time: {}",
+                    self.deps.agent_id,
+                    self.id,
+                    adapter,
+                    mode,
+                    channel_model,
+                    branch_model,
+                    now_line
+                );
+                self.send_builtin_text(body, "status").await;
+                return Ok(true);
+            }
+            "/quiet" => {
+                let persisted = self.set_listen_only_mode(true);
+                let body = if persisted {
+                    "quiet mode enabled. i'll only reply to commands, @mentions, or replies to my message."
+                        .to_string()
+                } else {
+                    "quiet mode enabled for this session, but persistence failed; it may revert after restart.".to_string()
+                };
+                self.send_builtin_text(body, "quiet").await;
+                return Ok(true);
+            }
+            "/active" => {
+                let persisted = self.set_listen_only_mode(false);
+                let body = if persisted {
+                    "active mode enabled. i'll respond normally in this chat.".to_string()
+                } else {
+                    "active mode enabled for this session, but persistence failed; it may revert after restart.".to_string()
+                };
+                self.send_builtin_text(body, "active").await;
+                return Ok(true);
+            }
+            "/help" => {
+                let lines = [
+                    "commands:".to_string(),
+                    "- /status: current mode, models, binding snapshot".to_string(),
+                    "- /today: in-progress + ready task snapshot".to_string(),
+                    "- /tasks: ready task list".to_string(),
+                    "- /digest: one-shot day digest (00:00 -> now)".to_string(),
+                    "- /quiet: listen-only mode".to_string(),
+                    "- /active: normal reply mode".to_string(),
+                    "- /agent-id: runtime agent id".to_string(),
+                ];
+                let body = lines.join("\n");
+                self.send_builtin_text(body, "help").await;
+                return Ok(true);
+            }
+            _ => {}
+        }
+
+        Ok(false)
     }
 
     /// Run the channel event loop.
@@ -413,6 +750,17 @@ impl Channel {
         if config.multi_user_only && self.is_dm() {
             return false;
         }
+        // Built-in slash commands should execute immediately and never be batched.
+        let looks_like_command = match &message.content {
+            crate::MessageContent::Text(text) => text.trim_start().starts_with('/'),
+            crate::MessageContent::Media { text, .. } => text
+                .as_deref()
+                .is_some_and(|value| value.trim_start().starts_with('/')),
+            crate::MessageContent::Interaction { .. } => false,
+        };
+        if looks_like_command {
+            return false;
+        }
         true
     }
 
@@ -497,6 +845,9 @@ impl Channel {
     /// with a coalesce hint telling the LLM this is a fast-moving conversation.
     #[tracing::instrument(skip(self, messages), fields(channel_id = %self.id, agent_id = %self.deps.agent_id, message_count = messages.len()))]
     async fn handle_message_batch(&mut self, messages: Vec<InboundMessage>) -> Result<()> {
+        // Apply runtime-config updates immediately without requiring a restart.
+        self.sync_listen_only_mode_from_runtime();
+
         let message_count = messages.len();
         let batch_start_timestamp = messages
             .iter()
@@ -558,9 +909,10 @@ impl Channel {
         }
 
         // Persist each message to conversation log (individual audit trail)
-        let mut user_contents: Vec<UserContent> = Vec::new();
+        let mut pending_batch_entries: Vec<(String, Vec<_>)> = Vec::new();
         let mut conversation_id = String::new();
         let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
+        let mut batch_has_invoke = false;
 
         for message in &messages {
             if message.source != "system" {
@@ -580,6 +932,13 @@ impl Channel {
                         (message.content.to_string(), Vec::new())
                     }
                 };
+
+                if self.listen_only_mode {
+                    let (invoked_by_command, invoked_by_mention, invoked_by_reply) =
+                        self.compute_listen_mode_invocation(message, &raw_text);
+                    batch_has_invoke |=
+                        invoked_by_command || invoked_by_mention || invoked_by_reply;
+                }
 
                 self.state.conversation_logger.log_user_message(
                     &self.state.channel_id,
@@ -617,17 +976,33 @@ impl Channel {
                     &raw_text,
                 );
 
-                // Download attachments for this message
-                if !attachments.is_empty() {
-                    let attachment_content = download_attachments(&self.deps, &attachments).await;
-                    for content in attachment_content {
-                        user_contents.push(content);
-                    }
-                }
-
-                user_contents.push(UserContent::text(formatted_text));
+                pending_batch_entries.push((formatted_text, attachments));
             }
         }
+
+        if self.listen_only_mode && !batch_has_invoke {
+            tracing::debug!(
+                channel_id = %self.id,
+                message_count,
+                "listen-first mode: suppressing unsolicited coalesced batch"
+            );
+            // Keep passive memory capture behavior aligned with single-message flow.
+            self.message_count += message_count;
+            self.check_memory_persistence().await;
+            return Ok(());
+        }
+
+        let mut user_contents: Vec<UserContent> = Vec::new();
+        for (formatted_text, attachments) in pending_batch_entries {
+            if !attachments.is_empty() {
+                let attachment_content = download_attachments(&self.deps, &attachments).await;
+                for content in attachment_content {
+                    user_contents.push(content);
+                }
+            }
+            user_contents.push(UserContent::text(formatted_text));
+        }
+
         // Separate text and non-text (image/audio) content
         let mut text_parts = Vec::new();
         let mut attachment_parts = Vec::new();
@@ -749,6 +1124,9 @@ impl Channel {
     /// memory_save. The tools act on the channel's shared state directly.
     #[tracing::instrument(skip(self, message), fields(channel_id = %self.id, agent_id = %self.deps.agent_id, message_id = %message.id))]
     async fn handle_message(&mut self, message: InboundMessage) -> Result<()> {
+        // Apply runtime-config updates immediately without requiring a restart.
+        self.sync_listen_only_mode_from_runtime();
+
         tracing::info!(
             channel_id = %self.id,
             message_id = %message.id,
@@ -773,33 +1151,52 @@ impl Channel {
             crate::MessageContent::Interaction { .. } => (message.content.to_string(), Vec::new()),
         };
 
-        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
-        let message_timestamp = temporal_context.format_timestamp(message.timestamp);
-        let user_text = format_user_message(&raw_text, &message, &message_timestamp);
+        self.persist_inbound_user_message(&message, &raw_text);
 
-        let attachment_content = if !attachments.is_empty() {
-            download_attachments(&self.deps, &attachments).await
-        } else {
-            Vec::new()
-        };
+        // Deterministic built-in command: bypass model output drift for agent identity checks.
+        if message.source != "system" && raw_text.trim() == "/agent-id" {
+            self.send_builtin_text(self.deps.agent_id.to_string(), "agent-id")
+                .await;
+            return Ok(());
+        }
 
-        // Persist user messages (skip system re-triggers)
-        if message.source != "system" {
-            let sender_name = message
-                .metadata
-                .get("sender_display_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&message.sender_id);
-            self.state.conversation_logger.log_user_message(
-                &self.state.channel_id,
-                sender_name,
-                &message.sender_id,
-                &raw_text,
-                &message.metadata,
-            );
-            self.state
-                .channel_store
-                .upsert(&message.conversation_id, &message.metadata);
+        // Deterministic liveness ping for Telegram mentions.
+        // This avoids model/provider flakiness for simple "you there?" style checks.
+        if message.source == "telegram" {
+            let text = raw_text.trim().to_lowercase();
+            let (_, has_mention, _) = self.compute_listen_mode_invocation(&message, &raw_text);
+            let looks_like_ping = text.contains("you here")
+                || text.contains("ping")
+                || text.ends_with(" yo")
+                || text == "yo"
+                || text.contains("alive")
+                || text.contains("there?");
+
+            if has_mention && looks_like_ping {
+                self.send_builtin_text("yeah i'm here".to_string(), "telegram-ping")
+                    .await;
+                return Ok(());
+            }
+        }
+
+        // Deterministic ping ack for Discord quiet-mode mentions/replies to avoid
+        // flaky model behavior (e.g. skipping or over-formatting simple liveness checks).
+        if message.source == "discord" && self.listen_only_mode {
+            let text = raw_text.trim().to_lowercase();
+            let (_, invoked_by_mention, invoked_by_reply) =
+                self.compute_listen_mode_invocation(&message, &raw_text);
+            let directed = invoked_by_mention || invoked_by_reply;
+            let looks_like_ping = text.contains("you here")
+                || text.contains("ping")
+                || text.ends_with(" yo")
+                || text == "yo"
+                || text.contains("alive")
+                || text.contains("there?");
+            if directed && looks_like_ping {
+                self.send_builtin_text("yeah i'm here".to_string(), "discord-ping")
+                    .await;
+                return Ok(());
+            }
         }
 
         // Capture conversation context from the first message (platform, channel, server)
@@ -820,6 +1217,49 @@ impl Channel {
             )?);
         }
 
+        if self
+            .try_handle_builtin_ops_commands(&raw_text, &message)
+            .await?
+        {
+            return Ok(());
+        }
+
+        let rewritten_text = if message.source == "system" {
+            raw_text.clone()
+        } else {
+            self.rewrite_tool_routed_command_prompt(&raw_text)
+                .unwrap_or_else(|| raw_text.clone())
+        };
+
+        let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
+        let message_timestamp = temporal_context.format_timestamp(message.timestamp);
+        let user_text = format_user_message(&rewritten_text, &message, &message_timestamp);
+
+        let mut invoked_by_command = false;
+        let mut invoked_by_mention = false;
+        let mut invoked_by_reply = false;
+
+        // Listen-first guardrail:
+        // ingest all messages, but only reply when explicitly invoked.
+        if self.listen_only_mode && message.source != "system" {
+            (invoked_by_command, invoked_by_mention, invoked_by_reply) =
+                self.compute_listen_mode_invocation(&message, &raw_text);
+
+            if !invoked_by_command && !invoked_by_mention && !invoked_by_reply {
+                tracing::debug!(
+                    channel_id = %self.id,
+                    source = %message.source,
+                    "listen-first mode: suppressing unsolicited reply"
+                );
+                // In quiet/listen-first mode we still want passive memory capture.
+                // Count suppressed user messages so auto memory persistence branches
+                // continue to run on interval without requiring explicit invokes.
+                self.message_count += 1;
+                self.check_memory_persistence().await;
+                return Ok(());
+            }
+        }
+
         let system_prompt = self.build_system_prompt().await?;
 
         {
@@ -828,6 +1268,11 @@ impl Channel {
         }
 
         let is_retrigger = message.source == "system";
+        let attachment_content = if !attachments.is_empty() {
+            download_attachments(&self.deps, &attachments).await
+        } else {
+            Vec::new()
+        };
 
         let (result, skip_flag, replied_flag, retrigger_reply_preserved) = self
             .run_agent_turn(
@@ -841,6 +1286,25 @@ impl Channel {
 
         self.handle_agent_result(result, &skip_flag, &replied_flag, is_retrigger)
             .await;
+
+        // Safety-net: in quiet mode, explicit mention/reply should never be dropped silently.
+        if self.listen_only_mode
+            && !is_retrigger
+            && !invoked_by_command
+            && (invoked_by_mention || invoked_by_reply)
+            && skip_flag.load(std::sync::atomic::Ordering::Relaxed)
+            && !replied_flag.load(std::sync::atomic::Ordering::Relaxed)
+            && matches!(
+                message.source.as_str(),
+                "discord" | "telegram" | "slack" | "twitch"
+            )
+        {
+            self.send_builtin_text(
+                "yeah i'm here — tell me what you need.".to_string(),
+                "quiet-mode-fallback",
+            )
+            .await;
+        }
 
         // After retrigger turns, persist a fallback summary only when we don't
         // already have the LLM's actual relay text in history.
@@ -1450,6 +1914,9 @@ impl Channel {
 
     /// Handle a process event (branch results, worker completions, status updates).
     async fn handle_event(&mut self, event: ProcessEvent) -> Result<()> {
+        // Keep mode aligned with live settings updates while this worker runs.
+        self.sync_listen_only_mode_from_runtime();
+
         // Only process events targeted at this channel
         if !event_is_for_channel(&event, &self.id) {
             return Ok(());
