@@ -1582,6 +1582,24 @@ impl Channel {
             } => {
                 run_logger.log_opencode_metadata(*worker_id, session_id, *port);
             }
+            ProcessEvent::WorkerInitialResult {
+                worker_id, result, ..
+            } => {
+                // Interactive worker completed its initial task but stays alive
+                // for follow-ups. Deliver the result to the channel without
+                // removing the worker from the active set.
+                self.pending_results.push(PendingResult {
+                    process_type: "worker",
+                    process_id: worker_id.to_string(),
+                    result: result.clone(),
+                    success: true,
+                });
+                should_retrigger = true;
+                tracing::info!(
+                    worker_id = %worker_id,
+                    "interactive worker initial result queued for retrigger"
+                );
+            }
             _ => {}
         }
 

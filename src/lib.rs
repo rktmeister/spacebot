@@ -204,6 +204,15 @@ pub enum ProcessEvent {
         session_id: String,
         port: u16,
     },
+    /// An interactive worker's initial task completed. The worker remains alive
+    /// for follow-ups, but the channel should retrigger to deliver this result.
+    /// Unlike `WorkerComplete`, the worker is NOT removed from the active set.
+    WorkerInitialResult {
+        agent_id: AgentId,
+        worker_id: WorkerId,
+        channel_id: Option<ChannelId>,
+        result: String,
+    },
     TextDelta {
         agent_id: AgentId,
         process_id: ProcessId,

@@ -192,6 +192,19 @@ impl OpenCodeWorker {
 
         // Interactive follow-up loop
         if let Some(mut input_rx) = self.input_rx.take() {
+            // Emit the initial result immediately so the channel can retrigger
+            // and tell the user what the worker found. Without this, the channel
+            // would block until the entire follow-up loop exits — which only
+            // happens when the channel drops the input sender, creating a deadlock.
+            let scrubbed_result = self.scrub_text(&result_text);
+            let scrubbed_result = crate::secrets::scrub::scrub_leaks(&scrubbed_result);
+            let _ = self.event_tx.send(ProcessEvent::WorkerInitialResult {
+                agent_id: self.agent_id.clone(),
+                worker_id: self.id,
+                channel_id: self.channel_id.clone(),
+                result: scrubbed_result,
+            });
+
             self.send_status("waiting for follow-up");
 
             while let Some(follow_up) = input_rx.recv().await {
