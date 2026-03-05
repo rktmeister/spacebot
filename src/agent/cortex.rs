@@ -790,7 +790,9 @@ impl Cortex {
     /// Process a process event and extract signals.
     pub async fn observe(&self, event: ProcessEvent) {
         self.observe_health_event(&event).await;
-        let signal = signal_from_event(event);
+        let Some(signal) = signal_from_event(event) else {
+            return;
+        };
         let buffer_len = {
             let mut buffer = self.signal_buffer.write().await;
             push_signal_into_buffer(&mut buffer, signal);
@@ -1023,8 +1025,8 @@ fn summarize_signal_text(value: &str) -> String {
     crate::summarize_first_non_empty_line(value, crate::EVENT_SUMMARY_MAX_CHARS)
 }
 
-fn signal_from_event(event: ProcessEvent) -> Signal {
-    match event {
+fn signal_from_event(event: ProcessEvent) -> Option<Signal> {
+    Some(match event {
         ProcessEvent::BranchStarted {
             branch_id,
             channel_id,
@@ -1193,7 +1195,20 @@ fn signal_from_event(event: ProcessEvent) -> Signal {
             channel_id,
             text_summary: summarize_signal_text(&text_delta),
         },
-    }
+        ProcessEvent::WorkerIdle {
+            worker_id,
+            channel_id,
+            ..
+        } => Signal::WorkerStatus {
+            worker_id,
+            channel_id,
+            status: "idle".to_string(),
+        },
+        // UI-only events — no cortex signal needed.
+        ProcessEvent::OpenCodeSessionCreated { .. }
+        | ProcessEvent::OpenCodePartUpdated { .. }
+        | ProcessEvent::WorkerInitialResult { .. } => return None,
+    })
 }
 
 fn push_signal_into_buffer(buffer: &mut VecDeque<Signal>, signal: Signal) {
@@ -3397,7 +3412,7 @@ mod tests {
             content_summary: "persisted decision".to_string(),
         };
 
-        let signal = signal_from_event(event);
+        let signal = signal_from_event(event).expect("MemorySaved should produce a signal");
         match signal {
             Signal::MemorySaved {
                 memory_id,
@@ -3530,10 +3545,36 @@ mod tests {
                 text_delta: "he".to_string(),
                 aggregated_text: "hello".to_string(),
             },
+            ProcessEvent::WorkerIdle {
+                agent_id: Arc::from("agent"),
+                worker_id,
+                channel_id: Some(channel_id.clone()),
+            },
+            ProcessEvent::OpenCodeSessionCreated {
+                agent_id: Arc::from("agent"),
+                worker_id,
+                session_id: "session-1".to_string(),
+                port: 19898,
+            },
+            ProcessEvent::OpenCodePartUpdated {
+                agent_id: Arc::from("agent"),
+                worker_id,
+                part: crate::opencode::types::OpenCodePart::Text {
+                    id: "part-1".to_string(),
+                    text: "hello".to_string(),
+                },
+            },
+            ProcessEvent::WorkerInitialResult {
+                agent_id: Arc::from("agent"),
+                worker_id,
+                channel_id: Some(channel_id.clone()),
+                result: "initial result".to_string(),
+            },
         ];
 
         for event in events {
-            let _signal = signal_from_event(event);
+            // Some events (OpenCode UI plumbing) return None — that's fine.
+            let _signal: Option<Signal> = signal_from_event(event);
         }
     }
 
