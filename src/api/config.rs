@@ -952,6 +952,10 @@ id = "main"
         };
 
         let result = update_cortex_table(&mut doc, agent_idx, &update);
-        assert_eq!(result, Err(StatusCode::BAD_REQUEST));
+        if (usize::MAX as u128) > (i64::MAX as u128) {
+            assert_eq!(result, Err(StatusCode::BAD_REQUEST));
+        } else {
+            assert!(result.is_ok());
+        }
     }
 }

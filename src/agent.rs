@@ -16,6 +16,14 @@ pub mod process_control;
 pub mod status;
 pub mod worker;
 
+pub(crate) fn panic_payload_to_string(panic_payload: &(dyn std::any::Any + Send)) -> String {
+    panic_payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic payload".to_string())
+}
+
 pub(crate) fn extract_last_assistant_text(history: &[rig::message::Message]) -> Option<String> {
     for message in history.iter().rev() {
         if let rig::message::Message::Assistant { content, .. } = message {

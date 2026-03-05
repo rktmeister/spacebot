@@ -440,7 +440,7 @@ fn take_lagged_control_flag(state: &mut HealthRuntimeState) -> bool {
 fn detached_timeout_transition(
     metadata: &serde_json::Value,
     retry_limit: u8,
-) -> (u64, bool, TaskStatus, &'static str) {
+) -> (u64, bool, TaskStatus) {
     let current_timeout_count = metadata
         .get("supervisor_timeout_count")
         .and_then(serde_json::Value::as_u64)
@@ -452,8 +452,7 @@ fn detached_timeout_transition(
     } else {
         TaskStatus::Ready
     };
-    let status_text = if exhausted { "backlog" } else { "ready" };
-    (next_timeout_count, exhausted, status, status_text)
+    (next_timeout_count, exhausted, status)
 }
 
 fn claim_detached_completion(lifecycle: &std::sync::atomic::AtomicU8) -> bool {
@@ -477,14 +476,6 @@ fn claim_detached_completion(lifecycle: &std::sync::atomic::AtomicU8) -> bool {
             return true;
         }
     }
-}
-
-fn panic_payload_to_string(panic_payload: &(dyn std::any::Any + Send)) -> String {
-    panic_payload
-        .downcast_ref::<&str>()
-        .map(|message| (*message).to_string())
-        .or_else(|| panic_payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "unknown panic payload".to_string())
 }
 
 #[doc(hidden)]
@@ -2613,7 +2604,8 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                             }
                         }
                         Err(panic_payload) => {
-                            let scrubbed_panic = scrub(panic_payload_to_string(&*panic_payload));
+                            let scrubbed_panic =
+                                scrub(crate::agent::panic_payload_to_string(&*panic_payload));
                             let (error_message, _notify, _success) =
                                 map_worker_completion_result(Err(WorkerCompletionError::failed(
                                     format!("worker task panicked: {scrubbed_panic}"),
@@ -2703,7 +2695,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                     .cortex
                     .load()
                     .detached_worker_timeout_retry_limit;
-                let (next_timeout_count, exhausted, next_status, next_status_text) =
+                let (next_timeout_count, exhausted, next_status) =
                     detached_timeout_transition(&task.metadata, timeout_retry_limit);
 
                 let timeout_message = scrub(format!(
@@ -2732,7 +2724,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                         let _ = event_tx.send(ProcessEvent::TaskUpdated {
                             agent_id: Arc::from(agent_id.as_str()),
                             task_number: task.task_number,
-                            status: next_status_text.to_string(),
+                            status: next_status.as_str().to_string(),
                             action: "updated".to_string(),
                         });
                         logger.log(
@@ -2820,7 +2812,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
             .catch_unwind()
             .await;
         if let Err(panic_payload) = execution_result {
-            let panic_message = panic_payload_to_string(&*panic_payload);
+            let panic_message = crate::agent::panic_payload_to_string(&*panic_payload);
             tracing::warn!(
                 task_number = task.task_number,
                 %panic_message,
@@ -3657,18 +3649,18 @@ mod tests {
     #[test]
     fn detached_timeout_transition_requeues_until_limit_then_quarantines() {
         let metadata = serde_json::json!({});
-        let (count1, exhausted1, status1, text1) = detached_timeout_transition(&metadata, 2);
+        let (count1, exhausted1, status1) = detached_timeout_transition(&metadata, 2);
         assert_eq!(count1, 1);
         assert!(!exhausted1);
         assert_eq!(status1, TaskStatus::Ready);
-        assert_eq!(text1, "ready");
+        assert_eq!(status1.as_str(), "ready");
 
         let metadata = serde_json::json!({ "supervisor_timeout_count": 2 });
-        let (count2, exhausted2, status2, text2) = detached_timeout_transition(&metadata, 2);
+        let (count2, exhausted2, status2) = detached_timeout_transition(&metadata, 2);
         assert_eq!(count2, 3);
         assert!(exhausted2);
         assert_eq!(status2, TaskStatus::Backlog);
-        assert_eq!(text2, "backlog");
+        assert_eq!(status2.as_str(), "backlog");
     }
 
     #[test]

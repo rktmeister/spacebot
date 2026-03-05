@@ -307,10 +307,7 @@ pub(super) async fn cancel_process(
             let pools = state.agent_pools.load();
             for (_agent_id, pool) in pools.iter() {
                 let logger = ProcessRunLogger::new(pool.clone());
-                match logger
-                    .cancel_running_worker(&request.channel_id, worker_id)
-                    .await
-                {
+                match logger.cancel_running_detached_worker(worker_id).await {
                     Ok(true) => {
                         return Ok(Json(CancelProcessResponse {
                             success: true,
