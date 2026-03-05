@@ -329,6 +329,7 @@ impl Worker {
         if let Some(mut input_rx) = self.input_rx.take() {
             self.state = WorkerState::WaitingForInput;
             self.hook.send_status("waiting for input");
+            self.hook.send_worker_idle();
 
             while let Some(follow_up) = input_rx.recv().await {
                 self.state = WorkerState::Running;
@@ -392,6 +393,7 @@ impl Worker {
 
                 self.state = WorkerState::WaitingForInput;
                 self.hook.send_status("waiting for input");
+                self.hook.send_worker_idle();
             }
         }
 

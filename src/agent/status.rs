@@ -77,6 +77,11 @@ impl StatusBlock {
                     worker.status.clone_from(status);
                 }
             }
+            ProcessEvent::WorkerIdle { worker_id, .. } => {
+                if let Some(worker) = self.active_workers.iter_mut().find(|w| w.id == *worker_id) {
+                    worker.status = "idle".to_string();
+                }
+            }
             ProcessEvent::WorkerComplete {
                 worker_id,
                 result,

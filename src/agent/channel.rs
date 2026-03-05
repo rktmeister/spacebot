@@ -1544,6 +1544,9 @@ impl Channel {
             } => {
                 run_logger.log_worker_status(*worker_id, status);
             }
+            ProcessEvent::WorkerIdle { worker_id, .. } => {
+                run_logger.log_worker_idle(*worker_id);
+            }
             ProcessEvent::WorkerComplete {
                 worker_id,
                 result,
