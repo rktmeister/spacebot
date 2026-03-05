@@ -395,12 +395,16 @@ impl OpenCodeWorker {
                             && let Some(tool_state) = state
                         {
                             match tool_state {
-                                ToolState::Running { title, .. } => {
+                                ToolState::Running { title, input, .. } => {
                                     *current_tool = Some(tool_name.clone());
-                                    let label = title.as_deref().unwrap_or(tool_name.as_str());
+                                    let label = title
+                                        .as_deref()
+                                        .map(String::from)
+                                        .or_else(|| describe_tool_input(tool_name, input.as_ref()))
+                                        .unwrap_or_else(|| tool_name.clone());
                                     self.send_status(&format!("running: {label}"));
                                 }
-                                ToolState::Completed { output, .. } => {
+                                ToolState::Completed { output, title, .. } => {
                                     // Scrub and log potential secret-pattern hits in tool output.
                                     // Do not terminate the worker; channel egress guards enforce
                                     // user-visible leak blocking.
@@ -421,7 +425,14 @@ impl OpenCodeWorker {
                                     if current_tool.as_deref() == Some(tool_name.as_str()) {
                                         *current_tool = None;
                                     }
-                                    self.send_status("working");
+                                    // Use the completed title (relative path, description,
+                                    // pattern) for a meaningful "done" status instead of
+                                    // the opaque "working".
+                                    let done_label = title
+                                        .as_deref()
+                                        .filter(|t| !t.is_empty())
+                                        .unwrap_or(tool_name.as_str());
+                                    self.send_status(&format!("done: {done_label}"));
                                 }
                                 ToolState::Error { error, .. } => {
                                     let description = error.as_deref().unwrap_or("unknown");
@@ -614,6 +625,75 @@ impl OpenCodeWorker {
             channel_id: self.channel_id.clone(),
             status: status.to_string(),
         });
+    }
+}
+
+/// Extract a human-readable description from a tool's input JSON.
+///
+/// OpenCode tool inputs have well-known shapes (e.g. `read` has `filePath`,
+/// `bash` has `description` and `command`, `grep` has `pattern`). When the
+/// running-state `title` is absent we derive a label from the input fields
+/// so the transcript shows "reading src/main.rs" instead of "running: read".
+fn describe_tool_input(tool_name: &str, input: Option<&serde_json::Value>) -> Option<String> {
+    let input = input?.as_object()?;
+    match tool_name {
+        "read" | "write" | "edit" => {
+            let file_path = input.get("filePath")?.as_str()?;
+            // Show just the last 3 path components to keep it short
+            let short = short_path(file_path);
+            Some(short.to_string())
+        }
+        "bash" => {
+            // Prefer the LLM-provided description, fall back to command
+            if let Some(description) = input.get("description").and_then(|v| v.as_str())
+                && !description.is_empty()
+            {
+                return Some(truncate_status(description, 80));
+            }
+            let command = input.get("command")?.as_str()?;
+            Some(truncate_status(command, 60))
+        }
+        "glob" => {
+            let pattern = input.get("pattern")?.as_str()?;
+            Some(format!("glob {pattern}"))
+        }
+        "grep" => {
+            let pattern = input.get("pattern")?.as_str()?;
+            Some(format!("search \"{pattern}\""))
+        }
+        "task" => {
+            let description = input.get("description")?.as_str()?;
+            Some(truncate_status(description, 80))
+        }
+        _ => None,
+    }
+}
+
+/// Shorten an absolute file path to at most the last 3 components.
+fn short_path(path: &str) -> &str {
+    let mut count = 0;
+    for (idx, byte) in path.bytes().enumerate().rev() {
+        if byte == b'/' {
+            count += 1;
+            if count == 3 {
+                return &path[idx + 1..];
+            }
+        }
+    }
+    path
+}
+
+/// Truncate a status string to `max` characters, appending "…" if trimmed.
+fn truncate_status(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        text.to_string()
+    } else {
+        let boundary = text
+            .char_indices()
+            .nth(max.saturating_sub(1))
+            .map(|(idx, _)| idx)
+            .unwrap_or(max);
+        format!("{}…", &text[..boundary])
     }
 }
 
