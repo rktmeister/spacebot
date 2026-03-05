@@ -339,6 +339,12 @@ impl McpConnection {
                 let mut auth_header_value = None;
                 for (header_name, header_value) in resolved_headers {
                     if header_name.eq_ignore_ascii_case("authorization") {
+                        HeaderValue::from_str(&header_value).with_context(|| {
+                            format!(
+                                "invalid mcp header value for '{}' on server '{}'",
+                                header_name, self.name
+                            )
+                        })?;
                         auth_header_value = Some(header_value);
                         continue;
                     }
