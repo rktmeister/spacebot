@@ -309,6 +309,12 @@ pub enum Signal {
         status: String,
         action: String,
     },
+    /// Streaming text delta emitted by a process.
+    TextDelta {
+        process_id: ProcessId,
+        channel_id: Option<ChannelId>,
+        text_summary: String,
+    },
 }
 
 /// A persisted cortex action record.
@@ -628,6 +634,16 @@ fn signal_from_event(event: ProcessEvent) -> Signal {
             status: summarize_signal_text(&status),
             action,
         },
+        ProcessEvent::TextDelta {
+            process_id,
+            channel_id,
+            text_delta,
+            ..
+        } => Signal::TextDelta {
+            process_id,
+            channel_id,
+            text_summary: summarize_signal_text(&text_delta),
+        },
     }
 }
 
@@ -688,6 +704,21 @@ fn coalesce_signal(previous: &mut Signal, next: &Signal) -> bool {
         ) if previous_task_number == next_task_number => {
             *previous_status = next_status.clone();
             *previous_action = next_action.clone();
+            true
+        }
+        (
+            Signal::TextDelta {
+                process_id: previous_process_id,
+                channel_id: previous_channel_id,
+                text_summary: previous_text_summary,
+            },
+            Signal::TextDelta {
+                process_id: next_process_id,
+                channel_id: next_channel_id,
+                text_summary: next_text_summary,
+            },
+        ) if previous_process_id == next_process_id && previous_channel_id == next_channel_id => {
+            *previous_text_summary = next_text_summary.clone();
             true
         }
         _ => false,
@@ -2584,6 +2615,13 @@ mod tests {
                 task_number: 7,
                 status: "created".to_string(),
                 action: "created".to_string(),
+            },
+            ProcessEvent::TextDelta {
+                agent_id: Arc::from("agent"),
+                process_id: crate::ProcessId::Worker(worker_id),
+                channel_id: Some(channel_id.clone()),
+                text_delta: "he".to_string(),
+                aggregated_text: "hello".to_string(),
             },
         ];
 

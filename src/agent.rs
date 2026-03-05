@@ -15,23 +15,6 @@ mod invariant_harness;
 pub mod status;
 pub mod worker;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EventRecvDisposition {
-    Continue { lagged_count: Option<u64> },
-    Stop,
-}
-
-pub(crate) fn classify_event_recv_error(
-    error: &tokio::sync::broadcast::error::RecvError,
-) -> EventRecvDisposition {
-    match error {
-        tokio::sync::broadcast::error::RecvError::Lagged(count) => EventRecvDisposition::Continue {
-            lagged_count: Some(*count),
-        },
-        tokio::sync::broadcast::error::RecvError::Closed => EventRecvDisposition::Stop,
-    }
-}
-
 pub(crate) fn extract_last_assistant_text(history: &[rig::message::Message]) -> Option<String> {
     for message in history.iter().rev() {
         if let rig::message::Message::Assistant { content, .. } = message {
