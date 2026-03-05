@@ -203,6 +203,7 @@ impl PromptEngine {
         browser_enabled: bool,
         web_search_enabled: bool,
         opencode_enabled: bool,
+        mcp_tool_names: &[String],
     ) -> Result<String> {
         self.render(
             "fragments/worker_capabilities",
@@ -210,6 +211,7 @@ impl PromptEngine {
                 browser_enabled => browser_enabled,
                 web_search_enabled => web_search_enabled,
                 opencode_enabled => opencode_enabled,
+                mcp_tool_names => mcp_tool_names,
             },
         )
     }

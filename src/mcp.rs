@@ -462,6 +462,48 @@ impl McpManager {
         adapters
     }
 
+    /// Return namespaced tool names for all connected MCP servers.
+    ///
+    /// Used to inform the channel prompt about available MCP tools so the
+    /// agent knows it can delegate work that uses them.
+    pub async fn get_tool_names(&self) -> Vec<String> {
+        let connections = self
+            .connections
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let mut names = Vec::new();
+        for connection in connections {
+            if !connection.is_connected().await {
+                continue;
+            }
+
+            let server_name = connection.name().to_string();
+            let tools = connection.list_tools().await;
+            for tool in tools {
+                let description = tool
+                    .description
+                    .as_ref()
+                    .map(|d| d.as_ref().to_string())
+                    .unwrap_or_default();
+                names.push(format!(
+                    "{} — {}",
+                    tool.name,
+                    if description.is_empty() {
+                        format!("from {}", server_name)
+                    } else {
+                        description
+                    }
+                ));
+            }
+        }
+
+        names
+    }
+
     pub async fn reconnect(&self, name: &str) -> Result<()> {
         let config = self
             .configs
