@@ -93,31 +93,35 @@ impl ProcessControlRegistry {
             .is_some()
     }
 
+    async fn lookup_channel_handle(
+        &self,
+        channel_id: &ChannelId,
+    ) -> std::result::Result<crate::agent::channel::ChannelControlHandle, ControlActionResult> {
+        let mut channels = self.channels.write().await;
+        let Some(weak_handle) = channels.get(channel_id).cloned() else {
+            return Err(ControlActionResult::NotFound);
+        };
+
+        let Some(handle) = weak_handle.upgrade() else {
+            channels.remove(channel_id);
+            return Err(ControlActionResult::NotFound);
+        };
+
+        Ok(handle)
+    }
+
     pub async fn cancel_channel_worker(
         &self,
         channel_id: &ChannelId,
         worker_id: WorkerId,
         reason: &str,
     ) -> ControlActionResult {
-        let handle = {
-            let mut channels = self.channels.write().await;
-            let Some(handle) = channels.get(channel_id).cloned() else {
-                return ControlActionResult::NotFound;
-            };
-
-            if handle.upgrade().is_none() {
-                channels.remove(channel_id);
-                return ControlActionResult::NotFound;
-            }
-
-            handle
+        let handle = match self.lookup_channel_handle(channel_id).await {
+            Ok(handle) => handle,
+            Err(result) => return result,
         };
 
-        if let Some(handle) = handle.upgrade() {
-            handle.cancel_worker_with_reason(worker_id, reason).await
-        } else {
-            ControlActionResult::NotFound
-        }
+        handle.cancel_worker_with_reason(worker_id, reason).await
     }
 
     pub async fn cancel_channel_branch(
@@ -126,22 +130,9 @@ impl ProcessControlRegistry {
         branch_id: BranchId,
         reason: &str,
     ) -> ControlActionResult {
-        let handle = {
-            let mut channels = self.channels.write().await;
-            let Some(handle) = channels.get(channel_id).cloned() else {
-                return ControlActionResult::NotFound;
-            };
-
-            if handle.upgrade().is_none() {
-                channels.remove(channel_id);
-                return ControlActionResult::NotFound;
-            }
-
-            handle
-        };
-
-        let Some(handle) = handle.upgrade() else {
-            return ControlActionResult::NotFound;
+        let handle = match self.lookup_channel_handle(channel_id).await {
+            Ok(handle) => handle,
+            Err(result) => return result,
         };
 
         handle.cancel_branch_with_reason(branch_id, reason).await

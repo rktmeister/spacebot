@@ -2161,7 +2161,7 @@ impl Channel {
                 conclusion,
                 ..
             } => {
-                let reply_target_message_id = self.branch_reply_targets.remove(branch_id);
+                let reply_target_message_id = self.branch_reply_targets.get(branch_id).cloned();
                 let was_active = self
                     .state
                     .active_branches
@@ -2177,6 +2177,7 @@ impl Channel {
                             "stale memory-persistence branch completion ignored"
                         );
                     }
+                    self.branch_reply_targets.remove(branch_id);
                     return Ok(());
                 }
 
@@ -2214,6 +2215,7 @@ impl Channel {
 
                     tracing::info!(branch_id = %branch_id, "branch result queued for retrigger");
                 }
+                self.branch_reply_targets.remove(branch_id);
             }
             ProcessEvent::WorkerStarted {
                 worker_id,

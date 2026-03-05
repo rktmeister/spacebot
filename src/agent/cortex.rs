@@ -431,6 +431,19 @@ fn build_kill_targets(
     targets
 }
 
+fn is_terminal_control_result(result: ControlActionResult) -> bool {
+    matches!(
+        result,
+        ControlActionResult::Cancelled
+            | ControlActionResult::AlreadyTerminal
+            | ControlActionResult::NotFound
+    )
+}
+
+fn is_cancelled_control_result(result: ControlActionResult) -> bool {
+    matches!(result, ControlActionResult::Cancelled)
+}
+
 fn take_lagged_control_flag(state: &mut HealthRuntimeState) -> bool {
     let lagged = state.lagged_control_since_last_tick;
     state.lagged_control_since_last_tick = false;
@@ -905,8 +918,8 @@ impl Cortex {
 
         let targets = build_kill_targets(overdue_workers, overdue_branches);
 
-        let mut cancelled_worker_ids = Vec::new();
-        let mut cancelled_branch_ids = Vec::new();
+        let mut terminal_worker_ids = Vec::new();
+        let mut terminal_branch_ids = Vec::new();
         let mut kill_attempts = 0_usize;
         let mut kill_actions = 0_usize;
 
@@ -938,52 +951,52 @@ impl Cortex {
                 }
             };
 
-            if !matches!(
-                result,
-                ControlActionResult::Cancelled
-                    | ControlActionResult::AlreadyTerminal
-                    | ControlActionResult::NotFound
-            ) {
+            if !is_terminal_control_result(result) {
                 continue;
             }
 
             match target {
                 KillTarget::Worker(tracker) => {
-                    cancelled_worker_ids.push(tracker.worker_id);
-                    logger.log(
-                        "worker_killed",
-                        &format!("Worker {} cancelled by supervisor", tracker.worker_id),
-                        Some(serde_json::json!({
-                            "worker_id": tracker.worker_id.to_string(),
-                            "channel_id": tracker.channel_id.as_deref(),
-                            "timeout_secs": worker_timeout.as_secs(),
-                            "reason": "timeout",
-                        })),
-                    );
+                    terminal_worker_ids.push(tracker.worker_id);
+                    if is_cancelled_control_result(result) {
+                        logger.log(
+                            "worker_killed",
+                            &format!("Worker {} cancelled by supervisor", tracker.worker_id),
+                            Some(serde_json::json!({
+                                "worker_id": tracker.worker_id.to_string(),
+                                "channel_id": tracker.channel_id.as_deref(),
+                                "timeout_secs": worker_timeout.as_secs(),
+                                "reason": "timeout",
+                            })),
+                        );
+                        kill_actions = kill_actions.saturating_add(1);
+                    }
                 }
                 KillTarget::Branch(tracker) => {
-                    cancelled_branch_ids.push(tracker.branch_id);
-                    logger.log(
-                        "branch_killed",
-                        &format!("Branch {} cancelled by supervisor", tracker.branch_id),
-                        Some(serde_json::json!({
-                            "branch_id": tracker.branch_id.to_string(),
-                            "channel_id": tracker.channel_id.as_ref(),
-                            "timeout_secs": branch_timeout.as_secs(),
-                            "reason": "timeout",
-                        })),
-                    );
+                    terminal_branch_ids.push(tracker.branch_id);
+                    if is_cancelled_control_result(result) {
+                        logger.log(
+                            "branch_killed",
+                            &format!("Branch {} cancelled by supervisor", tracker.branch_id),
+                            Some(serde_json::json!({
+                                "branch_id": tracker.branch_id.to_string(),
+                                "channel_id": tracker.channel_id.as_ref(),
+                                "timeout_secs": branch_timeout.as_secs(),
+                                "reason": "timeout",
+                            })),
+                        );
+                        kill_actions = kill_actions.saturating_add(1);
+                    }
                 }
             };
-            kill_actions = kill_actions.saturating_add(1);
         }
 
-        if !cancelled_worker_ids.is_empty() || !cancelled_branch_ids.is_empty() {
+        if !terminal_worker_ids.is_empty() || !terminal_branch_ids.is_empty() {
             let mut state = self.health_runtime_state.write().await;
-            for worker_id in cancelled_worker_ids {
+            for worker_id in terminal_worker_ids {
                 state.worker_trackers.remove(&worker_id);
             }
-            for branch_id in cancelled_branch_ids {
+            for branch_id in terminal_branch_ids {
                 state.branch_trackers.remove(&branch_id);
             }
         }
@@ -2529,6 +2542,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                             let (error_message, _notify, _success) = map_worker_completion_result(
                                 Err(WorkerCompletionError::failed(scrubbed_error.clone())),
                             );
+                            let worker_complete_message = format!("Worker failed: {error}");
                             run_logger.log_worker_completed(worker_id, &error_message, false);
                             let requeue_result = task_store
                                 .update(
@@ -2592,16 +2606,16 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                                     &injection_tx,
                                 )
                                 .await;
-
-                                let _ = event_tx.send(ProcessEvent::WorkerComplete {
-                                    agent_id: Arc::from(agent_id.as_str()),
-                                    worker_id,
-                                    channel_id: None,
-                                    result: format!("Worker failed: {error}"),
-                                    notify: true,
-                                    success: false,
-                                });
                             }
+
+                            let _ = event_tx.send(ProcessEvent::WorkerComplete {
+                                agent_id: Arc::from(agent_id.as_str()),
+                                worker_id,
+                                channel_id: None,
+                                result: worker_complete_message,
+                                notify: true,
+                                success: false,
+                            });
                         }
                         Err(panic_payload) => {
                             let scrubbed_panic =
@@ -2659,16 +2673,16 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                                     &injection_tx,
                                 )
                                 .await;
-
-                                let _ = event_tx.send(ProcessEvent::WorkerComplete {
-                                    agent_id: Arc::from(agent_id.as_str()),
-                                    worker_id,
-                                    channel_id: None,
-                                    result: error_message,
-                                    notify: true,
-                                    success: false,
-                                });
                             }
+
+                            let _ = event_tx.send(ProcessEvent::WorkerComplete {
+                                agent_id: Arc::from(agent_id.as_str()),
+                                worker_id,
+                                channel_id: None,
+                                result: error_message,
+                                notify: true,
+                                success: false,
+                            });
                         }
                     }
 
@@ -2768,6 +2782,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                             task_number = task.task_number,
                             "failed to update task status after detached timeout cancellation: task missing"
                         );
+                        run_logger.log_worker_completed(worker_id, &timeout_message, false);
                         logger.log(
                                 "task_pickup_timeout_persist_failure",
                                 &format!(
@@ -2782,6 +2797,14 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                                     "retry_limit": timeout_retry_limit,
                                 })),
                             );
+                        let _ = event_tx.send(ProcessEvent::WorkerComplete {
+                            agent_id: Arc::from(agent_id.as_str()),
+                            worker_id,
+                            channel_id: None,
+                            result: timeout_message.clone(),
+                            notify: true,
+                            success: false,
+                        });
                     }
                     Err(update_error) => {
                         tracing::warn!(
@@ -2789,6 +2812,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                             task_number = task.task_number,
                             "failed to update task status after detached timeout cancellation"
                         );
+                        run_logger.log_worker_completed(worker_id, &timeout_message, false);
                         logger.log(
                             "task_pickup_timeout_persist_failure",
                             &format!(
@@ -2803,6 +2827,14 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
                                 "retry_limit": timeout_retry_limit,
                             })),
                         );
+                        let _ = event_tx.send(ProcessEvent::WorkerComplete {
+                            agent_id: Arc::from(agent_id.as_str()),
+                            worker_id,
+                            channel_id: None,
+                            result: timeout_message.clone(),
+                            notify: true,
+                            success: false,
+                        });
                     }
                 }
             }
@@ -3129,13 +3161,14 @@ mod tests {
         BulletinRefreshOutcome, CortexReceiverOutcome, HealthRuntimeState, ReceiverClosedBehavior,
         Signal, WorkerTracker, apply_cancelled_warmup_status, build_kill_targets,
         claim_detached_completion, detached_timeout_transition, handle_cortex_receiver_result,
-        has_completed_initial_warmup, maybe_close_bulletin_refresh_circuit,
-        maybe_generate_bulletin_under_lock, parse_structured_success_flag, push_signal_into_buffer,
-        record_bulletin_refresh_failure, should_execute_warmup,
-        should_generate_bulletin_from_bulletin_loop, signal_from_event, summarize_signal_text,
-        take_lagged_control_flag,
+        has_completed_initial_warmup, is_cancelled_control_result, is_terminal_control_result,
+        maybe_close_bulletin_refresh_circuit, maybe_generate_bulletin_under_lock,
+        parse_structured_success_flag, push_signal_into_buffer, record_bulletin_refresh_failure,
+        should_execute_warmup, should_generate_bulletin_from_bulletin_loop, signal_from_event,
+        summarize_signal_text, take_lagged_control_flag,
     };
     use crate::ProcessEvent;
+    use crate::agent::process_control::ControlActionResult;
     use crate::memory::MemoryType;
     use crate::tasks::TaskStatus;
     use crate::tasks::TaskStore;
@@ -3968,6 +4001,24 @@ mod tests {
                 branch_newest.branch_id.to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn terminal_control_result_includes_not_found_and_already_terminal() {
+        assert!(is_terminal_control_result(ControlActionResult::Cancelled));
+        assert!(is_terminal_control_result(ControlActionResult::NotFound));
+        assert!(is_terminal_control_result(
+            ControlActionResult::AlreadyTerminal
+        ));
+    }
+
+    #[test]
+    fn cancelled_control_result_only_matches_cancelled() {
+        assert!(is_cancelled_control_result(ControlActionResult::Cancelled));
+        assert!(!is_cancelled_control_result(ControlActionResult::NotFound));
+        assert!(!is_cancelled_control_result(
+            ControlActionResult::AlreadyTerminal
+        ));
     }
 
     #[test]
