@@ -530,6 +530,7 @@ pub async fn spawn_opencode_worker_from_state(
         task = %task,
         worker_type = "opencode",
     );
+    let sqlite_pool = state.deps.sqlite_pool.clone();
     let handle = spawn_worker_task(
         worker_id,
         state.deps.event_tx.clone(),
@@ -538,6 +539,31 @@ pub async fn spawn_opencode_worker_from_state(
         oc_secrets_store,
         async move {
             let result = worker.run().await.map_err(SpacebotError::from)?;
+
+            // Persist the transcript built from SSE events so the worker detail
+            // view can show the full conversation (text + tool calls + results).
+            if !result.transcript.is_empty() {
+                let blob = crate::conversation::worker_transcript::serialize_steps(
+                    &result.transcript,
+                );
+                let tool_calls = result.tool_calls;
+                let wid = worker_id.to_string();
+                let pool = sqlite_pool.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = sqlx::query(
+                        "UPDATE worker_runs SET transcript = ?, tool_calls = ? WHERE id = ?",
+                    )
+                    .bind(&blob)
+                    .bind(tool_calls)
+                    .bind(&wid)
+                    .execute(&pool)
+                    .await
+                    {
+                        tracing::warn!(%error, worker_id = wid, "failed to persist OpenCode transcript");
+                    }
+                });
+            }
+
             Ok::<String, SpacebotError>(result.result_text)
         }
         .instrument(worker_span),

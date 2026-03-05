@@ -45,7 +45,15 @@ pub enum ActionContent {
 /// Convert a Rig message history to transcript steps, serialize as JSON, and gzip compress.
 pub fn serialize_transcript(history: &[rig::message::Message]) -> Vec<u8> {
     let steps = convert_history(history);
-    let json = serde_json::to_vec(&steps).unwrap_or_default();
+    serialize_steps(&steps)
+}
+
+/// Serialize pre-built transcript steps as gzipped JSON.
+///
+/// Used by OpenCode workers that build transcript steps directly from SSE
+/// events rather than from a Rig message history.
+pub fn serialize_steps(steps: &[TranscriptStep]) -> Vec<u8> {
+    let json = serde_json::to_vec(steps).unwrap_or_default();
 
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(&json).ok();

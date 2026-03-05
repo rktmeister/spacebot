@@ -35,10 +35,45 @@ pub struct OpenCodeWorker {
     pub secrets_store: Option<Arc<SecretsStore>>,
 }
 
+/// Accumulated state from SSE event processing.
+struct EventState {
+    /// All assistant text parts concatenated (the full result).
+    all_text: String,
+    /// The most recent text part (used for the last assistant message).
+    last_text: String,
+    /// Currently running tool name.
+    current_tool: Option<String>,
+    /// Transcript steps built from SSE events.
+    transcript: Vec<crate::conversation::worker_transcript::TranscriptStep>,
+    /// Number of tool calls observed.
+    tool_calls: i64,
+    /// Guards: don't treat session.idle as completion until we've seen real work.
+    has_received_event: bool,
+    has_assistant_message: bool,
+}
+
+impl EventState {
+    fn new() -> Self {
+        Self {
+            all_text: String::new(),
+            last_text: String::new(),
+            current_tool: None,
+            transcript: Vec::new(),
+            tool_calls: 0,
+            has_received_event: false,
+            has_assistant_message: false,
+        }
+    }
+}
+
 /// Result of an OpenCode worker run.
 pub struct OpenCodeWorkerResult {
     pub session_id: String,
     pub result_text: String,
+    /// Transcript steps built from SSE events for persistence.
+    pub transcript: Vec<crate::conversation::worker_transcript::TranscriptStep>,
+    /// Number of tool calls observed during the session.
+    pub tool_calls: i64,
 }
 
 impl OpenCodeWorker {
@@ -185,10 +220,19 @@ impl OpenCodeWorker {
                 .await?;
         }
 
-        // Process SSE events until session goes idle or errors
-        let result_text = self
-            .process_events(event_response, &session_id, &server)
+        // Process SSE events until session goes idle or errors.
+        // EventState accumulates all text and transcript steps across the
+        // entire worker lifetime (initial task + follow-ups).
+        let mut event_state = EventState::new();
+        self.process_events(event_response, &session_id, &server, &mut event_state)
             .await?;
+
+        // Use the accumulated full text as the result, not just the last fragment
+        let result_text = if event_state.all_text.is_empty() {
+            event_state.last_text.clone()
+        } else {
+            event_state.all_text.clone()
+        };
 
         // Interactive follow-up loop
         if let Some(mut input_rx) = self.input_rx.take() {
@@ -234,7 +278,7 @@ impl OpenCodeWorker {
                 }
 
                 match self
-                    .process_events(event_response, &session_id, &server)
+                    .process_events(event_response, &session_id, &server, &mut event_state)
                     .await
                 {
                     Ok(_) => {
@@ -264,6 +308,8 @@ impl OpenCodeWorker {
         Ok(OpenCodeWorkerResult {
             session_id,
             result_text,
+            transcript: event_state.transcript,
+            tool_calls: event_state.tool_calls,
         })
     }
 
@@ -274,14 +320,10 @@ impl OpenCodeWorker {
         response: reqwest::Response,
         session_id: &str,
         server: &Arc<Mutex<crate::opencode::server::OpenCodeServer>>,
+        event_state: &mut EventState,
     ) -> anyhow::Result<String> {
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
-        let mut last_text = String::new();
-        let mut current_tool: Option<String> = None;
-        // Guards: don't treat session.idle as completion until we've seen real work
-        let mut has_received_event = false;
-        let mut has_assistant_message = false;
 
         loop {
             let chunk = tokio::select! {
@@ -293,8 +335,8 @@ impl OpenCodeWorker {
 
             let Some(chunk) = chunk else {
                 // Stream ended -- if we have results, return them
-                if has_assistant_message && !last_text.is_empty() {
-                    return Ok(last_text);
+                if event_state.has_assistant_message && !event_state.last_text.is_empty() {
+                    return Ok(event_state.last_text.clone());
                 }
                 bail!("OpenCode event stream ended before session completed");
             };
@@ -305,19 +347,11 @@ impl OpenCodeWorker {
             // Parse SSE lines from buffer
             while let Some(event) = extract_sse_event(&mut buffer) {
                 match self
-                    .handle_sse_event(
-                        &event,
-                        session_id,
-                        server,
-                        &mut last_text,
-                        &mut current_tool,
-                        &mut has_received_event,
-                        &mut has_assistant_message,
-                    )
+                    .handle_sse_event(&event, session_id, server, event_state)
                     .await
                 {
                     EventAction::Continue => {}
-                    EventAction::Complete => return Ok(last_text.clone()),
+                    EventAction::Complete => return Ok(event_state.last_text.clone()),
                     EventAction::Error(message) => bail!("OpenCode session error: {message}"),
                 }
             }
@@ -325,33 +359,31 @@ impl OpenCodeWorker {
     }
 
     /// Handle a single SSE event. Returns whether to continue, complete, or error.
-    #[allow(clippy::too_many_arguments)]
     async fn handle_sse_event(
         &self,
         event: &SseEvent,
         session_id: &str,
         server: &Arc<Mutex<crate::opencode::server::OpenCodeServer>>,
-        last_text: &mut String,
-        current_tool: &mut Option<String>,
-        has_received_event: &mut bool,
-        has_assistant_message: &mut bool,
+        state: &mut EventState,
     ) -> EventAction {
+        use crate::conversation::worker_transcript::{ActionContent, TranscriptStep};
+
         match event {
             SseEvent::MessageUpdated { info } => {
-                *has_received_event = true;
+                state.has_received_event = true;
                 // Track assistant messages for idle guard
                 if let Some(msg) = info
                     && msg.role == "assistant"
                     && let Some(sid) = &msg.session_id
                     && sid == session_id
                 {
-                    *has_assistant_message = true;
+                    state.has_assistant_message = true;
                 }
                 EventAction::Continue
             }
 
             SseEvent::MessagePartUpdated { part, .. } => {
-                *has_received_event = true;
+                state.has_received_event = true;
                 match part {
                     Part::Text {
                         text,
@@ -363,7 +395,7 @@ impl OpenCodeWorker {
                         {
                             return EventAction::Continue;
                         }
-                        *has_assistant_message = true;
+                        state.has_assistant_message = true;
 
                         // Exact-match scrubbing: replace known tool secret values
                         // before leak detection so they don't trigger false positives.
@@ -377,12 +409,23 @@ impl OpenCodeWorker {
                             );
                         }
 
-                        *last_text = scrubbed;
+                        // Accumulate all text for the full result
+                        if !state.all_text.is_empty() && !scrubbed.is_empty() {
+                            state.all_text.push_str("\n\n");
+                        }
+                        state.all_text.push_str(&scrubbed);
+                        state.last_text = scrubbed.clone();
+
+                        // Add to transcript
+                        state.transcript.push(TranscriptStep::Action {
+                            content: vec![ActionContent::Text { text: scrubbed }],
+                        });
                     }
                     Part::Tool {
                         tool,
-                        state,
+                        state: tool_state,
                         session_id: part_session,
+                        call_id,
                         ..
                     } => {
                         if let Some(sid) = part_session
@@ -390,26 +433,45 @@ impl OpenCodeWorker {
                         {
                             return EventAction::Continue;
                         }
-                        *has_assistant_message = true;
+                        state.has_assistant_message = true;
                         if let Some(tool_name) = tool
-                            && let Some(tool_state) = state
+                            && let Some(tool_state) = tool_state
                         {
                             match tool_state {
                                 ToolState::Running { title, input, .. } => {
-                                    *current_tool = Some(tool_name.clone());
+                                    state.current_tool = Some(tool_name.clone());
+                                    state.tool_calls += 1;
                                     let label = title
                                         .as_deref()
                                         .map(String::from)
                                         .or_else(|| describe_tool_input(tool_name, input.as_ref()))
                                         .unwrap_or_else(|| tool_name.clone());
                                     self.send_status(&format!("running: {label}"));
+
+                                    // Add tool call to transcript
+                                    let args = input
+                                        .as_ref()
+                                        .map(|v| {
+                                            let s = v.to_string();
+                                            if s.len() > 2_000 {
+                                                crate::tools::truncate_output(&s, 2_000)
+                                            } else {
+                                                s
+                                            }
+                                        })
+                                        .unwrap_or_default();
+                                    state.transcript.push(TranscriptStep::Action {
+                                        content: vec![ActionContent::ToolCall {
+                                            id: call_id.clone().unwrap_or_default(),
+                                            name: tool_name.clone(),
+                                            args,
+                                        }],
+                                    });
                                 }
                                 ToolState::Completed { output, title, .. } => {
                                     // Scrub and log potential secret-pattern hits in tool output.
-                                    // Do not terminate the worker; channel egress guards enforce
-                                    // user-visible leak blocking.
-                                    if let Some(tool_output) = output {
-                                        let scrubbed = self.scrub_text(tool_output);
+                                    let scrubbed_output = output.as_ref().map(|o| {
+                                        let scrubbed = self.scrub_text(o);
                                         if let Some(leak) =
                                             crate::secrets::scrub::scan_for_leaks(&scrubbed)
                                         {
@@ -420,25 +482,42 @@ impl OpenCodeWorker {
                                                 "potential secret detected in OpenCode tool output"
                                             );
                                         }
-                                    }
+                                        scrubbed
+                                    });
 
-                                    if current_tool.as_deref() == Some(tool_name.as_str()) {
-                                        *current_tool = None;
+                                    if state.current_tool.as_deref() == Some(tool_name.as_str()) {
+                                        state.current_tool = None;
                                     }
-                                    // Use the completed title (relative path, description,
-                                    // pattern) for a meaningful "done" status instead of
-                                    // the opaque "working".
                                     let done_label = title
                                         .as_deref()
                                         .filter(|t| !t.is_empty())
                                         .unwrap_or(tool_name.as_str());
                                     self.send_status(&format!("done: {done_label}"));
+
+                                    // Add tool result to transcript
+                                    let result_text = scrubbed_output.unwrap_or_default();
+                                    let truncated = crate::tools::truncate_output(
+                                        &result_text,
+                                        crate::tools::MAX_TOOL_OUTPUT_BYTES,
+                                    );
+                                    state.transcript.push(TranscriptStep::ToolResult {
+                                        call_id: call_id.clone().unwrap_or_default(),
+                                        name: tool_name.clone(),
+                                        text: truncated,
+                                    });
                                 }
                                 ToolState::Error { error, .. } => {
                                     let description = error.as_deref().unwrap_or("unknown");
                                     self.send_status(&format!(
                                         "tool error: {tool_name}: {description}"
                                     ));
+
+                                    // Add error to transcript
+                                    state.transcript.push(TranscriptStep::ToolResult {
+                                        call_id: call_id.clone().unwrap_or_default(),
+                                        name: tool_name.clone(),
+                                        text: format!("Error: {description}"),
+                                    });
                                 }
                                 ToolState::Pending { .. } => {
                                     // Tool queued, no status update needed
@@ -460,11 +539,11 @@ impl OpenCodeWorker {
 
                 // Guard: don't complete until we've seen actual work.
                 // OpenCode can send an early idle event before the prompt is processed.
-                if !*has_received_event || !*has_assistant_message {
+                if !state.has_received_event || !state.has_assistant_message {
                     tracing::trace!(
                         worker_id = %self.id,
-                        has_received_event,
-                        has_assistant_message,
+                        has_received_event = state.has_received_event,
+                        has_assistant_message = state.has_assistant_message,
                         "ignoring early session.idle"
                     );
                     return EventAction::Continue;
