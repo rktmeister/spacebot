@@ -372,26 +372,6 @@ impl ProcessRunLogger {
         });
     }
 
-    /// Persist the working directory for a worker. Fire-and-forget.
-    ///
-    /// Called from `spawn_opencode_worker_from_state` after the worker row is
-    /// created, so the directory survives for idle-worker resume.
-    pub fn log_worker_directory(&self, worker_id: WorkerId, directory: &std::path::Path) {
-        let pool = self.pool.clone();
-        let id = worker_id.to_string();
-        let dir = directory.to_string_lossy().to_string();
-        tokio::spawn(async move {
-            if let Err(error) = sqlx::query("UPDATE worker_runs SET directory = ? WHERE id = ?")
-                .bind(&dir)
-                .bind(&id)
-                .execute(&pool)
-                .await
-            {
-                tracing::warn!(%error, worker_id = %id, "failed to persist worker directory");
-            }
-        });
-    }
-
     /// Update a worker's status. Fire-and-forget.
     /// Most status text updates are transient — they're available via the
     /// in-memory StatusBlock for live workers and don't need to be persisted.
@@ -835,7 +815,7 @@ impl ProcessRunLogger {
         let row = sqlx::query(
             "SELECT w.id, w.task, w.result, w.status, w.worker_type, w.channel_id, \
                     w.started_at, w.completed_at, w.transcript, w.tool_calls, \
-                    w.opencode_session_id, w.opencode_port, w.interactive, \
+                    w.opencode_session_id, w.opencode_port, w.interactive, w.directory, \
                     c.display_name as channel_name \
              FROM worker_runs w \
              LEFT JOIN channels c ON w.channel_id = c.id \
@@ -870,6 +850,9 @@ impl ProcessRunLogger {
             opencode_session_id: row.try_get("opencode_session_id").ok(),
             opencode_port: row.try_get::<i32, _>("opencode_port").ok(),
             interactive: row.try_get::<bool, _>("interactive").unwrap_or(false),
+            directory: row
+                .try_get::<Option<String>, _>("directory")
+                .unwrap_or(None),
         }))
     }
 }
@@ -922,6 +905,7 @@ pub struct WorkerDetailRow {
     pub opencode_session_id: Option<String>,
     pub opencode_port: Option<i32>,
     pub interactive: bool,
+    pub directory: Option<String>,
 }
 
 #[cfg(test)]

@@ -165,6 +165,9 @@ pub enum ProcessEvent {
         task: String,
         worker_type: String,
         interactive: bool,
+        /// Working directory for the worker (used by OpenCode workers to
+        /// persist the directory for idle-worker resume).
+        directory: Option<String>,
     },
     WorkerStatus {
         agent_id: AgentId,

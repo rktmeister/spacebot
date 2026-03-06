@@ -2479,6 +2479,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         task: task_description.clone(),
         worker_type: "task".to_string(),
         interactive: false,
+        directory: None,
     });
 
     // Log to worker_runs directly — task workers have no parent channel, so the
@@ -3519,6 +3520,7 @@ mod tests {
                 task: "do work".to_string(),
                 worker_type: "shell".to_string(),
                 interactive: false,
+                directory: None,
             },
             ProcessEvent::WorkerStatus {
                 agent_id: agent_id.clone(),

@@ -96,6 +96,8 @@ pub async fn start_http_server(
             "/opencode/{port}/{*path}",
             any(opencode_proxy::opencode_proxy),
         )
+        .route("/opencode/{port}", any(opencode_proxy::opencode_proxy))
+        .route("/opencode/{port}/", any(opencode_proxy::opencode_proxy))
         .route("/agents/memories", get(memories::list_memories))
         .route("/agents/memories/search", get(memories::search_memories))
         .route("/agents/memories/graph", get(memories::memory_graph))

@@ -279,6 +279,7 @@ export interface WorkerDetailResponse {
 	opencode_session_id: string | null;
 	opencode_port: number | null;
 	interactive: boolean;
+	directory: string | null;
 }
 
 export interface WorkerListResponse {
