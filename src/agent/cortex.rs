@@ -2491,6 +2491,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         "task",
         &deps.agent_id,
         false,
+        None,
     );
 
     let task_store = deps.task_store.clone();
@@ -3613,6 +3614,7 @@ mod tests {
             ProcessEvent::OpenCodeSessionCreated {
                 agent_id: Arc::from("agent"),
                 worker_id,
+                channel_id: Some(channel_id.clone()),
                 session_id: "session-1".to_string(),
                 port: 19898,
             },

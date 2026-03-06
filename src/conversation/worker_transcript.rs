@@ -20,6 +20,12 @@ const MAX_TOOL_ARGS_BYTES: usize = 2_000;
 pub enum TranscriptStep {
     /// Agent reasoning and/or tool calls.
     Action { content: Vec<ActionContent> },
+    /// User-originated text (task prompt, follow-up input).
+    ///
+    /// Distinct from `Action` so that `transcript_to_history()` can reconstruct
+    /// the correct `Message::User` role instead of treating everything as
+    /// `Message::Assistant`.
+    UserText { text: String },
     /// Tool execution result.
     ToolResult {
         call_id: String,
@@ -106,12 +112,16 @@ pub fn convert_opencode_messages(messages: &[serde_json::Value]) -> (Vec<Transcr
                                 all_text.push_str("\n\n");
                             }
                             all_text.push_str(text);
-                        }
-                        steps.push(TranscriptStep::Action {
-                            content: vec![ActionContent::Text {
+                            steps.push(TranscriptStep::Action {
+                                content: vec![ActionContent::Text {
+                                    text: text.to_string(),
+                                }],
+                            });
+                        } else {
+                            steps.push(TranscriptStep::UserText {
                                 text: text.to_string(),
-                            }],
-                        });
+                            });
+                        }
                     }
                 }
                 "tool" => {
@@ -297,6 +307,82 @@ pub fn convert_opencode_parts(
     steps
 }
 
+/// Convert a persisted `Vec<TranscriptStep>` back into a Rig `Vec<Message>` history.
+///
+/// Used when resuming an idle interactive worker after restart: the transcript
+/// blob is the only surviving record of the worker's conversation, so we
+/// reconstruct the Rig message history from it.
+///
+/// The mapping is lossy (reasoning, images, etc. are not round-tripped), but
+/// it preserves all text and tool call/result pairs which is sufficient for
+/// the LLM to pick up the conversation.
+pub fn transcript_to_history(steps: &[TranscriptStep]) -> Vec<rig::message::Message> {
+    use rig::message::{
+        AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+        UserContent,
+    };
+    use rig::one_or_many::OneOrMany;
+
+    let mut messages: Vec<Message> = Vec::new();
+
+    for step in steps {
+        match step {
+            TranscriptStep::Action { content } => {
+                let mut parts: Vec<AssistantContent> = Vec::new();
+                for item in content {
+                    match item {
+                        ActionContent::Text { text } => {
+                            parts.push(AssistantContent::Text(Text { text: text.clone() }));
+                        }
+                        ActionContent::ToolCall { id, name, args } => {
+                            let arguments = serde_json::from_str(args)
+                                .unwrap_or_else(|_| serde_json::Value::String(args.clone()));
+                            parts.push(AssistantContent::ToolCall(ToolCall {
+                                id: id.clone(),
+                                call_id: None,
+                                function: ToolFunction {
+                                    name: name.clone(),
+                                    arguments,
+                                },
+                                signature: None,
+                                additional_params: None,
+                            }));
+                        }
+                    }
+                }
+                if !parts.is_empty() {
+                    // OneOrMany::many returns Err only for empty vecs; we checked above.
+                    let content = OneOrMany::many(parts).expect("parts is non-empty");
+                    messages.push(Message::Assistant { id: None, content });
+                }
+            }
+            TranscriptStep::UserText { text } => {
+                if !text.is_empty() {
+                    messages.push(Message::User {
+                        content: OneOrMany::one(UserContent::Text(Text { text: text.clone() })),
+                    });
+                }
+            }
+            TranscriptStep::ToolResult {
+                call_id,
+                name: _,
+                text,
+            } => {
+                let result = ToolResult {
+                    id: call_id.clone(),
+                    call_id: Some(call_id.clone()),
+                    content: OneOrMany::one(ToolResultContent::Text(Text { text: text.clone() })),
+                };
+                messages.push(Message::User {
+                    content: OneOrMany::one(UserContent::ToolResult(result)),
+                });
+            }
+        }
+    }
+
+    messages
+}
+
 /// Convert Rig `Vec<Message>` to `Vec<TranscriptStep>`.
 fn convert_history(history: &[rig::message::Message]) -> Vec<TranscriptStep> {
     let mut steps = Vec::new();
@@ -367,10 +453,8 @@ fn convert_history(history: &[rig::message::Message]) -> Vec<TranscriptStep> {
                         rig::message::UserContent::Text(text) => {
                             // Skip compaction markers and system-injected messages
                             if !text.text.is_empty() && !text.text.starts_with("[System:") {
-                                steps.push(TranscriptStep::Action {
-                                    content: vec![ActionContent::Text {
-                                        text: text.text.clone(),
-                                    }],
+                                steps.push(TranscriptStep::UserText {
+                                    text: text.text.clone(),
                                 });
                             }
                         }

@@ -16,6 +16,13 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, mpsc};
 use uuid::Uuid;
 
+/// State for resuming an idle OpenCode session after restart.
+pub struct ResumeSession {
+    pub session_id: String,
+    pub accumulated_parts: Vec<OpenCodePart>,
+    pub tool_calls: i64,
+}
+
 /// An OpenCode-backed worker that drives a coding session via subprocess.
 pub struct OpenCodeWorker {
     pub id: WorkerId,
@@ -33,6 +40,10 @@ pub struct OpenCodeWorker {
     pub model: Option<String>,
     /// Secrets store for exact-match scrubbing of tool secret values in SSE output.
     pub secrets_store: Option<Arc<SecretsStore>>,
+    /// SQLite pool for incremental transcript persistence (set by channel_dispatch).
+    pub sqlite_pool: Option<sqlx::SqlitePool>,
+    /// Pre-populated session state for resumed workers (set by `resume_interactive`).
+    pub resuming_session: Option<ResumeSession>,
 }
 
 /// Accumulated state from SSE event processing.
@@ -96,6 +107,8 @@ impl OpenCodeWorker {
             system_prompt: None,
             model: None,
             secrets_store: None,
+            sqlite_pool: None,
+            resuming_session: None,
         }
     }
 
@@ -132,6 +145,101 @@ impl OpenCodeWorker {
         self
     }
 
+    /// Set the SQLite pool for incremental transcript persistence.
+    pub fn with_sqlite_pool(mut self, pool: sqlx::SqlitePool) -> Self {
+        self.sqlite_pool = Some(pool);
+        self
+    }
+
+    /// Create a resumed interactive OpenCode worker for an idle session.
+    ///
+    /// Instead of creating a new session, reconnects to `session_id` on the
+    /// existing OpenCode server. The prior transcript (from the DB blob) is
+    /// loaded into `accumulated_parts` so subsequent `persist_transcript_snapshot`
+    /// calls produce a complete history.
+    ///
+    /// Returns `None` if reconnection fails (server dead, session gone).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn resume_interactive(
+        existing_id: WorkerId,
+        channel_id: Option<ChannelId>,
+        agent_id: AgentId,
+        task: impl Into<String>,
+        directory: PathBuf,
+        server_pool: Arc<OpenCodeServerPool>,
+        event_tx: broadcast::Sender<ProcessEvent>,
+        session_id: String,
+        _prior_transcript_blob: Option<Vec<u8>>,
+    ) -> Option<(Self, mpsc::Sender<String>)> {
+        // Try to reconnect to the OpenCode server for this directory.
+        let server = match server_pool.get_or_create(&directory).await {
+            Ok(server) => server,
+            Err(error) => {
+                tracing::warn!(
+                    worker_id = %existing_id,
+                    %error,
+                    directory = %directory.display(),
+                    "failed to reconnect to OpenCode server for idle worker"
+                );
+                return None;
+            }
+        };
+
+        // Verify the session still exists by fetching its messages.
+        let messages = {
+            let guard = server.lock().await;
+            guard.get_messages(&session_id).await
+        };
+        if let Err(error) = &messages {
+            tracing::warn!(
+                worker_id = %existing_id,
+                %error,
+                session_id = %session_id,
+                "OpenCode session no longer exists, cannot resume"
+            );
+            return None;
+        }
+
+        // Reconstruct accumulated_parts from the session messages (preferred)
+        // or from the persisted transcript blob (fallback).
+        let accumulated_parts = if let Ok(messages) = &messages {
+            // Re-parse the parts from the session messages API.
+            // This gives us the authoritative state.
+            let mut parts = Vec::new();
+            for message in messages {
+                if let Some(msg_parts) = message.get("parts").and_then(|p| p.as_array()) {
+                    for part_value in msg_parts {
+                        if let Ok(part) = serde_json::from_value::<OpenCodePart>(part_value.clone())
+                        {
+                            parts.push(part);
+                        }
+                    }
+                }
+            }
+            parts
+        } else {
+            Vec::new()
+        };
+
+        // Count tool calls from accumulated parts
+        let tool_calls = accumulated_parts
+            .iter()
+            .filter(|p| matches!(p, OpenCodePart::Tool { .. }))
+            .count() as i64;
+
+        let (input_tx, input_rx) = mpsc::channel(32);
+        let mut worker = Self::new(channel_id, agent_id, task, directory, server_pool, event_tx);
+        worker.id = existing_id;
+        worker.input_rx = Some(input_rx);
+        worker.resuming_session = Some(ResumeSession {
+            session_id,
+            accumulated_parts,
+            tool_calls,
+        });
+
+        Some((worker, input_tx))
+    }
+
     /// Scrub tool secret values from text, replacing each with `[REDACTED:<name>]`.
     /// Returns the scrubbed text. If no secrets store is set, returns the input unchanged.
     fn scrub_text(&self, text: &str) -> String {
@@ -144,108 +252,160 @@ impl OpenCodeWorker {
     /// Run the worker: spawn/reuse an OpenCode server, create a session,
     /// send the task, monitor via SSE, and return the result.
     pub async fn run(mut self) -> anyhow::Result<OpenCodeWorkerResult> {
-        self.send_status("starting OpenCode server");
+        let resuming = self.resuming_session.is_some();
 
-        // Get or create server for this directory
-        let server = self
-            .server_pool
-            .get_or_create(&self.directory)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to get OpenCode server for '{}'",
-                    self.directory.display()
-                )
-            })?;
+        // --- Session setup: either resume an existing session or create a new one ---
+        let (server, session_id, mut event_state, result_text) =
+            if let Some(resume) = self.resuming_session.take() {
+                // Resumed worker: reconnect to the existing server + session.
+                self.send_status("reconnecting to OpenCode session");
 
-        self.send_status("creating session");
+                let server = self
+                    .server_pool
+                    .get_or_create(&self.directory)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to reconnect to OpenCode server for '{}'",
+                            self.directory.display()
+                        )
+                    })?;
 
-        // Create a session
-        let session = {
-            let guard = server.lock().await;
-            guard
-                .create_session(Some(format!("spacebot-worker-{}", self.id)))
-                .await?
-        };
-        let session_id = session.id.clone();
+                let opencode_port = {
+                    let guard = server.lock().await;
+                    guard.port()
+                };
 
-        // Record metadata so the web UI can embed the OpenCode interface
-        let opencode_port = {
-            let guard = server.lock().await;
-            guard.port()
-        };
-        self.event_tx
-            .send(ProcessEvent::OpenCodeSessionCreated {
-                agent_id: self.agent_id.clone(),
-                worker_id: self.id,
-                session_id: session_id.clone(),
-                port: opencode_port,
-            })
-            .ok();
+                // Re-emit session metadata so the frontend can show the embed.
+                self.event_tx
+                    .send(ProcessEvent::OpenCodeSessionCreated {
+                        agent_id: self.agent_id.clone(),
+                        worker_id: self.id,
+                        channel_id: self.channel_id.clone(),
+                        session_id: resume.session_id.clone(),
+                        port: opencode_port,
+                    })
+                    .ok();
 
-        tracing::info!(
-            worker_id = %self.id,
-            session_id = %session_id,
-            port = opencode_port,
-            directory = %self.directory.display(),
-            "OpenCode session created"
-        );
+                tracing::info!(
+                    worker_id = %self.id,
+                    session_id = %resume.session_id,
+                    port = opencode_port,
+                    prior_parts = resume.accumulated_parts.len(),
+                    "resumed OpenCode worker, reconnected to session"
+                );
 
-        // Subscribe to SSE events before sending the prompt
-        let event_response = {
-            let guard = server.lock().await;
-            guard.subscribe_events().await?
-        };
+                let mut event_state = EventState::new();
+                event_state.accumulated_parts = resume.accumulated_parts;
+                event_state.tool_calls = resume.tool_calls;
+                event_state.has_received_event = true;
+                event_state.has_assistant_message = true;
 
-        // Build the prompt request
-        let model_param = self.model.as_ref().and_then(|m| parse_model_param(m));
-        let prompt_request = SendPromptRequest {
-            parts: vec![PartInput::Text {
-                text: self.task.clone(),
-                synthetic: None,
-            }],
-            system: self.system_prompt.clone(),
-            model: model_param,
-            agent: None,
-        };
+                (server, resume.session_id, event_state, String::new())
+            } else {
+                // Fresh worker: create a new server + session.
+                self.send_status("starting OpenCode server");
 
-        // Send prompt async so we can process SSE events while it runs
-        self.send_status("sending task to OpenCode");
-        {
-            let guard = server.lock().await;
-            guard
-                .send_prompt_async(&session_id, &prompt_request)
-                .await?;
-        }
+                let server = self
+                    .server_pool
+                    .get_or_create(&self.directory)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to get OpenCode server for '{}'",
+                            self.directory.display()
+                        )
+                    })?;
 
-        // Process SSE events until session goes idle or errors.
-        // EventState tracks status and last_text for the initial result delivery.
-        // The full transcript is fetched from the OpenCode API on completion.
-        let mut event_state = EventState::new();
-        self.process_events(event_response, &session_id, &server, &mut event_state)
-            .await?;
+                self.send_status("creating session");
 
-        // last_text is our best signal for the initial result (used for
-        // WorkerInitialResult and the fallback if API fetch fails).
-        let result_text = event_state.last_text.clone();
+                let session = {
+                    let guard = server.lock().await;
+                    guard
+                        .create_session(Some(format!("spacebot-worker-{}", self.id)))
+                        .await?
+                };
+                let session_id = session.id.clone();
+
+                let opencode_port = {
+                    let guard = server.lock().await;
+                    guard.port()
+                };
+                self.event_tx
+                    .send(ProcessEvent::OpenCodeSessionCreated {
+                        agent_id: self.agent_id.clone(),
+                        worker_id: self.id,
+                        channel_id: self.channel_id.clone(),
+                        session_id: session_id.clone(),
+                        port: opencode_port,
+                    })
+                    .ok();
+
+                tracing::info!(
+                    worker_id = %self.id,
+                    session_id = %session_id,
+                    port = opencode_port,
+                    directory = %self.directory.display(),
+                    "OpenCode session created"
+                );
+
+                // Subscribe to SSE events before sending the prompt
+                let event_response = {
+                    let guard = server.lock().await;
+                    guard.subscribe_events().await?
+                };
+
+                let model_param = self.model.as_ref().and_then(|m| parse_model_param(m));
+                let prompt_request = SendPromptRequest {
+                    parts: vec![PartInput::Text {
+                        text: self.task.clone(),
+                        synthetic: None,
+                    }],
+                    system: self.system_prompt.clone(),
+                    model: model_param,
+                    agent: None,
+                };
+
+                self.send_status("sending task to OpenCode");
+                {
+                    let guard = server.lock().await;
+                    guard
+                        .send_prompt_async(&session_id, &prompt_request)
+                        .await?;
+                }
+
+                let mut event_state = EventState::new();
+                self.process_events(event_response, &session_id, &server, &mut event_state)
+                    .await?;
+
+                let result_text = event_state.last_text.clone();
+                (server, session_id, event_state, result_text)
+            };
 
         // Interactive follow-up loop
         if let Some(mut input_rx) = self.input_rx.take() {
-            // Emit the initial result immediately so the channel can retrigger
-            // and tell the user what the worker found. Without this, the channel
-            // would block until the entire follow-up loop exits — which only
-            // happens when the channel drops the input sender, creating a deadlock.
-            let scrubbed_result = self.scrub_text(&result_text);
-            let scrubbed_result = crate::secrets::scrub::scrub_leaks(&scrubbed_result);
-            let _ = self.event_tx.send(ProcessEvent::WorkerInitialResult {
-                agent_id: self.agent_id.clone(),
-                worker_id: self.id,
-                channel_id: self.channel_id.clone(),
-                result: scrubbed_result,
-            });
+            if resuming {
+                // Resumed worker: go straight to idle without emitting initial result
+                // (it was already relayed before the restart). Persist the recovered
+                // transcript so a second crash doesn't lose it.
+                self.persist_transcript_snapshot(&event_state).await;
+                self.send_status("resumed — waiting for follow-up");
+                self.send_idle();
+            } else {
+                // Fresh worker: emit the initial result so the channel can retrigger.
+                let scrubbed_result = self.scrub_text(&result_text);
+                let scrubbed_result = crate::secrets::scrub::scrub_leaks(&scrubbed_result);
+                let _ = self.event_tx.send(ProcessEvent::WorkerInitialResult {
+                    agent_id: self.agent_id.clone(),
+                    worker_id: self.id,
+                    channel_id: self.channel_id.clone(),
+                    result: scrubbed_result,
+                });
 
-            self.send_status("waiting for follow-up");
-            self.send_idle();
+                self.persist_transcript_snapshot(&event_state).await;
+                self.send_status("waiting for follow-up");
+                self.send_idle();
+            }
 
             while let Some(follow_up) = input_rx.recv().await {
                 self.send_status("processing follow-up");
@@ -291,6 +451,7 @@ impl OpenCodeWorker {
                                 result: scrubbed,
                             });
                         }
+                        self.persist_transcript_snapshot(&event_state).await;
                         self.send_status("waiting for follow-up");
                         self.send_idle();
                     }
@@ -721,6 +882,42 @@ impl OpenCodeWorker {
             worker_id: self.id,
             channel_id: self.channel_id.clone(),
         });
+    }
+
+    /// Persist a snapshot of the transcript built from accumulated SSE parts.
+    ///
+    /// Called each time the worker goes idle so that if spacebot restarts
+    /// while the worker is waiting for follow-up, the transcript survives.
+    /// Awaited directly so "idle implies persisted" — no out-of-order writes.
+    async fn persist_transcript_snapshot(&self, event_state: &EventState) {
+        let Some(pool) = &self.sqlite_pool else {
+            return;
+        };
+        if event_state.accumulated_parts.is_empty() {
+            return;
+        }
+
+        let steps = crate::conversation::worker_transcript::convert_opencode_parts(
+            &event_state.accumulated_parts,
+        );
+        if steps.is_empty() {
+            return;
+        }
+
+        let blob = crate::conversation::worker_transcript::serialize_steps(&steps);
+        let tool_calls = event_state.tool_calls;
+        let worker_id = self.id.to_string();
+
+        if let Err(error) =
+            sqlx::query("UPDATE worker_runs SET transcript = ?, tool_calls = ? WHERE id = ?")
+                .bind(&blob)
+                .bind(tool_calls)
+                .bind(&worker_id)
+                .execute(pool)
+                .await
+        {
+            tracing::warn!(%error, worker_id, "failed to persist transcript snapshot");
+        }
     }
 }
 

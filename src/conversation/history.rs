@@ -333,6 +333,7 @@ impl ProcessRunLogger {
     }
 
     /// Record a worker starting. Fire-and-forget.
+    #[allow(clippy::too_many_arguments)]
     pub fn log_worker_started(
         &self,
         channel_id: Option<&ChannelId>,
@@ -341,6 +342,7 @@ impl ProcessRunLogger {
         worker_type: &str,
         agent_id: &crate::AgentId,
         interactive: bool,
+        directory: Option<&std::path::Path>,
     ) {
         let pool = self.pool.clone();
         let id = worker_id.to_string();
@@ -348,11 +350,12 @@ impl ProcessRunLogger {
         let task = task.to_string();
         let worker_type = worker_type.to_string();
         let agent_id = agent_id.to_string();
+        let directory = directory.map(|d| d.to_string_lossy().to_string());
 
         tokio::spawn(async move {
             if let Err(error) = sqlx::query(
-                "INSERT OR IGNORE INTO worker_runs (id, channel_id, task, worker_type, agent_id, interactive) \
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO worker_runs (id, channel_id, task, worker_type, agent_id, interactive, directory) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(&channel_id)
@@ -360,10 +363,31 @@ impl ProcessRunLogger {
             .bind(&worker_type)
             .bind(&agent_id)
             .bind(interactive)
+            .bind(&directory)
             .execute(&pool)
             .await
             {
                 tracing::warn!(%error, worker_id = %id, "failed to persist worker start");
+            }
+        });
+    }
+
+    /// Persist the working directory for a worker. Fire-and-forget.
+    ///
+    /// Called from `spawn_opencode_worker_from_state` after the worker row is
+    /// created, so the directory survives for idle-worker resume.
+    pub fn log_worker_directory(&self, worker_id: WorkerId, directory: &std::path::Path) {
+        let pool = self.pool.clone();
+        let id = worker_id.to_string();
+        let dir = directory.to_string_lossy().to_string();
+        tokio::spawn(async move {
+            if let Err(error) = sqlx::query("UPDATE worker_runs SET directory = ? WHERE id = ?")
+                .bind(&dir)
+                .bind(&id)
+                .execute(&pool)
+                .await
+            {
+                tracing::warn!(%error, worker_id = %id, "failed to persist worker directory");
             }
         });
     }
@@ -464,10 +488,13 @@ impl ProcessRunLogger {
         });
     }
 
-    /// Mark all orphaned running/idle workers as failed for an agent.
+    /// Mark orphaned **running** workers as failed for an agent.
     ///
-    /// Called at startup to reconcile rows that were left in `running` or `idle`
+    /// Called at startup to reconcile rows that were left in `running` status
     /// when the process exited before a `WorkerComplete` event was persisted.
+    ///
+    /// Idle interactive workers are intentionally left alone — they will be
+    /// resumed by `get_idle_interactive_workers()` + the reconnection logic.
     pub async fn reconcile_running_workers_for_agent(
         &self,
         agent_id: &str,
@@ -481,7 +508,7 @@ impl ProcessRunLogger {
                      WHEN result IS NULL OR result = '' THEN ? \
                      ELSE result \
                  END \
-             WHERE status IN ('running', 'idle') AND (agent_id = ? OR agent_id IS NULL)",
+             WHERE status = 'running' AND (agent_id = ? OR agent_id IS NULL)",
         )
         .bind(failure_message)
         .bind(agent_id)
@@ -490,6 +517,74 @@ impl ProcessRunLogger {
         .map_err(|error| anyhow::anyhow!(error))?;
 
         Ok(result.rows_affected())
+    }
+
+    /// Load all idle interactive workers for an agent.
+    ///
+    /// Called at startup to find workers that were waiting for follow-up input
+    /// when the process exited. These can potentially be reconnected to their
+    /// sessions and resumed rather than marked as failed.
+    pub async fn get_idle_interactive_workers(
+        &self,
+        agent_id: &str,
+    ) -> crate::error::Result<Vec<IdleWorkerRow>> {
+        let rows = sqlx::query_as::<_, IdleWorkerRow>(
+            "SELECT id, task, channel_id, worker_type, transcript, \
+                    COALESCE(tool_calls, 0) AS tool_calls, \
+                    opencode_session_id, opencode_port, directory \
+             FROM worker_runs \
+             WHERE status = 'idle' AND interactive = TRUE \
+                   AND (agent_id = ? OR agent_id IS NULL)",
+        )
+        .bind(agent_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| anyhow::anyhow!(error))?;
+
+        Ok(rows)
+    }
+
+    /// Mark an idle worker as failed (used when reconnection fails at startup).
+    pub async fn fail_idle_worker(
+        &self,
+        worker_id: &str,
+        reason: &str,
+    ) -> crate::error::Result<()> {
+        sqlx::query(
+            "UPDATE worker_runs \
+             SET status = 'failed', \
+                 completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP), \
+                 result = CASE \
+                     WHEN result IS NULL OR result = '' THEN ? \
+                     ELSE result \
+                 END \
+             WHERE id = ? AND status = 'idle'",
+        )
+        .bind(reason)
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| anyhow::anyhow!(error))?;
+        Ok(())
+    }
+
+    /// Retire an idle worker whose session can no longer be resumed.
+    ///
+    /// Marks the row as `done` (not `failed`) because the worker completed its
+    /// work successfully — only the follow-up session expired. The existing
+    /// result and transcript are preserved.
+    pub async fn retire_idle_worker(&self, worker_id: &str) -> crate::error::Result<()> {
+        sqlx::query(
+            "UPDATE worker_runs \
+             SET status = 'done', \
+                 completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP) \
+             WHERE id = ? AND status = 'idle'",
+        )
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| anyhow::anyhow!(error))?;
+        Ok(())
     }
 
     /// Mark a detached running worker as cancelled.
@@ -794,6 +889,20 @@ pub struct WorkerRunRow {
     pub tool_calls: i64,
     pub opencode_port: Option<i32>,
     pub interactive: bool,
+}
+
+/// A worker that was idle at shutdown, loaded for reconnection at startup.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct IdleWorkerRow {
+    pub id: String,
+    pub task: String,
+    pub channel_id: Option<String>,
+    pub worker_type: String,
+    pub transcript: Option<Vec<u8>>,
+    pub tool_calls: i64,
+    pub opencode_session_id: Option<String>,
+    pub opencode_port: Option<i32>,
+    pub directory: Option<String>,
 }
 
 /// A worker run row with full detail including the transcript blob.

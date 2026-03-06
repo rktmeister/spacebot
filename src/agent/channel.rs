@@ -2250,6 +2250,7 @@ impl Channel {
                     worker_type,
                     &self.deps.agent_id,
                     *interactive,
+                    None,
                 );
             }
             ProcessEvent::WorkerStatus {
