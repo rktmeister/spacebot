@@ -847,6 +847,23 @@ function OpenCodeEmbed({
 			try {
 				setState("loading");
 
+				// Pre-seed OpenCode layout preferences so it starts with a clean
+				// chat-only view (sidebar, terminal, file tree, review all closed).
+				const layoutKey = "opencode.global.dat:layout";
+				if (!localStorage.getItem(layoutKey)) {
+					localStorage.setItem(layoutKey, JSON.stringify({
+						sidebar: { opened: false, width: 344, workspaces: {}, workspacesDefault: false },
+						terminal: { height: 280, opened: false },
+						review: { diffStyle: "split", panelOpened: false },
+						fileTree: { opened: false, width: 344, tab: "changes" },
+						session: { width: 600 },
+						mobileSidebar: { opened: false },
+						sessionTabs: {},
+						sessionView: {},
+						handoff: {},
+					}));
+				}
+
 				// First check if the OpenCode server is reachable
 				const healthRes = await fetch(`${serverUrl}/global/health`);
 				if (!healthRes.ok) throw new Error("OpenCode server not reachable");
