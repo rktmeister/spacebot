@@ -30,13 +30,11 @@ OUTPUT_DIR="${REPO_ROOT}/interface/public/opencode-embed"
 # ---------------------------------------------------------------------------
 if [ -d "${CACHE_DIR}/.git" ]; then
   echo "[opencode-embed] Fetching updates..."
-  git -C "${CACHE_DIR}" fetch --depth=1 origin "${OPENCODE_COMMIT}" 2>/dev/null || \
-    git -C "${CACHE_DIR}" fetch origin
+  git -C "${CACHE_DIR}" fetch origin
   git -C "${CACHE_DIR}" checkout "${OPENCODE_COMMIT}" --force
 else
-  echo "[opencode-embed] Cloning opencode at ${OPENCODE_COMMIT}..."
-  git clone --depth=1 "${OPENCODE_REPO}" "${CACHE_DIR}"
-  git -C "${CACHE_DIR}" fetch --depth=1 origin "${OPENCODE_COMMIT}" 2>/dev/null || true
+  echo "[opencode-embed] Cloning opencode..."
+  git clone "${OPENCODE_REPO}" "${CACHE_DIR}"
   git -C "${CACHE_DIR}" checkout "${OPENCODE_COMMIT}" --force
 fi
 
