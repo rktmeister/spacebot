@@ -328,6 +328,7 @@ impl Worker {
         let mut follow_up_failure: Option<String> = None;
         if let Some(mut input_rx) = self.input_rx.take() {
             self.state = WorkerState::WaitingForInput;
+            self.persist_transcript(&compacted_history, &history);
             self.hook.send_status("waiting for input");
             self.hook.send_worker_idle();
 
@@ -417,6 +418,7 @@ impl Worker {
                 }
 
                 self.state = WorkerState::WaitingForInput;
+                self.persist_transcript(&compacted_history, &history);
                 self.hook.send_status("waiting for input");
                 self.hook.send_worker_idle();
             }

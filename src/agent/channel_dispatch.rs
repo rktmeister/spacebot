@@ -504,10 +504,11 @@ pub async fn spawn_opencode_worker_from_state(
             .write()
             .await
             .insert(worker_id, input_tx);
-        match &oc_secrets_store {
+        let worker = match &oc_secrets_store {
             Some(store) => worker.with_secrets_store(store.clone()),
             None => worker,
-        }
+        };
+        worker.with_sqlite_pool(state.deps.sqlite_pool.clone())
     } else {
         let worker = crate::opencode::OpenCodeWorker::new(
             Some(state.channel_id.clone()),
@@ -517,10 +518,11 @@ pub async fn spawn_opencode_worker_from_state(
             server_pool,
             state.deps.event_tx.clone(),
         );
-        match &oc_secrets_store {
+        let worker = match &oc_secrets_store {
             Some(store) => worker.with_secrets_store(store.clone()),
             None => worker,
-        }
+        };
+        worker.with_sqlite_pool(state.deps.sqlite_pool.clone())
     };
 
     let worker_id = worker.id;

@@ -33,6 +33,8 @@ pub struct OpenCodeWorker {
     pub model: Option<String>,
     /// Secrets store for exact-match scrubbing of tool secret values in SSE output.
     pub secrets_store: Option<Arc<SecretsStore>>,
+    /// SQLite pool for incremental transcript persistence (set by channel_dispatch).
+    pub sqlite_pool: Option<sqlx::SqlitePool>,
 }
 
 /// Accumulated state from SSE event processing.
@@ -96,6 +98,7 @@ impl OpenCodeWorker {
             system_prompt: None,
             model: None,
             secrets_store: None,
+            sqlite_pool: None,
         }
     }
 
@@ -129,6 +132,12 @@ impl OpenCodeWorker {
     /// Set the secrets store for exact-match scrubbing of tool secret values.
     pub fn with_secrets_store(mut self, store: Arc<SecretsStore>) -> Self {
         self.secrets_store = Some(store);
+        self
+    }
+
+    /// Set the SQLite pool for incremental transcript persistence.
+    pub fn with_sqlite_pool(mut self, pool: sqlx::SqlitePool) -> Self {
+        self.sqlite_pool = Some(pool);
         self
     }
 
@@ -244,6 +253,7 @@ impl OpenCodeWorker {
                 result: scrubbed_result,
             });
 
+            self.persist_transcript_snapshot(&event_state);
             self.send_status("waiting for follow-up");
             self.send_idle();
 
@@ -291,6 +301,7 @@ impl OpenCodeWorker {
                                 result: scrubbed,
                             });
                         }
+                        self.persist_transcript_snapshot(&event_state);
                         self.send_status("waiting for follow-up");
                         self.send_idle();
                     }
@@ -720,6 +731,44 @@ impl OpenCodeWorker {
             agent_id: self.agent_id.clone(),
             worker_id: self.id,
             channel_id: self.channel_id.clone(),
+        });
+    }
+
+    /// Persist a snapshot of the transcript built from accumulated SSE parts.
+    ///
+    /// Called each time the worker goes idle so that if spacebot restarts
+    /// while the worker is waiting for follow-up, the transcript survives.
+    fn persist_transcript_snapshot(&self, event_state: &EventState) {
+        let Some(pool) = &self.sqlite_pool else {
+            return;
+        };
+        if event_state.accumulated_parts.is_empty() {
+            return;
+        }
+
+        let steps = crate::conversation::worker_transcript::convert_opencode_parts(
+            &event_state.accumulated_parts,
+        );
+        if steps.is_empty() {
+            return;
+        }
+
+        let blob = crate::conversation::worker_transcript::serialize_steps(&steps);
+        let tool_calls = event_state.tool_calls;
+        let worker_id = self.id.to_string();
+        let pool = pool.clone();
+
+        tokio::spawn(async move {
+            if let Err(error) =
+                sqlx::query("UPDATE worker_runs SET transcript = ?, tool_calls = ? WHERE id = ?")
+                    .bind(&blob)
+                    .bind(tool_calls)
+                    .bind(&worker_id)
+                    .execute(&pool)
+                    .await
+            {
+                tracing::warn!(%error, worker_id, "failed to persist transcript snapshot");
+            }
         });
     }
 }
