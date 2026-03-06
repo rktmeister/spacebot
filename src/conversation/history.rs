@@ -333,6 +333,7 @@ impl ProcessRunLogger {
     }
 
     /// Record a worker starting. Fire-and-forget.
+    #[allow(clippy::too_many_arguments)]
     pub fn log_worker_started(
         &self,
         channel_id: Option<&ChannelId>,
@@ -341,6 +342,7 @@ impl ProcessRunLogger {
         worker_type: &str,
         agent_id: &crate::AgentId,
         interactive: bool,
+        directory: Option<&std::path::Path>,
     ) {
         let pool = self.pool.clone();
         let id = worker_id.to_string();
@@ -348,11 +350,12 @@ impl ProcessRunLogger {
         let task = task.to_string();
         let worker_type = worker_type.to_string();
         let agent_id = agent_id.to_string();
+        let directory = directory.map(|d| d.to_string_lossy().to_string());
 
         tokio::spawn(async move {
             if let Err(error) = sqlx::query(
-                "INSERT OR IGNORE INTO worker_runs (id, channel_id, task, worker_type, agent_id, interactive) \
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO worker_runs (id, channel_id, task, worker_type, agent_id, interactive, directory) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(&channel_id)
@@ -360,10 +363,31 @@ impl ProcessRunLogger {
             .bind(&worker_type)
             .bind(&agent_id)
             .bind(interactive)
+            .bind(&directory)
             .execute(&pool)
             .await
             {
                 tracing::warn!(%error, worker_id = %id, "failed to persist worker start");
+            }
+        });
+    }
+
+    /// Persist the working directory for a worker. Fire-and-forget.
+    ///
+    /// Called from `spawn_opencode_worker_from_state` after the worker row is
+    /// created, so the directory survives for idle-worker resume.
+    pub fn log_worker_directory(&self, worker_id: WorkerId, directory: &std::path::Path) {
+        let pool = self.pool.clone();
+        let id = worker_id.to_string();
+        let dir = directory.to_string_lossy().to_string();
+        tokio::spawn(async move {
+            if let Err(error) = sqlx::query("UPDATE worker_runs SET directory = ? WHERE id = ?")
+                .bind(&dir)
+                .bind(&id)
+                .execute(&pool)
+                .await
+            {
+                tracing::warn!(%error, worker_id = %id, "failed to persist worker directory");
             }
         });
     }
@@ -507,7 +531,7 @@ impl ProcessRunLogger {
         let rows = sqlx::query_as::<_, IdleWorkerRow>(
             "SELECT id, task, channel_id, worker_type, transcript, \
                     COALESCE(tool_calls, 0) AS tool_calls, \
-                    opencode_session_id, opencode_port \
+                    opencode_session_id, opencode_port, directory \
              FROM worker_runs \
              WHERE status = 'idle' AND interactive = TRUE \
                    AND (agent_id = ? OR agent_id IS NULL)",
@@ -878,6 +902,7 @@ pub struct IdleWorkerRow {
     pub tool_calls: i64,
     pub opencode_session_id: Option<String>,
     pub opencode_port: Option<i32>,
+    pub directory: Option<String>,
 }
 
 /// A worker run row with full detail including the transcript blob.

@@ -2491,6 +2491,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         "task",
         &deps.agent_id,
         false,
+        None,
     );
 
     let task_store = deps.task_store.clone();

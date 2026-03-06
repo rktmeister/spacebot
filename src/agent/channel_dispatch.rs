@@ -502,6 +502,7 @@ pub async fn spawn_opencode_worker_from_state(
     // Clone for the release call in the async worker task.
     let release_pool = server_pool.clone();
     let release_directory = directory.clone();
+    let persist_directory = directory.clone();
 
     let oc_secrets_store = state.deps.runtime_config.secrets.load().as_ref().clone();
 
@@ -614,6 +615,12 @@ pub async fn spawn_opencode_worker_from_state(
             interactive,
         })
         .ok();
+
+    // Persist the directory so idle workers can be resumed into the correct
+    // directory after a restart.
+    state
+        .process_run_logger
+        .log_worker_directory(worker_id, &persist_directory);
 
     tracing::info!(worker_id = %worker_id, task = %task, interactive, "OpenCode worker spawned");
 
@@ -755,7 +762,11 @@ pub async fn resume_idle_worker_into_state(
                 return Err("OpenCode workers are not enabled".into());
             }
 
-            let directory = rc.workspace_dir.clone();
+            let directory = idle_worker
+                .directory
+                .as_deref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| rc.workspace_dir.clone());
             let server_pool = rc.opencode_server_pool.load().clone();
 
             let result = crate::opencode::OpenCodeWorker::resume_interactive(
