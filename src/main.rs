@@ -1554,6 +1554,238 @@ async fn run(
     // Active conversation channels: conversation_id -> ActiveChannel
     let mut active_channels: HashMap<String, ActiveChannel> = HashMap::new();
 
+    // Resume idle interactive workers that survived the restart.
+    // For each idle worker, pre-create the channel if needed and spawn
+    // the resumed worker into its state so follow-ups route correctly.
+    if agents_initialized {
+        for (agent_id, agent) in agents.iter() {
+            let run_logger = spacebot::conversation::ProcessRunLogger::new(agent.db.sqlite.clone());
+            let idle_workers = match run_logger
+                .get_idle_interactive_workers(&agent.config.id)
+                .await
+            {
+                Ok(workers) => workers,
+                Err(error) => {
+                    tracing::warn!(agent_id = %agent_id, %error, "failed to query idle workers");
+                    continue;
+                }
+            };
+            if idle_workers.is_empty() {
+                continue;
+            }
+            tracing::info!(
+                agent_id = %agent_id,
+                idle_count = idle_workers.len(),
+                "found idle interactive workers to resume"
+            );
+
+            // Group idle workers by channel_id
+            let mut by_channel: HashMap<
+                String,
+                Vec<&spacebot::conversation::history::IdleWorkerRow>,
+            > = HashMap::new();
+            for worker in &idle_workers {
+                if let Some(channel_id) = &worker.channel_id {
+                    by_channel
+                        .entry(channel_id.clone())
+                        .or_default()
+                        .push(worker);
+                } else {
+                    // Workers without a channel_id can't be resumed (no follow-up routing).
+                    run_logger
+                        .fail_idle_worker(
+                            &worker.id,
+                            "Worker had no channel, cannot resume after restart.",
+                        )
+                        .await
+                        .ok();
+                    tracing::warn!(
+                        worker_id = %worker.id,
+                        "idle worker has no channel_id, marking as failed"
+                    );
+                }
+            }
+
+            for (conversation_id, workers) in by_channel {
+                // Ensure the channel exists. If it's already in active_channels
+                // (unlikely at startup), use its state. Otherwise, pre-create it.
+                if !active_channels.contains_key(&conversation_id) {
+                    let (response_tx, mut response_rx) =
+                        mpsc::channel::<spacebot::OutboundResponse>(32);
+                    let event_rx = agent.deps.event_tx.subscribe();
+                    let channel_id: spacebot::ChannelId = Arc::from(conversation_id.as_str());
+
+                    let (channel, channel_tx) = spacebot::agent::channel::Channel::new(
+                        channel_id,
+                        agent.deps.clone(),
+                        response_tx,
+                        event_rx,
+                        agent.config.screenshot_dir(),
+                        agent.config.logs_dir(),
+                    );
+                    agent
+                        .deps
+                        .process_control_registry
+                        .register_channel(channel.id.clone(), channel.control_handle().downgrade())
+                        .await;
+                    api_state
+                        .register_channel_status(
+                            conversation_id.clone(),
+                            channel.state.status_block.clone(),
+                        )
+                        .await;
+                    api_state
+                        .register_channel_state(conversation_id.clone(), channel.state.clone())
+                        .await;
+
+                    // Resume idle workers into the channel state before spawning the event loop.
+                    for idle_worker in &workers {
+                        match spacebot::agent::channel_dispatch::resume_idle_worker_into_state(
+                            &channel.state,
+                            idle_worker,
+                        )
+                        .await
+                        {
+                            Ok(worker_id) => {
+                                tracing::info!(
+                                    worker_id = %worker_id,
+                                    channel_id = %conversation_id,
+                                    "resumed idle worker"
+                                );
+                            }
+                            Err(reason) => {
+                                tracing::warn!(
+                                    worker_id = %idle_worker.id,
+                                    channel_id = %conversation_id,
+                                    %reason,
+                                    "failed to resume idle worker, marking as failed"
+                                );
+                                run_logger
+                                    .fail_idle_worker(
+                                        &idle_worker.id,
+                                        &format!("Failed to resume after restart: {reason}"),
+                                    )
+                                    .await
+                                    .ok();
+                            }
+                        }
+                    }
+
+                    // Spawn the channel event loop.
+                    let cleanup_channel_id = conversation_id.clone();
+                    let process_control_registry = agent.deps.process_control_registry.clone();
+                    let api_state_for_cleanup = api_state.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = channel.run().await {
+                            tracing::error!(%error, "channel event loop failed");
+                        }
+                        let scoped_channel_id: spacebot::ChannelId =
+                            Arc::from(cleanup_channel_id.as_str());
+                        process_control_registry
+                            .unregister_channel(&scoped_channel_id)
+                            .await;
+                        api_state_for_cleanup
+                            .unregister_channel_status(&cleanup_channel_id)
+                            .await;
+                        api_state_for_cleanup
+                            .unregister_channel_state(&cleanup_channel_id)
+                            .await;
+                    });
+
+                    // Outbound response routing for this pre-created channel.
+                    // Since there's no inbound message yet, we create a placeholder.
+                    let latest_message =
+                        Arc::new(tokio::sync::RwLock::new(spacebot::InboundMessage {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            source: "internal".to_string(),
+                            adapter: None,
+                            conversation_id: conversation_id.clone(),
+                            content: spacebot::MessageContent::Text(String::new()),
+                            sender_id: String::new(),
+                            formatted_author: None,
+                            metadata: std::collections::HashMap::new(),
+                            agent_id: Some(agent_id.clone()),
+                            timestamp: chrono::Utc::now(),
+                        }));
+                    let outbound_message = latest_message.clone();
+                    let messaging_for_outbound = messaging_manager.clone();
+                    let api_event_tx = api_state.event_tx.clone();
+                    let sse_agent_id = agent_id.to_string();
+                    let sse_channel_id = conversation_id.clone();
+                    let outbound_handle = tokio::spawn(async move {
+                        while let Some(response) = response_rx.recv().await {
+                            match &response {
+                                spacebot::OutboundResponse::Text(text) => {
+                                    api_event_tx
+                                        .send(spacebot::api::ApiEvent::OutboundMessage {
+                                            agent_id: sse_agent_id.clone(),
+                                            channel_id: sse_channel_id.clone(),
+                                            text: text.clone(),
+                                        })
+                                        .ok();
+                                }
+                                spacebot::OutboundResponse::RichMessage { text, .. } => {
+                                    api_event_tx
+                                        .send(spacebot::api::ApiEvent::OutboundMessage {
+                                            agent_id: sse_agent_id.clone(),
+                                            channel_id: sse_channel_id.clone(),
+                                            text: text.clone(),
+                                        })
+                                        .ok();
+                                }
+                                spacebot::OutboundResponse::ThreadReply { text, .. } => {
+                                    api_event_tx
+                                        .send(spacebot::api::ApiEvent::OutboundMessage {
+                                            agent_id: sse_agent_id.clone(),
+                                            channel_id: sse_channel_id.clone(),
+                                            text: text.clone(),
+                                        })
+                                        .ok();
+                                }
+                                _ => {}
+                            }
+                            let current_message = outbound_message.read().await.clone();
+                            match response {
+                                spacebot::OutboundResponse::Status(status) => {
+                                    if let Err(error) = messaging_for_outbound
+                                        .send_status(&current_message, status)
+                                        .await
+                                    {
+                                        tracing::warn!(%error, "failed to send status update");
+                                    }
+                                }
+                                response => {
+                                    if let Err(error) = messaging_for_outbound
+                                        .respond(&current_message, response)
+                                        .await
+                                    {
+                                        tracing::error!(%error, "failed to send outbound response");
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                    active_channels.insert(
+                        conversation_id.clone(),
+                        ActiveChannel {
+                            message_tx: channel_tx,
+                            latest_message,
+                            _outbound_handle: outbound_handle,
+                        },
+                    );
+
+                    tracing::info!(
+                        conversation_id = %conversation_id,
+                        agent_id = %agent_id,
+                        workers_resumed = workers.len(),
+                        "pre-created channel for idle worker resumption"
+                    );
+                }
+            }
+        }
+    }
+
     // Main event loop: route inbound messages to agent channels
     loop {
         // Poll the inbound stream if it exists, otherwise yield a never-resolving future

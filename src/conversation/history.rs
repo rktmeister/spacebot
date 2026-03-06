@@ -464,10 +464,13 @@ impl ProcessRunLogger {
         });
     }
 
-    /// Mark all orphaned running/idle workers as failed for an agent.
+    /// Mark orphaned **running** workers as failed for an agent.
     ///
-    /// Called at startup to reconcile rows that were left in `running` or `idle`
+    /// Called at startup to reconcile rows that were left in `running` status
     /// when the process exited before a `WorkerComplete` event was persisted.
+    ///
+    /// Idle interactive workers are intentionally left alone — they will be
+    /// resumed by `get_idle_interactive_workers()` + the reconnection logic.
     pub async fn reconcile_running_workers_for_agent(
         &self,
         agent_id: &str,
@@ -481,7 +484,7 @@ impl ProcessRunLogger {
                      WHEN result IS NULL OR result = '' THEN ? \
                      ELSE result \
                  END \
-             WHERE status IN ('running', 'idle') AND (agent_id = ? OR agent_id IS NULL)",
+             WHERE status = 'running' AND (agent_id = ? OR agent_id IS NULL)",
         )
         .bind(failure_message)
         .bind(agent_id)
@@ -490,6 +493,54 @@ impl ProcessRunLogger {
         .map_err(|error| anyhow::anyhow!(error))?;
 
         Ok(result.rows_affected())
+    }
+
+    /// Load all idle interactive workers for an agent.
+    ///
+    /// Called at startup to find workers that were waiting for follow-up input
+    /// when the process exited. These can potentially be reconnected to their
+    /// sessions and resumed rather than marked as failed.
+    pub async fn get_idle_interactive_workers(
+        &self,
+        agent_id: &str,
+    ) -> crate::error::Result<Vec<IdleWorkerRow>> {
+        let rows = sqlx::query_as::<_, IdleWorkerRow>(
+            "SELECT id, task, channel_id, worker_type, transcript, tool_calls, \
+                    opencode_session_id, opencode_port \
+             FROM worker_runs \
+             WHERE status = 'idle' AND interactive = TRUE \
+                   AND (agent_id = ? OR agent_id IS NULL)",
+        )
+        .bind(agent_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| anyhow::anyhow!(error))?;
+
+        Ok(rows)
+    }
+
+    /// Mark an idle worker as failed (used when reconnection fails at startup).
+    pub async fn fail_idle_worker(
+        &self,
+        worker_id: &str,
+        reason: &str,
+    ) -> crate::error::Result<()> {
+        sqlx::query(
+            "UPDATE worker_runs \
+             SET status = 'failed', \
+                 completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP), \
+                 result = CASE \
+                     WHEN result IS NULL OR result = '' THEN ? \
+                     ELSE result \
+                 END \
+             WHERE id = ? AND status = 'idle'",
+        )
+        .bind(reason)
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| anyhow::anyhow!(error))?;
+        Ok(())
     }
 
     /// Mark a detached running worker as cancelled.
@@ -794,6 +845,19 @@ pub struct WorkerRunRow {
     pub tool_calls: i64,
     pub opencode_port: Option<i32>,
     pub interactive: bool,
+}
+
+/// A worker that was idle at shutdown, loaded for reconnection at startup.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct IdleWorkerRow {
+    pub id: String,
+    pub task: String,
+    pub channel_id: Option<String>,
+    pub worker_type: String,
+    pub transcript: Option<Vec<u8>>,
+    pub tool_calls: i64,
+    pub opencode_session_id: Option<String>,
+    pub opencode_port: Option<i32>,
 }
 
 /// A worker run row with full detail including the transcript blob.

@@ -297,6 +297,75 @@ pub fn convert_opencode_parts(
     steps
 }
 
+/// Convert a persisted `Vec<TranscriptStep>` back into a Rig `Vec<Message>` history.
+///
+/// Used when resuming an idle interactive worker after restart: the transcript
+/// blob is the only surviving record of the worker's conversation, so we
+/// reconstruct the Rig message history from it.
+///
+/// The mapping is lossy (reasoning, images, etc. are not round-tripped), but
+/// it preserves all text and tool call/result pairs which is sufficient for
+/// the LLM to pick up the conversation.
+pub fn transcript_to_history(steps: &[TranscriptStep]) -> Vec<rig::message::Message> {
+    use rig::message::{
+        AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+        UserContent,
+    };
+    use rig::one_or_many::OneOrMany;
+
+    let mut messages: Vec<Message> = Vec::new();
+
+    for step in steps {
+        match step {
+            TranscriptStep::Action { content } => {
+                let mut parts: Vec<AssistantContent> = Vec::new();
+                for item in content {
+                    match item {
+                        ActionContent::Text { text } => {
+                            parts.push(AssistantContent::Text(Text { text: text.clone() }));
+                        }
+                        ActionContent::ToolCall { id, name, args } => {
+                            let arguments = serde_json::from_str(args)
+                                .unwrap_or_else(|_| serde_json::Value::String(args.clone()));
+                            parts.push(AssistantContent::ToolCall(ToolCall {
+                                id: id.clone(),
+                                call_id: None,
+                                function: ToolFunction {
+                                    name: name.clone(),
+                                    arguments,
+                                },
+                                signature: None,
+                                additional_params: None,
+                            }));
+                        }
+                    }
+                }
+                if !parts.is_empty() {
+                    // OneOrMany::many returns Err only for empty vecs; we checked above.
+                    let content = OneOrMany::many(parts).expect("parts is non-empty");
+                    messages.push(Message::Assistant { id: None, content });
+                }
+            }
+            TranscriptStep::ToolResult {
+                call_id,
+                name: _,
+                text,
+            } => {
+                let result = ToolResult {
+                    id: call_id.clone(),
+                    call_id: Some(call_id.clone()),
+                    content: OneOrMany::one(ToolResultContent::Text(Text { text: text.clone() })),
+                };
+                messages.push(Message::User {
+                    content: OneOrMany::one(UserContent::ToolResult(result)),
+                });
+            }
+        }
+    }
+
+    messages
+}
+
 /// Convert Rig `Vec<Message>` to `Vec<TranscriptStep>`.
 fn convert_history(history: &[rig::message::Message]) -> Vec<TranscriptStep> {
     let mut steps = Vec::new();
