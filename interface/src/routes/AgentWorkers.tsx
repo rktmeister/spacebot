@@ -884,6 +884,15 @@ function OpenCodeEmbed({
 				style.textContent = cssText;
 				shadow.appendChild(style);
 
+				// Hide the sidebar and mobile sidebar in embedded mode —
+				// we only want the session/chat view.
+				const overrides = document.createElement("style");
+				overrides.textContent = `
+					[data-component="sidebar-nav-desktop"],
+					[data-component="sidebar-nav-mobile"] { display: none !important; }
+				`;
+				shadow.appendChild(overrides);
+
 				// Create the mount point inside the shadow.
 				// Apply the base styles that OpenCode normally gets from
 				// <body class="text-12-regular antialiased overflow-hidden">
