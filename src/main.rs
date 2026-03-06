@@ -1591,23 +1591,12 @@ async fn run(
                         .or_default()
                         .push(worker);
                 } else {
-                    // Workers without a channel_id can't be resumed (no follow-up routing).
-                    if let Err(error) = run_logger
-                        .fail_idle_worker(
-                            &worker.id,
-                            "Worker had no channel, cannot resume after restart.",
-                        )
-                        .await
-                    {
-                        tracing::error!(
-                            worker_id = %worker.id,
-                            %error,
-                            "failed to mark channelless idle worker as failed"
-                        );
-                    }
+                    // Workers without a channel_id can't be resumed (no follow-up
+                    // routing). Leave them as idle — the transcript is preserved
+                    // for inspection in the UI.
                     tracing::warn!(
                         worker_id = %worker.id,
-                        "idle worker has no channel_id, marking as failed"
+                        "idle worker has no channel_id, cannot resume (leaving as idle)"
                     );
                 }
             }
@@ -1660,25 +1649,16 @@ async fn run(
                                 );
                             }
                             Err(reason) => {
+                                // Leave the worker as idle — the transcript is
+                                // preserved for inspection. Don't transition to
+                                // failed just because the session couldn't be
+                                // reconnected.
                                 tracing::warn!(
                                     worker_id = %idle_worker.id,
                                     channel_id = %conversation_id,
                                     %reason,
-                                    "failed to resume idle worker, marking as failed"
+                                    "failed to resume idle worker (leaving as idle)"
                                 );
-                                if let Err(error) = run_logger
-                                    .fail_idle_worker(
-                                        &idle_worker.id,
-                                        &format!("Failed to resume after restart: {reason}"),
-                                    )
-                                    .await
-                                {
-                                    tracing::error!(
-                                        worker_id = %idle_worker.id,
-                                        %error,
-                                        "failed to mark idle worker as failed in DB"
-                                    );
-                                }
                             }
                         }
                     }
