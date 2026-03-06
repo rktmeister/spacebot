@@ -6,7 +6,7 @@
 # interface/public/opencode-embed/ for the Spacebot interface to serve.
 #
 # Requirements:
-#   - git, node (v24+), bun
+#   - git, node (v22+), bun
 #   - fnm (optional, used to switch to node 24 if available)
 #
 # Usage:

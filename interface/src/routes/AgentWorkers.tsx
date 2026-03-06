@@ -51,10 +51,6 @@ function statusBadgeVariant(status: string) {
 	}
 }
 
-function workerTypeBadgeVariant(workerType: string) {
-	return workerType === "opencode" ? ("accent" as const) : ("outline" as const);
-}
-
 function durationBetween(start: string, end: string | null): string {
 	if (!end) return "";
 	const seconds = Math.floor(
@@ -192,9 +188,10 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 			transcript: null,
 			tool_calls: live.toolCalls,
 			opencode_session_id: null,
-			opencode_port: null,
-			interactive: live.interactive,
-		};
+		opencode_port: null,
+		interactive: live.interactive,
+		directory: null,
+	};
 	}, [detailData, scopedActiveWorkers, selectedWorkerId]);
 
 	const selectWorker = useCallback(
@@ -628,11 +625,16 @@ function OpenCodeDirectLink({
 }) {
 	const [directory, setDirectory] = useState<string | null>(initialDirectory);
 
+	// Reset when the worker changes (props point to a different OpenCode instance)
+	useEffect(() => {
+		setDirectory(initialDirectory);
+	}, [port, sessionId, initialDirectory]);
+
 	useEffect(() => {
 		if (initialDirectory) return;
 		// Fetch directory from the OpenCode session API as fallback.
 		const controller = new AbortController();
-		fetch(`http://127.0.0.1:${port}/session/${sessionId}`, {
+		fetch(`/api/opencode/${port}/session/${sessionId}`, {
 			signal: controller.signal,
 		})
 			.then((r) => (r.ok ? r.json() : null))
@@ -644,8 +646,8 @@ function OpenCodeDirectLink({
 	}, [port, sessionId, initialDirectory]);
 
 	const href = directory
-		? `http://127.0.0.1:${port}/${base64UrlEncode(directory)}/session/${sessionId}`
-		: `http://127.0.0.1:${port}`;
+		? `/api/opencode/${port}/${base64UrlEncode(directory)}/session/${sessionId}`
+		: `/api/opencode/${port}`;
 
 	return (
 		<a
@@ -696,6 +698,13 @@ function loadEmbedAssets() {
 		if (!manifestRes.ok) throw new Error("Failed to load opencode-embed manifest");
 		const manifest: { js: string; css: string } = await manifestRes.json();
 
+		// Guard against path traversal or unexpected values from the manifest
+		const validAssetPath = (p: unknown): p is string =>
+			typeof p === "string" && p.startsWith("assets/") && !p.includes("..");
+		if (!validAssetPath(manifest.js) || !validAssetPath(manifest.css)) {
+			throw new Error("Invalid asset paths in opencode-embed manifest");
+		}
+
 		// Load JS via <script> tag (required for /public files in Vite dev)
 		// and CSS via fetch (to inject into Shadow DOM) in parallel
 		const [, cssRes] = await Promise.all([
@@ -730,7 +739,6 @@ function OpenCodeEmbed({
 }) {
 	const [state, setState] = useState<"loading" | "ready" | "error">("loading");
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const [directory, setDirectory] = useState<string | null>(initialDirectory);
 	const hostRef = useRef<HTMLDivElement>(null);
 	const handleRef = useRef<{ dispose: () => void; navigate: (route: string) => void } | null>(null);
 
@@ -747,6 +755,11 @@ function OpenCodeEmbed({
 	// the route or live updates won't work.
 	const [eventDirectory, setEventDirectory] = useState<string | null>(null);
 
+	// Reset when the worker changes (props point to a different OpenCode instance)
+	useEffect(() => {
+		setEventDirectory(null);
+	}, [port, sessionId]);
+
 	useEffect(() => {
 		const controller = new AbortController();
 
@@ -754,17 +767,23 @@ function OpenCodeEmbed({
 			try {
 				// Strategy 1: Probe the SSE stream briefly. The first non-heartbeat
 				// event carries the actual Instance.directory.
+				// Use a separate controller for the probe timeout so aborting the
+				// probe doesn't poison the fallback fetch or the unmount controller.
+				const probeController = new AbortController();
+				const onUnmount = () => probeController.abort();
+				controller.signal.addEventListener("abort", onUnmount);
+
 				const sseRes = await fetch(`${serverUrl}/global/event`, {
 					headers: { Accept: "text/event-stream" },
-					signal: controller.signal,
+					signal: probeController.signal,
 				});
 				if (!sseRes.ok || !sseRes.body) throw new Error("SSE probe failed");
 
 				const reader = sseRes.body.pipeThrough(new TextDecoderStream()).getReader();
-				const timeout = setTimeout(() => controller.abort(), 8000);
+				const timeout = setTimeout(() => probeController.abort(), 8000);
 				let buffer = "";
 
-				while (!controller.signal.aborted) {
+				while (!probeController.signal.aborted) {
 					const { done, value } = await reader.read();
 					if (done) break;
 					buffer += value;
@@ -788,7 +807,7 @@ function OpenCodeEmbed({
 				clearTimeout(timeout);
 			} catch {
 				// If SSE probe fails (aborted, timeout, etc.), fall back to
-				// the session API directory.
+				// the session API directory — unless the component unmounted.
 				if (!controller.signal.aborted) {
 					try {
 						const res = await fetch(`${serverUrl}/session/${sessionId}`, {
@@ -807,7 +826,7 @@ function OpenCodeEmbed({
 	}, [serverUrl, sessionId]);
 
 	// Use the discovered event directory, fall back to the prop directory
-	const resolvedDirectory = eventDirectory ?? directory;
+	const resolvedDirectory = eventDirectory ?? initialDirectory;
 
 	// Build the initial route for the memory router
 	const initialRoute = resolvedDirectory

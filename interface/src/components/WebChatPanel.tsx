@@ -62,6 +62,16 @@ function ActiveWorkersPanel({ workers, agentId }: { workers: ActiveWorker[]; age
 
 function ChatWorkerRunItem({ item, live, agentId }: { item: TimelineWorkerRun; live?: ActiveWorker; agentId: string }) {
 	const [expanded, setExpanded] = useState(!!live);
+	const wasLiveRef = useRef(!!live);
+
+	// Auto-expand when a worker becomes live after initial mount
+	useEffect(() => {
+		if (live && !wasLiveRef.current) {
+			setExpanded(true);
+		}
+		wasLiveRef.current = !!live;
+	}, [live]);
+
 	const oc = isOpenCodeWorker(live ?? { task: item.task });
 	const isLive = !!live;
 

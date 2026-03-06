@@ -203,7 +203,7 @@ export function mountOpenCode(
   const platform: Platform = {
     platform: "web",
     version: "embed",
-    openLink: (url) => window.open(url, "_blank"),
+    openLink: (url) => window.open(url, "_blank", "noopener,noreferrer"),
     back: () => memory.go(-1),
     forward: () => memory.go(1),
     restart: async () => {

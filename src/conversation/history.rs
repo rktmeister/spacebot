@@ -850,7 +850,9 @@ impl ProcessRunLogger {
             opencode_session_id: row.try_get("opencode_session_id").ok(),
             opencode_port: row.try_get::<i32, _>("opencode_port").ok(),
             interactive: row.try_get::<bool, _>("interactive").unwrap_or(false),
-            directory: row.try_get("directory").ok(),
+            directory: row
+                .try_get::<Option<String>, _>("directory")
+                .unwrap_or(None),
         }))
     }
 }
