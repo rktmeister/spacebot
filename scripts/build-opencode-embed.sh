@@ -108,13 +108,24 @@ echo "[opencode-embed] Copying build output..."
 rm -rf "${OUTPUT_DIR}"
 mkdir -p "${OUTPUT_DIR}"
 
-# Parse the Vite manifest to find the entry JS and CSS files, then copy
-# all assets. The manifest lives at dist-embed/.vite/manifest.json.
 cp -r "${APP_DIR}/dist-embed/assets" "${OUTPUT_DIR}/assets"
-if [ -f "${APP_DIR}/dist-embed/.vite/manifest.json" ]; then
-  mkdir -p "${OUTPUT_DIR}/.vite"
-  cp "${APP_DIR}/dist-embed/.vite/manifest.json" "${OUTPUT_DIR}/.vite/manifest.json"
+
+# Generate a simple manifest.json with the hashed entry filenames.
+# The frontend fetches /opencode-embed/manifest.json to discover them.
+ENTRY_JS="$(cd "${OUTPUT_DIR}/assets" && ls index-embed-*.js 2>/dev/null | head -1)"
+ENTRY_CSS="$(cd "${OUTPUT_DIR}/assets" && ls index-embed-*.css 2>/dev/null | head -1)"
+
+if [ -z "${ENTRY_JS}" ] || [ -z "${ENTRY_CSS}" ]; then
+  echo "[opencode-embed] ERROR: Could not find entry JS/CSS in build output."
+  echo "  JS: ${ENTRY_JS:-not found}"
+  echo "  CSS: ${ENTRY_CSS:-not found}"
+  echo "  Contents of assets/:"
+  ls "${OUTPUT_DIR}/assets/" | grep index-embed || echo "  (none)"
+  exit 1
 fi
+
+printf '{"js":"assets/%s","css":"assets/%s"}\n' "${ENTRY_JS}" "${ENTRY_CSS}" > "${OUTPUT_DIR}/manifest.json"
+echo "[opencode-embed] Manifest: js=assets/${ENTRY_JS}, css=assets/${ENTRY_CSS}"
 
 # Count output size
 TOTAL_SIZE="$(du -sh "${OUTPUT_DIR}" | cut -f1)"
