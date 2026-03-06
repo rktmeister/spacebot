@@ -466,6 +466,12 @@ pub async fn spawn_opencode_worker_from_state(
     directory: &str,
     interactive: bool,
 ) -> std::result::Result<crate::WorkerId, AgentError> {
+    if !interactive {
+        return Err(AgentError::Other(anyhow::anyhow!(
+            "OpenCode workers must be interactive"
+        )));
+    }
+
     check_worker_limit(state).await?;
     ensure_dispatch_readiness(state, "opencode_worker");
     let task = task.into();
@@ -486,6 +492,16 @@ pub async fn spawn_opencode_worker_from_state(
     }
 
     let server_pool = rc.opencode_server_pool.load().clone();
+
+    // Prevent multiple opencode workers on the same directory.
+    server_pool
+        .claim_directory(&directory)
+        .await
+        .map_err(AgentError::Other)?;
+
+    // Clone for the release call in the async worker task.
+    let release_pool = server_pool.clone();
+    let release_directory = directory.clone();
 
     let oc_secrets_store = state.deps.runtime_config.secrets.load().as_ref().clone();
 
@@ -542,7 +558,12 @@ pub async fn spawn_opencode_worker_from_state(
         Some(state.channel_id.clone()),
         oc_secrets_store,
         async move {
-            let result = worker.run().await.map_err(SpacebotError::from)?;
+            let result = worker.run().await.map_err(SpacebotError::from);
+
+            // Release the directory claim regardless of success or failure.
+            release_pool.release_directory(&release_directory).await;
+
+            let result = result?;
 
             // Persist the transcript built from SSE events so the worker detail
             // view can show the full conversation (text + tool calls + results).
