@@ -41,8 +41,9 @@ struct McpClientHandler {
 
 impl McpClientHandler {
     fn new(tool_list_changed: Arc<AtomicBool>) -> Self {
-        let implementation = rmcp::model::Implementation::new("spacebot", env!("CARGO_PKG_VERSION"))
-            .with_description("Spacebot MCP client");
+        let implementation =
+            rmcp::model::Implementation::new("spacebot", env!("CARGO_PKG_VERSION"))
+                .with_description("Spacebot MCP client");
 
         let client_info = rmcp::model::ClientInfo::new(
             rmcp::model::ClientCapabilities::default(),
@@ -255,9 +256,7 @@ impl McpConnection {
             return Err(anyhow!("mcp server '{}' is not connected", self.name));
         };
 
-        let mut params = rmcp::model::CallToolRequestParams::new(
-            Cow::Owned(tool_name.to_string()),
-        );
+        let mut params = rmcp::model::CallToolRequestParams::new(Cow::Owned(tool_name.to_string()));
         if let Some(args) = arguments {
             params = params.with_arguments(args);
         }
@@ -663,9 +662,7 @@ impl McpManager {
 fn parse_bearer_token(auth_value: &str, server_name: &str) -> anyhow::Result<String> {
     let trimmed = auth_value.trim();
     if trimmed.is_empty() {
-        anyhow::bail!(
-            "empty Authorization header value for mcp server '{server_name}'"
-        );
+        anyhow::bail!("empty Authorization header value for mcp server '{server_name}'");
     }
 
     // Check if the value starts with a known scheme word (case-insensitive).
@@ -681,16 +678,12 @@ fn parse_bearer_token(auth_value: &str, server_name: &str) -> anyhow::Result<Str
         }
         let token = trimmed[space_pos + 1..].trim();
         if token.is_empty() {
-            anyhow::bail!(
-                "empty Bearer token value for mcp server '{server_name}'"
-            );
+            anyhow::bail!("empty Bearer token value for mcp server '{server_name}'");
         }
         Ok(token.to_string())
     } else if trimmed.eq_ignore_ascii_case("Bearer") {
         // Bare "Bearer" with no token value.
-        anyhow::bail!(
-            "empty Bearer token value for mcp server '{server_name}'"
-        );
+        anyhow::bail!("empty Bearer token value for mcp server '{server_name}'");
     } else {
         // Raw token with no scheme prefix — pass through as-is.
         Ok(trimmed.to_string())
@@ -722,9 +715,7 @@ fn interpolate_env_placeholders(value: &str) -> String {
         } else {
             let resolved = std::env::var(var_name)
                 .ok()
-                .or_else(|| {
-                    crate::config::resolve_env_value(&format!("secret:{var_name}"))
-                })
+                .or_else(|| crate::config::resolve_env_value(&format!("secret:{var_name}")))
                 .unwrap_or_default();
             output.push_str(&resolved);
         }
@@ -762,7 +753,10 @@ mod tests {
     #[test]
     fn parse_bearer_token_rejects_non_bearer_scheme() {
         let err = parse_bearer_token("Basic dXNlcjpwYXNz", "myserver").unwrap_err();
-        assert!(err.to_string().contains("unsupported Authorization scheme 'Basic'"));
+        assert!(
+            err.to_string()
+                .contains("unsupported Authorization scheme 'Basic'")
+        );
         assert!(err.to_string().contains("myserver"));
     }
 
@@ -781,7 +775,10 @@ mod tests {
     #[test]
     fn parse_bearer_token_trims_whitespace() {
         assert_eq!(parse_bearer_token("  Bearer abc  ", "test").unwrap(), "abc");
-        assert_eq!(parse_bearer_token("  raw_token  ", "test").unwrap(), "raw_token");
+        assert_eq!(
+            parse_bearer_token("  raw_token  ", "test").unwrap(),
+            "raw_token"
+        );
     }
 
     #[test]
