@@ -179,7 +179,7 @@ export function WebChatPanel({ agentId }: WebChatPanelProps) {
 	return (
 		<div className="relative flex h-full w-full flex-col">
 			{/* Messages */}
-			<div className="flex-1 overflow-y-auto">
+			<div className="flex-1 overflow-x-hidden overflow-y-auto">
 				<div className="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-6 pb-32">
 					{hasActiveWorkers && (
 						<div className="sticky top-0 z-10 bg-app/90 pb-2 pt-2 backdrop-blur-sm">
@@ -201,8 +201,8 @@ export function WebChatPanel({ agentId }: WebChatPanelProps) {
 							<div key={item.id}>
 								{item.role === "user" ? (
 									<div className="flex justify-end">
-										<div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent/10 px-4 py-2.5">
-											<p className="text-sm text-ink">{item.content}</p>
+										<div className="max-w-[85%] min-w-0 overflow-hidden rounded-2xl rounded-br-md bg-accent/10 px-4 py-2.5">
+											<p className="text-sm text-ink break-all whitespace-pre-wrap">{item.content}</p>
 										</div>
 									</div>
 								) : (
