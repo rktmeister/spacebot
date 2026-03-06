@@ -77,6 +77,8 @@ pub(super) struct WorkerDetailResponse {
     opencode_port: Option<i32>,
     /// Whether this worker accepts follow-up input via route.
     interactive: bool,
+    /// Working directory for OpenCode workers.
+    directory: Option<String>,
 }
 
 /// List worker runs for an agent, with live status merged from StatusBlocks.
@@ -191,5 +193,6 @@ pub(super) async fn worker_detail(
         opencode_session_id: detail.opencode_session_id,
         opencode_port: detail.opencode_port,
         interactive: detail.interactive,
+        directory: detail.directory,
     }))
 }

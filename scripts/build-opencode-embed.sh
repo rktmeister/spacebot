@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Build the OpenCode embed bundle from a pinned upstream commit.
+#
+# Clones opencode at the pinned commit, copies our embed entry points
+# into the tree, builds with Vite, and copies the output into
+# interface/public/opencode-embed/ for the Spacebot interface to serve.
+#
+# Requirements:
+#   - git, node (v24+), bun
+#   - fnm (optional, used to switch to node 24 if available)
+#
+# Usage:
+#   ./scripts/build-opencode-embed.sh
+#
+# The OpenCode commit is pinned in OPENCODE_COMMIT below. Update it
+# when pulling in a new upstream version.
+
+set -euo pipefail
+
+OPENCODE_REPO="https://github.com/anomalyco/opencode"
+OPENCODE_COMMIT="114eb4244"
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CACHE_DIR="${REPO_ROOT}/.opencode-build-cache"
+EMBED_SRC="${REPO_ROOT}/interface/opencode-embed-src"
+OUTPUT_DIR="${REPO_ROOT}/interface/public/opencode-embed"
+
+# ---------------------------------------------------------------------------
+# 1. Clone or fetch OpenCode at the pinned commit
+# ---------------------------------------------------------------------------
+if [ -d "${CACHE_DIR}/.git" ]; then
+  echo "[opencode-embed] Fetching updates..."
+  git -C "${CACHE_DIR}" fetch --depth=1 origin "${OPENCODE_COMMIT}" 2>/dev/null || \
+    git -C "${CACHE_DIR}" fetch origin
+  git -C "${CACHE_DIR}" checkout "${OPENCODE_COMMIT}" --force
+else
+  echo "[opencode-embed] Cloning opencode at ${OPENCODE_COMMIT}..."
+  git clone --depth=1 "${OPENCODE_REPO}" "${CACHE_DIR}"
+  git -C "${CACHE_DIR}" fetch --depth=1 origin "${OPENCODE_COMMIT}" 2>/dev/null || true
+  git -C "${CACHE_DIR}" checkout "${OPENCODE_COMMIT}" --force
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Copy embed source files into the OpenCode tree
+# ---------------------------------------------------------------------------
+APP_DIR="${CACHE_DIR}/packages/app"
+echo "[opencode-embed] Copying embed source files..."
+cp "${EMBED_SRC}/embed.tsx"          "${APP_DIR}/src/embed.tsx"
+cp "${EMBED_SRC}/embed-entry.tsx"    "${APP_DIR}/src/embed-entry.tsx"
+cp "${EMBED_SRC}/vite.config.embed.ts" "${APP_DIR}/vite.config.embed.ts"
+cp "${EMBED_SRC}/index-embed.html"   "${APP_DIR}/index-embed.html"
+
+# ---------------------------------------------------------------------------
+# 3. Install dependencies
+# ---------------------------------------------------------------------------
+echo "[opencode-embed] Installing dependencies..."
+(cd "${CACHE_DIR}" && bun install --frozen-lockfile 2>/dev/null || bun install)
+
+# ---------------------------------------------------------------------------
+# 4. Switch to Node 24+ if fnm is available (needed for Vite build)
+# ---------------------------------------------------------------------------
+if command -v fnm &>/dev/null; then
+  eval "$(fnm env)"
+  fnm use v24.14.0 2>/dev/null || fnm install v24.14.0
+  fnm use v24.14.0
+fi
+
+# Verify node version
+NODE_MAJOR="$(node -v | sed 's/^v//' | cut -d. -f1)"
+if [ "${NODE_MAJOR}" -lt 22 ]; then
+  echo "[opencode-embed] ERROR: Node 22+ required for Vite build (got $(node -v))"
+  echo "  Install fnm and run: fnm install v24.14.0"
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Build the embed bundle
+# ---------------------------------------------------------------------------
+echo "[opencode-embed] Building embed bundle..."
+(cd "${APP_DIR}" && ./node_modules/.bin/vite build --config vite.config.embed.ts)
+
+# ---------------------------------------------------------------------------
+# 6. Copy output to interface/public/opencode-embed/
+# ---------------------------------------------------------------------------
+echo "[opencode-embed] Copying build output..."
+rm -rf "${OUTPUT_DIR}"
+mkdir -p "${OUTPUT_DIR}"
+
+# Parse the Vite manifest to find the entry JS and CSS files, then copy
+# all assets. The manifest lives at dist-embed/.vite/manifest.json.
+cp -r "${APP_DIR}/dist-embed/assets" "${OUTPUT_DIR}/assets"
+if [ -f "${APP_DIR}/dist-embed/.vite/manifest.json" ]; then
+  mkdir -p "${OUTPUT_DIR}/.vite"
+  cp "${APP_DIR}/dist-embed/.vite/manifest.json" "${OUTPUT_DIR}/.vite/manifest.json"
+fi
+
+# Count output size
+TOTAL_SIZE="$(du -sh "${OUTPUT_DIR}" | cut -f1)"
+JS_COUNT="$(find "${OUTPUT_DIR}" -name '*.js' | wc -l | tr -d ' ')"
+CSS_COUNT="$(find "${OUTPUT_DIR}" -name '*.css' | wc -l | tr -d ' ')"
+
+echo "[opencode-embed] Done! ${TOTAL_SIZE} total (${JS_COUNT} JS, ${CSS_COUNT} CSS)"
+echo "[opencode-embed] Output: ${OUTPUT_DIR}"

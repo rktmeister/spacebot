@@ -2241,6 +2241,7 @@ impl Channel {
                 task,
                 worker_type,
                 interactive,
+                directory,
                 ..
             } => {
                 run_logger.log_worker_started(
@@ -2250,7 +2251,7 @@ impl Channel {
                     worker_type,
                     &self.deps.agent_id,
                     *interactive,
-                    None,
+                    directory.as_deref().map(std::path::Path::new),
                 );
             }
             ProcessEvent::WorkerStatus {
