@@ -505,7 +505,8 @@ impl ProcessRunLogger {
         agent_id: &str,
     ) -> crate::error::Result<Vec<IdleWorkerRow>> {
         let rows = sqlx::query_as::<_, IdleWorkerRow>(
-            "SELECT id, task, channel_id, worker_type, transcript, tool_calls, \
+            "SELECT id, task, channel_id, worker_type, transcript, \
+                    COALESCE(tool_calls, 0) AS tool_calls, \
                     opencode_session_id, opencode_port \
              FROM worker_runs \
              WHERE status = 'idle' AND interactive = TRUE \

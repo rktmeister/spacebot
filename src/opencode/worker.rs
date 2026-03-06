@@ -384,7 +384,9 @@ impl OpenCodeWorker {
         if let Some(mut input_rx) = self.input_rx.take() {
             if resuming {
                 // Resumed worker: go straight to idle without emitting initial result
-                // (it was already relayed before the restart).
+                // (it was already relayed before the restart). Persist the recovered
+                // transcript so a second crash doesn't lose it.
+                self.persist_transcript_snapshot(&event_state).await;
                 self.send_status("resumed — waiting for follow-up");
                 self.send_idle();
             } else {
@@ -398,7 +400,7 @@ impl OpenCodeWorker {
                     result: scrubbed_result,
                 });
 
-                self.persist_transcript_snapshot(&event_state);
+                self.persist_transcript_snapshot(&event_state).await;
                 self.send_status("waiting for follow-up");
                 self.send_idle();
             }
@@ -447,7 +449,7 @@ impl OpenCodeWorker {
                                 result: scrubbed,
                             });
                         }
-                        self.persist_transcript_snapshot(&event_state);
+                        self.persist_transcript_snapshot(&event_state).await;
                         self.send_status("waiting for follow-up");
                         self.send_idle();
                     }
@@ -884,7 +886,8 @@ impl OpenCodeWorker {
     ///
     /// Called each time the worker goes idle so that if spacebot restarts
     /// while the worker is waiting for follow-up, the transcript survives.
-    fn persist_transcript_snapshot(&self, event_state: &EventState) {
+    /// Awaited directly so "idle implies persisted" — no out-of-order writes.
+    async fn persist_transcript_snapshot(&self, event_state: &EventState) {
         let Some(pool) = &self.sqlite_pool else {
             return;
         };
@@ -902,20 +905,17 @@ impl OpenCodeWorker {
         let blob = crate::conversation::worker_transcript::serialize_steps(&steps);
         let tool_calls = event_state.tool_calls;
         let worker_id = self.id.to_string();
-        let pool = pool.clone();
 
-        tokio::spawn(async move {
-            if let Err(error) =
-                sqlx::query("UPDATE worker_runs SET transcript = ?, tool_calls = ? WHERE id = ?")
-                    .bind(&blob)
-                    .bind(tool_calls)
-                    .bind(&worker_id)
-                    .execute(&pool)
-                    .await
-            {
-                tracing::warn!(%error, worker_id, "failed to persist transcript snapshot");
-            }
-        });
+        if let Err(error) =
+            sqlx::query("UPDATE worker_runs SET transcript = ?, tool_calls = ? WHERE id = ?")
+                .bind(&blob)
+                .bind(tool_calls)
+                .bind(&worker_id)
+                .execute(pool)
+                .await
+        {
+            tracing::warn!(%error, worker_id, "failed to persist transcript snapshot");
+        }
     }
 }
 

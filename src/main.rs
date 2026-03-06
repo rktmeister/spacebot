@@ -1592,13 +1592,19 @@ async fn run(
                         .push(worker);
                 } else {
                     // Workers without a channel_id can't be resumed (no follow-up routing).
-                    run_logger
+                    if let Err(error) = run_logger
                         .fail_idle_worker(
                             &worker.id,
                             "Worker had no channel, cannot resume after restart.",
                         )
                         .await
-                        .ok();
+                    {
+                        tracing::error!(
+                            worker_id = %worker.id,
+                            %error,
+                            "failed to mark channelless idle worker as failed"
+                        );
+                    }
                     tracing::warn!(
                         worker_id = %worker.id,
                         "idle worker has no channel_id, marking as failed"
@@ -1660,13 +1666,19 @@ async fn run(
                                     %reason,
                                     "failed to resume idle worker, marking as failed"
                                 );
-                                run_logger
+                                if let Err(error) = run_logger
                                     .fail_idle_worker(
                                         &idle_worker.id,
                                         &format!("Failed to resume after restart: {reason}"),
                                     )
                                     .await
-                                    .ok();
+                                {
+                                    tracing::error!(
+                                        worker_id = %idle_worker.id,
+                                        %error,
+                                        "failed to mark idle worker as failed in DB"
+                                    );
+                                }
                             }
                         }
                     }

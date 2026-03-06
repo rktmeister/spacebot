@@ -194,6 +194,16 @@ impl Worker {
         );
         // Reuse the original worker ID so DB row stays linked.
         worker.id = existing_id;
+        // Rebuild the hook so it publishes events under the correct worker ID
+        // (Self::build creates it with a fresh random ID).
+        let process_id = ProcessId::Worker(existing_id);
+        worker.hook = SpacebotHook::new(
+            worker.deps.agent_id.clone(),
+            process_id,
+            ProcessType::Worker,
+            worker.channel_id.clone(),
+            worker.deps.event_tx.clone(),
+        );
         worker.state = WorkerState::WaitingForInput;
         // Stash the prior history so `run_follow_up_loop()` can pick it up.
         worker.prior_history = Some(prior_history);
@@ -270,16 +280,17 @@ impl Worker {
             .tool_server_handle(worker_tool_server)
             .build();
 
-        // If this is a resumed worker, load the prior history and skip
-        // directly to the follow-up loop.
+        // If this is a resumed worker, load the prior history into `history`
+        // (not `compacted_history`) so the LLM sees it as conversation context
+        // on the next follow-up call.
         let resuming = self.prior_history.is_some();
-        let mut history = Vec::new();
-        let mut compacted_history = self.prior_history.take().unwrap_or_default();
+        let mut history = self.prior_history.take().unwrap_or_default();
+        let mut compacted_history = Vec::new();
 
         if resuming {
             tracing::info!(
                 worker_id = %self.id,
-                prior_messages = compacted_history.len(),
+                prior_messages = history.len(),
                 "resuming interactive worker with prior history"
             );
             self.hook.send_status("resumed — waiting for input");
@@ -343,7 +354,7 @@ impl Worker {
                         self.state = WorkerState::Failed;
                         self.hook.send_status("cancelled");
                         self.write_failure_log(&history, &format!("cancelled: {reason}"));
-                        self.persist_transcript(&compacted_history, &history);
+                        self.persist_transcript(&compacted_history, &history).await;
                         tracing::info!(worker_id = %self.id, %reason, "worker cancelled");
                         return Err(crate::error::AgentError::Cancelled { reason }.into());
                     }
@@ -353,7 +364,7 @@ impl Worker {
                             self.state = WorkerState::Failed;
                             self.hook.send_status("failed");
                             self.write_failure_log(&history, &format!("context overflow after {MAX_OVERFLOW_RETRIES} compaction attempts: {error}"));
-                            self.persist_transcript(&compacted_history, &history);
+                            self.persist_transcript(&compacted_history, &history).await;
                             tracing::error!(worker_id = %self.id, %error, "worker context overflow unrecoverable");
                             return Err(crate::error::AgentError::Other(error.into()).into());
                         }
@@ -376,7 +387,7 @@ impl Worker {
                         self.state = WorkerState::Failed;
                         self.hook.send_status("failed");
                         self.write_failure_log(&history, &error.to_string());
-                        self.persist_transcript(&compacted_history, &history);
+                        self.persist_transcript(&compacted_history, &history).await;
                         tracing::error!(worker_id = %self.id, %error, "worker LLM call failed");
                         return Err(crate::error::AgentError::Other(error.into()).into());
                     }
@@ -391,7 +402,7 @@ impl Worker {
                 // Fresh worker: persist transcript and signal idle for the first time.
                 // Resumed workers already did this in the preamble above.
                 self.state = WorkerState::WaitingForInput;
-                self.persist_transcript(&compacted_history, &history);
+                self.persist_transcript(&compacted_history, &history).await;
                 self.hook.send_status("waiting for input");
                 self.hook.send_worker_idle();
             }
@@ -482,14 +493,14 @@ impl Worker {
                 }
 
                 self.state = WorkerState::WaitingForInput;
-                self.persist_transcript(&compacted_history, &history);
+                self.persist_transcript(&compacted_history, &history).await;
                 self.hook.send_status("waiting for input");
                 self.hook.send_worker_idle();
             }
         }
 
         if let Some(failure_reason) = follow_up_failure {
-            self.persist_transcript(&compacted_history, &history);
+            self.persist_transcript(&compacted_history, &history).await;
             tracing::error!(worker_id = %self.id, reason = %failure_reason, "worker failed");
             return Err(crate::error::AgentError::Other(anyhow::anyhow!(failure_reason)).into());
         }
@@ -503,8 +514,8 @@ impl Worker {
             self.write_success_log(&history);
         }
 
-        // Persist transcript blob (fire-and-forget)
-        self.persist_transcript(&compacted_history, &history);
+        // Persist transcript blob
+        self.persist_transcript(&compacted_history, &history).await;
 
         tracing::info!(worker_id = %self.id, "worker completed");
         Ok(result)
@@ -594,8 +605,11 @@ impl Worker {
         );
     }
 
-    /// Persist the compressed transcript blob to worker_runs. Fire-and-forget.
-    fn persist_transcript(
+    /// Persist the compressed transcript blob to worker_runs.
+    ///
+    /// Awaited directly so that at idle boundaries "idle implies persisted"
+    /// and concurrent snapshots cannot land out of order.
+    async fn persist_transcript(
         &self,
         compacted_history: &[rig::message::Message],
         history: &[rig::message::Message],
@@ -604,7 +618,6 @@ impl Worker {
         full_history.extend(history.iter().cloned());
         let transcript_blob =
             crate::conversation::worker_transcript::serialize_transcript(&full_history);
-        let pool = self.deps.sqlite_pool.clone();
         let worker_id = self.id.to_string();
 
         // Count tool calls from the Rig history (each ToolCall in an Assistant message)
@@ -621,18 +634,16 @@ impl Worker {
             })
             .sum();
 
-        tokio::spawn(async move {
-            if let Err(error) =
-                sqlx::query("UPDATE worker_runs SET transcript = ?, tool_calls = ? WHERE id = ?")
-                    .bind(&transcript_blob)
-                    .bind(tool_calls)
-                    .bind(&worker_id)
-                    .execute(&pool)
-                    .await
-            {
-                tracing::warn!(%error, worker_id, "failed to persist worker transcript");
-            }
-        });
+        if let Err(error) =
+            sqlx::query("UPDATE worker_runs SET transcript = ?, tool_calls = ? WHERE id = ?")
+                .bind(&transcript_blob)
+                .bind(tool_calls)
+                .bind(&worker_id)
+                .execute(&self.deps.sqlite_pool)
+                .await
+        {
+            tracing::warn!(%error, worker_id, "failed to persist worker transcript");
+        }
     }
 
     /// Check if worker is in a terminal state.
