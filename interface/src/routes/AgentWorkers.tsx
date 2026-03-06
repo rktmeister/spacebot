@@ -16,6 +16,8 @@ import {formatTimeAgo, formatDuration} from "@/lib/format";
 import {LiveDuration} from "@/components/LiveDuration";
 import {useLiveContext} from "@/hooks/useLiveContext";
 import {cx} from "@/ui/utils";
+import {badgeStyles} from "@/ui/Badge";
+import {ProviderIcon} from "@/lib/providerIcons";
 
 /** RFC 4648 base64url encoding (no padding), matching OpenCode's directory encoding. */
 export function base64UrlEncode(value: string): string {
@@ -441,39 +443,22 @@ function WorkerDetail({
 			<div className="flex flex-col gap-2 border-b border-app-line/50 bg-app-darkBox/20 px-6 py-4">
 				<div className="flex items-start justify-between gap-3">
 					<TaskText text={detail.task} />
-					<div className="flex items-center gap-2">
-						{isLive && detail.channel_id && (
-							<CancelWorkerButton
-								channelId={detail.channel_id}
-								workerId={detail.id}
-							/>
-						)}
-						{detail.interactive && (
-							<Badge variant="outline" size="sm">
-								interactive
-							</Badge>
-						)}
-						<Badge
-							variant={workerTypeBadgeVariant(detail.worker_type)}
-							size="sm"
-						>
-							{detail.worker_type}
-						</Badge>
-						<Badge
-							variant={statusBadgeVariant(
-								isIdle ? "idle" : isLive ? "running" : normalizeStatus(detail.status),
-							)}
-							size="sm"
-						>
-							{isLive && !isIdle && (
-								<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
-							)}
-							{isIdle ? "idle" : isLive ? "running" : normalizeStatus(detail.status)}
-						</Badge>
-					</div>
+					{isLive && detail.channel_id && (
+						<CancelWorkerButton
+							channelId={detail.channel_id}
+							workerId={detail.id}
+						/>
+					)}
 				</div>
 				<div className="flex items-center gap-3 text-tiny text-ink-faint">
 					{detail.channel_name && <span>{detail.channel_name}</span>}
+					{hasOpenCodeEmbed && detail.opencode_port && (
+						<OpenCodeDirectLink
+							port={detail.opencode_port}
+							sessionId={detail.opencode_session_id!}
+							directory={detail.directory}
+						/>
+					)}
 					{isRunning ? (
 						<span>
 							Running for{" "}
@@ -494,14 +479,6 @@ function WorkerDetail({
 						<span>{toolCalls} tool calls</span>
 					)}
 				</div>
-				{/* Direct link to OpenCode session */}
-				{hasOpenCodeEmbed && detail.opencode_port && (
-					<OpenCodeDirectLink
-						port={detail.opencode_port}
-						sessionId={detail.opencode_session_id!}
-						directory={detail.directory}
-					/>
-				)}
 				{/* Live status bar for running workers */}
 				{isRunning && (currentTool || displayStatus) && (
 					<div className="flex items-center gap-2 text-tiny">
@@ -675,8 +652,9 @@ function OpenCodeDirectLink({
 			href={href}
 			target="_blank"
 			rel="noopener noreferrer"
-			className="text-tiny text-accent hover:underline"
+			className={cx(badgeStyles({ variant: "outline", size: "sm" }), "w-fit")}
 		>
+			<ProviderIcon provider="opencode-zen" size={12} className="text-current" />
 			OpenCode ::{port}
 		</a>
 	);
@@ -994,15 +972,38 @@ function OpenCodeEmbed({
 }
 
 function TaskText({text}: {text: string}) {
-	const [expanded, setExpanded] = useState(false);
+	const [hovered, setHovered] = useState(false);
+	const containerRef = useRef<HTMLDivElement>(null);
+	const textRef = useRef<HTMLParagraphElement>(null);
+	const [isTruncated, setIsTruncated] = useState(false);
+
+	useEffect(() => {
+		const element = textRef.current;
+		if (!element) return;
+		setIsTruncated(element.scrollWidth > element.clientWidth);
+	}, [text]);
 
 	return (
-		<button
-			onClick={() => setExpanded((v) => !v)}
-			className="text-left text-sm font-medium text-ink-dull"
+		<div
+			ref={containerRef}
+			className="relative min-w-0 flex-1"
+			onMouseEnter={() => { if (isTruncated) setHovered(true); }}
+			onMouseLeave={() => setHovered(false)}
 		>
-			<p className={expanded ? undefined : "line-clamp-3"}>{text}</p>
-		</button>
+			<p
+				ref={textRef}
+				className="truncate text-sm font-medium text-ink-dull"
+			>
+				{text}
+			</p>
+			{hovered && (
+				<div className="absolute left-0 top-full z-50 mt-1 max-h-60 max-w-lg overflow-y-auto rounded-lg border border-app-line/50 bg-app-box/95 px-4 py-3 shadow-xl backdrop-blur-sm">
+					<p className="whitespace-pre-wrap break-words text-sm text-ink-dull">
+						{text}
+					</p>
+				</div>
+			)}
+		</div>
 	);
 }
 
