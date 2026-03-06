@@ -1653,6 +1653,24 @@ async fn run(
                                 // preserved for inspection. Don't transition to
                                 // failed just because the session couldn't be
                                 // reconnected.
+                                //
+                                // Still register it in the status block so the
+                                // channel knows about it and can display it.
+                                if let Ok(worker_id) = idle_worker.id.parse::<uuid::Uuid>() {
+                                    let task_label = if idle_worker.worker_type == "opencode" {
+                                        format!("[opencode] {}", idle_worker.task)
+                                    } else {
+                                        idle_worker.task.clone()
+                                    };
+                                    let mut status = channel.state.status_block.write().await;
+                                    status.add_worker(worker_id, &task_label, false, true);
+                                    if let Some(worker) =
+                                        status.active_workers.iter_mut().find(|w| w.id == worker_id)
+                                    {
+                                        worker.status = "idle (session expired)".to_string();
+                                        worker.tool_calls = idle_worker.tool_calls as usize;
+                                    }
+                                }
                                 tracing::warn!(
                                     worker_id = %idle_worker.id,
                                     channel_id = %conversation_id,
