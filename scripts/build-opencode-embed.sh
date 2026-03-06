@@ -30,7 +30,13 @@ OUTPUT_DIR="${REPO_ROOT}/interface/public/opencode-embed"
 # ---------------------------------------------------------------------------
 if [ -d "${CACHE_DIR}/.git" ]; then
   echo "[opencode-embed] Fetching updates..."
-  git -C "${CACHE_DIR}" fetch origin
+  # Unshallow if this was a prior shallow clone, otherwise fetch fails
+  # to retrieve older commits.
+  if [ -f "${CACHE_DIR}/.git/shallow" ]; then
+    git -C "${CACHE_DIR}" fetch --unshallow origin
+  else
+    git -C "${CACHE_DIR}" fetch origin
+  fi
   git -C "${CACHE_DIR}" checkout "${OPENCODE_COMMIT}" --force
 else
   echo "[opencode-embed] Cloning opencode..."
