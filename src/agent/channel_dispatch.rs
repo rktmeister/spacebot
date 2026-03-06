@@ -434,7 +434,7 @@ pub async fn spawn_worker_from_state(
 
     {
         let mut status = state.status_block.write().await;
-        status.add_worker(worker_id, &task, false);
+        status.add_worker(worker_id, &task, false, interactive);
     }
 
     state
@@ -446,10 +446,11 @@ pub async fn spawn_worker_from_state(
             channel_id: Some(state.channel_id.clone()),
             task: task.clone(),
             worker_type: "builtin".into(),
+            interactive,
         })
         .ok();
 
-    tracing::info!(worker_id = %worker_id, task = %task, "worker spawned");
+    tracing::info!(worker_id = %worker_id, task = %task, interactive, "worker spawned");
 
     Ok(worker_id)
 }
@@ -468,7 +469,7 @@ pub async fn spawn_opencode_worker_from_state(
     check_worker_limit(state).await?;
     ensure_dispatch_readiness(state, "opencode_worker");
     let task = task.into();
-    let directory = std::path::PathBuf::from(directory);
+    let directory = expand_tilde(directory);
 
     let rc = &state.deps.runtime_config;
     let prompt_engine = rc.prompts.load();
@@ -531,6 +532,7 @@ pub async fn spawn_opencode_worker_from_state(
         task = %task,
         worker_type = "opencode",
     );
+    let sqlite_pool = state.deps.sqlite_pool.clone();
     let handle = spawn_worker_task(
         worker_id,
         state.deps.event_tx.clone(),
@@ -539,6 +541,31 @@ pub async fn spawn_opencode_worker_from_state(
         oc_secrets_store,
         async move {
             let result = worker.run().await.map_err(SpacebotError::from)?;
+
+            // Persist the transcript built from SSE events so the worker detail
+            // view can show the full conversation (text + tool calls + results).
+            if !result.transcript.is_empty() {
+                let blob = crate::conversation::worker_transcript::serialize_steps(
+                    &result.transcript,
+                );
+                let tool_calls = result.tool_calls;
+                let wid = worker_id.to_string();
+                let pool = sqlite_pool.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = sqlx::query(
+                        "UPDATE worker_runs SET transcript = ?, tool_calls = ? WHERE id = ?",
+                    )
+                    .bind(&blob)
+                    .bind(tool_calls)
+                    .bind(&wid)
+                    .execute(&pool)
+                    .await
+                    {
+                        tracing::warn!(%error, worker_id = wid, "failed to persist OpenCode transcript");
+                    }
+                });
+            }
+
             Ok::<String, SpacebotError>(result.result_text)
         }
         .instrument(worker_span),
@@ -549,7 +576,7 @@ pub async fn spawn_opencode_worker_from_state(
     let opencode_task = format!("[opencode] {task}");
     {
         let mut status = state.status_block.write().await;
-        status.add_worker(worker_id, &opencode_task, false);
+        status.add_worker(worker_id, &opencode_task, false, interactive);
     }
 
     state
@@ -561,10 +588,11 @@ pub async fn spawn_opencode_worker_from_state(
             channel_id: Some(state.channel_id.clone()),
             task: opencode_task,
             worker_type: "opencode".into(),
+            interactive,
         })
         .ok();
 
-    tracing::info!(worker_id = %worker_id, task = %task, "OpenCode worker spawned");
+    tracing::info!(worker_id = %worker_id, task = %task, interactive, "OpenCode worker spawned");
 
     Ok(worker_id)
 }
@@ -674,6 +702,24 @@ where
             success,
         });
     })
+}
+
+/// Expand a leading `~` or `~/` in a path to the user's home directory.
+///
+/// LLMs consistently produce tilde-prefixed paths because that's what appears
+/// in conversation context. `std::path::Path::canonicalize()` doesn't expand
+/// tildes (that's a shell feature), so paths like `~/Projects/foo` fail with
+/// "directory does not exist". This handles the common cases.
+fn expand_tilde(path: &str) -> std::path::PathBuf {
+    if path == "~" {
+        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/"))
+            .join(rest)
+    } else {
+        std::path::PathBuf::from(path)
+    }
 }
 
 #[cfg(test)]

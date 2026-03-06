@@ -259,6 +259,9 @@ struct WorkerTracker {
     worker_type: String,
     started_at: Instant,
     last_activity_at: Instant,
+    /// When true the worker is idle (waiting for follow-up input) and should
+    /// NOT be killed by the supervisor timeout.
+    is_idle: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -312,13 +315,22 @@ impl HealthRuntimeState {
                 worker_type,
                 started_at: now,
                 last_activity_at: now,
+                is_idle: false,
             },
         );
+    }
+
+    fn track_worker_idle(&mut self, worker_id: WorkerId) {
+        if let Some(tracker) = self.worker_trackers.get_mut(&worker_id) {
+            tracker.is_idle = true;
+        }
     }
 
     fn track_worker_activity(&mut self, worker_id: WorkerId) {
         if let Some(tracker) = self.worker_trackers.get_mut(&worker_id) {
             tracker.last_activity_at = Instant::now();
+            // Any activity means the worker is no longer idle.
+            tracker.is_idle = false;
         }
     }
 
@@ -799,7 +811,9 @@ impl Cortex {
     /// Process a process event and extract signals.
     pub async fn observe(&self, event: ProcessEvent) {
         self.observe_health_event(&event).await;
-        let signal = signal_from_event(event);
+        let Some(signal) = signal_from_event(event) else {
+            return;
+        };
         let buffer_len = {
             let mut buffer = self.signal_buffer.write().await;
             push_signal_into_buffer(&mut buffer, signal);
@@ -828,6 +842,7 @@ impl Cortex {
             ProcessEvent::WorkerComplete {
                 worker_id, success, ..
             } => state.track_worker_complete(*worker_id, *success, threshold),
+            ProcessEvent::WorkerIdle { worker_id, .. } => state.track_worker_idle(*worker_id),
             ProcessEvent::WorkerStatus { worker_id, .. } => {
                 state.track_worker_activity(*worker_id);
             }
@@ -893,7 +908,8 @@ impl Cortex {
                     .worker_trackers
                     .values()
                     .filter(|tracker| {
-                        now.duration_since(tracker.last_activity_at) >= worker_timeout
+                        !tracker.is_idle
+                            && now.duration_since(tracker.last_activity_at) >= worker_timeout
                     })
                     .cloned()
                     .collect()
@@ -1059,8 +1075,8 @@ fn summarize_signal_text(value: &str) -> String {
     crate::summarize_first_non_empty_line(value, crate::EVENT_SUMMARY_MAX_CHARS)
 }
 
-fn signal_from_event(event: ProcessEvent) -> Signal {
-    match event {
+fn signal_from_event(event: ProcessEvent) -> Option<Signal> {
+    Some(match event {
         ProcessEvent::BranchStarted {
             branch_id,
             channel_id,
@@ -1229,7 +1245,20 @@ fn signal_from_event(event: ProcessEvent) -> Signal {
             channel_id,
             text_summary: summarize_signal_text(&text_delta),
         },
-    }
+        ProcessEvent::WorkerIdle {
+            worker_id,
+            channel_id,
+            ..
+        } => Signal::WorkerStatus {
+            worker_id,
+            channel_id,
+            status: "idle".to_string(),
+        },
+        // UI-only events — no cortex signal needed.
+        ProcessEvent::OpenCodeSessionCreated { .. }
+        | ProcessEvent::OpenCodePartUpdated { .. }
+        | ProcessEvent::WorkerInitialResult { .. } => return None,
+    })
 }
 
 fn push_signal_into_buffer(buffer: &mut VecDeque<Signal>, signal: Signal) {
@@ -2449,12 +2478,20 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         channel_id: None,
         task: task_description.clone(),
         worker_type: "task".to_string(),
+        interactive: false,
     });
 
     // Log to worker_runs directly — task workers have no parent channel, so the
     // channel event handler won't persist them.
     let run_logger = crate::conversation::history::ProcessRunLogger::new(deps.sqlite_pool.clone());
-    run_logger.log_worker_started(None, worker_id, &task_description, "task", &deps.agent_id);
+    run_logger.log_worker_started(
+        None,
+        worker_id,
+        &task_description,
+        "task",
+        &deps.agent_id,
+        false,
+    );
 
     let task_store = deps.task_store.clone();
     let agent_id = deps.agent_id.to_string();
@@ -3434,7 +3471,7 @@ mod tests {
             content_summary: "persisted decision".to_string(),
         };
 
-        let signal = signal_from_event(event);
+        let signal = signal_from_event(event).expect("MemorySaved should produce a signal");
         match signal {
             Signal::MemorySaved {
                 memory_id,
@@ -3480,6 +3517,7 @@ mod tests {
                 channel_id: Some(channel_id.clone()),
                 task: "do work".to_string(),
                 worker_type: "shell".to_string(),
+                interactive: false,
             },
             ProcessEvent::WorkerStatus {
                 agent_id: agent_id.clone(),
@@ -3567,10 +3605,36 @@ mod tests {
                 text_delta: "he".to_string(),
                 aggregated_text: "hello".to_string(),
             },
+            ProcessEvent::WorkerIdle {
+                agent_id: Arc::from("agent"),
+                worker_id,
+                channel_id: Some(channel_id.clone()),
+            },
+            ProcessEvent::OpenCodeSessionCreated {
+                agent_id: Arc::from("agent"),
+                worker_id,
+                session_id: "session-1".to_string(),
+                port: 19898,
+            },
+            ProcessEvent::OpenCodePartUpdated {
+                agent_id: Arc::from("agent"),
+                worker_id,
+                part: crate::opencode::types::OpenCodePart::Text {
+                    id: "part-1".to_string(),
+                    text: "hello".to_string(),
+                },
+            },
+            ProcessEvent::WorkerInitialResult {
+                agent_id: Arc::from("agent"),
+                worker_id,
+                channel_id: Some(channel_id.clone()),
+                result: "initial result".to_string(),
+            },
         ];
 
         for event in events {
-            let _signal = signal_from_event(event);
+            // Some events (OpenCode UI plumbing) return None — that's fine.
+            let _signal: Option<Signal> = signal_from_event(event);
         }
     }
 
@@ -3996,6 +4060,7 @@ mod tests {
             worker_type: "builtin".to_string(),
             started_at: shared_start,
             last_activity_at: shared_start,
+            is_idle: false,
         };
         let worker_b = WorkerTracker {
             worker_id: uuid::Uuid::parse_str("00000000-0000-0000-0000-00000000000b")
@@ -4004,6 +4069,7 @@ mod tests {
             worker_type: "builtin".to_string(),
             started_at: shared_start,
             last_activity_at: shared_start,
+            is_idle: false,
         };
         let branch_oldest = BranchTracker {
             branch_id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001")
