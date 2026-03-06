@@ -36,7 +36,7 @@ The `set_status` tool has a `kind` field:
 - `kind: "progress"` (default) — intermediate status update, does not unlock exit
 - `kind: "outcome"` — terminal result signal, allows text-only exit
 
-Workers are instructed to call `set_status(kind: "outcome")` with a result summary before finishing. The hook detects this in `on_tool_call` by parsing the args.
+Workers are instructed to call `set_status(kind: "outcome")` with a result summary before finishing. The hook marks `outcome_signaled` only after a successful `set_status` tool result is observed in `on_tool_result` (`success: true` and `kind: "outcome"`), so failed status calls do not unlock text-only exit.
 
 ### Policy Scoping
 
@@ -57,8 +57,8 @@ let hook = SpacebotHook::new(...)
 
 ### Implementation Details
 
-**Outcome detection** (`src/hooks/spacebot.rs:on_tool_call`):
-- When a `set_status` call has `kind: "outcome"` in its args, `outcome_signaled` is set to `true`
+**Outcome detection** (`src/hooks/spacebot.rs:on_tool_result`):
+- After a successful `set_status` tool execution with `kind: "outcome"`, `outcome_signaled` is set to `true`
 - The flag persists for the rest of the prompt request
 
 **Nudge decision** (`src/hooks/spacebot.rs:should_nudge_tool_usage`):

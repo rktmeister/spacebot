@@ -247,6 +247,18 @@ impl SpacebotHook {
         self.event_tx.send(event).ok();
     }
 
+    /// Send a worker idle event. Only valid for worker processes.
+    pub fn send_worker_idle(&self) {
+        if let ProcessId::Worker(worker_id) = &self.process_id {
+            let event = ProcessEvent::WorkerIdle {
+                agent_id: self.agent_id.clone(),
+                worker_id: *worker_id,
+                channel_id: self.channel_id.clone(),
+            };
+            self.event_tx.send(event).ok();
+        }
+    }
+
     /// Scan content for potential secret leaks, including encoded forms.
     ///
     /// Delegates to the shared implementation in `secrets::scrub`.
