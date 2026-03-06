@@ -1605,6 +1605,38 @@ async fn run(
                 // Ensure the channel exists. If it's already in active_channels
                 // (unlikely at startup), use its state. Otherwise, pre-create it.
                 if !active_channels.contains_key(&conversation_id) {
+                    // First pass: retire any workers whose sessions can't be
+                    // reconnected. Only create the channel if at least one
+                    // worker has a chance of resuming.
+                    let mut resumable: Vec<&spacebot::conversation::history::IdleWorkerRow> =
+                        Vec::new();
+                    for idle_worker in &workers {
+                        if idle_worker.worker_type == "opencode"
+                            && idle_worker.opencode_session_id.is_none()
+                        {
+                            // OpenCode workers without session metadata can never
+                            // resume — the server died with kill_on_drop.
+                            if let Err(error) = run_logger.retire_idle_worker(&idle_worker.id).await
+                            {
+                                tracing::warn!(
+                                    worker_id = %idle_worker.id,
+                                    %error,
+                                    "failed to retire idle worker"
+                                );
+                            }
+                            tracing::info!(
+                                worker_id = %idle_worker.id,
+                                channel_id = %conversation_id,
+                                "retired idle opencode worker (no session metadata)"
+                            );
+                        } else {
+                            resumable.push(idle_worker);
+                        }
+                    }
+                    if resumable.is_empty() {
+                        continue;
+                    }
+
                     let (response_tx, mut response_rx) =
                         mpsc::channel::<spacebot::OutboundResponse>(32);
                     let event_rx = agent.deps.event_tx.subscribe();
@@ -1633,8 +1665,9 @@ async fn run(
                         .register_channel_state(conversation_id.clone(), channel.state.clone())
                         .await;
 
-                    // Resume idle workers into the channel state before spawning the event loop.
-                    for idle_worker in &workers {
+                    // Resume workers into the channel state before spawning the event loop.
+                    let mut any_resumed = false;
+                    for idle_worker in &resumable {
                         match spacebot::agent::channel_dispatch::resume_idle_worker_into_state(
                             &channel.state,
                             idle_worker,
@@ -1642,6 +1675,7 @@ async fn run(
                         .await
                         {
                             Ok(worker_id) => {
+                                any_resumed = true;
                                 tracing::info!(
                                     worker_id = %worker_id,
                                     channel_id = %conversation_id,
@@ -1649,33 +1683,22 @@ async fn run(
                                 );
                             }
                             Err(reason) => {
-                                // Leave the worker as idle — the transcript is
-                                // preserved for inspection. Don't transition to
-                                // failed just because the session couldn't be
-                                // reconnected.
-                                //
-                                // Still register it in the status block so the
-                                // channel knows about it and can display it.
-                                if let Ok(worker_id) = idle_worker.id.parse::<uuid::Uuid>() {
-                                    let task_label = if idle_worker.worker_type == "opencode" {
-                                        format!("[opencode] {}", idle_worker.task)
-                                    } else {
-                                        idle_worker.task.clone()
-                                    };
-                                    let mut status = channel.state.status_block.write().await;
-                                    status.add_worker(worker_id, &task_label, false, true);
-                                    if let Some(worker) =
-                                        status.active_workers.iter_mut().find(|w| w.id == worker_id)
-                                    {
-                                        worker.status = "idle (session expired)".to_string();
-                                        worker.tool_calls = idle_worker.tool_calls as usize;
-                                    }
+                                // Resume failed at runtime (e.g. OpenCode disabled,
+                                // transcript corrupt). Retire the worker.
+                                if let Err(error) =
+                                    run_logger.retire_idle_worker(&idle_worker.id).await
+                                {
+                                    tracing::warn!(
+                                        worker_id = %idle_worker.id,
+                                        %error,
+                                        "failed to retire idle worker"
+                                    );
                                 }
-                                tracing::warn!(
+                                tracing::info!(
                                     worker_id = %idle_worker.id,
                                     channel_id = %conversation_id,
                                     %reason,
-                                    "failed to resume idle worker (leaving as idle)"
+                                    "retired idle worker (session expired)"
                                 );
                             }
                         }
@@ -1752,6 +1775,28 @@ async fn run(
                                         })
                                         .ok();
                                 }
+                                spacebot::OutboundResponse::Status(
+                                    spacebot::StatusUpdate::Thinking,
+                                ) => {
+                                    api_event_tx
+                                        .send(spacebot::api::ApiEvent::TypingState {
+                                            agent_id: sse_agent_id.clone(),
+                                            channel_id: sse_channel_id.clone(),
+                                            is_typing: true,
+                                        })
+                                        .ok();
+                                }
+                                spacebot::OutboundResponse::Status(
+                                    spacebot::StatusUpdate::StopTyping,
+                                ) => {
+                                    api_event_tx
+                                        .send(spacebot::api::ApiEvent::TypingState {
+                                            agent_id: sse_agent_id.clone(),
+                                            channel_id: sse_channel_id.clone(),
+                                            is_typing: false,
+                                        })
+                                        .ok();
+                                }
                                 _ => {}
                             }
                             let current_message = outbound_message.read().await.clone();
@@ -1788,7 +1833,7 @@ async fn run(
                     tracing::info!(
                         conversation_id = %conversation_id,
                         agent_id = %agent_id,
-                        workers_resumed = workers.len(),
+                        any_resumed,
                         "pre-created channel for idle worker resumption"
                     );
                 }

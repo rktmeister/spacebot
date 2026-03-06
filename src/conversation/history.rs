@@ -544,6 +544,25 @@ impl ProcessRunLogger {
         Ok(())
     }
 
+    /// Retire an idle worker whose session can no longer be resumed.
+    ///
+    /// Marks the row as `done` (not `failed`) because the worker completed its
+    /// work successfully — only the follow-up session expired. The existing
+    /// result and transcript are preserved.
+    pub async fn retire_idle_worker(&self, worker_id: &str) -> crate::error::Result<()> {
+        sqlx::query(
+            "UPDATE worker_runs \
+             SET status = 'done', \
+                 completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP) \
+             WHERE id = ? AND status = 'idle'",
+        )
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| anyhow::anyhow!(error))?;
+        Ok(())
+    }
+
     /// Mark a detached running worker as cancelled.
     ///
     /// Used by API cancellation when the in-memory channel state no longer has

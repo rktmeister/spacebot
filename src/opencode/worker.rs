@@ -281,6 +281,7 @@ impl OpenCodeWorker {
                     .send(ProcessEvent::OpenCodeSessionCreated {
                         agent_id: self.agent_id.clone(),
                         worker_id: self.id,
+                        channel_id: self.channel_id.clone(),
                         session_id: resume.session_id.clone(),
                         port: opencode_port,
                     })
@@ -334,15 +335,11 @@ impl OpenCodeWorker {
                     .send(ProcessEvent::OpenCodeSessionCreated {
                         agent_id: self.agent_id.clone(),
                         worker_id: self.id,
+                        channel_id: self.channel_id.clone(),
                         session_id: session_id.clone(),
                         port: opencode_port,
                     })
                     .ok();
-
-                // Persist session metadata directly to the DB so it survives
-                // restarts. The channel event filter currently drops
-                // OpenCodeSessionCreated, so we can't rely on the event path.
-                self.persist_opencode_metadata(&session_id, opencode_port);
 
                 tracing::info!(
                     worker_id = %self.id,
@@ -884,33 +881,6 @@ impl OpenCodeWorker {
             agent_id: self.agent_id.clone(),
             worker_id: self.id,
             channel_id: self.channel_id.clone(),
-        });
-    }
-
-    /// Persist OpenCode session metadata (session_id, port) to the worker_runs row.
-    ///
-    /// Fire-and-forget because losing this metadata is not catastrophic (the
-    /// worker just won't be resumable). This bypasses the event system because
-    /// `OpenCodeSessionCreated` is filtered out by `event_is_for_channel()`.
-    fn persist_opencode_metadata(&self, session_id: &str, port: u16) {
-        let Some(pool) = &self.sqlite_pool else {
-            return;
-        };
-        let pool = pool.clone();
-        let worker_id = self.id.to_string();
-        let session_id = session_id.to_string();
-        tokio::spawn(async move {
-            if let Err(error) = sqlx::query(
-                "UPDATE worker_runs SET opencode_session_id = ?, opencode_port = ? WHERE id = ?",
-            )
-            .bind(&session_id)
-            .bind(port as i32)
-            .bind(&worker_id)
-            .execute(&pool)
-            .await
-            {
-                tracing::warn!(%error, worker_id, "failed to persist OpenCode session metadata");
-            }
         });
     }
 

@@ -20,6 +20,12 @@ const MAX_TOOL_ARGS_BYTES: usize = 2_000;
 pub enum TranscriptStep {
     /// Agent reasoning and/or tool calls.
     Action { content: Vec<ActionContent> },
+    /// User-originated text (task prompt, follow-up input).
+    ///
+    /// Distinct from `Action` so that `transcript_to_history()` can reconstruct
+    /// the correct `Message::User` role instead of treating everything as
+    /// `Message::Assistant`.
+    UserText { text: String },
     /// Tool execution result.
     ToolResult {
         call_id: String,
@@ -106,12 +112,16 @@ pub fn convert_opencode_messages(messages: &[serde_json::Value]) -> (Vec<Transcr
                                 all_text.push_str("\n\n");
                             }
                             all_text.push_str(text);
-                        }
-                        steps.push(TranscriptStep::Action {
-                            content: vec![ActionContent::Text {
+                            steps.push(TranscriptStep::Action {
+                                content: vec![ActionContent::Text {
+                                    text: text.to_string(),
+                                }],
+                            });
+                        } else {
+                            steps.push(TranscriptStep::UserText {
                                 text: text.to_string(),
-                            }],
-                        });
+                            });
+                        }
                     }
                 }
                 "tool" => {
@@ -346,6 +356,13 @@ pub fn transcript_to_history(steps: &[TranscriptStep]) -> Vec<rig::message::Mess
                     messages.push(Message::Assistant { id: None, content });
                 }
             }
+            TranscriptStep::UserText { text } => {
+                if !text.is_empty() {
+                    messages.push(Message::User {
+                        content: OneOrMany::one(UserContent::Text(Text { text: text.clone() })),
+                    });
+                }
+            }
             TranscriptStep::ToolResult {
                 call_id,
                 name: _,
@@ -436,10 +453,8 @@ fn convert_history(history: &[rig::message::Message]) -> Vec<TranscriptStep> {
                         rig::message::UserContent::Text(text) => {
                             // Skip compaction markers and system-injected messages
                             if !text.text.is_empty() && !text.text.starts_with("[System:") {
-                                steps.push(TranscriptStep::Action {
-                                    content: vec![ActionContent::Text {
-                                        text: text.text.clone(),
-                                    }],
+                                steps.push(TranscriptStep::UserText {
+                                    text: text.text.clone(),
                                 });
                             }
                         }

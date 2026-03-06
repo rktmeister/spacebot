@@ -258,6 +258,7 @@ pub enum ProcessEvent {
     OpenCodeSessionCreated {
         agent_id: AgentId,
         worker_id: WorkerId,
+        channel_id: Option<ChannelId>,
         session_id: String,
         port: u16,
     },

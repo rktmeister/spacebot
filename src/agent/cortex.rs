@@ -3613,6 +3613,7 @@ mod tests {
             ProcessEvent::OpenCodeSessionCreated {
                 agent_id: Arc::from("agent"),
                 worker_id,
+                channel_id: Some(channel_id.clone()),
                 session_id: "session-1".to_string(),
                 port: 19898,
             },
