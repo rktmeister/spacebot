@@ -17,11 +17,12 @@ import { DialogProvider } from "@opencode-ai/ui/context/dialog"
 import { FileComponentProvider } from "@opencode-ai/ui/context/file"
 import { MarkedProvider } from "@opencode-ai/ui/context/marked"
 import { Font } from "@opencode-ai/ui/font"
-import { ThemeProvider } from "@opencode-ai/ui/theme"
+import { ThemeProvider, useTheme, type DesktopTheme, type ColorScheme } from "@opencode-ai/ui/theme"
 import { MetaProvider } from "@solidjs/meta"
 import { MemoryRouter, Route, createMemoryHistory } from "@solidjs/router"
-import { ErrorBoundary, lazy, type ParentProps, Show, Suspense } from "solid-js"
+import { ErrorBoundary, lazy, onMount, type ParentProps, Show, Suspense } from "solid-js"
 import { render } from "solid-js/web"
+import spacebotTheme from "./spacebot-theme.json"
 import { CommandProvider } from "@/context/command"
 import { CommentsProvider } from "@/context/comments"
 import { FileProvider } from "@/context/file"
@@ -115,6 +116,26 @@ function ServerKey(props: ParentProps) {
   )
 }
 
+/**
+ * Registers and activates a custom theme + color scheme inside the
+ * ThemeProvider. Runs once on mount — theme changes propagate
+ * reactively through OpenCode's own effect in the ThemeProvider.
+ */
+function ThemeInjector(props: ParentProps & { theme?: DesktopTheme; colorScheme?: ColorScheme }) {
+  const ctx = useTheme()
+  onMount(() => {
+    const theme = props.theme
+    if (theme) {
+      ctx.registerTheme(theme)
+      ctx.setTheme(theme.id)
+    }
+    if (props.colorScheme) {
+      ctx.setColorScheme(props.colorScheme)
+    }
+  })
+  return <>{props.children}</>
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -129,6 +150,19 @@ export type MountOpenCodeConfig = {
    * Defaults to "/" (home / project picker).
    */
   initialRoute?: string
+
+  /**
+   * Custom theme to register and activate. If omitted, the built-in
+   * Spacebot theme is used. Pass `null` to skip theme injection
+   * entirely and use OpenCode's default theme.
+   */
+  theme?: DesktopTheme | null
+
+  /**
+   * Force a color scheme. Defaults to "dark" to match Spacebot's UI.
+   * Pass "system" to respect the user's OS preference.
+   */
+  colorScheme?: ColorScheme
 }
 
 export type MountOpenCodeHandle = {
@@ -155,7 +189,11 @@ export function mountOpenCode(
   container: HTMLElement,
   config: MountOpenCodeConfig,
 ): MountOpenCodeHandle {
-  const { serverUrl, initialRoute = "/" } = config
+  const { serverUrl, initialRoute = "/", colorScheme = "dark" } = config
+  // Resolve theme: undefined → default Spacebot theme, null → no injection
+  const theme = config.theme === undefined
+    ? (spacebotTheme as DesktopTheme)
+    : config.theme ?? undefined
 
   // Create an in-memory history that never touches the real URL bar.
   const memory = createMemoryHistory()
@@ -194,6 +232,7 @@ export function mountOpenCode(
         <MetaProvider>
           <Font />
           <ThemeProvider>
+            <ThemeInjector theme={theme} colorScheme={colorScheme}>
             <LanguageProvider>
               <UiI18nBridge>
                 <ErrorBoundary fallback={(error) => <ErrorPage error={error} />}>
@@ -226,6 +265,7 @@ export function mountOpenCode(
                 </ErrorBoundary>
               </UiI18nBridge>
             </LanguageProvider>
+            </ThemeInjector>
           </ThemeProvider>
         </MetaProvider>
       </PlatformProvider>
