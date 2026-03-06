@@ -2582,6 +2582,12 @@ impl Channel {
                     .channel_errors_total
                     .with_label_values(&[metrics_agent_id, metrics_channel_type, "llm_error"])
                     .inc();
+                // Send error to user so they know something went wrong
+                let error_msg = format!("I encountered an error: {}", error);
+                let _ = self
+                    .response_tx
+                    .send(OutboundResponse::Text(error_msg))
+                    .await;
                 tracing::error!(channel_id = %self.id, %error, "channel LLM call failed");
             }
         }
