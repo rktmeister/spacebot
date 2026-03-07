@@ -256,6 +256,7 @@ impl ProjectManageTool {
                     path: repo_info.relative_path.clone(),
                     remote_url: repo_info.remote_url.clone(),
                     default_branch: repo_info.default_branch.clone(),
+                    current_branch: repo_info.current_branch.clone(),
                     description: String::new(),
                 })
                 .await;
@@ -339,16 +340,19 @@ impl ProjectManageTool {
             .await
             .unwrap_or_default();
 
-        let existing_paths: std::collections::HashSet<&str> = existing_repos
-            .iter()
-            .map(|repo| repo.path.as_str())
-            .collect();
-
         let mut new_repos = 0;
         let mut new_worktrees = 0;
 
         for repo_info in &discovered {
-            if existing_paths.contains(repo_info.relative_path.as_str()) {
+            if let Some(existing) = existing_repos
+                .iter()
+                .find(|r| r.path == repo_info.relative_path)
+            {
+                // Refresh current_branch on existing repos.
+                let _ = self
+                    .project_store
+                    .update_repo_current_branch(&existing.id, repo_info.current_branch.as_deref())
+                    .await;
                 continue;
             }
 
@@ -360,6 +364,7 @@ impl ProjectManageTool {
                     path: repo_info.relative_path.clone(),
                     remote_url: repo_info.remote_url.clone(),
                     default_branch: repo_info.default_branch.clone(),
+                    current_branch: repo_info.current_branch.clone(),
                     description: String::new(),
                 })
                 .await;
@@ -511,6 +516,7 @@ impl ProjectManageTool {
         let default_branch = repo_meta
             .map(|meta| meta.default_branch.clone())
             .unwrap_or_else(|| "main".to_string());
+        let current_branch = repo_meta.and_then(|meta| meta.current_branch.clone());
 
         let repo = self
             .project_store
@@ -520,6 +526,7 @@ impl ProjectManageTool {
                 path: relative_path,
                 remote_url,
                 default_branch,
+                current_branch,
                 description: String::new(),
             })
             .await

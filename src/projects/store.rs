@@ -91,6 +91,8 @@ pub struct ProjectRepo {
     pub path: String,
     pub remote_url: String,
     pub default_branch: String,
+    /// Currently checked-out branch (may differ from `default_branch`).
+    pub current_branch: Option<String>,
     pub description: String,
     pub disk_usage_bytes: Option<i64>,
     pub created_at: String,
@@ -158,6 +160,7 @@ pub struct CreateRepoInput {
     pub path: String,
     pub remote_url: String,
     pub default_branch: String,
+    pub current_branch: Option<String>,
     pub description: String,
 }
 
@@ -331,8 +334,8 @@ impl ProjectStore {
 
         sqlx::query(
             r#"
-            INSERT INTO project_repos (id, project_id, name, path, remote_url, default_branch, description)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO project_repos (id, project_id, name, path, remote_url, default_branch, current_branch, description)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -341,6 +344,7 @@ impl ProjectStore {
         .bind(&input.path)
         .bind(&input.remote_url)
         .bind(&input.default_branch)
+        .bind(&input.current_branch)
         .bind(&input.description)
         .execute(&self.pool)
         .await
@@ -505,6 +509,23 @@ impl ProjectStore {
         row.map(|r| row_to_worktree(&r)).transpose()
     }
 
+    /// Update the current_branch for a repo (e.g. after a scan detects a checkout change).
+    pub async fn update_repo_current_branch(
+        &self,
+        repo_id: &str,
+        current_branch: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE project_repos SET current_branch = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(current_branch)
+        .bind(repo_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to update repo current_branch")?;
+        Ok(())
+    }
+
     /// Update cached disk usage for a repo.
     pub async fn set_repo_disk_usage(&self, repo_id: &str, bytes: i64) -> Result<()> {
         sqlx::query("UPDATE project_repos SET disk_usage_bytes = ? WHERE id = ?")
@@ -578,6 +599,7 @@ fn row_to_repo(row: &sqlx::sqlite::SqliteRow) -> Result<ProjectRepo> {
         default_branch: row
             .try_get("default_branch")
             .context("missing default_branch")?,
+        current_branch: row.try_get("current_branch").unwrap_or(None),
         description: row.try_get("description").context("missing description")?,
         disk_usage_bytes: row.try_get("disk_usage_bytes").unwrap_or(None),
         created_at: row.try_get("created_at").context("missing created_at")?,
@@ -672,6 +694,7 @@ mod tests {
                 path: "spacebot".into(),
                 remote_url: "https://github.com/spacedriveapp/spacebot.git".into(),
                 default_branch: "main".into(),
+                current_branch: Some("feat/projects".into()),
                 description: "Core agent".into(),
             })
             .await
@@ -768,6 +791,7 @@ mod tests {
                 path: "repo".into(),
                 remote_url: String::new(),
                 default_branch: "main".into(),
+                current_branch: None,
                 description: String::new(),
             })
             .await

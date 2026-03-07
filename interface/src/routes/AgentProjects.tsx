@@ -446,8 +446,8 @@ function RepoCard({
 				{repo.remote_url && (
 					<span className="truncate">{repo.remote_url}</span>
 				)}
-				<Badge variant="outline" size="sm">
-					{repo.default_branch}
+				<Badge variant={repo.current_branch && repo.current_branch !== repo.default_branch ? "accent" : "outline"} size="sm">
+					{repo.current_branch ?? repo.default_branch}
 				</Badge>
 				<span>{worktreeCount} worktree{worktreeCount !== 1 ? "s" : ""}</span>
 				{repo.disk_usage_bytes != null && (

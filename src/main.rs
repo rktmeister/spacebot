@@ -2508,6 +2508,11 @@ async fn initialize_agents(
             sandbox.set_secrets_store(secrets_store.clone());
         }
 
+        // Inject active project root paths into the sandbox allowlist so
+        // workers can access project directories even outside the workspace.
+        spacebot::projects::refresh_sandbox_project_paths(&project_store, &agent_id, &sandbox)
+            .await;
+
         let deps = spacebot::AgentDeps {
             agent_id: agent_id.clone(),
             memory_search,

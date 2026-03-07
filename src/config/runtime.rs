@@ -273,7 +273,12 @@ impl RuntimeConfig {
         self.user_timezone.store(Arc::new(resolved.user_timezone));
         self.cortex.store(Arc::new(resolved.cortex));
         self.warmup.store(Arc::new(resolved.warmup));
-        self.sandbox.store(Arc::new(resolved.sandbox.clone()));
+        // Preserve project_paths from the current sandbox config when
+        // reloading — the resolved config only has user-configured paths.
+        let existing_project_paths = self.sandbox.load().project_paths.clone();
+        let mut new_sandbox = resolved.sandbox.clone();
+        new_sandbox.project_paths = existing_project_paths;
+        self.sandbox.store(Arc::new(new_sandbox));
         self.projects.store(Arc::new(resolved.projects.clone()));
 
         let old_opencode = self.opencode.load().as_ref().clone();

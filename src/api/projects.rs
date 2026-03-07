@@ -136,6 +136,16 @@ fn default_true() -> bool {
     true
 }
 
+/// Refresh the sandbox allowlist with project root paths after a project
+/// create, delete, or scan. Best-effort — logs and continues on error.
+async fn refresh_sandbox(state: &ApiState, agent_id: &str) {
+    let stores = state.project_stores.load();
+    let sandboxes = state.sandboxes.load();
+    if let (Some(store), Some(sandbox)) = (stores.get(agent_id), sandboxes.get(agent_id)) {
+        crate::projects::refresh_sandbox_project_paths(store, agent_id, sandbox).await;
+    }
+}
+
 /// Discover worktrees for all repos in a project and register any new ones.
 async fn discover_and_register_worktrees(
     store: &Arc<crate::projects::ProjectStore>,
@@ -311,6 +321,7 @@ pub(super) async fn create_project(
                                 path: repo.relative_path,
                                 remote_url: repo.remote_url,
                                 default_branch: repo.default_branch,
+                                current_branch: repo.current_branch,
                                 description: String::new(),
                             })
                             .await
@@ -341,6 +352,9 @@ pub(super) async fn create_project(
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Refresh sandbox allowlist with new project path.
+    refresh_sandbox(&state, &request.agent_id).await;
 
     Ok(Json(ProjectResponse { project: full }))
 }
@@ -431,6 +445,9 @@ pub(super) async fn delete_project(
         return Err(StatusCode::NOT_FOUND);
     }
 
+    // Refresh sandbox allowlist after removing project path.
+    refresh_sandbox(&state, &query.agent_id).await;
+
     Ok(Json(ActionResponse {
         success: true,
         message: "project deleted".into(),
@@ -460,18 +477,23 @@ pub(super) async fn scan_project(
         return Err(StatusCode::UNPROCESSABLE_ENTITY);
     }
 
-    // Discover repos.
+    // Discover repos — register new ones and refresh current_branch on existing.
     match crate::projects::git::discover_repos(&root).await {
         Ok(discovered) => {
             for repo in discovered {
-                // Skip if already registered.
-                if store
+                if let Some(existing) = store
                     .get_repo_by_path(&project_id, &repo.relative_path)
                     .await
                     .ok()
                     .flatten()
-                    .is_some()
                 {
+                    // Refresh the current_branch for existing repos.
+                    if let Err(error) = store
+                        .update_repo_current_branch(&existing.id, repo.current_branch.as_deref())
+                        .await
+                    {
+                        tracing::warn!(%error, repo = %existing.name, "failed to update current_branch");
+                    }
                     continue;
                 }
                 if let Err(error) = store
@@ -481,6 +503,7 @@ pub(super) async fn scan_project(
                         path: repo.relative_path,
                         remote_url: repo.remote_url,
                         default_branch: repo.default_branch,
+                        current_branch: repo.current_branch,
                         description: String::new(),
                     })
                     .await
@@ -509,6 +532,9 @@ pub(super) async fn scan_project(
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Refresh sandbox allowlist (scan may have added new repos/worktrees).
+    refresh_sandbox(&state, &query.agent_id).await;
 
     Ok(Json(ProjectResponse { project: full }))
 }
@@ -539,6 +565,7 @@ pub(super) async fn create_repo(
             path: request.path,
             remote_url: request.remote_url.unwrap_or_default(),
             default_branch: request.default_branch.unwrap_or_else(|| "main".into()),
+            current_branch: None,
             description: request.description.unwrap_or_default(),
         })
         .await

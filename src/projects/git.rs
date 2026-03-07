@@ -14,8 +14,10 @@ pub struct DiscoveredRepo {
     pub relative_path: String,
     /// Primary remote URL (origin), if any.
     pub remote_url: String,
-    /// Default branch name.
+    /// Default branch name (remote's default, e.g. "main").
     pub default_branch: String,
+    /// Currently checked-out branch (from `git rev-parse --abbrev-ref HEAD`).
+    pub current_branch: Option<String>,
 }
 
 /// Information about an existing git worktree.
@@ -69,12 +71,14 @@ pub async fn discover_repos(project_root: &Path) -> anyhow::Result<Vec<Discovere
         let default_branch = get_default_branch(&path)
             .await
             .unwrap_or_else(|| "main".into());
+        let current_branch = get_current_branch(&path).await;
 
         repos.push(DiscoveredRepo {
             name: name.clone(),
             relative_path: name,
             remote_url,
             default_branch,
+            current_branch,
         });
     }
 
@@ -264,6 +268,29 @@ async fn get_remote_url(repo_path: &Path) -> Option<String> {
 
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if url.is_empty() { None } else { Some(url) }
+}
+
+/// Get the currently checked-out branch for a repo.
+///
+/// Returns `None` for detached HEAD or when git is unavailable.
+pub async fn get_current_branch(repo_path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        None
+    } else {
+        Some(branch)
+    }
 }
 
 /// Get the default branch for a repo (from origin/HEAD or fallback to "main").

@@ -1361,6 +1361,7 @@ export interface ProjectRepo {
 	path: string;
 	remote_url: string;
 	default_branch: string;
+	current_branch: string | null;
 	description: string;
 	disk_usage_bytes: number | null;
 	created_at: string;
