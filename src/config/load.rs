@@ -1458,6 +1458,9 @@ impl Config {
                     listen_only_mode: channel_config
                         .listen_only_mode
                         .unwrap_or(base_defaults.channel.listen_only_mode),
+                    save_attachments: channel_config
+                        .save_attachments
+                        .unwrap_or(base_defaults.channel.save_attachments),
                 })
                 .unwrap_or(base_defaults.channel),
             mcp: default_mcp,
@@ -1626,10 +1629,9 @@ impl Config {
                         ),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
-                    channel: a.channel.and_then(|channel_config| {
-                        channel_config
-                            .listen_only_mode
-                            .map(|listen_only_mode| ChannelConfig { listen_only_mode })
+                    channel: a.channel.map(|channel_config| ChannelConfig {
+                        listen_only_mode: channel_config.listen_only_mode.unwrap_or(false),
+                        save_attachments: channel_config.save_attachments.unwrap_or(false),
                     }),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(

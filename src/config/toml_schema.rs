@@ -374,6 +374,7 @@ pub(super) struct TomlBrowserConfig {
 #[derive(Deserialize)]
 pub(super) struct TomlChannelConfig {
     pub(super) listen_only_mode: Option<bool>,
+    pub(super) save_attachments: Option<bool>,
 }
 
 #[derive(Deserialize)]

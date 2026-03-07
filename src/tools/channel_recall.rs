@@ -174,11 +174,29 @@ impl Tool for ChannelRecallTool {
 
         let transcript: Vec<TranscriptMessage> = messages
             .iter()
-            .map(|message| TranscriptMessage {
-                role: message.role.clone(),
-                sender: message.sender_name.clone(),
-                content: message.content.clone(),
-                timestamp: message.created_at.to_rfc3339(),
+            .map(|message| {
+                // Append saved attachment annotations from metadata if present
+                let content = if let Some(ref meta_json) = message.metadata {
+                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(meta_json) {
+                        if let Some(annotation) =
+                            crate::agent::channel_attachments::annotation_from_metadata(&meta)
+                        {
+                            format!("{}\n{}", message.content, annotation)
+                        } else {
+                            message.content.clone()
+                        }
+                    } else {
+                        message.content.clone()
+                    }
+                } else {
+                    message.content.clone()
+                };
+                TranscriptMessage {
+                    role: message.role.clone(),
+                    sender: message.sender_name.clone(),
+                    content,
+                    timestamp: message.created_at.to_rfc3339(),
+                }
             })
             .collect();
 

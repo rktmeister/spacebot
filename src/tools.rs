@@ -28,6 +28,7 @@
 //! **Cortex Chat ToolServer** (interactive admin chat):
 //! - branch + worker tool superset plus `spacebot_docs` and `config_inspect`
 
+pub mod attachment_recall;
 pub mod branch_tool;
 pub mod browser;
 pub mod cancel;
@@ -60,6 +61,9 @@ pub mod task_update;
 pub mod web_search;
 pub mod worker_inspect;
 
+pub use attachment_recall::{
+    AttachmentRecallArgs, AttachmentRecallError, AttachmentRecallOutput, AttachmentRecallTool,
+};
 pub use branch_tool::{BranchArgs, BranchError, BranchOutput, BranchTool};
 pub use browser::{
     ActKind, BrowserAction, BrowserArgs, BrowserError, BrowserOutput, BrowserTool, ElementSummary,
@@ -337,6 +341,21 @@ pub async fn add_channel_tools(
             state.deps.sandbox.clone(),
         ))
         .await?;
+    // Add attachment recall tool when save_attachments is enabled
+    if state
+        .deps
+        .runtime_config
+        .channel_config
+        .load()
+        .save_attachments
+    {
+        handle
+            .add_tool(AttachmentRecallTool::new(
+                state.deps.sqlite_pool.clone(),
+                state.channel_id.clone(),
+            ))
+            .await?;
+    }
     handle.add_tool(CancelTool::new(state)).await?;
     handle
         .add_tool(SkipTool::new(skip_flag.clone(), response_tx.clone()))
@@ -381,10 +400,12 @@ pub async fn remove_channel_tools(
     handle.remove_tool(SkipTool::NAME).await?;
     handle.remove_tool(SendFileTool::NAME).await?;
     handle.remove_tool(ReactTool::NAME).await?;
-    // Cron, send_message, and send_agent_message removal is best-effort since not all channels have them
+    // Cron, send_message, send_agent_message, and attachment_recall removal is
+    // best-effort since not all channels have them
     let _ = handle.remove_tool(CronTool::NAME).await;
     let _ = handle.remove_tool(SendMessageTool::NAME).await;
     let _ = handle.remove_tool(SendAgentMessageTool::NAME).await;
+    let _ = handle.remove_tool(AttachmentRecallTool::NAME).await;
     Ok(())
 }
 

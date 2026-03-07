@@ -1,5 +1,6 @@
 //! Channel: User-facing conversation process.
 
+use crate::agent::channel_attachments;
 use crate::agent::channel_attachments::download_attachments;
 use crate::agent::channel_dispatch::spawn_memory_persistence_branch;
 use crate::agent::channel_history::{
@@ -562,7 +563,12 @@ impl Channel {
         persisted
     }
 
-    fn persist_inbound_user_message(&self, message: &InboundMessage, raw_text: &str) {
+    fn persist_inbound_user_message(
+        &self,
+        message: &InboundMessage,
+        raw_text: &str,
+        saved_attachments: Option<&[channel_attachments::SavedAttachmentMeta]>,
+    ) {
         if message.source == "system" {
             return;
         }
@@ -571,16 +577,28 @@ impl Channel {
             .get("sender_display_name")
             .and_then(|v| v.as_str())
             .unwrap_or(&message.sender_id);
+
+        // If attachments were saved, enrich the metadata with their info
+        let metadata = if let Some(saved) = saved_attachments {
+            let mut enriched = message.metadata.clone();
+            if let Ok(attachments_json) = serde_json::to_value(saved) {
+                enriched.insert("attachments".to_string(), attachments_json);
+            }
+            enriched
+        } else {
+            message.metadata.clone()
+        };
+
         self.state.conversation_logger.log_user_message(
             &self.state.channel_id,
             sender_name,
             &message.sender_id,
             raw_text,
-            &message.metadata,
+            &metadata,
         );
         self.state
             .channel_store
-            .upsert(&message.conversation_id, &message.metadata);
+            .upsert(&message.conversation_id, &metadata);
     }
 
     fn suppress_plaintext_fallback(&self) -> bool {
@@ -1120,7 +1138,20 @@ impl Channel {
         }
 
         // Persist each message to conversation log (individual audit trail)
-        let mut pending_batch_entries: Vec<(String, Vec<_>)> = Vec::new();
+        let save_attachments_enabled = self
+            .deps
+            .runtime_config
+            .channel_config
+            .load()
+            .save_attachments;
+        let saved_dir = self.deps.runtime_config.saved_dir();
+
+        // Entries: (formatted_text, attachments, optional saved bytes per attachment)
+        let mut pending_batch_entries: Vec<(
+            String,
+            Vec<crate::Attachment>,
+            Option<Vec<(channel_attachments::SavedAttachmentMeta, Vec<u8>)>>,
+        )> = Vec::new();
         let mut conversation_id = String::new();
         let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
         let mut batch_has_invoke = false;
@@ -1151,16 +1182,44 @@ impl Channel {
                         invoked_by_command || invoked_by_mention || invoked_by_reply;
                 }
 
+                // Save attachments to disk when enabled
+                let saved_data = if save_attachments_enabled && !attachments.is_empty() {
+                    Some(
+                        channel_attachments::save_channel_attachments(
+                            &self.deps.sqlite_pool,
+                            self.deps.llm_manager.http_client(),
+                            self.state.channel_id.as_ref(),
+                            &saved_dir,
+                            &attachments,
+                        )
+                        .await,
+                    )
+                } else {
+                    None
+                };
+
+                // Enrich metadata with saved attachment info
+                let metadata = if let Some(ref data) = saved_data {
+                    let metas: Vec<_> = data.iter().map(|(meta, _)| meta.clone()).collect();
+                    let mut enriched = message.metadata.clone();
+                    if let Ok(json) = serde_json::to_value(&metas) {
+                        enriched.insert("attachments".to_string(), json);
+                    }
+                    enriched
+                } else {
+                    message.metadata.clone()
+                };
+
                 self.state.conversation_logger.log_user_message(
                     &self.state.channel_id,
                     sender_name,
                     &message.sender_id,
                     &raw_text,
-                    &message.metadata,
+                    &metadata,
                 );
                 self.state
                     .channel_store
-                    .upsert(&message.conversation_id, &message.metadata);
+                    .upsert(&message.conversation_id, &metadata);
 
                 conversation_id = message.conversation_id.clone();
 
@@ -1187,7 +1246,7 @@ impl Channel {
                     &raw_text,
                 );
 
-                pending_batch_entries.push((formatted_text, attachments));
+                pending_batch_entries.push((formatted_text, attachments, saved_data));
             }
         }
 
@@ -1204,9 +1263,34 @@ impl Channel {
         }
 
         let mut user_contents: Vec<UserContent> = Vec::new();
-        for (formatted_text, attachments) in pending_batch_entries {
+        for (formatted_text, attachments, saved_data) in pending_batch_entries {
             if !attachments.is_empty() {
-                let attachment_content = download_attachments(&self.deps, &attachments).await;
+                let attachment_content = if let Some(ref saved) = saved_data {
+                    let mut content = Vec::new();
+                    let mut unsaved = Vec::new();
+                    for attachment in &attachments {
+                        if let Some((_, bytes)) = saved
+                            .iter()
+                            .find(|(meta, _)| meta.filename == attachment.filename)
+                        {
+                            if attachment.mime_type.starts_with("audio/") {
+                                unsaved.push(attachment.clone());
+                            } else {
+                                content.push(channel_attachments::content_from_bytes(
+                                    bytes, attachment,
+                                ));
+                            }
+                        } else {
+                            unsaved.push(attachment.clone());
+                        }
+                    }
+                    if !unsaved.is_empty() {
+                        content.extend(download_attachments(&self.deps, &unsaved).await);
+                    }
+                    content
+                } else {
+                    download_attachments(&self.deps, &attachments).await
+                };
                 for content in attachment_content {
                     user_contents.push(content);
                 }
@@ -1362,7 +1446,34 @@ impl Channel {
             crate::MessageContent::Interaction { .. } => (message.content.to_string(), Vec::new()),
         };
 
-        self.persist_inbound_user_message(&message, &raw_text);
+        // Save attachments to disk when enabled, capturing bytes for LLM reuse
+        let save_attachments_enabled = self
+            .deps
+            .runtime_config
+            .channel_config
+            .load()
+            .save_attachments;
+        let saved_attachment_data = if save_attachments_enabled && !attachments.is_empty() {
+            let saved_dir = self.deps.runtime_config.saved_dir();
+            Some(
+                channel_attachments::save_channel_attachments(
+                    &self.deps.sqlite_pool,
+                    self.deps.llm_manager.http_client(),
+                    self.state.channel_id.as_ref(),
+                    &saved_dir,
+                    &attachments,
+                )
+                .await,
+            )
+        } else {
+            None
+        };
+
+        let saved_metas: Option<Vec<_>> = saved_attachment_data
+            .as_ref()
+            .map(|data| data.iter().map(|(meta, _)| meta.clone()).collect());
+
+        self.persist_inbound_user_message(&message, &raw_text, saved_metas.as_deref());
 
         // Deterministic built-in command: bypass model output drift for agent identity checks.
         if message.source != "system" && raw_text.trim() == "/agent-id" {
@@ -1480,7 +1591,38 @@ impl Channel {
 
         let is_retrigger = message.source == "system";
         let attachment_content = if !attachments.is_empty() {
-            download_attachments(&self.deps, &attachments).await
+            if let Some(ref saved_data) = saved_attachment_data {
+                // Reuse already-downloaded bytes for images/text; audio still
+                // needs transcription via the normal path so we fall through.
+                let mut content = Vec::new();
+                let mut unsaved_attachments = Vec::new();
+
+                for attachment in &attachments {
+                    if let Some((_, bytes)) = saved_data
+                        .iter()
+                        .find(|(meta, _)| meta.filename == attachment.filename)
+                    {
+                        // Audio attachments need transcription, not just bytes
+                        if attachment.mime_type.starts_with("audio/") {
+                            unsaved_attachments.push(attachment.clone());
+                        } else {
+                            content
+                                .push(channel_attachments::content_from_bytes(bytes, attachment));
+                        }
+                    } else {
+                        unsaved_attachments.push(attachment.clone());
+                    }
+                }
+
+                // Process any attachments that weren't saved (or need transcription)
+                if !unsaved_attachments.is_empty() {
+                    let extra = download_attachments(&self.deps, &unsaved_attachments).await;
+                    content.extend(extra);
+                }
+                content
+            } else {
+                download_attachments(&self.deps, &attachments).await
+            }
         } else {
             Vec::new()
         };
