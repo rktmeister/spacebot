@@ -1,21 +1,31 @@
 //! Browser automation tools for workers.
 //!
 //! Provides a suite of separate tools (navigate, click, type, snapshot, etc.)
-//! backed by a shared browser state. Uses an ARIA-tree DOM extraction script
-//! (ported from browser-use-rs) that assigns numeric indices to interactive
-//! elements. The LLM sees a compact YAML snapshot and interacts via index.
+//! backed by a shared browser state. Uses Chrome's native CDP Accessibility API
+//! (`Accessibility.getFullAXTree`) to extract the ARIA tree directly from the
+//! browser's accessibility layer. Interactive elements get sequential indices
+//! and their `BackendNodeId` is stored for reliable element resolution.
 //!
-//! Element resolution: index → CSS selector (built from DOM position during
-//! extraction) → chromiumoxide `page.find_element()`. This avoids stale CDP
-//! node IDs and works with both native HTML elements and ARIA widgets.
+//! Element resolution: index → `BackendNodeId` (from CDP accessibility tree) →
+//! `DOM.getBoxModel` for coordinates → `Input.dispatchMouseEvent` for clicks.
+//! This avoids fragile CSS selectors and works reliably on SPAs and complex
+//! pages where JS injection fails.
 
 use crate::config::BrowserConfig;
 
 use chromiumoxide::browser::{Browser, BrowserConfig as ChromeConfig};
 use chromiumoxide::fetcher::{BrowserFetcher, BrowserFetcherOptions};
+use chromiumoxide::handler::viewport::Viewport;
 use chromiumoxide::page::ScreenshotParams;
+use chromiumoxide_cdp::cdp::browser_protocol::accessibility::{
+    AxNode, AxPropertyName, GetFullAxTreeParams,
+};
+use chromiumoxide_cdp::cdp::browser_protocol::dom::{
+    BackendNodeId, GetBoxModelParams, ResolveNodeParams,
+};
 use chromiumoxide_cdp::cdp::browser_protocol::input::{
-    DispatchKeyEventParams, DispatchKeyEventType,
+    DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType,
+    MouseButton,
 };
 use chromiumoxide_cdp::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use futures::StreamExt as _;
@@ -123,19 +133,6 @@ fn is_v4_mapped_blocked(ip: std::net::Ipv6Addr) -> bool {
     }
 }
 
-// Debug helpers
-
-fn value_type_name(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "bool",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
-}
-
 // Page readiness helper
 
 /// Wait for the page to be "ready enough" for DOM extraction.
@@ -179,101 +176,345 @@ async fn wait_for_page_ready(page: &chromiumoxide::Page) {
     }
 }
 
-// DOM snapshot types (ported from browser-use-rs)
+// Accessibility snapshot types (CDP-native)
 
-/// An ARIA tree snapshot of a page, extracted via injected JavaScript.
+/// Roles that represent interactive elements the LLM can target via index.
+/// Only nodes with these roles get assigned an index in the snapshot.
+const INTERACTIVE_ROLES: &[&str] = &[
+    "button",
+    "checkbox",
+    "combobox",
+    "link",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "radio",
+    "searchbox",
+    "slider",
+    "spinbutton",
+    "switch",
+    "tab",
+    "textbox",
+    "treeitem",
+];
+
+/// Roles that are structural noise and should be skipped when they have no
+/// name and no interactive descendants. Keeps the YAML output compact.
+const SKIP_UNNAMED_ROLES: &[&str] = &[
+    "generic",
+    "none",
+    "presentation",
+    "InlineTextBox",
+    "LineBreak",
+];
+
+/// A snapshot of the page's accessibility tree, extracted via CDP.
 ///
-/// Contains the tree structure for LLM display and a parallel `selectors`
-/// array that maps element indices to CSS selectors for interaction.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct DomSnapshot {
-    pub root: AriaNode,
-    /// CSS selector for each indexed element. `selectors[i]` corresponds to the
-    /// element with `index == i` in the ARIA tree.
-    pub selectors: Vec<String>,
-    #[allow(dead_code)]
-    pub iframe_indices: Vec<usize>,
-    /// Extraction error from the JS side, if any.
-    pub error: Option<String>,
+/// Contains a tree of `SnapshotNode`s for LLM display and a parallel map from
+/// element indices to `BackendNodeId` for interaction.
+#[derive(Debug, Clone)]
+pub(crate) struct AxSnapshot {
+    /// Root nodes of the tree (usually one, but CDP can return multiple roots).
+    pub roots: Vec<SnapshotNode>,
+    /// `BackendNodeId` for each indexed interactive element.
+    /// `node_ids[i]` corresponds to the element with `index == i` in the tree.
+    pub node_ids: Vec<BackendNodeId>,
 }
 
-/// A node in the ARIA accessibility tree.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct AriaNode {
+/// A node in the processed accessibility tree, ready for rendering.
+#[derive(Debug, Clone)]
+pub(crate) struct SnapshotNode {
     pub role: String,
     pub name: String,
-    #[serde(default)]
+    /// Sequential index assigned to interactive elements. `None` for structural nodes.
     pub index: Option<usize>,
-    #[serde(default)]
-    pub children: Vec<AriaChild>,
-    #[serde(default)]
-    pub props: HashMap<String, String>,
-    #[serde(default)]
-    pub active: Option<bool>,
-    #[serde(default)]
-    pub checked: Option<serde_json::Value>,
-    #[serde(default)]
-    pub disabled: Option<bool>,
-    #[serde(default)]
+    pub children: Vec<SnapshotNode>,
+    // State properties
+    pub checked: Option<String>,
+    pub disabled: bool,
     pub expanded: Option<bool>,
-    #[serde(default)]
-    pub level: Option<u32>,
-    #[serde(default)]
-    pub pressed: Option<serde_json::Value>,
-    #[serde(default)]
-    pub selected: Option<bool>,
-    #[serde(default)]
-    pub box_info: Option<BoxInfo>,
+    pub selected: bool,
+    pub level: Option<i64>,
+    pub pressed: Option<String>,
+    pub value: Option<String>,
+    pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct BoxInfo {
-    #[allow(dead_code)]
-    pub visible: bool,
-    pub cursor: Option<String>,
-}
+impl AxSnapshot {
+    /// Build from a flat CDP `AxNode` list by reconstructing the tree and
+    /// assigning sequential indices to interactive elements.
+    fn from_ax_nodes(nodes: Vec<AxNode>) -> Self {
+        // Build a lookup from AxNodeId → index in the flat list.
+        let id_to_idx: HashMap<String, usize> = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, node)| (node.node_id.inner().clone(), i))
+            .collect();
 
-/// A child of an `AriaNode` — either a text string or a nested node.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum AriaChild {
-    Text(String),
-    Node(Box<AriaNode>),
-}
+        // Track which nodes are roots (no parent) or whose parent_id doesn't
+        // exist in the tree (happens with frame roots).
+        let root_indices: Vec<usize> = nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| {
+                node.parent_id
+                    .as_ref()
+                    .map_or(true, |pid| !id_to_idx.contains_key(pid.inner()))
+            })
+            .map(|(i, _)| i)
+            .collect();
 
-/// The JS script injected into pages to extract the ARIA tree.
-/// Ported from browser-use-rs's `extract_dom.js`.
-const EXTRACT_DOM_JS: &str = include_str!("browser_extract_dom.js");
+        let mut next_index: usize = 0;
+        let mut node_ids: Vec<BackendNodeId> = Vec::new();
 
-impl DomSnapshot {
-    /// Render the ARIA tree as compact YAML-like text for LLM consumption.
+        // Collect non-ignored descendants of an ignored node. The CDP AX
+        // tree marks many structural nodes as ignored, but their children may
+        // be interactive (button inside an ignored generic div). We must walk
+        // through ignored nodes to reach them.
+        fn collect_children_of_ignored(
+            flat: &[AxNode],
+            idx: usize,
+            id_to_idx: &HashMap<String, usize>,
+            next_index: &mut usize,
+            node_ids: &mut Vec<BackendNodeId>,
+        ) -> Vec<SnapshotNode> {
+            let ax = &flat[idx];
+            let mut result = Vec::new();
+            if let Some(child_ids) = &ax.child_ids {
+                for child_id in child_ids {
+                    if let Some(&child_idx) = id_to_idx.get(child_id.inner()) {
+                        if flat[child_idx].ignored {
+                            // Recursively collect through chains of ignored nodes.
+                            result.extend(collect_children_of_ignored(
+                                flat, child_idx, id_to_idx, next_index, node_ids,
+                            ));
+                        } else if let Some(child_node) =
+                            build_node(flat, child_idx, id_to_idx, next_index, node_ids)
+                        {
+                            result.push(child_node);
+                        }
+                    }
+                }
+            }
+            result
+        }
+
+        // Recursive tree builder
+        fn build_node(
+            flat: &[AxNode],
+            idx: usize,
+            id_to_idx: &HashMap<String, usize>,
+            next_index: &mut usize,
+            node_ids: &mut Vec<BackendNodeId>,
+        ) -> Option<SnapshotNode> {
+            let ax = &flat[idx];
+
+            // Ignored nodes aren't rendered, but their children may contain
+            // non-ignored interactive elements. Handled by the caller via
+            // `collect_children_of_ignored`.
+            if ax.ignored {
+                return None;
+            }
+
+            let role = ax
+                .role
+                .as_ref()
+                .and_then(|v| v.value.as_ref())
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let name = ax
+                .name
+                .as_ref()
+                .and_then(|v| v.value.as_ref())
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let description = ax
+                .description
+                .as_ref()
+                .and_then(|v| v.value.as_ref())
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty());
+
+            let value_text = ax
+                .value
+                .as_ref()
+                .and_then(|v| v.value.as_ref())
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty());
+
+            // Extract state properties from the properties array.
+            let mut checked = None;
+            let mut disabled = false;
+            let mut expanded = None;
+            let mut selected = false;
+            let mut level = None;
+            let mut pressed = None;
+
+            if let Some(properties) = &ax.properties {
+                for prop in properties {
+                    match prop.name {
+                        AxPropertyName::Checked => {
+                            checked = prop
+                                .value
+                                .value
+                                .as_ref()
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                        }
+                        AxPropertyName::Disabled => {
+                            disabled = prop
+                                .value
+                                .value
+                                .as_ref()
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                        }
+                        AxPropertyName::Expanded => {
+                            expanded = prop.value.value.as_ref().and_then(|v| v.as_bool());
+                        }
+                        AxPropertyName::Selected => {
+                            selected = prop
+                                .value
+                                .value
+                                .as_ref()
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                        }
+                        AxPropertyName::Level => {
+                            level = prop.value.value.as_ref().and_then(|v| v.as_i64());
+                        }
+                        AxPropertyName::Pressed => {
+                            pressed = prop
+                                .value
+                                .value
+                                .as_ref()
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Build children recursively. Ignored children are transparent —
+            // we walk through them to collect their non-ignored descendants.
+            let mut children = Vec::new();
+            if let Some(child_ids) = &ax.child_ids {
+                for child_id in child_ids {
+                    if let Some(&child_idx) = id_to_idx.get(child_id.inner()) {
+                        if flat[child_idx].ignored {
+                            children.extend(collect_children_of_ignored(
+                                flat, child_idx, id_to_idx, next_index, node_ids,
+                            ));
+                        } else if let Some(child_node) =
+                            build_node(flat, child_idx, id_to_idx, next_index, node_ids)
+                        {
+                            children.push(child_node);
+                        }
+                    }
+                }
+            }
+
+            // Assign an index to interactive elements that have a BackendNodeId.
+            let role_lower = role.to_lowercase();
+            let is_interactive = INTERACTIVE_ROLES.contains(&role_lower.as_str());
+            let element_index = if is_interactive && ax.backend_dom_node_id.is_some() {
+                let idx = *next_index;
+                *next_index += 1;
+                node_ids.push(ax.backend_dom_node_id.expect("checked above"));
+                Some(idx)
+            } else {
+                None
+            };
+
+            // Skip structural nodes that have no name, no index, and only serve
+            // as tree wrappers — but only if they have exactly one child (pass
+            // through) or zero children (prune entirely).
+            if SKIP_UNNAMED_ROLES.contains(&role.as_str())
+                && element_index.is_none()
+                && name.is_empty()
+            {
+                match children.len() {
+                    0 => return None,
+                    1 => return Some(children.into_iter().next().expect("len checked")),
+                    _ => {
+                        // Multiple children — keep the node as a container
+                        // but only if children are non-trivial.
+                    }
+                }
+            }
+
+            Some(SnapshotNode {
+                role,
+                name,
+                index: element_index,
+                children,
+                checked,
+                disabled,
+                expanded,
+                selected,
+                level,
+                pressed,
+                value: value_text,
+                description,
+            })
+        }
+
+        let mut roots = Vec::new();
+        for &root_idx in &root_indices {
+            if nodes[root_idx].ignored {
+                // Root itself is ignored — collect its non-ignored descendants.
+                roots.extend(collect_children_of_ignored(
+                    &nodes,
+                    root_idx,
+                    &id_to_idx,
+                    &mut next_index,
+                    &mut node_ids,
+                ));
+            } else if let Some(node) =
+                build_node(&nodes, root_idx, &id_to_idx, &mut next_index, &mut node_ids)
+            {
+                roots.push(node);
+            }
+        }
+
+        Self { roots, node_ids }
+    }
+
+    /// Render the accessibility tree as compact YAML-like text for LLM consumption.
     pub fn render(&self) -> String {
         let mut output = String::with_capacity(4096);
-        render_node(&self.root, 0, &mut output);
+        for root in &self.roots {
+            render_snapshot_node(root, 0, &mut output);
+        }
         output
     }
 
-    /// Look up the CSS selector for an element index.
-    pub fn selector_for_index(&self, index: usize) -> Option<&str> {
-        self.selectors.get(index).map(|s| s.as_str())
+    /// Look up the `BackendNodeId` for an element index.
+    pub fn backend_node_id_for_index(&self, index: usize) -> Option<BackendNodeId> {
+        self.node_ids.get(index).copied()
+    }
+
+    /// Total number of indexed interactive elements.
+    pub fn element_count(&self) -> usize {
+        self.node_ids.len()
     }
 }
 
-fn render_node(node: &AriaNode, depth: usize, output: &mut String) {
+fn render_snapshot_node(node: &SnapshotNode, depth: usize, output: &mut String) {
     let indent = "  ".repeat(depth);
 
-    // Skip the root fragment — just render children
-    if node.role == "fragment" {
+    // Skip the root "RootWebArea" wrapper — just render children directly.
+    if node.role == "RootWebArea" || node.role == "rootWebArea" {
         for child in &node.children {
-            render_child(child, depth, output);
-        }
-        return;
-    }
-
-    // Skip generic nodes without index or name — they're structural noise
-    if node.role == "generic" && node.index.is_none() && node.name.is_empty() {
-        for child in &node.children {
-            render_child(child, depth, output);
+            render_snapshot_node(child, depth, output);
         }
         return;
     }
@@ -285,8 +526,13 @@ fn render_node(node: &AriaNode, depth: usize, output: &mut String) {
 
     if !node.name.is_empty() {
         output.push_str(" \"");
-        // Escape quotes in name for YAML safety
-        output.push_str(&node.name.replace('"', "\\\""));
+        // Truncate very long names for context efficiency.
+        let display_name = if node.name.len() > 200 {
+            format!("{}...", &node.name[..200])
+        } else {
+            node.name.clone()
+        };
+        output.push_str(&display_name.replace('"', "\\\""));
         output.push('"');
     }
 
@@ -297,28 +543,24 @@ fn render_node(node: &AriaNode, depth: usize, output: &mut String) {
     if let Some(level) = node.level {
         output.push_str(&format!(" [level={level}]"));
     }
-    if let Some(true) = node.active {
-        output.push_str(" [active]");
-    }
-    if let Some(true) = node.disabled {
+    if node.disabled {
         output.push_str(" [disabled]");
     }
-    if let Some(true) = node.selected {
+    if node.selected {
         output.push_str(" [selected]");
     }
     if let Some(ref checked) = node.checked {
-        match checked {
-            serde_json::Value::Bool(true) => output.push_str(" [checked]"),
-            serde_json::Value::Bool(false) => output.push_str(" [unchecked]"),
-            serde_json::Value::String(s) if s == "mixed" => output.push_str(" [checked=mixed]"),
+        match checked.as_str() {
+            "true" => output.push_str(" [checked]"),
+            "false" => output.push_str(" [unchecked]"),
+            "mixed" => output.push_str(" [checked=mixed]"),
             _ => {}
         }
     }
     if let Some(ref pressed) = node.pressed {
-        match pressed {
-            serde_json::Value::Bool(true) => output.push_str(" [pressed]"),
-            serde_json::Value::Bool(false) => {}
-            serde_json::Value::String(s) if s == "mixed" => output.push_str(" [pressed=mixed]"),
+        match pressed.as_str() {
+            "true" => output.push_str(" [pressed]"),
+            "mixed" => output.push_str(" [pressed=mixed]"),
             _ => {}
         }
     }
@@ -327,55 +569,38 @@ fn render_node(node: &AriaNode, depth: usize, output: &mut String) {
     } else if let Some(false) = node.expanded {
         output.push_str(" [collapsed]");
     }
-    if let Some(ref box_info) = node.box_info
-        && box_info.cursor.as_deref() == Some("pointer")
-    {
-        output.push_str(" [cursor=pointer]");
+
+    // Value (e.g., text input current value)
+    if let Some(ref value) = node.value {
+        let display_value = if value.len() > 100 {
+            format!("{}...", &value[..100])
+        } else {
+            value.clone()
+        };
+        output.push_str(&format!(
+            " value=\"{}\"",
+            display_value.replace('"', "\\\"")
+        ));
     }
 
-    // Props on separate indented lines
     let has_children = !node.children.is_empty();
-    let has_props = !node.props.is_empty();
+    let has_description = node.description.is_some();
 
-    if has_children || has_props {
+    if has_children || has_description {
         output.push_str(":\n");
     } else {
         output.push('\n');
     }
 
-    for (key, value) in &node.props {
+    if let Some(ref description) = node.description {
         output.push_str(&indent);
-        output.push_str("  /");
-        output.push_str(key);
-        output.push_str(": ");
-        output.push_str(value);
+        output.push_str("  /description: ");
+        output.push_str(description);
         output.push('\n');
     }
 
     for child in &node.children {
-        render_child(child, depth + 1, output);
-    }
-}
-
-fn render_child(child: &AriaChild, depth: usize, output: &mut String) {
-    match child {
-        AriaChild::Text(text) => {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                let indent = "  ".repeat(depth);
-                // Truncate long text for LLM context efficiency
-                let display = if trimmed.len() > 200 {
-                    format!("{}...", &trimmed[..200])
-                } else {
-                    trimmed.to_string()
-                };
-                output.push_str(&indent);
-                output.push_str("- text \"");
-                output.push_str(&display.replace('"', "\\\""));
-                output.push_str("\"\n");
-            }
-        }
-        AriaChild::Node(node) => render_node(node, depth, output),
+        render_snapshot_node(child, depth + 1, output);
     }
 }
 
@@ -402,9 +627,9 @@ pub struct BrowserState {
     _handler_task: Option<JoinHandle<()>>,
     pages: HashMap<String, chromiumoxide::Page>,
     active_target: Option<String>,
-    /// Cached DOM snapshot from the last `browser_snapshot` call. Invalidated
-    /// on navigation, tab switch, and explicit snapshot refresh.
-    snapshot: Option<DomSnapshot>,
+    /// Cached accessibility snapshot from the last `browser_snapshot` call.
+    /// Invalidated on navigation, tab switch, and explicit snapshot refresh.
+    snapshot: Option<AxSnapshot>,
     user_data_dir: Option<PathBuf>,
     /// When true, `user_data_dir` is a stable path that should NOT be deleted
     /// on drop — it holds cookies, localStorage, and login sessions.
@@ -579,100 +804,267 @@ impl BrowserContext {
             .ok_or_else(|| BrowserError::new("active tab no longer exists"))
     }
 
-    /// Extract the DOM snapshot from the active page via injected JavaScript.
+    /// Extract the accessibility snapshot from the active page via CDP.
     /// Caches the result on `BrowserState` so repeated reads don't re-extract.
     async fn extract_snapshot<'a>(
         &self,
         state: &'a mut BrowserState,
-    ) -> Result<&'a DomSnapshot, BrowserError> {
-        if let Some(ref snapshot) = state.snapshot {
-            return Ok(snapshot);
+    ) -> Result<&'a AxSnapshot, BrowserError> {
+        if state.snapshot.is_some() {
+            return Ok(state.snapshot.as_ref().expect("just checked"));
         }
 
         let page = self.require_active_page(state)?;
 
         let result = page
-            .evaluate(EXTRACT_DOM_JS)
+            .execute(GetFullAxTreeParams::default())
             .await
-            .map_err(|error| BrowserError::new(format!("DOM extraction failed: {error}")))?;
+            .map_err(|error| {
+                BrowserError::new(format!("accessibility tree extraction failed: {error}"))
+            })?;
 
-        let value = result.value().cloned().unwrap_or(serde_json::Value::Null);
+        let ax_nodes = result.result.nodes;
 
         tracing::debug!(
-            value_type = ?value_type_name(&value),
-            value_len = value.as_str().map(|s| s.len()),
-            "DOM extraction raw CDP result"
+            node_count = ax_nodes.len(),
+            "CDP Accessibility.getFullAXTree returned"
         );
 
-        // The JS wraps the result in JSON.stringify(), so we get a string back
-        let json_value = if let Some(json_str) = value.as_str() {
-            serde_json::from_str::<serde_json::Value>(json_str).map_err(|error| {
-                tracing::warn!(
-                    json_preview = &json_str[..json_str.len().min(200)],
-                    %error,
-                    "failed to parse DOM extraction JSON string"
-                );
-                BrowserError::new(format!("failed to parse DOM extraction JSON: {error}"))
-            })?
-        } else {
-            value
-        };
+        let snapshot = AxSnapshot::from_ax_nodes(ax_nodes);
 
-        let snapshot: DomSnapshot = serde_json::from_value(json_value)
-            .map_err(|error| BrowserError::new(format!("failed to parse DOM snapshot: {error}")))?;
-
-        if let Some(ref error) = snapshot.error {
-            tracing::warn!(%error, "DOM extraction JS reported an error");
-        }
+        tracing::debug!(
+            interactive_count = snapshot.element_count(),
+            "accessibility snapshot built"
+        );
 
         state.snapshot = Some(snapshot);
         Ok(state.snapshot.as_ref().expect("just stored"))
     }
 
-    /// Resolve an element target (index or CSS selector) to a chromiumoxide Element.
+    /// Resolve an element target to a `BackendNodeId` for interaction.
     ///
-    /// When an index is provided, the cached snapshot's CSS selectors are used.
-    /// When a CSS selector string is provided, it's used directly — this is
-    /// useful when the LLM already knows the selector (e.g., `#login_field`).
+    /// When an index is provided, the cached snapshot's `BackendNodeId` map is
+    /// used. When a CSS selector string is provided, it's resolved via
+    /// `page.find_element()` — this path is a fallback for when the LLM already
+    /// knows a selector (e.g., `#login_field`).
     async fn find_element(
         &self,
         state: &mut BrowserState,
         target: &ElementTarget,
-    ) -> Result<chromiumoxide::Element, BrowserError> {
-        let selector = match target {
+    ) -> Result<ElementHandle, BrowserError> {
+        match target {
             ElementTarget::Index(index) => {
-                // Ensure snapshot is cached
                 self.extract_snapshot(state).await?;
                 let snapshot = state.snapshot.as_ref().expect("just extracted");
 
-                let sel = snapshot.selector_for_index(*index).ok_or_else(|| {
+                let backend_node_id =
+                    snapshot.backend_node_id_for_index(*index).ok_or_else(|| {
+                        BrowserError::new(format!(
+                            "element index {index} not found — run browser_snapshot to get fresh \
+                             indices (max index in current snapshot: {})",
+                            snapshot.element_count().saturating_sub(1)
+                        ))
+                    })?;
+
+                Ok(ElementHandle::BackendNode(backend_node_id))
+            }
+            ElementTarget::Selector(selector) => {
+                let page = self.require_active_page(state)?;
+                let element = page.find_element(selector).await.map_err(|error| {
                     BrowserError::new(format!(
-                        "element index {index} not found — run browser_snapshot to get fresh \
-                         indices (max index in current snapshot: {})",
-                        snapshot.selectors.len().saturating_sub(1)
+                        "element not found via selector '{selector}': {error}. \
+                             The page may have changed — run browser_snapshot again."
                     ))
                 })?;
-
-                if sel.is_empty() {
-                    return Err(BrowserError::new(format!(
-                        "element index {index} has an empty CSS selector — the element may be \
-                         in an iframe. Try using the `selector` parameter instead."
-                    )));
-                }
-
-                sel.to_string()
+                Ok(ElementHandle::CssElement(element))
             }
-            ElementTarget::Selector(selector) => selector.clone(),
-        };
+        }
+    }
 
+    /// Click an element resolved by `find_element`. Uses CDP mouse events for
+    /// `BackendNodeId` targets (avoids CSS selector fragility) and the
+    /// chromiumoxide `Element::click()` for CSS selector targets.
+    async fn click_element(
+        &self,
+        state: &BrowserState,
+        handle: &ElementHandle,
+    ) -> Result<(), BrowserError> {
+        match handle {
+            ElementHandle::BackendNode(backend_node_id) => {
+                let page = self.require_active_page(state)?;
+                let (center_x, center_y) = get_element_center(page, *backend_node_id).await?;
+
+                page.execute(
+                    DispatchMouseEventParams::builder()
+                        .r#type(DispatchMouseEventType::MousePressed)
+                        .x(center_x)
+                        .y(center_y)
+                        .button(MouseButton::Left)
+                        .click_count(1)
+                        .build()
+                        .map_err(|error| {
+                            BrowserError::new(format!("failed to build mouse press event: {error}"))
+                        })?,
+                )
+                .await
+                .map_err(|error| BrowserError::new(format!("mouse press failed: {error}")))?;
+
+                page.execute(
+                    DispatchMouseEventParams::builder()
+                        .r#type(DispatchMouseEventType::MouseReleased)
+                        .x(center_x)
+                        .y(center_y)
+                        .button(MouseButton::Left)
+                        .click_count(1)
+                        .build()
+                        .map_err(|error| {
+                            BrowserError::new(format!(
+                                "failed to build mouse release event: {error}"
+                            ))
+                        })?,
+                )
+                .await
+                .map_err(|error| BrowserError::new(format!("mouse release failed: {error}")))?;
+
+                Ok(())
+            }
+            ElementHandle::CssElement(element) => {
+                element
+                    .click()
+                    .await
+                    .map_err(|error| BrowserError::new(format!("click failed: {error}")))?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Focus an element and type text into it. Uses CDP `DOM.focus` for
+    /// `BackendNodeId` targets.
+    async fn focus_and_type(
+        &self,
+        state: &BrowserState,
+        handle: &ElementHandle,
+        text: &str,
+        clear: bool,
+    ) -> Result<(), BrowserError> {
         let page = self.require_active_page(state)?;
 
-        page.find_element(&selector).await.map_err(|error| {
-            BrowserError::new(format!(
-                "element not found via selector '{selector}': {error}. \
-                 The page may have changed — run browser_snapshot again."
-            ))
-        })
+        match handle {
+            ElementHandle::BackendNode(backend_node_id) => {
+                // Resolve BackendNodeId to RemoteObject so we can call JS on it
+                let resolve_result = page
+                    .execute(ResolveNodeParams {
+                        backend_node_id: Some(*backend_node_id),
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(|error| {
+                        BrowserError::new(format!("failed to resolve node for typing: {error}"))
+                    })?;
+
+                let object_id = resolve_result.result.object.object_id.ok_or_else(|| {
+                    BrowserError::new(
+                        "resolved node has no object_id — element may have been removed",
+                    )
+                })?;
+
+                // Use callFunctionOn to focus, validate, clear, and set value
+                let text_json = serde_json::to_string(text).unwrap_or_default();
+                let clear_js = if clear {
+                    "if (this.isContentEditable) { this.textContent = ''; } else { this.value = ''; }"
+                } else {
+                    ""
+                };
+
+                let js = format!(
+                    r#"function() {{
+                        const tag = this.tagName;
+                        const editable = this.isContentEditable;
+                        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !editable) {{
+                            return 'element is a ' + tag.toLowerCase() + ', not a text input';
+                        }}
+                        this.focus();
+                        {clear_js}
+                        if (editable) {{
+                            this.textContent = {text_json};
+                        }} else {{
+                            this.value = {text_json};
+                        }}
+                        this.dispatchEvent(new Event('input', {{bubbles: true}}));
+                        this.dispatchEvent(new Event('change', {{bubbles: true}}));
+                        return null;
+                    }}"#,
+                );
+
+                let call_result = page
+                    .execute(
+                        chromiumoxide_cdp::cdp::js_protocol::runtime::CallFunctionOnParams::builder()
+                            .function_declaration(js)
+                            .object_id(object_id)
+                            .return_by_value(true)
+                            .user_gesture(true)
+                            .silent(true)
+                            .build()
+                            .map_err(|error| {
+                                BrowserError::new(format!(
+                                    "failed to build CallFunctionOn params: {error}"
+                                ))
+                            })?,
+                    )
+                    .await
+                    .map_err(|error| {
+                        BrowserError::new(format!("type action failed: {error}"))
+                    })?;
+
+                // Check for validation error returned from the JS function.
+                // The function returns null on success, or an error string.
+                if let Some(value) = &call_result.result.result.value
+                    && let Some(error_msg) = value.as_str()
+                {
+                    return Err(BrowserError::new(error_msg.to_string()));
+                }
+
+                Ok(())
+            }
+            ElementHandle::CssElement(element) => {
+                // CSS selector path — click to focus, then use JS to type.
+                element
+                    .click()
+                    .await
+                    .map_err(|error| BrowserError::new(format!("focus failed: {error}")))?;
+
+                let text_json = serde_json::to_string(text).unwrap_or_default();
+                let clear_js = if clear { "el.value = '';" } else { "" };
+                let js = format!(
+                    r#"(() => {{
+                        const el = document.activeElement;
+                        if (!el) return 'no focused element after click';
+                        const tag = el.tagName;
+                        const editable = el.isContentEditable;
+                        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !editable) {{
+                            return 'element is a ' + tag.toLowerCase() + ', not a text input';
+                        }}
+                        if (editable) {{
+                            {clear_editable}
+                            el.textContent = {text_json};
+                        }} else {{
+                            {clear_js}
+                            el.value = {text_json};
+                        }}
+                        el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                        el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                        return null;
+                    }})()"#,
+                    clear_editable = if clear { "el.textContent = '';" } else { "" },
+                );
+
+                page.evaluate(js)
+                    .await
+                    .map_err(|error| BrowserError::new(format!("type failed: {error}")))?;
+
+                Ok(())
+            }
+        }
     }
 
     /// Launch the browser if not already running. Returns a status message.
@@ -710,8 +1102,20 @@ impl BrowserContext {
             .chrome_executable(&executable)
             .user_data_dir(&user_data_dir);
 
-        if !self.config.headless {
-            builder = builder.with_head().window_size(1280, 900);
+        if self.config.headless {
+            // Headless has no real window — set an explicit viewport so
+            // screenshots render at a reasonable desktop size instead of
+            // the chromiumoxide default of 800x600.
+            builder = builder.viewport(Viewport {
+                width: 1280,
+                height: 900,
+                ..Default::default()
+            });
+        } else {
+            // Headed mode: disable viewport emulation so the page fills
+            // the actual window. The default 800x600 viewport constrains
+            // page content to a smaller area than the window.
+            builder = builder.with_head().window_size(1280, 900).viewport(None);
         }
 
         let chrome_config = builder.build().map_err(|error| {
@@ -935,13 +1339,8 @@ impl Tool for BrowserSnapshotTool {
         state.invalidate_snapshot();
         let snapshot = self.context.extract_snapshot(&mut state).await?;
 
-        // Surface any JS-level errors from the extraction script
-        if let Some(ref error) = snapshot.error {
-            return Err(BrowserError::new(format!("DOM extraction failed: {error}")));
-        }
-
         let rendered = snapshot.render();
-        let element_count = snapshot.selectors.len();
+        let element_count = snapshot.element_count();
         let title = self
             .context
             .require_active_page(&state)?
@@ -972,6 +1371,13 @@ impl Tool for BrowserSnapshotTool {
 }
 
 // Shared element targeting — tools accept either an index or a CSS selector.
+
+/// A resolved element handle — either a CDP `BackendNodeId` (from snapshot
+/// index lookup) or a chromiumoxide `Element` (from CSS selector query).
+enum ElementHandle {
+    BackendNode(BackendNodeId),
+    CssElement(chromiumoxide::Element),
+}
 
 /// Resolved element target for click/type/press_key tools.
 enum ElementTarget {
@@ -1042,12 +1448,9 @@ impl Tool for BrowserClickTool {
         let label = target.display();
 
         let mut state = self.context.state.lock().await;
-        let element = self.context.find_element(&mut state, &target).await?;
+        let handle = self.context.find_element(&mut state, &target).await?;
 
-        element
-            .click()
-            .await
-            .map_err(|error| BrowserError::new(format!("click failed: {error}")))?;
+        self.context.click_element(&state, &handle).await?;
 
         // Clicks often trigger navigation or DOM changes — give the page a
         // moment to settle before the next snapshot.
@@ -1116,74 +1519,11 @@ impl Tool for BrowserTypeTool {
         let label = target.display();
 
         let mut state = self.context.state.lock().await;
+        let handle = self.context.find_element(&mut state, &target).await?;
 
-        // Resolve the CSS selector from the target.
-        let selector = match &target {
-            ElementTarget::Selector(sel) => sel.clone(),
-            ElementTarget::Index(index) => {
-                let snapshot = self.context.extract_snapshot(&mut state).await?;
-                snapshot
-                    .selector_for_index(*index)
-                    .ok_or_else(|| BrowserError::new(format!("element index {index} not found")))?
-                    .to_string()
-            }
-        };
-
-        let page = self.context.require_active_page(&state)?;
-
-        // Use JS injection for reliable clear + type: focus the element, set
-        // its value, and fire input/change events. Also validates that the
-        // target is an input, textarea, or contenteditable element.
-        let text_json = serde_json::to_string(&args.text).unwrap_or_default();
-        let clear_js = if args.clear { "el.value = '';" } else { "" };
-        let js = format!(
-            r#"(() => {{
-                const el = document.querySelector({selector_json});
-                if (!el) return JSON.stringify({{success: false, error: 'element not found via selector'}});
-                const tag = el.tagName;
-                const editable = el.isContentEditable;
-                if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !editable) {{
-                    return JSON.stringify({{success: false, error: 'element is a ' + tag.toLowerCase() + ', not a text input — check your index or selector'}});
-                }}
-                el.focus();
-                if (editable) {{
-                    {clear_editable}
-                    el.textContent = {text_json};
-                }} else {{
-                    {clear_js}
-                    el.value = {text_json};
-                }}
-                el.dispatchEvent(new Event('input', {{bubbles: true}}));
-                el.dispatchEvent(new Event('change', {{bubbles: true}}));
-                return JSON.stringify({{success: true}});
-            }})()"#,
-            selector_json = serde_json::to_string(&selector).unwrap_or_default(),
-            clear_editable = if args.clear {
-                "el.textContent = '';"
-            } else {
-                ""
-            },
-            clear_js = clear_js,
-            text_json = text_json,
-        );
-
-        let result = page
-            .evaluate(js)
-            .await
-            .map_err(|error| BrowserError::new(format!("type failed: {error}")))?;
-
-        // Check for JS-level errors
-        if let Some(value) = result.value()
-            && let Some(json_str) = value.as_str()
-            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str)
-            && parsed.get("success").and_then(|v| v.as_bool()) == Some(false)
-        {
-            let error = parsed
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("type action failed");
-            return Err(BrowserError::new(error.to_string()));
-        }
+        self.context
+            .focus_and_type(&state, &handle, &args.text, args.clear)
+            .await?;
 
         state.invalidate_snapshot();
 
@@ -1814,6 +2154,40 @@ async fn dispatch_key_press(page: &chromiumoxide::Page, key: &str) -> Result<(),
 
 fn page_target_id(page: &chromiumoxide::Page) -> String {
     page.target_id().inner().clone()
+}
+
+/// Get the center coordinates of an element identified by `BackendNodeId`.
+/// Uses `DOM.getBoxModel` to get the content box, then computes center.
+async fn get_element_center(
+    page: &chromiumoxide::Page,
+    backend_node_id: BackendNodeId,
+) -> Result<(f64, f64), BrowserError> {
+    let box_model = page
+        .execute(GetBoxModelParams {
+            backend_node_id: Some(backend_node_id),
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| {
+            BrowserError::new(format!(
+                "failed to get box model for element: {error}. \
+                 The element may not be visible — try scrolling or taking a screenshot."
+            ))
+        })?;
+
+    // The content quad is a flat array of 8 values: [x1,y1, x2,y2, x3,y3, x4,y4]
+    let quad = &box_model.result.model.content;
+    if quad.inner().len() < 8 {
+        return Err(BrowserError::new(
+            "element has no visible content box — it may be hidden or zero-sized",
+        ));
+    }
+
+    let points = quad.inner();
+    let center_x = (points[0] + points[2] + points[4] + points[6]) / 4.0;
+    let center_y = (points[1] + points[3] + points[5] + points[7]) / 4.0;
+
+    Ok((center_x, center_y))
 }
 
 // Chrome executable resolution
