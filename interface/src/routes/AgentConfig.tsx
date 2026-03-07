@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type AgentConfigResponse, type AgentConfigUpdateRequest } from "@/api/client";
-import { Button, SettingSidebarButton, TextArea, Toggle, NumberStepper, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, cx } from "@/ui";
+import { Button, Input, SettingSidebarButton, TextArea, Toggle, NumberStepper, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, cx } from "@/ui";
 import { ModelSelect } from "@/components/ModelSelect";
 import { TagInput } from "@/components/TagInput";
 import { Markdown } from "@/components/Markdown";
@@ -15,15 +15,16 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 		|| id.includes("sonnet-4-6") || id.includes("sonnet-4.6");
 }
 
-type SectionId = "soul" | "identity" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "sandbox";
+type SectionId = "general" | "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "channel" | "sandbox";
 
 const SECTIONS: {
 	id: SectionId;
 	label: string;
-	group: "identity" | "config";
+	group: "general" | "identity" | "config";
 	description: string;
 	detail: string;
 }[] = [
+	{ id: "general", label: "General", group: "general", description: "Agent metadata", detail: "The agent's display name and role. The display name is shown in the UI and messaging platforms. The role describes the agent's purpose (e.g. Research Assistant, Code Reviewer)." },
 	{ id: "soul", label: "Soul", group: "identity", description: "SOUL.md", detail: "Defines the agent's personality, values, communication style, and behavioral boundaries. This is the core of who the agent is." },
 	{ id: "identity", label: "Identity", group: "identity", description: "IDENTITY.md", detail: "The agent's name, nature, and purpose. How it introduces itself and what it understands its role to be." },
 	{ id: "routing", label: "Model Routing", group: "config", description: "Which models each process uses", detail: "Controls which LLM model is used for each process type. Channels handle user-facing conversation, branches do thinking, workers execute tasks, the compactor summarizes context, cortex observes system state, and voice transcribes audio attachments before the channel turn." },
@@ -33,6 +34,7 @@ const SECTIONS: {
 	{ id: "coalesce", label: "Coalesce", group: "config", description: "Message batching", detail: "When multiple messages arrive in quick succession, coalescing batches them into a single LLM turn. This prevents the agent from responding to each message individually in fast-moving conversations." },
 	{ id: "memory", label: "Memory Persistence", group: "config", description: "Auto-save interval", detail: "Spawns a silent background branch at regular intervals to recall existing memories and save new ones from the recent conversation. Runs without blocking the channel." },
 	{ id: "browser", label: "Browser", group: "config", description: "Chrome automation", detail: "Controls browser automation tools available to workers. When enabled, workers can navigate web pages, take screenshots, and interact with sites. JavaScript evaluation is a separate permission." },
+	{ id: "channel", label: "Channel Behavior", group: "config", description: "Reply behavior", detail: "Listen-only mode suppresses unsolicited replies in busy channels. The agent still responds to slash commands, @mentions, and replies to its own messages." },
 	{ id: "sandbox", label: "Sandbox", group: "config", description: "Process containment", detail: "OS-level filesystem containment for shell and exec tool subprocesses. When enabled, worker processes run inside a kernel-enforced sandbox (bubblewrap on Linux, sandbox-exec on macOS) with an allowlist-only filesystem — only system paths, the workspace, and explicitly configured extra paths are accessible." },
 ];
 
@@ -55,7 +57,7 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const search = useSearch({from: "/agents/$agentId/config"}) as {tab?: string};
-	const [activeSection, setActiveSection] = useState<SectionId>("soul");
+	const [activeSection, setActiveSection] = useState<SectionId>("general");
 	const [dirty, setDirty] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const saveHandlerRef = useRef<{ save?: () => void; revert?: () => void }>({});
@@ -63,7 +65,7 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 	// Sync activeSection with URL search param
 	useEffect(() => {
 		if (search.tab) {
-			const validSections: SectionId[] = ["soul", "identity", "routing", "tuning", "compaction", "cortex", "coalesce", "memory", "browser", "sandbox"];
+			const validSections = SECTIONS.map((section) => section.id);
 			if (validSections.includes(search.tab as SectionId)) {
 				setActiveSection(search.tab as SectionId);
 			}
@@ -75,6 +77,12 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 		navigate({to: "/agents/$agentId/config", params: {agentId}, search: {tab: section}});
 	};
 
+	const agentsQuery = useQuery({
+		queryKey: ["agents"],
+		queryFn: () => api.agents(),
+		staleTime: 10_000,
+	});
+
 	const identityQuery = useQuery({
 		queryKey: ["agent-identity", agentId],
 		queryFn: () => api.agentIdentity(agentId),
@@ -85,6 +93,18 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 		queryKey: ["agent-config", agentId],
 		queryFn: () => api.agentConfig(agentId),
 		staleTime: 10_000,
+	});
+
+	const agentMutation = useMutation({
+		mutationFn: (update: { display_name?: string; role?: string }) =>
+			api.updateAgent(agentId, update),
+		onMutate: () => setSaving(true),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["agents"] });
+			setDirty(false);
+			setSaving(false);
+		},
+		onError: () => setSaving(false),
 	});
 
 	const identityMutation = useMutation({
@@ -144,8 +164,8 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 		saveHandlerRef.current.revert?.();
 	}, []);
 
-	const isLoading = identityQuery.isLoading || configQuery.isLoading;
-	const isError = identityQuery.isError || configQuery.isError;
+	const isLoading = agentsQuery.isLoading || identityQuery.isLoading || configQuery.isLoading;
+	const isError = agentsQuery.isError || identityQuery.isError || configQuery.isError;
 
 	if (isLoading) {
 		return (
@@ -167,16 +187,34 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 	}
 
 	const active = SECTIONS.find((s) => s.id === activeSection)!;
+	const isGeneralSection = active.group === "general";
 	const isIdentitySection = active.group === "identity";
+	const currentAgent = agentsQuery.data?.agents.find((a) => a.id === agentId);
 
 	return (
 		<div className="flex h-full relative">
 			{/* Sidebar */}
 			<div className="flex w-52 flex-shrink-0 flex-col border-r border-app-line/50 bg-app-darkBox/20 overflow-y-auto">
-				{/* Identity Group */}
-				<div className="px-3 pb-1 pt-4">
-					<span className="text-tiny font-medium uppercase tracking-wider text-ink-faint">Identity</span>
-				</div>
+			{/* General Group */}
+			<div className="flex flex-col gap-0.5 px-2 pt-3">
+				{SECTIONS.filter((s) => s.group === "general").map((section) => {
+					const isActive = activeSection === section.id;
+					return (
+						<SettingSidebarButton
+							key={section.id}
+							onClick={() => handleSectionChange(section.id)}
+							active={isActive}
+						>
+							<span className="flex-1">{section.label}</span>
+						</SettingSidebarButton>
+					);
+				})}
+			</div>
+
+			{/* Identity Group */}
+			<div className="px-3 pb-1 pt-4">
+				<span className="text-tiny font-medium uppercase tracking-wider text-ink-faint">Identity</span>
+			</div>
 					<div className="flex flex-col gap-0.5 px-2">
 					{SECTIONS.filter((s) => s.group === "identity").map((section) => {
 						const isActive = activeSection === section.id;
@@ -218,22 +256,33 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 
 			{/* Editor */}
 			<div className="flex flex-1 flex-col overflow-hidden">
-				{isIdentitySection ? (
-				<IdentityEditor
-					key={active.id}
-					label={active.label}
-					description={active.description}
-					content={getIdentityField(identityQuery.data ?? { soul: null, identity: null, user: null }, active.id)}
-					onDirtyChange={setDirty}
-					saveHandlerRef={saveHandlerRef}
-					onSave={(content) => {
-						// Only mutate for identity sections
-						if (isIdentityField(active.id)) {
-							identityMutation.mutate({ field: active.id, content });
-						}
-					}}
-				/>
-				) : (
+			{isGeneralSection ? (
+			<GeneralEditor
+				key={active.id}
+				agentId={agentId}
+				displayName={currentAgent?.display_name ?? ""}
+				role={currentAgent?.role ?? ""}
+				detail={active.detail}
+				onDirtyChange={setDirty}
+				saveHandlerRef={saveHandlerRef}
+				onSave={(update) => agentMutation.mutate(update)}
+			/>
+			) : isIdentitySection ? (
+			<IdentityEditor
+				key={active.id}
+				label={active.label}
+				description={active.description}
+				content={getIdentityField(identityQuery.data ?? { soul: null, identity: null, user: null }, active.id)}
+				onDirtyChange={setDirty}
+				saveHandlerRef={saveHandlerRef}
+				onSave={(content) => {
+					// Only mutate for identity sections
+					if (isIdentityField(active.id)) {
+						identityMutation.mutate({ field: active.id, content });
+					}
+				}}
+			/>
+			) : (
 					<ConfigSectionEditor
 						sectionId={active.id}
 						label={active.label}
@@ -278,6 +327,105 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 				)}
 			</AnimatePresence>
 		</div>
+	);
+}
+
+// -- General Editor --
+
+interface GeneralEditorProps {
+	agentId: string;
+	displayName: string;
+	role: string;
+	detail: string;
+	onDirtyChange: (dirty: boolean) => void;
+	saveHandlerRef: React.MutableRefObject<{ save?: () => void; revert?: () => void }>;
+	onSave: (update: { display_name?: string; role?: string }) => void;
+}
+
+function GeneralEditor({ agentId, displayName, role, detail, onDirtyChange, saveHandlerRef, onSave }: GeneralEditorProps) {
+	const [localDisplayName, setLocalDisplayName] = useState(displayName);
+	const [localRole, setLocalRole] = useState(role);
+	const [localDirty, setLocalDirty] = useState(false);
+
+	useEffect(() => {
+		if (!localDirty) {
+			setLocalDisplayName(displayName);
+			setLocalRole(role);
+		}
+	}, [displayName, role, localDirty]);
+
+	useEffect(() => {
+		onDirtyChange(localDirty);
+	}, [localDirty, onDirtyChange]);
+
+	const handleSave = useCallback(() => {
+		onSave({ display_name: localDisplayName, role: localRole });
+		setLocalDirty(false);
+	}, [onSave, localDisplayName, localRole]);
+
+	const handleRevert = useCallback(() => {
+		setLocalDisplayName(displayName);
+		setLocalRole(role);
+		setLocalDirty(false);
+	}, [displayName, role]);
+
+	useEffect(() => {
+		saveHandlerRef.current.save = handleSave;
+		saveHandlerRef.current.revert = handleRevert;
+		return () => {
+			saveHandlerRef.current.save = undefined;
+			saveHandlerRef.current.revert = undefined;
+		};
+	}, [handleSave, handleRevert]);
+
+	return (
+		<>
+			<div className="flex items-center justify-between border-b border-app-line/50 bg-app-darkBox/20 px-5 py-2.5">
+				<div className="flex items-center gap-3">
+					<h3 className="text-sm font-medium text-ink">General</h3>
+					<span className="text-tiny text-ink-faint">Agent metadata</span>
+				</div>
+				{localDirty ? (
+					<span className="text-tiny text-amber-400">Unsaved changes</span>
+				) : (
+					<span className="text-tiny text-ink-faint/50">Changes saved to config.toml</span>
+				)}
+			</div>
+			<div className="flex-1 overflow-y-auto px-8 py-8">
+				<div className="mb-6 rounded-lg border border-app-line/30 bg-app-darkBox/20 px-5 py-4">
+					<p className="text-sm leading-relaxed text-ink-dull">{detail}</p>
+				</div>
+				<div className="grid gap-4">
+					<div className="flex flex-col gap-1.5">
+						<label className="text-sm font-medium text-ink">Agent ID</label>
+						<p className="text-tiny text-ink-faint">The config key identifier. This cannot be changed.</p>
+						<Input
+							value={agentId}
+							disabled
+							className="border-app-line/50 bg-app-darkBox/30 text-ink-faint"
+						/>
+					</div>
+					<div className="flex flex-col gap-1.5">
+						<label className="text-sm font-medium text-ink">Display Name</label>
+						<p className="text-tiny text-ink-faint">Human-friendly name shown in the UI and messaging platforms.</p>
+						<Input
+							value={localDisplayName}
+							onChange={(e) => { setLocalDisplayName(e.target.value); setLocalDirty(true); }}
+							placeholder={agentId}
+						/>
+					</div>
+					<div className="flex flex-col gap-1.5">
+						<label className="text-sm font-medium text-ink">Role</label>
+						<p className="text-tiny text-ink-faint">Describes the agent's purpose. Shown in the topology view and agent listings.</p>
+						<Input
+							value={localRole}
+							onChange={(e) => { setLocalRole(e.target.value); setLocalDirty(true); }}
+							placeholder="e.g. Research Assistant, Code Reviewer"
+						/>
+					</div>
+				</div>
+			</div>
+		</>
 	);
 }
 
@@ -413,6 +561,7 @@ const SANDBOX_DEFAULTS = { mode: "enabled" as const, writable_paths: [] as strin
 function ConfigSectionEditor({ sectionId, label, description, detail, config, onDirtyChange, saveHandlerRef, onSave }: ConfigSectionEditorProps) {
 	type ConfigValues = Record<string, string | number | boolean | string[]>;
 	const sandbox = config.sandbox ?? SANDBOX_DEFAULTS;
+	const channel = config.channel ?? { listen_only_mode: false };
 	const [localValues, setLocalValues] = useState<ConfigValues>(() => {
 		// Initialize from config based on section
 		switch (sectionId) {
@@ -430,6 +579,8 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 				return { ...config.memory_persistence } as ConfigValues;
 			case "browser":
 				return { ...config.browser } as ConfigValues;
+			case "channel":
+				return { ...channel } as ConfigValues;
 			case "sandbox":
 				return { mode: sandbox.mode, writable_paths: sandbox.writable_paths } as ConfigValues;
 			default:
@@ -467,6 +618,9 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 					break;
 				case "browser":
 					setLocalValues({ ...config.browser });
+					break;
+				case "channel":
+					setLocalValues({ ...channel });
 					break;
 				case "sandbox":
 					setLocalValues({ mode: sandbox.mode, writable_paths: sandbox.writable_paths });
@@ -507,6 +661,9 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 				break;
 			case "browser":
 				setLocalValues({ ...config.browser });
+				break;
+			case "channel":
+				setLocalValues({ ...channel });
 				break;
 			case "sandbox":
 				setLocalValues({ mode: sandbox.mode, writable_paths: sandbox.writable_paths });
@@ -819,6 +976,29 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 							value={localValues.evaluate_enabled as boolean}
 							onChange={(v) => handleChange("evaluate_enabled", v)}
 						/>
+						<ConfigToggleField
+							label="Persist Session"
+							description="Keep the browser alive across worker lifetimes. Cookies, tabs, and login sessions survive between tasks. Requires agent restart to take effect."
+							value={localValues.persist_session as boolean}
+							onChange={(v) => handleChange("persist_session", v)}
+						/>
+						<div className="flex flex-col gap-1.5">
+							<label className="text-sm font-medium text-ink">Close Policy</label>
+							<p className="text-tiny text-ink-faint">What happens when a worker calls &quot;close&quot; or finishes.</p>
+							<Select
+								value={localValues.close_policy as string}
+								onValueChange={(v) => handleChange("close_policy", v)}
+							>
+								<SelectTrigger className="border-app-line/50 bg-app-darkBox/30">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="close_browser">Close Browser</SelectItem>
+									<SelectItem value="close_tabs">Close Tabs</SelectItem>
+									<SelectItem value="detach">Detach</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
 					</div>
 				);
 			case "sandbox":
@@ -849,6 +1029,17 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 								placeholder="/home/user/projects/myapp"
 							/>
 						</div>
+					</div>
+				);
+			case "channel":
+				return (
+					<div className="grid gap-4">
+						<ConfigToggleField
+							label="Listen-Only Mode"
+							description="Only respond when explicitly invoked (slash command, @mention, or reply-to-bot)."
+							value={localValues.listen_only_mode as boolean}
+							onChange={(v) => handleChange("listen_only_mode", v)}
+						/>
 					</div>
 				);
 			default:

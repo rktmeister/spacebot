@@ -278,6 +278,7 @@ pub(super) struct TomlDefaultsConfig {
     pub(super) cortex: Option<TomlCortexConfig>,
     pub(super) warmup: Option<TomlWarmupConfig>,
     pub(super) browser: Option<TomlBrowserConfig>,
+    pub(super) channel: Option<TomlChannelConfig>,
     #[serde(default)]
     pub(super) mcp: Vec<TomlMcpServerConfig>,
     pub(super) brave_search_key: Option<String>,
@@ -340,6 +341,8 @@ pub(super) struct TomlCortexConfig {
     pub(super) tick_interval_secs: Option<u64>,
     pub(super) worker_timeout_secs: Option<u64>,
     pub(super) branch_timeout_secs: Option<u64>,
+    pub(super) detached_worker_timeout_retry_limit: Option<u8>,
+    pub(super) supervisor_kill_budget_per_tick: Option<usize>,
     pub(super) circuit_breaker_threshold: Option<u8>,
     pub(super) bulletin_interval_secs: Option<u64>,
     pub(super) bulletin_max_words: Option<usize>,
@@ -365,6 +368,13 @@ pub(super) struct TomlBrowserConfig {
     pub(super) evaluate_enabled: Option<bool>,
     pub(super) executable_path: Option<String>,
     pub(super) screenshot_dir: Option<String>,
+    pub(super) persist_session: Option<bool>,
+    pub(super) close_policy: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TomlChannelConfig {
+    pub(super) listen_only_mode: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -425,6 +435,7 @@ pub(super) struct TomlAgentConfig {
     pub(super) cortex: Option<TomlCortexConfig>,
     pub(super) warmup: Option<TomlWarmupConfig>,
     pub(super) browser: Option<TomlBrowserConfig>,
+    pub(super) channel: Option<TomlChannelConfig>,
     pub(super) mcp: Option<Vec<TomlMcpServerConfig>>,
     pub(super) brave_search_key: Option<String>,
     pub(super) cron_timezone: Option<String>,

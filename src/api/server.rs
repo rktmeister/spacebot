@@ -3,8 +3,8 @@
 use super::state::ApiState;
 use super::{
     agents, bindings, channels, config, cortex, cron, factory, ingest, links, mcp, memories,
-    messaging, models, providers, secrets, settings, skills, system, tasks, tools, webchat,
-    workers,
+    messaging, models, opencode_proxy, providers, secrets, settings, skills, system, tasks, tools,
+    webchat, workers,
 };
 
 use axum::Json;
@@ -14,7 +14,7 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use rust_embed::Embed;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
@@ -92,6 +92,12 @@ pub async fn start_http_server(
         .route("/channels/status", get(channels::channel_status))
         .route("/agents/workers", get(workers::list_workers))
         .route("/agents/workers/detail", get(workers::worker_detail))
+        .route(
+            "/opencode/{port}/{*path}",
+            any(opencode_proxy::opencode_proxy),
+        )
+        .route("/opencode/{port}", any(opencode_proxy::opencode_proxy))
+        .route("/opencode/{port}/", any(opencode_proxy::opencode_proxy))
         .route("/agents/memories", get(memories::list_memories))
         .route("/agents/memories/search", get(memories::search_memories))
         .route("/agents/memories/graph", get(memories::memory_graph))
@@ -205,6 +211,7 @@ pub async fn start_http_server(
             get(settings::update_check).post(settings::update_check_now),
         )
         .route("/update/apply", post(settings::update_apply))
+        .route("/changelog", get(settings::changelog))
         .route("/webchat/send", post(webchat::webchat_send))
         .route("/webchat/history", get(webchat::webchat_history))
         .route("/links", get(links::list_links).post(links::create_link))
