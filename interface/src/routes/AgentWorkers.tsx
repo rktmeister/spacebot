@@ -408,9 +408,13 @@ function WorkerDetail({
 		setActiveTab(hasOpenCodeEmbed ? "opencode" : "transcript");
 	}, [detail.id, hasOpenCodeEmbed]);
 
-	// Use persisted transcript if available, otherwise fall back to live SSE transcript.
-	// Strip the final action step if it duplicates the result text shown above.
-	const rawTranscript = detail.transcript ?? (isLive ? liveTranscript : null);
+	// For live workers, prefer the SSE-accumulated transcript when it has content
+	// (it's the most up-to-date). Fall back to detail.transcript which may come
+	// from the DB or the server-side live cache (survives page refreshes).
+	// For completed workers, always use the persisted DB transcript.
+	const rawTranscript = isLive
+		? (liveTranscript && liveTranscript.length > 0 ? liveTranscript : detail.transcript ?? null)
+		: detail.transcript ?? null;
 	const transcript = useMemo(() => {
 		if (!rawTranscript || !detail.result) return rawTranscript;
 		const last = rawTranscript[rawTranscript.length - 1];

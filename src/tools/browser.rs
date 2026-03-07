@@ -12,6 +12,7 @@
 //! pages where JS injection fails.
 
 use crate::config::BrowserConfig;
+use crate::secrets::store::SecretsStore;
 
 use chromiumoxide::browser::{Browser, BrowserConfig as ChromeConfig};
 use chromiumoxide::fetcher::{BrowserFetcher, BrowserFetcherOptions};
@@ -260,7 +261,7 @@ impl AxSnapshot {
             .filter(|(_, node)| {
                 node.parent_id
                     .as_ref()
-                    .map_or(true, |pid| !id_to_idx.contains_key(pid.inner()))
+                    .is_none_or(|pid| !id_to_idx.contains_key(pid.inner()))
             })
             .map(|(i, _)| i)
             .collect();
@@ -425,14 +426,15 @@ impl AxSnapshot {
             // Assign an index to interactive elements that have a BackendNodeId.
             let role_lower = role.to_lowercase();
             let is_interactive = INTERACTIVE_ROLES.contains(&role_lower.as_str());
-            let element_index = if is_interactive && ax.backend_dom_node_id.is_some() {
-                let idx = *next_index;
-                *next_index += 1;
-                node_ids.push(ax.backend_dom_node_id.expect("checked above"));
-                Some(idx)
-            } else {
-                None
-            };
+            let element_index =
+                if let Some(backend_node_id) = ax.backend_dom_node_id.filter(|_| is_interactive) {
+                    let idx = *next_index;
+                    *next_index += 1;
+                    node_ids.push(backend_node_id);
+                    Some(idx)
+                } else {
+                    None
+                };
 
             // Skip structural nodes that have no name, no index, and only serve
             // as tree wrappers — but only if they have exactly one child (pass
@@ -767,12 +769,16 @@ pub struct TabInfo {
 // Shared helper struct that all tools reference
 
 /// Shared context cloned into each browser tool. Holds the browser state mutex,
-/// config, and screenshot directory.
+/// config, screenshot directory, and optional secrets store for secure text entry.
 #[derive(Debug, Clone)]
 pub(crate) struct BrowserContext {
     state: Arc<Mutex<BrowserState>>,
     config: BrowserConfig,
     screenshot_dir: PathBuf,
+    /// Secrets store for resolving secret names in `browser_type`. When present,
+    /// the `secret` parameter can look up credential values without exposing
+    /// them in tool arguments or output.
+    secrets: Option<Arc<SecretsStore>>,
 }
 
 impl BrowserContext {
@@ -780,11 +786,13 @@ impl BrowserContext {
         state: Arc<Mutex<BrowserState>>,
         config: BrowserConfig,
         screenshot_dir: PathBuf,
+        secrets: Option<Arc<SecretsStore>>,
     ) -> Self {
         Self {
             state,
             config,
             screenshot_dir,
+            secrets,
         }
     }
 
@@ -810,6 +818,10 @@ impl BrowserContext {
         &self,
         state: &'a mut BrowserState,
     ) -> Result<&'a AxSnapshot, BrowserError> {
+        // The `is_some` + `expect` pattern is intentional — `if let Some(s) =
+        // state.snapshot.as_ref()` would borrow `state` for `'a`, preventing
+        // the mutable assignment to `state.snapshot` in the cache-miss path.
+        #[allow(clippy::unnecessary_unwrap)]
         if state.snapshot.is_some() {
             return Ok(state.snapshot.as_ref().expect("just checked"));
         }
@@ -1326,7 +1338,9 @@ impl Tool for BrowserSnapshotTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: "Get the page's ARIA accessibility tree with numbered element indices. \
-                          Use the [index=N] values in browser_click, browser_type, etc."
+                          Use the [index=N] values in browser_click, browser_type, etc. When \
+                          you see password fields or other sensitive inputs, use browser_type \
+                          with the `secret` parameter (not `text`) to type credentials securely."
                 .to_string(),
             parameters: serde_json::json!({ "type": "object", "properties": {} }),
         }
@@ -1478,8 +1492,15 @@ pub struct BrowserTypeArgs {
     pub index: Option<usize>,
     /// CSS selector to target directly (e.g., "#login_field", "input[name='email']").
     pub selector: Option<String>,
-    /// The text to type into the element.
-    pub text: String,
+    /// The text to type into the element. Mutually exclusive with `secret`.
+    /// Do NOT put secret values (passwords, tokens, API keys) here — they will
+    /// appear in tool output. Use the `secret` parameter instead.
+    pub text: Option<String>,
+    /// Name of a secret from the secret store to type into the element.
+    /// The secret value is resolved server-side and never appears in tool
+    /// arguments, output, or LLM context. Use this for passwords, tokens,
+    /// API keys, and any other sensitive values. Mutually exclusive with `text`.
+    pub secret: Option<String>,
     /// Whether to clear the field before typing. Defaults to true.
     #[serde(default = "default_true")]
     pub clear: bool,
@@ -1499,17 +1520,22 @@ impl Tool for BrowserTypeTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: "Type text into an input element by index (from browser_snapshot) or \
-                          CSS selector."
+                          CSS selector. Provide either `text` for plain text or `secret` for \
+                          sensitive values (passwords, tokens, API keys). When using `secret`, \
+                          pass the secret name (e.g. \"GH_PASSWORD\") — the value is resolved \
+                          from the secret store and typed without ever appearing in tool \
+                          arguments or output. NEVER put passwords or credentials in the `text` \
+                          parameter — always use `secret` for sensitive values."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "index": { "type": "integer", "description": "Element index from snapshot" },
                     "selector": { "type": "string", "description": "CSS selector (e.g. \"#login_field\", \"input[name='email']\")" },
-                    "text": { "type": "string", "description": "Text to type" },
+                    "text": { "type": "string", "description": "Plain text to type. Do NOT use for passwords or secrets — use the `secret` parameter instead." },
+                    "secret": { "type": "string", "description": "Name of a secret from the secret store (e.g. \"GH_PASSWORD\", \"NPM_TOKEN\"). The value is resolved securely and never appears in output." },
                     "clear": { "type": "boolean", "default": true, "description": "Clear the field before typing (default true)" }
-                },
-                "required": ["text"]
+                }
             }),
         }
     }
@@ -1518,23 +1544,59 @@ impl Tool for BrowserTypeTool {
         let target = ElementTarget::from_args(args.index, args.selector)?;
         let label = target.display();
 
+        // Resolve the text to type: either from `secret` (secure) or `text` (plain).
+        let (text_value, is_secret) = match (&args.secret, &args.text) {
+            (Some(secret_name), None) => {
+                let store = self.context.secrets.as_ref().ok_or_else(|| {
+                    BrowserError::new(
+                        "secret store is not available — secrets cannot be resolved. \
+                         Add the secret via the API or use the `text` parameter instead.",
+                    )
+                })?;
+                let decrypted = store.get(secret_name).map_err(|error| {
+                    BrowserError::new(format!("failed to resolve secret '{secret_name}': {error}"))
+                })?;
+                (decrypted.expose().to_string(), true)
+            }
+            (None, Some(text)) => (text.clone(), false),
+            (Some(_), Some(_)) => {
+                return Err(BrowserError::new(
+                    "`text` and `secret` are mutually exclusive — provide one or the other",
+                ));
+            }
+            (None, None) => {
+                return Err(BrowserError::new(
+                    "provide either `text` (plain text) or `secret` (secret name from the \
+                     secret store) to type into the element",
+                ));
+            }
+        };
+
         let mut state = self.context.state.lock().await;
         let handle = self.context.find_element(&mut state, &target).await?;
 
         self.context
-            .focus_and_type(&state, &handle, &args.text, args.clear)
+            .focus_and_type(&state, &handle, &text_value, args.clear)
             .await?;
 
         state.invalidate_snapshot();
 
-        let display_text = if args.text.len() > 50 {
-            format!("{}...", &args.text[..50])
+        // Secret values must never appear in tool output.
+        let message = if is_secret {
+            format!(
+                "Typed secret '{}' into element at {label}",
+                args.secret.as_deref().unwrap_or("unknown")
+            )
         } else {
-            args.text.clone()
+            let display_text = if text_value.len() > 50 {
+                format!("{}...", &text_value[..50])
+            } else {
+                text_value
+            };
+            format!("Typed '{display_text}' into element at {label}")
         };
-        Ok(BrowserOutput::success(format!(
-            "Typed '{display_text}' into element at {label}"
-        )))
+
+        Ok(BrowserOutput::success(message))
     }
 }
 
@@ -2052,7 +2114,9 @@ pub fn register_browser_tools(
         Arc::new(Mutex::new(BrowserState::new()))
     };
 
-    let context = BrowserContext::new(state, config, screenshot_dir);
+    let secrets = runtime_config.secrets.load().as_ref().as_ref().cloned();
+
+    let context = BrowserContext::new(state, config, screenshot_dir, secrets);
 
     server
         .tool(BrowserLaunchTool {

@@ -402,14 +402,29 @@ impl SpacebotHook {
             return false;
         }
 
-        // Text-only response without a prior outcome signal — nudge.
-        response.choice.iter().any(|content| {
+        // Response without tool calls and without a prior outcome signal.
+        // Nudge if the response contains any non-empty text, OR if it
+        // contains no text at all (e.g. reasoning-only). A response that
+        // is purely reasoning/image with no text and no tool calls means
+        // the worker hasn't actually done anything — send it back.
+        let has_any_text = response.choice.iter().any(|content| {
             if let rig::message::AssistantContent::Text(text) = content {
                 !text.text.trim().is_empty()
             } else {
                 false
             }
-        })
+        });
+
+        // Nudge on non-empty text (worker tried to narrate instead of
+        // working) or on no text at all (reasoning-only exit attempt).
+        has_any_text
+            || !response.choice.iter().any(|content| {
+                matches!(
+                    content,
+                    rig::message::AssistantContent::Text(_)
+                        | rig::message::AssistantContent::ToolCall(_)
+                )
+            })
     }
 }
 
@@ -1133,5 +1148,44 @@ mod tests {
                 ..
             } if text_delta == "hi" && aggregated_text == "hi"
         ));
+    }
+
+    #[tokio::test]
+    async fn nudges_on_reasoning_only_response_without_outcome() {
+        // A response with only Reasoning content (no Text, no ToolCall) should
+        // trigger a nudge. This is the exact bug case: models with extended
+        // thinking produce a Reasoning block and exit the agent loop without
+        // doing any work.
+        let hook = make_hook().with_tool_nudge_policy(ToolNudgePolicy::Enabled);
+        let prompt = prompt_message();
+        hook.reset_tool_nudge_state();
+        hook.set_tool_nudge_request_active(true);
+
+        let reasoning_response = CompletionResponse {
+            choice: OneOrMany::one(AssistantContent::reasoning("thinking about the task...")),
+            message_id: None,
+            usage: Usage::default(),
+            raw_response: RawResponse {
+                body: serde_json::json!({}),
+            },
+        };
+
+        let _ =
+            <SpacebotHook as PromptHook<SpacebotModel>>::on_completion_call(&hook, &prompt, &[])
+                .await;
+        let response = <SpacebotHook as PromptHook<SpacebotModel>>::on_completion_response(
+            &hook,
+            &prompt,
+            &reasoning_response,
+        )
+        .await;
+        assert!(
+            matches!(
+                response,
+                HookAction::Terminate { ref reason }
+                if reason == SpacebotHook::TOOL_NUDGE_REASON
+            ),
+            "Expected nudge — reasoning-only response without outcome should be rejected"
+        );
     }
 }

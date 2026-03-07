@@ -22,11 +22,14 @@ Workers must explicitly signal a terminal outcome via `set_status(kind: "outcome
 Worker loop starts
   → LLM completion
   → If response includes tool calls → continue normally
-  → If text-only response:
+  → If response has no tool calls:
     → Has outcome been signaled via set_status(kind: "outcome")? → allow exit
-    → No outcome signal? → Terminate with "tool_nudge" reason → retry with nudge prompt
-    → Max 2 retries per prompt request
-    → If retries exhausted → worker fails (PromptCancelled)
+    → No outcome signal?
+      → Response has text OR is reasoning-only (no text, no tools)?
+        → Terminate with "tool_nudge" reason → retry with nudge prompt
+      → Max 2 retries per prompt request
+      → If retries exhausted → worker fails (PromptCancelled)
+  → After initial task loop: if result text is empty → worker fails (safety net)
 ```
 
 ### Outcome Signaling
@@ -62,8 +65,11 @@ let hook = SpacebotHook::new(...)
 - The flag persists for the rest of the prompt request
 
 **Nudge decision** (`src/hooks/spacebot.rs:should_nudge_tool_usage`):
-- Returns `true` when: policy enabled, nudge active, no outcome signaled, response is text-only
+- Returns `true` when: policy enabled, nudge active, no outcome signaled, AND response has no tool calls (either non-empty text or reasoning-only with no text)
 - Returns `false` when: outcome signaled, response has tool calls, policy disabled
+
+**Empty result guard** (`src/agent/worker.rs`):
+- After the initial task loop, if the result text is empty/whitespace-only, the worker fails instead of reaching `Done`. This is a safety net for cases where a reasoning-only response slips past the nudge gate (e.g. after nudge retries are exhausted).
 
 **Retry flow** (`prompt_with_tool_nudge_retry`):
 1. Reset nudge state at start of prompt (clears `outcome_signaled`)
@@ -100,6 +106,7 @@ The nudging behavior has comprehensive test coverage:
 - **Unit tests** (`src/hooks/spacebot.rs`):
   - `nudges_on_every_text_only_response_without_outcome` — nudge fires on every text-only response
   - `nudges_after_tool_calls_without_outcome` — the exact bug case (read_skill + progress status + text exit)
+  - `nudges_on_reasoning_only_response_without_outcome` — nudge fires when response is only Reasoning blocks (no text, no tools)
   - `outcome_signal_allows_text_only_completion` — outcome signal unlocks exit
   - `progress_status_does_not_signal_outcome` — explicit progress kind doesn't unlock
   - `default_status_kind_does_not_signal_outcome` — omitted kind doesn't unlock
