@@ -253,7 +253,34 @@ pub async fn remove_worktree(repo_path: &Path, worktree_path: &Path) -> anyhow::
     Ok(())
 }
 
-/// Get the origin remote URL for a repo.
+/// Strip embedded credentials (userinfo) from a URL.
+///
+/// `https://user:token@github.com/org/repo.git` → `https://github.com/org/repo.git`
+/// Non-URL remotes (e.g., SSH `git@...`) are returned as-is.
+fn scrub_remote_url(url: &str) -> String {
+    // Only strip from http(s) URLs that contain a `@` before the first `/` after `://`.
+    if let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    {
+        let scheme = if url.starts_with("https://") {
+            "https://"
+        } else {
+            "http://"
+        };
+        if let Some(at_pos) = rest.find('@') {
+            // Only strip if `@` comes before the first `/` (i.e., it's in the authority).
+            let slash_pos = rest.find('/').unwrap_or(rest.len());
+            if at_pos < slash_pos {
+                return format!("{scheme}{}", &rest[at_pos + 1..]);
+            }
+        }
+        return url.to_string();
+    }
+    url.to_string()
+}
+
+/// Get the origin remote URL for a repo. Credentials are scrubbed from HTTPS URLs.
 async fn get_remote_url(repo_path: &Path) -> Option<String> {
     let output = Command::new("git")
         .args(["remote", "get-url", "origin"])
@@ -267,7 +294,11 @@ async fn get_remote_url(repo_path: &Path) -> Option<String> {
     }
 
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if url.is_empty() { None } else { Some(url) }
+    if url.is_empty() {
+        None
+    } else {
+        Some(scrub_remote_url(&url))
+    }
 }
 
 /// Get the currently checked-out branch for a repo.

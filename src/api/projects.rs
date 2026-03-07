@@ -14,6 +14,37 @@ use crate::projects::store::{
 };
 
 // ---------------------------------------------------------------------------
+// Path sanitization
+// ---------------------------------------------------------------------------
+
+/// Reject paths that contain traversal components (`..`) or are absolute.
+/// Returns the cleaned relative path on success.
+fn sanitize_relative_path(path: &str) -> Result<String, StatusCode> {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    for component in p.components() {
+        match component {
+            std::path::Component::ParentDir => return Err(StatusCode::BAD_REQUEST),
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            _ => {}
+        }
+    }
+    Ok(path.to_string())
+}
+
+/// Validate that a name is a single normal path segment (no `/`, `\`, `..`).
+fn sanitize_segment(name: &str) -> Result<String, StatusCode> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." || name == "." {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(name.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Query / request types
 // ---------------------------------------------------------------------------
 
@@ -558,11 +589,14 @@ pub(super) async fn create_repo(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    // Sanitize the path — must be relative, no traversal components.
+    let path = sanitize_relative_path(&request.path)?;
+
     let repo = store
         .create_repo(CreateRepoInput {
             project_id,
             name: request.name,
-            path: request.path,
+            path,
             remote_url: request.remote_url.unwrap_or_default(),
             default_branch: request.default_branch.unwrap_or_else(|| "main".into()),
             current_branch: None,
@@ -580,11 +614,24 @@ pub(super) async fn create_repo(
 /// DELETE /agents/projects/{project_id}/repos/{repo_id} — remove a repo.
 pub(super) async fn delete_repo(
     State(state): State<Arc<ApiState>>,
-    Path((_, repo_id)): Path<(String, String)>,
+    Path((project_id, repo_id)): Path<(String, String)>,
     Query(query): Query<AgentQuery>,
 ) -> Result<Json<ActionResponse>, StatusCode> {
     let stores = state.project_stores.load();
     let store = stores.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    // Verify the repo belongs to this project.
+    let repo = store
+        .get_repo(&repo_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "failed to get repo");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if repo.project_id != project_id {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
     let deleted = store.delete_repo(&repo_id).await.map_err(|error| {
         tracing::error!(%error, "failed to delete repo");
@@ -629,13 +676,19 @@ pub(super) async fn create_worktree(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    // Verify the repo belongs to this project.
+    if repo.project_id != project_id {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
     let root = std::path::PathBuf::from(&project.root_path);
     let repo_abs_path = root.join(&repo.path);
 
-    // Determine worktree name and path.
+    // Determine worktree name and path — sanitize to prevent traversal.
     let worktree_name = request
         .worktree_name
         .unwrap_or_else(|| request.branch.replace('/', "-"));
+    let worktree_name = sanitize_segment(&worktree_name)?;
     let worktree_abs_path = root.join(&worktree_name);
 
     // Create the git worktree.
@@ -689,6 +742,11 @@ pub(super) async fn delete_worktree(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    // Verify the worktree belongs to this project.
+    if worktree.project_id != project_id {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
     let project = store
         .get_project(&query.agent_id, &project_id)
         .await
@@ -712,10 +770,16 @@ pub(super) async fn delete_worktree(
     let repo_abs_path = root.join(&repo.path);
     let worktree_abs_path = root.join(&worktree.path);
 
-    if let Err(error) =
-        crate::projects::git::remove_worktree(&repo_abs_path, &worktree_abs_path).await
-    {
-        tracing::warn!(%error, "git worktree remove failed, deleting DB record anyway");
+    // Only delete the DB record if the git removal succeeds (or the directory
+    // no longer exists on disk). This prevents ghost worktrees on disk with no
+    // corresponding DB entry.
+    if worktree_abs_path.exists() {
+        crate::projects::git::remove_worktree(&repo_abs_path, &worktree_abs_path)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "git worktree remove failed");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
     }
 
     // Delete from database.
@@ -766,10 +830,14 @@ pub(super) async fn disk_usage(
 
     while let Ok(Some(entry)) = dir_entries.next_entry().await {
         let name = entry.file_name().to_string_lossy().to_string();
-        let metadata = match entry.metadata().await {
+        let metadata = match tokio::fs::symlink_metadata(entry.path()).await {
             Ok(m) => m,
             Err(_) => continue,
         };
+        // Skip symlinks entirely — don't follow them to avoid escaping the project root.
+        if metadata.is_symlink() {
+            continue;
+        }
         let is_dir = metadata.is_dir();
         let bytes = if is_dir {
             // For directories, approximate with a quick du.
@@ -793,7 +861,9 @@ pub(super) async fn disk_usage(
     }))
 }
 
-/// Recursively calculate directory size. Best-effort — skips entries it can't read.
+/// Recursively calculate directory size. Best-effort — skips entries it can't
+/// read. Uses `symlink_metadata` to avoid following symlinks (prevents infinite
+/// recursion and escaping project root).
 async fn dir_size(path: &std::path::Path) -> u64 {
     let mut total: u64 = 0;
     let mut stack = vec![path.to_path_buf()];
@@ -804,7 +874,7 @@ async fn dir_size(path: &std::path::Path) -> u64 {
             Err(_) => continue,
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
-            let metadata = match entry.metadata().await {
+            let metadata = match tokio::fs::symlink_metadata(entry.path()).await {
                 Ok(m) => m,
                 Err(_) => continue,
             };

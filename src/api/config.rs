@@ -819,7 +819,8 @@ fn update_projects_table(
         table["auto_discover_worktrees"] = toml_edit::value(auto_worktrees);
     }
     if let Some(threshold) = projects.disk_usage_warning_threshold {
-        table["disk_usage_warning_threshold"] = toml_edit::value(threshold as i64);
+        let clamped = i64::try_from(threshold).unwrap_or(i64::MAX);
+        table["disk_usage_warning_threshold"] = toml_edit::value(clamped);
     }
     Ok(())
 }

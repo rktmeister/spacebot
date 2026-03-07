@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
 	api,
@@ -258,6 +258,15 @@ function CreateWorktreeDialog({
 	const [branch, setBranch] = useState("");
 	const [worktreeName, setWorktreeName] = useState("");
 
+	// Reset form state when the dialog opens (repos list may have changed).
+	useEffect(() => {
+		if (open) {
+			setRepoId(repos[0]?.id ?? "");
+			setBranch("");
+			setWorktreeName("");
+		}
+	}, [open, repos]);
+
 	const createMutation = useMutation({
 		mutationFn: (request: CreateWorktreeRequest) =>
 			api.createProjectWorktree(agentId, projectId, request),
@@ -425,6 +434,7 @@ function RepoCard({
 						onClick={onDelete}
 						disabled={isDeleting}
 						className="h-6 w-6 text-red-500 hover:text-red-400"
+						aria-label={`Delete repo ${repo.name}`}
 					>
 						<svg
 							className="h-3 w-3"
@@ -511,6 +521,7 @@ function WorktreeCard({
 					onClick={onDelete}
 					disabled={isDeleting}
 					className="h-6 w-6 text-red-500 hover:text-red-400"
+					aria-label={`Delete worktree ${worktree.name}`}
 				>
 					<svg
 						className="h-3 w-3"

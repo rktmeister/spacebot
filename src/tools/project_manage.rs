@@ -464,12 +464,26 @@ impl ProjectManageTool {
             .map_err(|error| ProjectManageError(format!("failed to get project: {error}")))?
             .ok_or_else(|| ProjectManageError(format!("project not found: {project_id}")))?;
 
-        // Resolve to absolute path
+        let root = Path::new(&project.root_path);
+
+        // Resolve to absolute path — must end up inside the project root.
         let abs_path = if Path::new(&repo_path).is_absolute() {
             std::path::PathBuf::from(&repo_path)
         } else {
-            Path::new(&project.root_path).join(&repo_path)
+            root.join(&repo_path)
         };
+
+        // Canonicalize to resolve any `..` and ensure the path is within the project root.
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let canonical_abs = abs_path.canonicalize().unwrap_or_else(|_| abs_path.clone());
+        if !canonical_abs.starts_with(&canonical_root) {
+            return Ok(ProjectManageOutput {
+                success: false,
+                action: "add_repo".to_string(),
+                message: "repo path must be within the project root".to_string(),
+                data: None,
+            });
+        }
 
         if !abs_path.is_dir() {
             return Ok(ProjectManageOutput {
@@ -489,9 +503,9 @@ impl ProjectManageTool {
             });
         }
 
-        // Compute relative path from project root
-        let relative_path = abs_path
-            .strip_prefix(&project.root_path)
+        // Compute relative path from project root.
+        let relative_path = canonical_abs
+            .strip_prefix(&canonical_root)
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_else(|_| repo_path.clone());
 
@@ -568,9 +582,36 @@ impl ProjectManageTool {
             .map_err(|error| ProjectManageError(format!("failed to get repo: {error}")))?
             .ok_or_else(|| ProjectManageError(format!("repo not found: {repo_id}")))?;
 
+        // Verify the repo belongs to this project.
+        if repo.project_id != project_id {
+            return Ok(ProjectManageOutput {
+                success: false,
+                action: "create_worktree".to_string(),
+                message: format!("repo '{repo_id}' does not belong to project '{project_id}'"),
+                data: None,
+            });
+        }
+
         let worktree_dir_name = args
             .worktree_name
             .unwrap_or_else(|| branch.replace('/', "-"));
+
+        // Sanitize the worktree name — must be a single path segment, no traversal.
+        if worktree_dir_name.is_empty()
+            || worktree_dir_name.contains('/')
+            || worktree_dir_name.contains('\\')
+            || worktree_dir_name == ".."
+            || worktree_dir_name == "."
+        {
+            return Ok(ProjectManageOutput {
+                success: false,
+                action: "create_worktree".to_string(),
+                message: format!(
+                    "invalid worktree name '{worktree_dir_name}': must be a single directory name"
+                ),
+                data: None,
+            });
+        }
 
         let root = Path::new(&project.root_path);
         let repo_abs_path = root.join(&repo.path);
@@ -637,6 +678,18 @@ impl ProjectManageTool {
             .map_err(|error| ProjectManageError(format!("failed to get worktree: {error}")))?
             .ok_or_else(|| ProjectManageError(format!("worktree not found: {worktree_id}")))?;
 
+        // Verify the worktree belongs to this project.
+        if worktree.project_id != project_id {
+            return Ok(ProjectManageOutput {
+                success: false,
+                action: "remove_worktree".to_string(),
+                message: format!(
+                    "worktree '{worktree_id}' does not belong to project '{project_id}'"
+                ),
+                data: None,
+            });
+        }
+
         let repo = self
             .project_store
             .get_repo(&worktree.repo_id)
@@ -650,12 +703,17 @@ impl ProjectManageTool {
         let repo_abs_path = root.join(&repo.path);
         let worktree_abs_path = root.join(&worktree.path);
 
-        // Remove the git worktree (best-effort)
-        if let Err(error) = git::remove_worktree(&repo_abs_path, &worktree_abs_path).await {
-            tracing::warn!(%error, "git worktree remove failed, removing DB record anyway");
+        // Remove the git worktree — only delete the DB record if the directory
+        // is already gone or git removal succeeds.
+        if worktree_abs_path.exists() {
+            git::remove_worktree(&repo_abs_path, &worktree_abs_path)
+                .await
+                .map_err(|error| {
+                    ProjectManageError(format!("git worktree remove failed: {error}"))
+                })?;
         }
 
-        // Delete from database
+        // Delete from database.
         self.project_store
             .delete_worktree(&worktree_id)
             .await
@@ -699,17 +757,25 @@ impl ProjectManageTool {
             });
         }
 
-        // Calculate disk usage per top-level entry
+        // Calculate disk usage per top-level entry (async IO, no symlink following).
         let mut entries = Vec::new();
         let mut total_bytes: u64 = 0;
 
-        if let Ok(read_dir) = std::fs::read_dir(root) {
-            for entry in read_dir.flatten() {
-                let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+        if let Ok(mut read_dir) = tokio::fs::read_dir(root).await {
+            while let Ok(Some(entry)) = read_dir.next_entry().await {
+                let metadata = match tokio::fs::symlink_metadata(entry.path()).await {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                // Skip symlinks entirely.
+                if metadata.is_symlink() {
+                    continue;
+                }
+                let is_dir = metadata.is_dir();
                 let size = if is_dir {
-                    dir_size(&entry.path())
+                    dir_size_async(&entry.path()).await
                 } else {
-                    entry.metadata().map(|m| m.len()).unwrap_or(0)
+                    metadata.len()
                 };
                 total_bytes += size;
                 entries.push(serde_json::json!({
@@ -742,18 +808,27 @@ impl ProjectManageTool {
     }
 }
 
-/// Recursively calculate directory size in bytes.
-fn dir_size(path: &Path) -> u64 {
+/// Recursively calculate directory size in bytes (async, no symlink following).
+async fn dir_size_async(path: &Path) -> u64 {
     let mut total: u64 = 0;
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            if let Ok(ft) = entry.file_type() {
-                if ft.is_file() {
-                    total += entry.metadata().map(|m| m.len()).unwrap_or(0);
-                } else if ft.is_dir() {
-                    total += dir_size(&entry.path());
-                }
+    let mut stack = vec![path.to_path_buf()];
+
+    while let Some(current) = stack.pop() {
+        let mut entries = match tokio::fs::read_dir(&current).await {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let metadata = match tokio::fs::symlink_metadata(entry.path()).await {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if metadata.is_dir() {
+                stack.push(entry.path());
+            } else if metadata.is_file() {
+                total += metadata.len();
             }
+            // Skip symlinks.
         }
     }
     total

@@ -1063,7 +1063,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 						/>
 						<div className="flex flex-col gap-1.5">
 							<label className="text-sm font-medium text-ink">Worktree Name Template</label>
-							<p className="text-tiny text-ink-faint">Template for naming new worktrees. Use {"{"} branch {"}"} for the branch name.</p>
+							<p className="text-tiny text-ink-faint">Template for naming new worktrees. Use <code className="text-ink-dull">{"{branch}"}</code> for the branch name.</p>
 							<Input
 								value={localValues.worktree_name_template as string}
 								onChange={(e) => handleChange("worktree_name_template", e.target.value)}

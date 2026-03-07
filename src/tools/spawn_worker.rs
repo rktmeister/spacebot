@@ -274,9 +274,19 @@ async fn resolve_directory_from_project(
     if let Some(worktree_id) = worktree_id
         && let Ok(Some(worktree)) = store.get_worktree(worktree_id).await
     {
-        // Need the project to resolve the absolute path.
-        let pid = project_id.unwrap_or(&worktree.project_id);
-        if let Ok(Some(project)) = store.get_project(agent_id, pid).await {
+        // Always use the worktree's own project_id to resolve the path.
+        // If the caller also provided a project_id, verify it matches.
+        if let Some(pid) = project_id
+            && pid != worktree.project_id
+        {
+            tracing::warn!(
+                worktree_id,
+                provided_project_id = pid,
+                actual_project_id = %worktree.project_id,
+                "project_id/worktree_id mismatch — using worktree's project"
+            );
+        }
+        if let Ok(Some(project)) = store.get_project(agent_id, &worktree.project_id).await {
             let abs_path = std::path::Path::new(&project.root_path).join(&worktree.path);
             return Some(abs_path.to_string_lossy().to_string());
         }
