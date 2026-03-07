@@ -352,6 +352,7 @@ pub async fn spawn_worker_from_state(
         None => Vec::new(),
     };
 
+    let browser_config = (**rc.browser_config.load()).clone();
     let worker_system_prompt = prompt_engine
         .render_worker_prompt(
             &rc.instance_dir.display().to_string(),
@@ -361,10 +362,10 @@ pub async fn spawn_worker_from_state(
             sandbox_read_allowlist,
             sandbox_write_allowlist,
             &tool_secret_names,
+            browser_config.persist_session,
         )
         .map_err(|e| AgentError::Other(anyhow::anyhow!("{e}")))?;
     let skills = rc.skills.load();
-    let browser_config = (**rc.browser_config.load()).clone();
     let brave_search_key = (**rc.brave_search_key.load()).clone();
 
     // Append skills listing to worker system prompt. Suggested skills are
@@ -887,6 +888,7 @@ pub async fn resume_idle_worker_into_state(
                 Some(store) => store.tool_secret_names(),
                 None => Vec::new(),
             };
+            let browser_config = (**rc.browser_config.load()).clone();
             let system_prompt = prompt_engine
                 .render_worker_prompt(
                     &rc.instance_dir.display().to_string(),
@@ -896,9 +898,9 @@ pub async fn resume_idle_worker_into_state(
                     sandbox_read_allowlist,
                     sandbox_write_allowlist,
                     &tool_secret_names,
+                    browser_config.persist_session,
                 )
                 .map_err(|error| format!("failed to render worker prompt: {error}"))?;
-            let browser_config = (**rc.browser_config.load()).clone();
             let brave_search_key = (**rc.brave_search_key.load()).clone();
 
             let (worker, input_tx) = Worker::resume_interactive(

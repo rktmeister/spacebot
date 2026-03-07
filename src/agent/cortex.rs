@@ -2398,6 +2398,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         None => Vec::new(),
     };
 
+    let browser_persist_session = deps.runtime_config.browser_config.load().persist_session;
     let worker_system_prompt = prompt_engine
         .render_worker_prompt(
             &deps.runtime_config.instance_dir.display().to_string(),
@@ -2407,6 +2408,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
             sandbox_read_allowlist,
             sandbox_write_allowlist,
             &tool_secret_names,
+            browser_persist_session,
         )
         .map_err(|error| anyhow::anyhow!("failed to render worker prompt: {error}"))?;
 
