@@ -123,6 +123,19 @@ fn is_v4_mapped_blocked(ip: std::net::Ipv6Addr) -> bool {
     }
 }
 
+// Debug helpers
+
+fn value_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
 // Page readiness helper
 
 /// Wait for the page to be "ready enough" for DOM extraction.
@@ -585,9 +598,22 @@ impl BrowserContext {
 
         let value = result.value().cloned().unwrap_or(serde_json::Value::Null);
 
+        tracing::debug!(
+            value_type = ?value_type_name(&value),
+            value_len = value.as_str().map(|s| s.len()),
+            "DOM extraction raw CDP result"
+        );
+
         // The JS wraps the result in JSON.stringify(), so we get a string back
         let json_value = if let Some(json_str) = value.as_str() {
-            serde_json::from_str::<serde_json::Value>(json_str).unwrap_or(serde_json::Value::Null)
+            serde_json::from_str::<serde_json::Value>(json_str).map_err(|error| {
+                tracing::warn!(
+                    json_preview = &json_str[..json_str.len().min(200)],
+                    %error,
+                    "failed to parse DOM extraction JSON string"
+                );
+                BrowserError::new(format!("failed to parse DOM extraction JSON: {error}"))
+            })?
         } else {
             value
         };
@@ -908,6 +934,11 @@ impl Tool for BrowserSnapshotTool {
         // Force a fresh snapshot
         state.invalidate_snapshot();
         let snapshot = self.context.extract_snapshot(&mut state).await?;
+
+        // Surface any JS-level errors from the extraction script
+        if let Some(ref error) = snapshot.error {
+            return Err(BrowserError::new(format!("DOM extraction failed: {error}")));
+        }
 
         let rendered = snapshot.render();
         let element_count = snapshot.selectors.len();

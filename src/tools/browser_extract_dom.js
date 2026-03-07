@@ -1,6 +1,6 @@
 // ARIA Snapshot DOM Extraction
 // Based on Playwright's ariaSnapshot.ts - generates ARIA-tree structure for AI consumption
-JSON.stringify((function() {
+(function() {
     'use strict';
     
     let currentIndex = 0;
@@ -755,18 +755,21 @@ JSON.stringify((function() {
         // Serialize and return
         const serialized = serializeAriaNode(snapshot);
         
-        return {
+        const result = {
             root: serialized,
             selectors: selectors,
             iframe_indices: iframe_indices
         };
+
+        // Stringify inside try/catch so we catch circular-ref or size errors
+        return JSON.stringify(result);
         
     } catch (error) {
-        return {
-            error: error.toString(),
+        return JSON.stringify({
+            error: error.toString() + ' | stack: ' + (error.stack || 'none'),
             root: { role: 'fragment', name: '', children: [], props: {}, box_info: { visible: false } },
             selectors: [],
             iframe_indices: []
-        };
+        });
     }
 })())
