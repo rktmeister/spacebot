@@ -1248,18 +1248,16 @@ impl BrowserTool {
                 // Clean up the user data dir — but only for ephemeral sessions.
                 // Persistent profiles hold cookies and login sessions that must
                 // survive browser restarts.
-                if !persistent_profile {
-                    if let Some(dir) = user_data_dir {
-                        tokio::spawn(async move {
-                            if let Err(error) = tokio::fs::remove_dir_all(&dir).await {
-                                tracing::debug!(
-                                    path = %dir.display(),
-                                    %error,
-                                    "failed to clean up browser user data dir"
-                                );
-                            }
-                        });
-                    }
+                if !persistent_profile && let Some(dir) = user_data_dir {
+                    tokio::spawn(async move {
+                        if let Err(error) = tokio::fs::remove_dir_all(&dir).await {
+                            tracing::debug!(
+                                path = %dir.display(),
+                                %error,
+                                "failed to clean up browser user data dir"
+                            );
+                        }
+                    });
                 }
 
                 tracing::info!(policy = "close_browser", "browser closed");
