@@ -14,7 +14,7 @@ use super::{
     CoalesceConfig, CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
     DiscordInstanceConfig, EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig,
     LinkDef, LlmConfig, McpServerConfig, McpTransport, MemoryPersistenceConfig, MessagingConfig,
-    MetricsConfig, OpenCodeConfig, ProviderConfig, SlackCommandConfig, SlackConfig,
+    MetricsConfig, OpenCodeConfig, ProjectsConfig, ProviderConfig, SlackCommandConfig, SlackConfig,
     SlackInstanceConfig, TelegramConfig, TelegramInstanceConfig, TelemetryConfig, TwitchConfig,
     TwitchInstanceConfig, WarmupConfig, WebhookConfig, normalize_adapter,
     validate_named_messaging_adapters,
@@ -813,6 +813,7 @@ impl Config {
             cron_timezone: None,
             user_timezone: None,
             sandbox: None,
+            projects: None,
             cron: Vec::new(),
         }];
 
@@ -1519,6 +1520,31 @@ impl Config {
                 .as_deref()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(base_defaults.worker_log_mode),
+            projects: toml
+                .defaults
+                .projects
+                .map(|p| {
+                    let base = &base_defaults.projects;
+                    ProjectsConfig {
+                        use_worktrees: p.use_worktrees.unwrap_or(base.use_worktrees),
+                        worktree_name_template: p
+                            .worktree_name_template
+                            .unwrap_or_else(|| base.worktree_name_template.clone()),
+                        auto_create_worktrees: p
+                            .auto_create_worktrees
+                            .unwrap_or(base.auto_create_worktrees),
+                        auto_discover_repos: p
+                            .auto_discover_repos
+                            .unwrap_or(base.auto_discover_repos),
+                        auto_discover_worktrees: p
+                            .auto_discover_worktrees
+                            .unwrap_or(base.auto_discover_worktrees),
+                        disk_usage_warning_threshold: p
+                            .disk_usage_warning_threshold
+                            .unwrap_or(base.disk_usage_warning_threshold),
+                    }
+                })
+                .unwrap_or_else(|| base_defaults.projects.clone()),
         };
 
         let mut agents: Vec<AgentConfig> = toml
@@ -1650,6 +1676,27 @@ impl Config {
                     cron_timezone: a.cron_timezone.as_deref().and_then(resolve_env_value),
                     user_timezone: a.user_timezone.as_deref().and_then(resolve_env_value),
                     sandbox: a.sandbox,
+                    projects: a.projects.map(|p| {
+                        let base = &defaults.projects;
+                        ProjectsConfig {
+                            use_worktrees: p.use_worktrees.unwrap_or(base.use_worktrees),
+                            worktree_name_template: p
+                                .worktree_name_template
+                                .unwrap_or_else(|| base.worktree_name_template.clone()),
+                            auto_create_worktrees: p
+                                .auto_create_worktrees
+                                .unwrap_or(base.auto_create_worktrees),
+                            auto_discover_repos: p
+                                .auto_discover_repos
+                                .unwrap_or(base.auto_discover_repos),
+                            auto_discover_worktrees: p
+                                .auto_discover_worktrees
+                                .unwrap_or(base.auto_discover_worktrees),
+                            disk_usage_warning_threshold: p
+                                .disk_usage_warning_threshold
+                                .unwrap_or(base.disk_usage_warning_threshold),
+                        }
+                    }),
                     cron,
                 })
             })
@@ -1681,6 +1728,7 @@ impl Config {
                 cron_timezone: None,
                 user_timezone: None,
                 sandbox: None,
+                projects: None,
                 cron: Vec::new(),
             });
         }

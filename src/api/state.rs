@@ -11,6 +11,7 @@ use crate::mcp::McpManager;
 use crate::memory::{EmbeddingModel, MemorySearch};
 use crate::messaging::MessagingManager;
 use crate::messaging::webchat::WebChatAdapter;
+use crate::projects::ProjectStore;
 use crate::prompts::PromptEngine;
 use crate::tasks::TaskStore;
 use crate::update::SharedUpdateStatus;
@@ -69,6 +70,8 @@ pub struct ApiState {
     pub cron_schedulers: arc_swap::ArcSwap<HashMap<String, Arc<Scheduler>>>,
     /// Per-agent task stores for task CRUD operations.
     pub task_stores: arc_swap::ArcSwap<HashMap<String, Arc<TaskStore>>>,
+    /// Per-agent project stores for project/repo/worktree CRUD operations.
+    pub project_stores: arc_swap::ArcSwap<HashMap<String, Arc<ProjectStore>>>,
     /// Per-agent RuntimeConfig for reading live hot-reloaded configuration.
     pub runtime_configs: ArcSwap<HashMap<String, Arc<RuntimeConfig>>>,
     /// Per-agent MCP managers for status and reconnect APIs.
@@ -280,6 +283,7 @@ impl ApiState {
             cron_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             cron_schedulers: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             task_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
+            project_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             runtime_configs: ArcSwap::from_pointee(HashMap::new()),
             mcp_managers: ArcSwap::from_pointee(HashMap::new()),
             sandboxes: ArcSwap::from_pointee(HashMap::new()),
@@ -689,6 +693,11 @@ impl ApiState {
     /// Set the task stores for all agents.
     pub fn set_task_stores(&self, stores: HashMap<String, Arc<TaskStore>>) {
         self.task_stores.store(Arc::new(stores));
+    }
+
+    /// Set the project stores for all agents.
+    pub fn set_project_stores(&self, stores: HashMap<String, Arc<ProjectStore>>) {
+        self.project_stores.store(Arc::new(stores));
     }
 
     /// Set the runtime configs for all agents.

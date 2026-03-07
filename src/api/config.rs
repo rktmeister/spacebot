@@ -93,6 +93,16 @@ pub(super) struct SandboxSection {
 }
 
 #[derive(Serialize, Debug)]
+pub(super) struct ProjectsSection {
+    use_worktrees: bool,
+    worktree_name_template: String,
+    auto_create_worktrees: bool,
+    auto_discover_repos: bool,
+    auto_discover_worktrees: bool,
+    disk_usage_warning_threshold: u64,
+}
+
+#[derive(Serialize, Debug)]
 pub(super) struct DiscordSection {
     enabled: bool,
     allow_bot_messages: bool,
@@ -110,6 +120,7 @@ pub(super) struct AgentConfigResponse {
     browser: BrowserSection,
     channel: ChannelSection,
     sandbox: SandboxSection,
+    projects: ProjectsSection,
     discord: DiscordSection,
 }
 
@@ -141,6 +152,8 @@ pub(super) struct AgentConfigUpdateRequest {
     channel: Option<ChannelUpdate>,
     #[serde(default)]
     sandbox: Option<SandboxUpdate>,
+    #[serde(default)]
+    projects: Option<ProjectsUpdate>,
     #[serde(default)]
     discord: Option<DiscordUpdate>,
 }
@@ -231,6 +244,16 @@ pub(super) struct SandboxUpdate {
 }
 
 #[derive(Deserialize, Debug)]
+pub(super) struct ProjectsUpdate {
+    use_worktrees: Option<bool>,
+    worktree_name_template: Option<String>,
+    auto_create_worktrees: Option<bool>,
+    auto_discover_repos: Option<bool>,
+    auto_discover_worktrees: Option<bool>,
+    disk_usage_warning_threshold: Option<u64>,
+}
+
+#[derive(Deserialize, Debug)]
 pub(super) struct DiscordUpdate {
     allow_bot_messages: Option<bool>,
 }
@@ -255,6 +278,7 @@ pub(super) async fn get_agent_config(
     let browser = rc.browser_config.load();
     let channel = rc.channel_config.load();
     let sandbox = rc.sandbox.load();
+    let projects = rc.projects.load();
 
     let response = AgentConfigResponse {
         routing: RoutingSection {
@@ -328,6 +352,14 @@ pub(super) async fn get_agent_config(
                 .map(|p| p.display().to_string())
                 .collect(),
             passthrough_env: sandbox.passthrough_env.clone(),
+        },
+        projects: ProjectsSection {
+            use_worktrees: projects.use_worktrees,
+            worktree_name_template: projects.worktree_name_template.clone(),
+            auto_create_worktrees: projects.auto_create_worktrees,
+            auto_discover_repos: projects.auto_discover_repos,
+            auto_discover_worktrees: projects.auto_discover_worktrees,
+            disk_usage_warning_threshold: projects.disk_usage_warning_threshold,
         },
         discord: {
             let perms = state.discord_permissions.read().await;
@@ -407,6 +439,9 @@ pub(super) async fn update_agent_config(
     }
     if let Some(sandbox) = &request.sandbox {
         update_sandbox_table(&mut doc, agent_idx, sandbox)?;
+    }
+    if let Some(projects) = &request.projects {
+        update_projects_table(&mut doc, agent_idx, projects)?;
     }
     if let Some(discord) = &request.discord {
         update_discord_table(&mut doc, discord)?;
@@ -757,6 +792,35 @@ fn update_sandbox_table(
             array.push(var_name.as_str());
         }
         table["passthrough_env"] = toml_edit::value(array);
+    }
+    Ok(())
+}
+
+fn update_projects_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+    projects: &ProjectsUpdate,
+) -> Result<(), StatusCode> {
+    let agent = get_agent_table_mut(doc, agent_idx)?;
+    let table = get_or_create_subtable(agent, "projects")?;
+    if let Some(use_worktrees) = projects.use_worktrees {
+        table["use_worktrees"] = toml_edit::value(use_worktrees);
+    }
+    if let Some(ref template) = projects.worktree_name_template {
+        table["worktree_name_template"] = toml_edit::value(template.as_str());
+    }
+    if let Some(auto_create) = projects.auto_create_worktrees {
+        table["auto_create_worktrees"] = toml_edit::value(auto_create);
+    }
+    if let Some(auto_repos) = projects.auto_discover_repos {
+        table["auto_discover_repos"] = toml_edit::value(auto_repos);
+    }
+    if let Some(auto_worktrees) = projects.auto_discover_worktrees {
+        table["auto_discover_worktrees"] = toml_edit::value(auto_worktrees);
+    }
+    if let Some(threshold) = projects.disk_usage_warning_threshold {
+        let clamped = i64::try_from(threshold).unwrap_or(i64::MAX);
+        table["disk_usage_warning_threshold"] = toml_edit::value(clamped);
     }
     Ok(())
 }
