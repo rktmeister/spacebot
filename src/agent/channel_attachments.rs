@@ -445,6 +445,9 @@ async fn download_text_attachment(
     ))
 }
 
+/// A saved attachment paired with its raw bytes, used to avoid re-downloading.
+pub(crate) type SavedAttachmentWithBytes = (SavedAttachmentMeta, Vec<u8>);
+
 /// Build LLM-ready `UserContent` from pre-downloaded bytes. Used when
 /// `save_attachments` is enabled so we don't re-download from the URL.
 ///

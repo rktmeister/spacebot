@@ -137,7 +137,7 @@ impl Tool for AttachmentRecallTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         match args.action.as_str() {
-            "list" => self.list_attachments(args.limit.min(50).max(1)).await,
+            "list" => self.list_attachments(args.limit.clamp(1, 50)).await,
             "get_path" => {
                 self.get_attachment_path(args.attachment_id.as_deref(), args.filename.as_deref())
                     .await

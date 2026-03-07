@@ -1150,7 +1150,7 @@ impl Channel {
         let mut pending_batch_entries: Vec<(
             String,
             Vec<crate::Attachment>,
-            Option<Vec<(channel_attachments::SavedAttachmentMeta, Vec<u8>)>>,
+            Option<Vec<channel_attachments::SavedAttachmentWithBytes>>,
         )> = Vec::new();
         let mut conversation_id = String::new();
         let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
