@@ -161,9 +161,14 @@ pub struct BrowserState {
     element_refs: HashMap<String, ElementRef>,
     /// Counter for generating element refs.
     next_ref: usize,
-    /// Per-launch temp directory for Chrome's user data. Cleaned up on drop to
-    /// prevent stale singleton locks from blocking subsequent launches.
+    /// Chrome's user data directory. For ephemeral sessions this is a random
+    /// temp dir cleaned up on drop. For persistent sessions this is a stable
+    /// path under the instance dir that survives agent restarts.
     user_data_dir: Option<PathBuf>,
+    /// When true, `user_data_dir` is a stable path that should NOT be deleted
+    /// on drop — it holds cookies, localStorage, and login sessions that must
+    /// survive across agent restarts.
+    persistent_profile: bool,
 }
 
 impl BrowserState {
@@ -176,6 +181,7 @@ impl BrowserState {
             element_refs: HashMap::new(),
             next_ref: 0,
             user_data_dir: None,
+            persistent_profile: false,
         }
     }
 }
@@ -184,6 +190,13 @@ impl Drop for BrowserState {
     fn drop(&mut self) {
         // Browser and handler task are dropped automatically —
         // chromiumoxide's Child has kill_on_drop(true).
+
+        // Persistent profiles store cookies, localStorage, and login sessions
+        // that must survive across agent restarts — never delete them.
+        if self.persistent_profile {
+            return;
+        }
+
         if let Some(dir) = self.user_data_dir.take() {
             // Offload sync fs cleanup to a blocking thread so we don't stall
             // the tokio worker that's dropping this state.
@@ -212,6 +225,7 @@ impl std::fmt::Debug for BrowserState {
             .field("pages", &self.pages.len())
             .field("active_target", &self.active_target)
             .field("element_refs", &self.element_refs.len())
+            .field("persistent_profile", &self.persistent_profile)
             .finish()
     }
 }
@@ -554,10 +568,16 @@ impl BrowserTool {
         //   4. Auto-download via BrowserFetcher (cached in chrome_cache_dir)
         let executable = resolve_chrome_executable(&self.config).await?;
 
-        // Use a unique temp dir per launch to avoid singleton lock collisions
-        // when multiple workers launch browsers or a previous session crashed.
-        let user_data_dir =
-            std::env::temp_dir().join(format!("spacebot-browser-{}", uuid::Uuid::new_v4()));
+        // Persistent sessions use a stable profile dir under chrome_cache_dir so
+        // cookies, localStorage, and login sessions survive across agent restarts.
+        // Ephemeral sessions use a random temp dir to avoid singleton lock collisions.
+        let (user_data_dir, persistent_profile) = if self.config.persist_session {
+            (self.config.chrome_cache_dir.join("profile"), true)
+        } else {
+            let dir =
+                std::env::temp_dir().join(format!("spacebot-browser-{}", uuid::Uuid::new_v4()));
+            (dir, false)
+        };
 
         let mut builder = ChromeConfig::builder()
             .no_sandbox()
@@ -594,12 +614,15 @@ impl BrowserTool {
             // the browser we just created and return success.
             drop(browser);
             handler_task.abort();
-            // Clean up the temp user data dir asynchronously so we don't block
-            // while holding the shared mutex.
-            let dir = user_data_dir;
-            tokio::spawn(async move {
-                let _ = tokio::fs::remove_dir_all(&dir).await;
-            });
+            // Clean up the temp user data dir — but only for ephemeral sessions.
+            // Persistent profiles use a shared stable path that the winner is
+            // actively using.
+            if !persistent_profile {
+                let dir = user_data_dir;
+                tokio::spawn(async move {
+                    let _ = tokio::fs::remove_dir_all(&dir).await;
+                });
+            }
 
             if self.config.persist_session {
                 return self.reconnect_existing_tabs(&mut state).await;
@@ -610,6 +633,7 @@ impl BrowserTool {
         state.browser = Some(browser);
         state._handler_task = Some(handler_task);
         state.user_data_dir = Some(user_data_dir);
+        state.persistent_profile = persistent_profile;
 
         tracing::info!("browser launched");
         Ok(BrowserOutput::success("Browser launched successfully"))
@@ -1196,16 +1220,17 @@ impl BrowserTool {
             ClosePolicy::CloseBrowser => {
                 // Take everything out of state under the lock, then do the
                 // actual teardown outside it.
-                let (browser, handler_task, user_data_dir) = {
+                let (browser, handler_task, user_data_dir, persistent_profile) = {
                     let mut state = self.state.lock().await;
                     let browser = state.browser.take();
                     let handler_task = state._handler_task.take();
                     let user_data_dir = state.user_data_dir.take();
+                    let persistent_profile = state.persistent_profile;
                     state.pages.clear();
                     state.active_target = None;
                     state.element_refs.clear();
                     state.next_ref = 0;
-                    (browser, handler_task, user_data_dir)
+                    (browser, handler_task, user_data_dir, persistent_profile)
                 };
 
                 if let Some(task) = handler_task {
@@ -1220,17 +1245,21 @@ impl BrowserTool {
                     return Err(BrowserError::new(message));
                 }
 
-                // Clean up the per-launch user data dir to free disk space.
-                if let Some(dir) = user_data_dir {
-                    tokio::spawn(async move {
-                        if let Err(error) = tokio::fs::remove_dir_all(&dir).await {
-                            tracing::debug!(
-                                path = %dir.display(),
-                                %error,
-                                "failed to clean up browser user data dir"
-                            );
-                        }
-                    });
+                // Clean up the user data dir — but only for ephemeral sessions.
+                // Persistent profiles hold cookies and login sessions that must
+                // survive browser restarts.
+                if !persistent_profile {
+                    if let Some(dir) = user_data_dir {
+                        tokio::spawn(async move {
+                            if let Err(error) = tokio::fs::remove_dir_all(&dir).await {
+                                tracing::debug!(
+                                    path = %dir.display(),
+                                    %error,
+                                    "failed to clean up browser user data dir"
+                                );
+                            }
+                        });
+                    }
                 }
 
                 tracing::info!(policy = "close_browser", "browser closed");
