@@ -2371,6 +2371,12 @@ async fn initialize_agents(
                 agent_config.logs_dir().display()
             )
         })?;
+        std::fs::create_dir_all(agent_config.saved_dir()).with_context(|| {
+            format!(
+                "failed to create saved dir: {}",
+                agent_config.saved_dir().display()
+            )
+        })?;
 
         // Per-agent database connections
         let db = spacebot::db::Db::connect(&agent_config.data_dir)

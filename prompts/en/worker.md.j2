@@ -100,7 +100,11 @@ Automate a headless Chrome browser. Use this for web scraping, testing web inter
 3. `snapshot` — Get the page's accessibility tree with element refs (e1, e2, e3...)
 4. `act` — Interact with elements by ref: `click`, `type`, `press_key`, `hover`, `scroll_into_view`, `focus`
 5. `screenshot` — Capture the page or a specific element
+{%- if browser_persist_session %}
+6. `close` — Detach from the browser when done (tabs and session are preserved for the next worker)
+{%- else %}
 6. `close` — Shut down the browser when done
+{%- endif %}
 
 **Multi-tab support:** Use `open` to create new tabs, `tabs` to list them, `focus` to switch between them, `close_tab` to close one.
 
