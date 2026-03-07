@@ -57,10 +57,10 @@ impl PresetRegistry {
         // Discover preset directories by finding all meta.toml files
         for path in PresetAssets::iter() {
             let path_str = path.as_ref();
-            if path_str.ends_with("/meta.toml") {
-                if let Some(meta) = Self::load_meta(path_str) {
-                    presets.push(meta);
-                }
+            if path_str.ends_with("/meta.toml")
+                && let Some(meta) = Self::load_meta(path_str)
+            {
+                presets.push(meta);
             }
         }
 

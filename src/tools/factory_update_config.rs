@@ -197,27 +197,25 @@ impl Tool for FactoryUpdateConfigTool {
         }
 
         // Validate routing model names: check that the provider prefix is known
-        if let Some(routing) = &args.routing {
-            if let Some(ref llm_manager) = *self.state.llm_manager.read().await {
-                for (label, model) in [
-                    ("channel", &routing.channel),
-                    ("branch", &routing.branch),
-                    ("worker", &routing.worker),
-                    ("compactor", &routing.compactor),
-                    ("cortex", &routing.cortex),
-                ] {
-                    if let Some(model_name) = model {
-                        let (provider_id, _) =
-                            llm_manager.resolve_model(model_name).map_err(|error| {
-                                FactoryUpdateConfigError(format!(
-                                    "invalid model for {label}: {error}"
-                                ))
-                            })?;
-                        if llm_manager.get_provider(&provider_id).is_err() {
-                            return Err(FactoryUpdateConfigError(format!(
-                                "provider '{provider_id}' (from model '{model_name}' for {label}) is not configured"
-                            )));
-                        }
+        if let Some(routing) = &args.routing
+            && let Some(ref llm_manager) = *self.state.llm_manager.read().await
+        {
+            for (label, model) in [
+                ("channel", &routing.channel),
+                ("branch", &routing.branch),
+                ("worker", &routing.worker),
+                ("compactor", &routing.compactor),
+                ("cortex", &routing.cortex),
+            ] {
+                if let Some(model_name) = model {
+                    let (provider_id, _) =
+                        llm_manager.resolve_model(model_name).map_err(|error| {
+                            FactoryUpdateConfigError(format!("invalid model for {label}: {error}"))
+                        })?;
+                    if llm_manager.get_provider(&provider_id).is_err() {
+                        return Err(FactoryUpdateConfigError(format!(
+                            "provider '{provider_id}' (from model '{model_name}' for {label}) is not configured"
+                        )));
                     }
                 }
             }
@@ -225,40 +223,40 @@ impl Tool for FactoryUpdateConfigTool {
 
         // Validate tuning value ranges
         if let Some(tuning) = &args.tuning {
-            if let Some(value) = tuning.max_concurrent_branches {
-                if value == 0 || value > 32 {
-                    return Err(FactoryUpdateConfigError(format!(
-                        "max_concurrent_branches must be between 1 and 32 (got {value})"
-                    )));
-                }
+            if let Some(value) = tuning.max_concurrent_branches
+                && (value == 0 || value > 32)
+            {
+                return Err(FactoryUpdateConfigError(format!(
+                    "max_concurrent_branches must be between 1 and 32 (got {value})"
+                )));
             }
-            if let Some(value) = tuning.max_concurrent_workers {
-                if value == 0 || value > 64 {
-                    return Err(FactoryUpdateConfigError(format!(
-                        "max_concurrent_workers must be between 1 and 64 (got {value})"
-                    )));
-                }
+            if let Some(value) = tuning.max_concurrent_workers
+                && (value == 0 || value > 64)
+            {
+                return Err(FactoryUpdateConfigError(format!(
+                    "max_concurrent_workers must be between 1 and 64 (got {value})"
+                )));
             }
-            if let Some(value) = tuning.max_turns {
-                if value == 0 || value > 100 {
-                    return Err(FactoryUpdateConfigError(format!(
-                        "max_turns must be between 1 and 100 (got {value})"
-                    )));
-                }
+            if let Some(value) = tuning.max_turns
+                && (value == 0 || value > 100)
+            {
+                return Err(FactoryUpdateConfigError(format!(
+                    "max_turns must be between 1 and 100 (got {value})"
+                )));
             }
-            if let Some(value) = tuning.branch_max_turns {
-                if value == 0 || value > 100 {
-                    return Err(FactoryUpdateConfigError(format!(
-                        "branch_max_turns must be between 1 and 100 (got {value})"
-                    )));
-                }
+            if let Some(value) = tuning.branch_max_turns
+                && (value == 0 || value > 100)
+            {
+                return Err(FactoryUpdateConfigError(format!(
+                    "branch_max_turns must be between 1 and 100 (got {value})"
+                )));
             }
-            if let Some(value) = tuning.context_window {
-                if value < 1000 || value > 2_000_000 {
-                    return Err(FactoryUpdateConfigError(format!(
-                        "context_window must be between 1000 and 2000000 (got {value})"
-                    )));
-                }
+            if let Some(value) = tuning.context_window
+                && !(1000..=2_000_000).contains(&value)
+            {
+                return Err(FactoryUpdateConfigError(format!(
+                    "context_window must be between 1000 and 2000000 (got {value})"
+                )));
             }
         }
 

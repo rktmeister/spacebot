@@ -127,12 +127,12 @@ impl Tool for FactoryUpdateIdentityTool {
             ("identity_content", &args.identity_content),
             ("role_content", &args.role_content),
         ] {
-            if let Some(content) = content {
-                if content.trim().is_empty() {
-                    return Err(FactoryUpdateIdentityError(format!(
-                        "{label} cannot be empty or whitespace-only"
-                    )));
-                }
+            if let Some(content) = content
+                && content.trim().is_empty()
+            {
+                return Err(FactoryUpdateIdentityError(format!(
+                    "{label} cannot be empty or whitespace-only"
+                )));
             }
         }
 

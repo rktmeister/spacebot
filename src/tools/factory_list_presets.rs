@@ -11,6 +11,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct FactoryListPresetsTool;
 
+impl Default for FactoryListPresetsTool {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl FactoryListPresetsTool {
     pub fn new() -> Self {
         Self
