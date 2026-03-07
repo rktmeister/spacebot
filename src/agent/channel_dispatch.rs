@@ -352,6 +352,7 @@ pub async fn spawn_worker_from_state(
         None => Vec::new(),
     };
 
+    let browser_config = (**rc.browser_config.load()).clone();
     let worker_system_prompt = prompt_engine
         .render_worker_prompt(
             &rc.instance_dir.display().to_string(),
@@ -361,10 +362,10 @@ pub async fn spawn_worker_from_state(
             sandbox_read_allowlist,
             sandbox_write_allowlist,
             &tool_secret_names,
+            browser_config.persist_session,
         )
         .map_err(|e| AgentError::Other(anyhow::anyhow!("{e}")))?;
     let skills = rc.skills.load();
-    let browser_config = (**rc.browser_config.load()).clone();
     let brave_search_key = (**rc.brave_search_key.load()).clone();
 
     // Append skills listing to worker system prompt. Suggested skills are
@@ -447,6 +448,7 @@ pub async fn spawn_worker_from_state(
             task: task.clone(),
             worker_type: "builtin".into(),
             interactive,
+            directory: None,
         })
         .ok();
 
@@ -613,14 +615,9 @@ pub async fn spawn_opencode_worker_from_state(
             task: opencode_task,
             worker_type: "opencode".into(),
             interactive,
+            directory: Some(persist_directory.to_string_lossy().to_string()),
         })
         .ok();
-
-    // Persist the directory so idle workers can be resumed into the correct
-    // directory after a restart.
-    state
-        .process_run_logger
-        .log_worker_directory(worker_id, &persist_directory);
 
     tracing::info!(worker_id = %worker_id, task = %task, interactive, "OpenCode worker spawned");
 
@@ -766,9 +763,10 @@ pub async fn resume_idle_worker_into_state(
                 .directory
                 .as_deref()
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| rc.workspace_dir.clone());
+                .ok_or("idle OpenCode worker has no directory persisted, cannot resume")?;
             let server_pool = rc.opencode_server_pool.load().clone();
 
+            let directory_str = directory.to_string_lossy().to_string();
             let result = crate::opencode::OpenCodeWorker::resume_interactive(
                 worker_id,
                 Some(state.channel_id.clone()),
@@ -861,6 +859,7 @@ pub async fn resume_idle_worker_into_state(
                     task: opencode_task,
                     worker_type: "opencode".into(),
                     interactive: true,
+                    directory: Some(directory_str.clone()),
                 })
                 .ok();
 
@@ -889,6 +888,7 @@ pub async fn resume_idle_worker_into_state(
                 Some(store) => store.tool_secret_names(),
                 None => Vec::new(),
             };
+            let browser_config = (**rc.browser_config.load()).clone();
             let system_prompt = prompt_engine
                 .render_worker_prompt(
                     &rc.instance_dir.display().to_string(),
@@ -898,9 +898,9 @@ pub async fn resume_idle_worker_into_state(
                     sandbox_read_allowlist,
                     sandbox_write_allowlist,
                     &tool_secret_names,
+                    browser_config.persist_session,
                 )
                 .map_err(|error| format!("failed to render worker prompt: {error}"))?;
-            let browser_config = (**rc.browser_config.load()).clone();
             let brave_search_key = (**rc.brave_search_key.load()).clone();
 
             let (worker, input_tx) = Worker::resume_interactive(
@@ -955,6 +955,7 @@ pub async fn resume_idle_worker_into_state(
                     task: idle_worker.task.clone(),
                     worker_type: "builtin".into(),
                     interactive: true,
+                    directory: None,
                 })
                 .ok();
 

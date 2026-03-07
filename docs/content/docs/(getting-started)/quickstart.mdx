@@ -58,11 +58,17 @@ cd spacebot
 # Optional: build the web UI (React + Vite, embedded into the binary)
 cd interface && bun install && cd ..
 
+# Optional: build the OpenCode embed (live coding UI in the Workers tab)
+# Requires Node 22+ (use fnm: fnm install v24.14.0 && fnm use v24.14.0)
+./scripts/build-opencode-embed.sh
+
 # Install the binary
 cargo install --path .
 ```
 
 The `build.rs` script automatically runs `bun run build` during compilation if `interface/node_modules` exists. Without it, the binary still works — you just get an empty UI on the web dashboard.
+
+The OpenCode embed step (`build-opencode-embed.sh`) clones OpenCode at a pinned commit, builds the embeddable SPA, and places it in `interface/public/opencode-embed/`. This is optional — without it, OpenCode workers still function normally, but the Workers tab will show a transcript view instead of the live interactive OpenCode UI.
 
 ## Configure
 
@@ -150,6 +156,60 @@ Each agent has three optional markdown files in its workspace (`~/.spacebot/agen
 | `USER.md`     | Info about the human the agent talks to  |
 
 Template files are created on first run. Edit them to shape the agent's personality. Changes are hot-reloaded (no restart needed).
+
+## Development setup
+
+To run a dev instance from source alongside an installed production instance, use `SPACEBOT_DIR` to give each its own data directory. Each instance gets separate databases, PID file, Unix socket, and logs — fully isolated.
+
+### 1. Create a dev instance directory
+
+```bash
+mkdir -p ~/.spacebot/dev
+```
+
+### 2. Add a dev config with different ports
+
+Create `~/.spacebot/dev/config.toml`:
+
+```toml
+[llm]
+anthropic_key = "env:ANTHROPIC_API_KEY"
+
+[[agents]]
+id = "main"
+
+# Use different ports so dev and prod don't conflict
+[api]
+port = 19899
+
+[messaging.webhook]
+port = 18790
+```
+
+### 3. Run both instances
+
+```bash
+# Production (installed binary, default ~/.spacebot)
+spacebot start
+
+# Dev (from source, separate data directory)
+SPACEBOT_DIR=~/.spacebot/dev cargo run -- start -f -d
+```
+
+The dev instance uses `~/.spacebot/dev/` for all data, and the production instance uses `~/.spacebot/` — they won't interfere with each other.
+
+You can also set `SPACEBOT_DIR` in a direnv `.envrc` so it applies automatically when you're in the project directory:
+
+```bash
+# .envrc in your spacebot source checkout
+export SPACEBOT_DIR="$HOME/.spacebot/dev"
+```
+
+Alternatively, use the `-c` flag to point at a specific config file (the instance directory is inferred as its parent):
+
+```bash
+cargo run -- -c ~/.spacebot/dev/config.toml start -f -d
+```
 
 ## Web UI
 

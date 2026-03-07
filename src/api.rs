@@ -17,6 +17,7 @@ mod memories;
 mod messaging;
 mod models;
 mod opencode_proxy;
+mod projects;
 mod providers;
 mod secrets;
 mod server;

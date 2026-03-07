@@ -100,6 +100,10 @@ impl PromptEngine {
             "fragments/org_context",
             crate::prompts::text::get("fragments/org_context"),
         )?;
+        env.add_template(
+            "fragments/projects_context",
+            crate::prompts::text::get("fragments/projects_context"),
+        )?;
 
         // System message fragments
         env.add_template(
@@ -255,6 +259,7 @@ impl PromptEngine {
         sandbox_read_allowlist: Vec<String>,
         sandbox_write_allowlist: Vec<String>,
         tool_secret_names: &[String],
+        browser_persist_session: bool,
     ) -> Result<String> {
         self.render(
             "worker",
@@ -266,6 +271,7 @@ impl PromptEngine {
                 sandbox_read_allowlist => sandbox_read_allowlist,
                 sandbox_write_allowlist => sandbox_write_allowlist,
                 tool_secret_names => tool_secret_names,
+                browser_persist_session => browser_persist_session,
             },
         )
     }
@@ -470,6 +476,7 @@ impl PromptEngine {
             sandbox_enabled,
             None,
             None,
+            None,
         )
     }
 
@@ -528,6 +535,16 @@ impl PromptEngine {
         )
     }
 
+    /// Render the projects context fragment listing active projects with repos and worktrees.
+    pub fn render_projects_context(&self, projects: Vec<ProjectContext>) -> Result<String> {
+        self.render(
+            "fragments/projects_context",
+            context! {
+                projects => projects,
+            },
+        )
+    }
+
     /// Render the channel system prompt with all dynamic components including org context.
     #[allow(clippy::too_many_arguments)]
     pub fn render_channel_prompt_with_links(
@@ -543,6 +560,7 @@ impl PromptEngine {
         sandbox_enabled: bool,
         org_context: Option<String>,
         adapter_prompt: Option<String>,
+        project_context: Option<String>,
     ) -> Result<String> {
         self.render(
             "channel",
@@ -558,6 +576,7 @@ impl PromptEngine {
                 sandbox_enabled => sandbox_enabled,
                 org_context => org_context,
                 adapter_prompt => adapter_prompt,
+                project_context => project_context,
             },
         )
     }
@@ -602,6 +621,35 @@ pub struct ChannelEntry {
     pub name: String,
     pub platform: String,
     pub id: String,
+}
+
+/// A project's context for prompt injection — repos and active worktrees.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProjectContext {
+    pub name: String,
+    pub root_path: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    pub repos: Vec<ProjectRepoContext>,
+    pub worktrees: Vec<ProjectWorktreeContext>,
+}
+
+/// A repo within a project for prompt injection.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProjectRepoContext {
+    pub name: String,
+    pub path: String,
+    pub default_branch: String,
+    pub remote_url: Option<String>,
+}
+
+/// A worktree within a project for prompt injection.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProjectWorktreeContext {
+    pub name: String,
+    pub path: String,
+    pub branch: String,
+    pub repo_name: String,
 }
 
 // All templates are now loaded from the centralized text registry (src/prompts/text.rs)

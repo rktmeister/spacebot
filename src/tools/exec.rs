@@ -170,20 +170,14 @@ impl Tool for ExecTool {
             };
             let canonical = resolved.canonicalize().unwrap_or(resolved);
 
-            if self.sandbox.mode_enabled() {
-                let workspace_canonical = self
-                    .workspace
-                    .canonicalize()
-                    .unwrap_or_else(|_| self.workspace.clone());
-                if !canonical.starts_with(&workspace_canonical) {
-                    return Err(ExecError {
-                        message: format!(
-                            "working_dir must be within the workspace ({}).",
-                            self.workspace.display()
-                        ),
-                        exit_code: -1,
-                    });
-                }
+            if self.sandbox.mode_enabled() && !self.sandbox.is_path_allowed(&canonical) {
+                return Err(ExecError {
+                    message: format!(
+                        "working_dir must be within the workspace ({}) or an allowed project path.",
+                        self.workspace.display()
+                    ),
+                    exit_code: -1,
+                });
             }
 
             canonical

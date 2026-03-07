@@ -18,6 +18,7 @@ pub mod memory;
 pub mod messaging;
 pub mod openai_auth;
 pub mod opencode;
+pub mod projects;
 pub mod prompts;
 pub mod sandbox;
 pub mod secrets;
@@ -165,6 +166,9 @@ pub enum ProcessEvent {
         task: String,
         worker_type: String,
         interactive: bool,
+        /// Working directory for the worker (used by OpenCode workers to
+        /// persist the directory for idle-worker resume).
+        directory: Option<String>,
     },
     WorkerStatus {
         agent_id: AgentId,
@@ -362,6 +366,7 @@ pub struct AgentDeps {
     pub llm_manager: Arc<llm::LlmManager>,
     pub mcp_manager: Arc<mcp::McpManager>,
     pub task_store: Arc<tasks::TaskStore>,
+    pub project_store: Arc<projects::ProjectStore>,
     pub cron_tool: Option<tools::CronTool>,
     pub runtime_config: Arc<config::RuntimeConfig>,
     pub event_tx: tokio::sync::broadcast::Sender<ProcessEvent>,

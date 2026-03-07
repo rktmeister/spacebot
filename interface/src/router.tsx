@@ -5,7 +5,8 @@ import {
 	createRoute,
 	Outlet,
 } from "@tanstack/react-router";
-import {BASE_PATH} from "@/api/client";
+import {useQuery} from "@tanstack/react-query";
+import {api, BASE_PATH} from "@/api/client";
 import {ConnectionBanner} from "@/components/ConnectionBanner";
 import {SetupBanner} from "@/components/SetupBanner";
 import {Sidebar} from "@/components/Sidebar";
@@ -20,6 +21,7 @@ import {AgentCron} from "@/routes/AgentCron";
 import {AgentIngest} from "@/routes/AgentIngest";
 import {AgentSkills} from "@/routes/AgentSkills";
 import {AgentWorkers} from "@/routes/AgentWorkers";
+import {AgentProjects} from "@/routes/AgentProjects";
 import {AgentTasks} from "@/routes/AgentTasks";
 import {AgentChat} from "@/routes/AgentChat";
 import {Settings} from "@/routes/Settings";
@@ -49,10 +51,27 @@ function RootLayout() {
 }
 
 function AgentHeader({agentId}: {agentId: string}) {
+	const agentsQuery = useQuery({
+		queryKey: ["agents"],
+		queryFn: () => api.agents(),
+		staleTime: 10_000,
+	});
+	const agent = agentsQuery.data?.agents.find((a) => a.id === agentId);
+	const displayName = agent?.display_name;
+
 	return (
 		<>
 			<header className="flex h-12 items-center border-b border-app-line bg-app-darkBox/50 px-6">
-				<h1 className="font-plex text-sm font-medium text-ink">{agentId}</h1>
+				<h1 className="font-plex text-sm font-medium text-ink">
+					{displayName ? (
+						<>
+							{displayName}
+							<span className="ml-2 text-ink-faint">{agentId}</span>
+						</>
+					) : (
+						agentId
+					)}
+				</h1>
 			</header>
 			<AgentTabs agentId={agentId} />
 		</>
@@ -203,6 +222,22 @@ const agentWorkersRoute = createRoute({
 	},
 });
 
+const agentProjectsRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: "/agents/$agentId/projects",
+	component: function AgentProjectsPage() {
+		const {agentId} = agentProjectsRoute.useParams();
+		return (
+			<div className="flex h-full flex-col">
+				<AgentHeader agentId={agentId} />
+				<div className="flex-1 overflow-hidden">
+					<AgentProjects agentId={agentId} />
+				</div>
+			</div>
+		);
+	},
+});
+
 const agentTasksRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: "/agents/$agentId/tasks",
@@ -322,6 +357,7 @@ const routeTree = rootRoute.addChildren([
 	agentMemoriesRoute,
 	agentIngestRoute,
 	agentWorkersRoute,
+	agentProjectsRoute,
 	agentTasksRoute,
 	agentCortexRoute,
 	agentSkillsRoute,

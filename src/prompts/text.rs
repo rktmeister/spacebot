@@ -128,6 +128,10 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         ("en", "fragments/coalesce_hint") => {
             include_str!("../../prompts/en/fragments/coalesce_hint.md.j2")
         }
+        // Projects Context
+        ("en", "fragments/projects_context") => {
+            include_str!("../../prompts/en/fragments/projects_context.md.j2")
+        }
 
         // Tool Descriptions
         ("en", "tools/reply") => include_str!("../../prompts/en/tools/reply_description.md.j2"),
@@ -194,6 +198,12 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         }
         ("en", "tools/config_inspect") => {
             include_str!("../../prompts/en/tools/config_inspect_description.md.j2")
+        }
+        ("en", "tools/project_manage") => {
+            include_str!("../../prompts/en/tools/project_manage_description.md.j2")
+        }
+        ("en", "tools/attachment_recall") => {
+            include_str!("../../prompts/en/tools/attachment_recall_description.md.j2")
         }
 
         // Fallback: unknown language or key -> try English
