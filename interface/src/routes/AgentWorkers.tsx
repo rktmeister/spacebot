@@ -10,7 +10,7 @@ import {
 	type TranscriptStep,
 	type OpenCodePart,
 } from "@/api/client";
-import {ToolCall, pairTranscriptSteps} from "@/components/ToolCall";
+import {ToolCall, pairTranscriptSteps, openCodePartToPair} from "@/components/ToolCall";
 import {Badge} from "@/ui/Badge";
 import {formatTimeAgo, formatDuration} from "@/lib/format";
 import {LiveDuration} from "@/components/LiveDuration";
@@ -1069,7 +1069,7 @@ function OpenCodePartView({part}: {part: OpenCodePart}) {
 				</div>
 			);
 		case "tool":
-			return <OpenCodeToolPartView part={part} />;
+			return <ToolCall pair={openCodePartToPair(part)} />;
 		case "step_start":
 			return (
 				<div className="flex items-center gap-2 border-t border-app-line/20 pt-3">
@@ -1093,93 +1093,4 @@ function OpenCodePartView({part}: {part: OpenCodePart}) {
 	}
 }
 
-function OpenCodeToolPartView({
-	part,
-}: {
-	part: Extract<OpenCodePart, {type: "tool"}>;
-}) {
-	const [expanded, setExpanded] = useState(false);
-	const isRunning = part.status === "running";
-	const isCompleted = part.status === "completed";
-	const isError = part.status === "error";
 
-	const statusIcon = isCompleted
-		? "\u2713"
-		: isError
-			? "\u2717"
-			: isRunning
-				? "\u25B6"
-				: "\u25CB";
-
-	const statusColor = isCompleted
-		? "text-emerald-500"
-		: isError
-			? "text-red-400"
-			: isRunning
-				? "text-accent"
-				: "text-ink-faint";
-
-	const title =
-		(part.status === "running" || part.status === "completed")
-			? (part as any).title
-			: undefined;
-
-	const input =
-		(part.status === "running" || part.status === "completed")
-			? (part as any).input
-			: undefined;
-
-	const output = part.status === "completed" ? (part as any).output : undefined;
-	const error = part.status === "error" ? (part as any).error : undefined;
-
-	return (
-		<div className="rounded-md border border-app-line/50 bg-app-darkBox/30">
-			<button
-				onClick={() => setExpanded(!expanded)}
-				className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs"
-			>
-				<span className={cx(statusColor, isRunning ? "animate-pulse" : "")}>
-					{statusIcon}
-				</span>
-				<span className="font-medium text-ink-dull">{part.tool}</span>
-				{title && (
-					<span className="flex-1 truncate text-ink-faint">{title}</span>
-				)}
-				{!title && !expanded && input && (
-					<span className="flex-1 truncate text-ink-faint">
-						{input.slice(0, 80)}
-					</span>
-				)}
-				{isRunning && (
-					<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-				)}
-			</button>
-			{expanded && (
-				<div className="border-t border-app-line/30">
-					{input && (
-						<div className="border-b border-app-line/20 px-3 py-2">
-							<p className="mb-1 text-tiny font-medium text-ink-faint">Input</p>
-							<pre className="max-h-40 overflow-auto font-mono text-tiny text-ink-dull">
-								{input}
-							</pre>
-						</div>
-					)}
-					{output && (
-						<div className="px-3 py-2">
-							<p className="mb-1 text-tiny font-medium text-ink-faint">Output</p>
-							<pre className="max-h-60 overflow-auto whitespace-pre-wrap font-mono text-tiny text-ink-dull">
-								{output.length > 500 ? output.slice(0, 500) + "..." : output}
-							</pre>
-						</div>
-					)}
-					{error && (
-						<div className="px-3 py-2">
-							<p className="mb-1 text-tiny font-medium text-red-400">Error</p>
-							<pre className="font-mono text-tiny text-red-300">{error}</pre>
-						</div>
-					)}
-				</div>
-			)}
-		</div>
-	);
-}

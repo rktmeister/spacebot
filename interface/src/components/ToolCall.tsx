@@ -1,6 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { cx } from "@/ui/utils";
-import type { ActionContent, TranscriptStep } from "@/api/client";
+import type { ActionContent, TranscriptStep, OpenCodePart } from "@/api/client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -23,6 +23,8 @@ export interface ToolCallPair {
 	result: Record<string, unknown> | null;
 	/** Current state */
 	status: ToolCallStatus;
+	/** Human-readable summary provided by live opencode parts */
+	title?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +90,47 @@ export function pairTranscriptSteps(steps: TranscriptStep[]): TranscriptItem[] {
 	}
 
 	return items;
+}
+
+/**
+ * Convert an OpenCode live part (tool type) into a ToolCallPair so it can be
+ * rendered by the unified ToolCall component.
+ */
+export function openCodePartToPair(
+	part: Extract<OpenCodePart, { type: "tool" }>,
+): ToolCallPair {
+	const input =
+		part.status === "running" || part.status === "completed"
+			? (part as any).input
+			: undefined;
+	const output =
+		part.status === "completed" ? (part as any).output : undefined;
+	const error =
+		part.status === "error" ? (part as any).error : undefined;
+	const title =
+		part.status === "running" || part.status === "completed"
+			? (part as any).title
+			: undefined;
+
+	const argsRaw = input ?? "";
+	const resultRaw = error ?? output ?? null;
+
+	return {
+		id: part.id,
+		name: part.tool,
+		argsRaw,
+		args: tryParseJson(argsRaw),
+		resultRaw,
+		result: resultRaw ? tryParseJson(resultRaw) : null,
+		status:
+			part.status === "error"
+				? "error"
+				: part.status === "completed"
+					? "completed"
+					: "running",
+		// Carry the title through for renderers that want it
+		title: title ?? null,
+	};
 }
 
 function tryParseJson(text: string): Record<string, unknown> | null {
@@ -337,12 +380,32 @@ const toolRenderers: Record<string, ToolRenderer> = {
 
 	file: {
 		summary(pair) {
+			if (pair.title) return pair.title;
 			const path = pair.args?.path;
-			const action = pair.args?.action;
-			if (action && path) {
-				return `${action}: ${truncate(String(path), 50)}`;
+			const op = pair.args?.operation ?? pair.args?.action;
+			if (op && path) {
+				return `${op}: ${truncate(String(path), 50)}`;
 			}
 			return path ? truncate(String(path), 60) : null;
+		},
+		argsView(pair) {
+			const path = pair.args?.path;
+			const op = pair.args?.operation ?? pair.args?.action;
+			const content = pair.args?.content;
+			if (!path) return null;
+			return (
+				<div className="border-b border-app-line/20 px-3 py-2">
+					<p className="font-mono text-tiny text-ink-dull">
+						{op && <span className="text-ink-faint">{String(op)}: </span>}
+						{String(path)}
+					</p>
+					{op === "write" && content && (
+						<pre className="mt-1 max-h-40 overflow-auto font-mono text-tiny text-ink-faint">
+							{truncate(String(content), 2000)}
+						</pre>
+					)}
+				</div>
+			);
 		},
 		resultView(pair) {
 			if (!pair.resultRaw) return null;
@@ -375,6 +438,285 @@ const toolRenderers: Record<string, ToolRenderer> = {
 		resultView() {
 			// set_status results are not interesting — just "ok"
 			return null;
+		},
+	},
+
+	// -----------------------------------------------------------------------
+	// OpenCode tools
+	// -----------------------------------------------------------------------
+
+	read: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const filePath = pair.args?.filePath ?? pair.args?.file_path;
+			return filePath ? truncate(String(filePath), 60) : null;
+		},
+		argsView(pair) {
+			const filePath = pair.args?.filePath ?? pair.args?.file_path;
+			if (!filePath) return null;
+			const offset = pair.args?.offset;
+			const limit = pair.args?.limit;
+			return (
+				<div className="border-b border-app-line/20 px-3 py-2">
+					<p className="font-mono text-tiny text-ink-dull">
+						{String(filePath)}
+						{offset ? ` (from line ${offset})` : ""}
+						{limit ? ` (${limit} lines)` : ""}
+					</p>
+				</div>
+			);
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <CollapsiblePre text={pair.resultRaw} maxLines={30} />;
+		},
+	},
+
+	write: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const filePath = pair.args?.filePath ?? pair.args?.file_path;
+			return filePath ? truncate(String(filePath), 60) : null;
+		},
+		argsView(pair) {
+			const filePath = pair.args?.filePath ?? pair.args?.file_path;
+			const content = pair.args?.content;
+			if (!filePath && !content) return null;
+			return (
+				<div className="border-b border-app-line/20 px-3 py-2">
+					{filePath && (
+						<p className="mb-1 font-mono text-tiny text-ink-dull">
+							{String(filePath)}
+						</p>
+					)}
+					{content && (
+						<pre className="max-h-40 overflow-auto font-mono text-tiny text-ink-faint">
+							{truncate(String(content), 2000)}
+						</pre>
+					)}
+				</div>
+			);
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <ResultLine text={truncate(pair.resultRaw, 100)} />;
+		},
+	},
+
+	edit: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const filePath = pair.args?.filePath ?? pair.args?.file_path;
+			return filePath ? truncate(String(filePath), 60) : null;
+		},
+		argsView(pair) {
+			const filePath = pair.args?.filePath ?? pair.args?.file_path;
+			const oldStr = pair.args?.oldString ?? pair.args?.old_string;
+			const newStr = pair.args?.newString ?? pair.args?.new_string;
+			if (!filePath) return null;
+			return (
+				<div className="border-b border-app-line/20 px-3 py-2">
+					<p className="mb-1 font-mono text-tiny text-ink-dull">
+						{String(filePath)}
+					</p>
+					{oldStr && (
+						<div className="mt-1">
+							<p className="text-tiny font-medium text-red-400/70">
+								Old
+							</p>
+							<pre className="max-h-20 overflow-auto font-mono text-tiny text-red-300/60">
+								{truncate(String(oldStr), 500)}
+							</pre>
+						</div>
+					)}
+					{newStr && (
+						<div className="mt-1">
+							<p className="text-tiny font-medium text-emerald-400/70">
+								New
+							</p>
+							<pre className="max-h-20 overflow-auto font-mono text-tiny text-emerald-300/60">
+								{truncate(String(newStr), 500)}
+							</pre>
+						</div>
+					)}
+				</div>
+			);
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <ResultLine text={truncate(pair.resultRaw, 100)} />;
+		},
+	},
+
+	bash: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const command = pair.args?.command;
+			return command ? truncate(String(command), 60) : null;
+		},
+		argsView(pair) {
+			const command = pair.args?.command;
+			if (!command) return null;
+			return (
+				<div className="border-b border-app-line/20 px-3 py-2">
+					<pre className="max-h-40 overflow-auto font-mono text-tiny text-ink-dull">
+						<span className="select-none text-ink-faint">$ </span>
+						{String(command)}
+					</pre>
+				</div>
+			);
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <CollapsiblePre text={pair.resultRaw} maxLines={30} />;
+		},
+	},
+
+	glob: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const pattern = pair.args?.pattern;
+			return pattern ? truncate(String(pattern), 60) : null;
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <CollapsiblePre text={pair.resultRaw} maxLines={20} />;
+		},
+	},
+
+	grep: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const pattern = pair.args?.pattern;
+			const include = pair.args?.include;
+			if (pattern && include) {
+				return `/${pattern}/ in ${include}`;
+			}
+			return pattern ? `/${truncate(String(pattern), 40)}/` : null;
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <CollapsiblePre text={pair.resultRaw} maxLines={20} />;
+		},
+	},
+
+	webfetch: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const url = pair.args?.url;
+			return url ? truncate(String(url), 60) : null;
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <CollapsiblePre text={pair.resultRaw} maxLines={20} />;
+		},
+	},
+
+	read_skill: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const name = pair.args?.name;
+			return name ? String(name) : null;
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <CollapsiblePre text={pair.resultRaw} maxLines={30} />;
+		},
+	},
+
+	web_search: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const query = pair.args?.query;
+			const resultCount = pair.result?.result_count ?? (Array.isArray(pair.result?.results) ? (pair.result!.results as unknown[]).length : null);
+			const queryStr = query ? truncate(String(query), 50) : null;
+			if (queryStr && resultCount != null) {
+				return `${queryStr} (${resultCount} result${resultCount !== 1 ? "s" : ""})`;
+			}
+			return queryStr;
+		},
+		argsView(pair) {
+			const query = pair.args?.query;
+			if (!query) return null;
+			const count = pair.args?.count;
+			const freshness = pair.args?.freshness;
+			return (
+				<div className="border-b border-app-line/20 px-3 py-2">
+					<p className="text-tiny text-ink-dull">
+						<span className="select-none text-ink-faint">Search: </span>
+						{String(query)}
+					</p>
+					{(count || freshness) && (
+						<p className="mt-0.5 text-tiny text-ink-faint">
+							{count ? `${count} results` : ""}
+							{count && freshness ? " · " : ""}
+							{freshness ? `${freshness}` : ""}
+						</p>
+					)}
+				</div>
+			);
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <CollapsiblePre text={pair.resultRaw} maxLines={20} />;
+		},
+	},
+
+	spacebot_docs: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const action = pair.args?.action;
+			const docId = pair.args?.doc_id;
+			if (action === "read" && docId) {
+				return truncate(String(docId), 50);
+			}
+			return action ? String(action) : "list";
+		},
+		argsView(pair) {
+			const action = pair.args?.action;
+			const docId = pair.args?.doc_id;
+			const query = pair.args?.query;
+			if (!action && !docId) return null;
+			return (
+				<div className="border-b border-app-line/20 px-3 py-2">
+					{docId && (
+						<p className="font-mono text-tiny text-ink-dull">
+							{String(docId)}
+						</p>
+					)}
+					{query && (
+						<p className="mt-0.5 text-tiny text-ink-faint">
+							filter: {String(query)}
+						</p>
+					)}
+				</div>
+			);
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <CollapsiblePre text={pair.resultRaw} maxLines={30} />;
+		},
+	},
+
+	todowrite: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			return "Update tasks";
+		},
+		resultView() {
+			return null;
+		},
+	},
+
+	task: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const description = pair.args?.description;
+			return description ? truncate(String(description), 60) : null;
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <CollapsiblePre text={pair.resultRaw} maxLines={20} />;
 		},
 	},
 };
@@ -462,6 +804,16 @@ const STATUS_COLORS: Record<ToolCallStatus, string> = {
 
 /** Human-readable tool name: browser_navigate → Navigate */
 function formatToolName(name: string): string {
+	// Handle specific tool name overrides
+	const overrides: Record<string, string> = {
+		webfetch: "Web Fetch",
+		todowrite: "Todo",
+		read_skill: "Read Skill",
+		web_search: "Web Search",
+		spacebot_docs: "Docs",
+	};
+	if (overrides[name]) return overrides[name];
+
 	// Strip common prefixes for cleaner display
 	const stripped = name
 		.replace(/^browser_/, "")
