@@ -1342,6 +1342,7 @@ export interface ProjectRepo {
 	remote_url: string;
 	default_branch: string;
 	description: string;
+	disk_usage_bytes: number | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -1354,6 +1355,7 @@ export interface ProjectWorktree {
 	path: string;
 	branch: string;
 	created_by: string;
+	disk_usage_bytes: number | null;
 	created_at: string;
 	updated_at: string;
 }

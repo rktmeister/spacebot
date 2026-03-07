@@ -65,6 +65,7 @@ pub struct ProjectRepo {
     pub remote_url: String,
     pub default_branch: String,
     pub description: String,
+    pub disk_usage_bytes: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -78,6 +79,7 @@ pub struct ProjectWorktree {
     pub path: String,
     pub branch: String,
     pub created_by: String,
+    pub disk_usage_bytes: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -476,6 +478,28 @@ impl ProjectStore {
         row.map(|r| row_to_worktree(&r)).transpose()
     }
 
+    /// Update cached disk usage for a repo.
+    pub async fn set_repo_disk_usage(&self, repo_id: &str, bytes: i64) -> Result<()> {
+        sqlx::query("UPDATE project_repos SET disk_usage_bytes = ? WHERE id = ?")
+            .bind(bytes)
+            .bind(repo_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to update repo disk usage")?;
+        Ok(())
+    }
+
+    /// Update cached disk usage for a worktree.
+    pub async fn set_worktree_disk_usage(&self, worktree_id: &str, bytes: i64) -> Result<()> {
+        sqlx::query("UPDATE project_worktrees SET disk_usage_bytes = ? WHERE id = ?")
+            .bind(bytes)
+            .bind(worktree_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to update worktree disk usage")?;
+        Ok(())
+    }
+
     /// List worktrees belonging to a specific repo.
     pub async fn list_worktrees_for_repo(&self, repo_id: &str) -> Result<Vec<ProjectWorktree>> {
         let rows =
@@ -528,6 +552,7 @@ fn row_to_repo(row: &sqlx::sqlite::SqliteRow) -> Result<ProjectRepo> {
             .try_get("default_branch")
             .context("missing default_branch")?,
         description: row.try_get("description").context("missing description")?,
+        disk_usage_bytes: row.try_get("disk_usage_bytes").unwrap_or(None),
         created_at: row.try_get("created_at").context("missing created_at")?,
         updated_at: row.try_get("updated_at").context("missing updated_at")?,
     })
@@ -542,6 +567,7 @@ fn row_to_worktree(row: &sqlx::sqlite::SqliteRow) -> Result<ProjectWorktree> {
         path: row.try_get("path").context("missing path")?,
         branch: row.try_get("branch").context("missing branch")?,
         created_by: row.try_get("created_by").context("missing created_by")?,
+        disk_usage_bytes: row.try_get("disk_usage_bytes").unwrap_or(None),
         created_at: row.try_get("created_at").context("missing created_at")?,
         updated_at: row.try_get("updated_at").context("missing updated_at")?,
     })

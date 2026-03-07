@@ -210,6 +210,42 @@ async fn discover_and_register_worktrees(
     }
 }
 
+/// Compute and cache disk usage for all repos and worktrees in a project.
+///
+/// Runs `dir_size` for each repo and worktree directory and writes the result
+/// back to the database. Best-effort — skips entries whose directories are
+/// missing or unreadable.
+async fn compute_and_cache_disk_usage(
+    store: &Arc<crate::projects::ProjectStore>,
+    project_id: &str,
+    root: &std::path::Path,
+) {
+    let repos = store.list_repos(project_id).await.unwrap_or_default();
+    for repo in &repos {
+        let abs_path = root.join(&repo.path);
+        if abs_path.is_dir() {
+            let bytes = dir_size(&abs_path).await;
+            if let Err(error) = store.set_repo_disk_usage(&repo.id, bytes as i64).await {
+                tracing::warn!(%error, repo = %repo.name, "failed to cache repo disk usage");
+            }
+        }
+    }
+
+    let worktrees = store.list_worktrees(project_id).await.unwrap_or_default();
+    for worktree in &worktrees {
+        let abs_path = root.join(&worktree.path);
+        if abs_path.is_dir() {
+            let bytes = dir_size(&abs_path).await;
+            if let Err(error) = store
+                .set_worktree_disk_usage(&worktree.id, bytes as i64)
+                .await
+            {
+                tracing::warn!(%error, worktree = %worktree.name, "failed to cache worktree disk usage");
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -290,6 +326,9 @@ pub(super) async fn create_project(
 
             // Discover worktrees for all registered repos.
             discover_and_register_worktrees(store, &project.id, &root).await;
+
+            // Compute and cache disk usage for repos and worktrees.
+            compute_and_cache_disk_usage(store, &project.id, &root).await;
         }
     }
 
@@ -457,6 +496,9 @@ pub(super) async fn scan_project(
 
     // Discover worktrees for each known repo.
     discover_and_register_worktrees(store, &project_id, &root).await;
+
+    // Recompute and cache disk usage.
+    compute_and_cache_disk_usage(store, &project_id, &root).await;
 
     // Reload with relations.
     let full = store

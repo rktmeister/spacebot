@@ -1,12 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
 	api,
 	type Project,
-	type ProjectWithRelations,
 	type ProjectWorktreeWithRepo,
 	type ProjectRepo,
-	type DiskUsageResponse,
 	type CreateProjectRequest,
 	type CreateWorktreeRequest,
 } from "@/api/client";
@@ -452,6 +450,11 @@ function RepoCard({
 					{repo.default_branch}
 				</Badge>
 				<span>{worktreeCount} worktree{worktreeCount !== 1 ? "s" : ""}</span>
+				{repo.disk_usage_bytes != null && (
+					<span className="ml-auto shrink-0 font-mono">
+						{formatBytes(repo.disk_usage_bytes)}
+					</span>
+				)}
 			</div>
 		</div>
 	);
@@ -492,6 +495,14 @@ function WorktreeCard({
 						from <span className="text-ink-dull">{worktree.repo_name}</span>
 						{" \u00B7 "}
 						<span className="font-mono">{worktree.path}</span>
+						{worktree.disk_usage_bytes != null && (
+							<>
+								{" \u00B7 "}
+								<span className="font-mono">
+									{formatBytes(worktree.disk_usage_bytes)}
+								</span>
+							</>
+						)}
 					</p>
 				</div>
 				<Button
@@ -516,109 +527,6 @@ function WorktreeCard({
 					</svg>
 				</Button>
 			</div>
-		</div>
-	);
-}
-
-// ---------------------------------------------------------------------------
-// Disk Usage Panel
-// ---------------------------------------------------------------------------
-
-function DiskUsagePanel({
-	agentId,
-	projectId,
-}: {
-	agentId: string;
-	projectId: string;
-}) {
-	const [expanded, setExpanded] = useState(false);
-
-	const { data, isLoading, refetch, isFetching } = useQuery({
-		queryKey: ["project-disk-usage", agentId, projectId],
-		queryFn: () => api.projectDiskUsage(agentId, projectId),
-		enabled: expanded,
-		staleTime: 60_000,
-	});
-
-	return (
-		<div className="rounded-lg border border-app-line bg-app-box">
-			<button
-				onClick={() => setExpanded(!expanded)}
-				className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-ink transition-colors hover:bg-app-hover/20"
-			>
-				<span>Disk Usage</span>
-				<div className="flex items-center gap-2">
-					{data && (
-						<span className="text-xs text-ink-dull">{formatBytes(data.total_bytes)}</span>
-					)}
-					<svg
-						className={clsx(
-							"h-4 w-4 text-ink-faint transition-transform",
-							expanded && "rotate-180",
-						)}
-						fill="none"
-						viewBox="0 0 24 24"
-						stroke="currentColor"
-						strokeWidth={2}
-					>
-						<path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-					</svg>
-				</div>
-			</button>
-			<AnimatePresence>
-				{expanded && (
-					<motion.div
-						initial={{ height: 0, opacity: 0 }}
-						animate={{ height: "auto", opacity: 1 }}
-						exit={{ height: 0, opacity: 0 }}
-						className="overflow-hidden"
-					>
-						<div className="border-t border-app-line px-4 py-3">
-							{isLoading ? (
-								<p className="text-xs text-ink-faint">Calculating...</p>
-							) : data ? (
-								<>
-									<div className="mb-3 flex items-center justify-between">
-										<span className="text-lg font-semibold text-ink">
-											{formatBytes(data.total_bytes)}
-										</span>
-										<Button
-											variant="outline"
-											size="sm"
-											onClick={() => refetch()}
-											loading={isFetching}
-										>
-											Refresh
-										</Button>
-									</div>
-									{data.entries.length > 0 && (
-										<div className="space-y-1">
-											{data.entries.slice(0, 15).map((entry) => (
-												<div
-													key={entry.name}
-													className="flex items-center justify-between text-xs"
-												>
-													<span className="flex items-center gap-2 truncate text-ink-dull">
-														<span className="text-ink-faint">
-															{entry.is_dir ? "\uD83D\uDCC1" : "\uD83D\uDCC4"}
-														</span>
-														{entry.name}
-													</span>
-													<span className="shrink-0 font-mono text-ink-faint">
-														{formatBytes(entry.bytes)}
-													</span>
-												</div>
-											))}
-										</div>
-									)}
-								</>
-							) : (
-								<p className="text-xs text-ink-faint">Failed to load disk usage.</p>
-							)}
-						</div>
-					</motion.div>
-				)}
-			</AnimatePresence>
 		</div>
 	);
 }
@@ -713,6 +621,10 @@ function ProjectDetail({
 	const worktreeCountByRepo = (repoId: string) =>
 		worktrees.filter((w) => w.repo_id === repoId).length;
 
+	const totalDiskUsage =
+		repos.reduce((sum, r) => sum + (r.disk_usage_bytes ?? 0), 0) +
+		worktrees.reduce((sum, w) => sum + (w.disk_usage_bytes ?? 0), 0);
+
 	return (
 		<div className="h-full overflow-y-auto">
 			<div className="mx-auto max-w-4xl space-y-6 p-6">
@@ -779,6 +691,11 @@ function ProjectDetail({
 								<span className="font-mono text-[11px] text-ink-faint">
 									{project.root_path}
 								</span>
+								{totalDiskUsage > 0 && (
+									<span className="rounded-md bg-app-button px-2 py-0.5 font-mono text-[11px] text-ink-dull">
+										{formatBytes(totalDiskUsage)}
+									</span>
+								)}
 							</div>
 						</div>
 
@@ -872,9 +789,6 @@ function ProjectDetail({
 						</div>
 					)}
 				</section>
-
-				{/* Disk Usage */}
-				<DiskUsagePanel agentId={agentId} projectId={projectId} />
 
 				{/* Stats */}
 				<div className="flex items-center gap-4 text-xs text-ink-faint">
