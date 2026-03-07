@@ -98,8 +98,8 @@ Automate a headless Chrome browser. Each action is a separate tool.
 1. `browser_launch` — Start the browser (or auto-launched by `browser_navigate`)
 2. `browser_navigate` — Go to a URL
 3. `browser_snapshot` — Get the page's ARIA accessibility tree with numbered element indices
-4. `browser_click` — Click an element by index: `{"index": 5}`
-5. `browser_type` — Type text into an input by index: `{"index": 3, "text": "hello"}`
+4. `browser_click` — Click an element: `{"index": 5}` or `{"selector": "#my-button"}`
+5. `browser_type` — Type into an input: `{"index": 3, "text": "hello"}` or `{"selector": "#login_field", "text": "hello"}`
 6. `browser_screenshot` — Capture the page
 {%- if browser_persist_session %}
 7. `browser_close` — Detach from the browser when done (tabs and session preserved)
@@ -107,11 +107,13 @@ Automate a headless Chrome browser. Each action is a separate tool.
 7. `browser_close` — Shut down the browser when done
 {%- endif %}
 
-**Element indices** are assigned during `browser_snapshot` and look like `[index=0]`, `[index=1]`. Always snapshot before interacting — indices reset on each snapshot.
+**Targeting elements:** `browser_click` and `browser_type` accept either `index` (from `browser_snapshot`) or `selector` (a CSS selector like `"#login_field"` or `"button.submit"`). Use `index` when you have a fresh snapshot; use `selector` when you know the element's ID or a stable CSS path — it's more reliable on dynamic pages.
+
+**Element indices** are assigned during `browser_snapshot` and look like `[index=0]`, `[index=1]`. Always snapshot before using index-based interaction — indices reset on each snapshot.
 
 **Other tools:** `browser_press_key` (Enter, Tab, Escape), `browser_evaluate` (run JS on the page), `browser_tab_open`, `browser_tab_list`, `browser_tab_close`.
 
-**Prefer index-based interaction:** Use `browser_snapshot` to get element indices, then `browser_click`/`browser_type`/`browser_press_key` to interact. Fall back to `browser_evaluate` for reading page data or when the index-based tools don't work for a specific page.
+**Prefer index or selector over evaluate:** Use `browser_snapshot` + `browser_click`/`browser_type` to interact with elements. Fall back to `browser_evaluate` for reading page data or when the other tools don't work for a specific page.
 
 ### secret_set
 

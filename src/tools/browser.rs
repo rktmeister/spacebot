@@ -603,37 +603,47 @@ impl BrowserContext {
         Ok(state.snapshot.as_ref().expect("just stored"))
     }
 
-    /// Resolve a numeric element index to a chromiumoxide Element on the active page.
-    /// Uses the cached snapshot's CSS selectors.
-    async fn find_element_by_index(
+    /// Resolve an element target (index or CSS selector) to a chromiumoxide Element.
+    ///
+    /// When an index is provided, the cached snapshot's CSS selectors are used.
+    /// When a CSS selector string is provided, it's used directly — this is
+    /// useful when the LLM already knows the selector (e.g., `#login_field`).
+    async fn find_element(
         &self,
         state: &mut BrowserState,
-        index: usize,
+        target: &ElementTarget,
     ) -> Result<chromiumoxide::Element, BrowserError> {
-        // Ensure snapshot is cached
-        self.extract_snapshot(state).await?;
-        let snapshot = state.snapshot.as_ref().expect("just extracted");
+        let selector = match target {
+            ElementTarget::Index(index) => {
+                // Ensure snapshot is cached
+                self.extract_snapshot(state).await?;
+                let snapshot = state.snapshot.as_ref().expect("just extracted");
 
-        let selector = snapshot.selector_for_index(index).ok_or_else(|| {
-            BrowserError::new(format!(
-                "element index {index} not found — run browser_snapshot to get fresh indices \
-                 (max index in current snapshot: {})",
-                snapshot.selectors.len().saturating_sub(1)
-            ))
-        })?;
+                let sel = snapshot.selector_for_index(*index).ok_or_else(|| {
+                    BrowserError::new(format!(
+                        "element index {index} not found — run browser_snapshot to get fresh \
+                         indices (max index in current snapshot: {})",
+                        snapshot.selectors.len().saturating_sub(1)
+                    ))
+                })?;
 
-        if selector.is_empty() {
-            return Err(BrowserError::new(format!(
-                "element index {index} has an empty CSS selector — the element may be in an iframe. \
-                 Try browser_evaluate with a custom querySelector instead."
-            )));
-        }
+                if sel.is_empty() {
+                    return Err(BrowserError::new(format!(
+                        "element index {index} has an empty CSS selector — the element may be \
+                         in an iframe. Try using the `selector` parameter instead."
+                    )));
+                }
+
+                sel.to_string()
+            }
+            ElementTarget::Selector(selector) => selector.clone(),
+        };
 
         let page = self.require_active_page(state)?;
 
-        page.find_element(selector).await.map_err(|error| {
+        page.find_element(&selector).await.map_err(|error| {
             BrowserError::new(format!(
-                "element at index {index} not found via selector '{selector}': {error}. \
+                "element not found via selector '{selector}': {error}. \
                  The page may have changed — run browser_snapshot again."
             ))
         })
@@ -930,6 +940,35 @@ impl Tool for BrowserSnapshotTool {
     }
 }
 
+// Shared element targeting — tools accept either an index or a CSS selector.
+
+/// Resolved element target for click/type/press_key tools.
+enum ElementTarget {
+    Index(usize),
+    Selector(String),
+}
+
+impl ElementTarget {
+    /// Build from optional index + optional selector args.
+    /// At least one must be provided; `selector` wins if both are present.
+    fn from_args(index: Option<usize>, selector: Option<String>) -> Result<Self, BrowserError> {
+        match (selector, index) {
+            (Some(sel), _) if !sel.is_empty() => Ok(Self::Selector(sel)),
+            (_, Some(idx)) => Ok(Self::Index(idx)),
+            _ => Err(BrowserError::new(
+                "provide either `index` (from browser_snapshot) or `selector` (CSS selector)",
+            )),
+        }
+    }
+
+    fn display(&self) -> String {
+        match self {
+            Self::Index(i) => format!("index {i}"),
+            Self::Selector(s) => format!("selector '{s}'"),
+        }
+    }
+}
+
 // Tool: browser_click
 
 #[derive(Debug, Clone)]
@@ -940,7 +979,10 @@ pub struct BrowserClickTool {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BrowserClickArgs {
     /// The element index from the snapshot (e.g., 5).
-    pub index: usize,
+    pub index: Option<usize>,
+    /// CSS selector to target directly (e.g., "#login_field"). Use this when
+    /// you know the selector — it's more reliable than index for dynamic pages.
+    pub selector: Option<String>,
 }
 
 impl Tool for BrowserClickTool {
@@ -952,23 +994,24 @@ impl Tool for BrowserClickTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Click an element by its index from browser_snapshot.".to_string(),
+            description: "Click an element by index (from browser_snapshot) or CSS selector."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "index": { "type": "integer", "description": "Element index from snapshot" }
-                },
-                "required": ["index"]
+                    "index": { "type": "integer", "description": "Element index from snapshot" },
+                    "selector": { "type": "string", "description": "CSS selector (e.g. \"#my-button\", \"button.submit\")" }
+                }
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let target = ElementTarget::from_args(args.index, args.selector)?;
+        let label = target.display();
+
         let mut state = self.context.state.lock().await;
-        let element = self
-            .context
-            .find_element_by_index(&mut state, args.index)
-            .await?;
+        let element = self.context.find_element(&mut state, &target).await?;
 
         element
             .click()
@@ -983,8 +1026,7 @@ impl Tool for BrowserClickTool {
         state.invalidate_snapshot();
 
         Ok(BrowserOutput::success(format!(
-            "Clicked element at index {}",
-            args.index
+            "Clicked element at {label}"
         )))
     }
 }
@@ -999,7 +1041,9 @@ pub struct BrowserTypeTool {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BrowserTypeArgs {
     /// The element index from the snapshot.
-    pub index: usize,
+    pub index: Option<usize>,
+    /// CSS selector to target directly (e.g., "#login_field", "input[name='email']").
+    pub selector: Option<String>,
     /// The text to type into the element.
     pub text: String,
     /// Whether to clear the field before typing. Defaults to true.
@@ -1020,48 +1064,74 @@ impl Tool for BrowserTypeTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Type text into an input element by its index from browser_snapshot."
+            description: "Type text into an input element by index (from browser_snapshot) or \
+                          CSS selector."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "index": { "type": "integer", "description": "Element index from snapshot" },
+                    "selector": { "type": "string", "description": "CSS selector (e.g. \"#login_field\", \"input[name='email']\")" },
                     "text": { "type": "string", "description": "Text to type" },
                     "clear": { "type": "boolean", "default": true, "description": "Clear the field before typing (default true)" }
                 },
-                "required": ["index", "text"]
+                "required": ["text"]
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let target = ElementTarget::from_args(args.index, args.selector)?;
+        let label = target.display();
+
         let mut state = self.context.state.lock().await;
 
-        // Use JS injection for reliable clear + type: focus, select all, then
-        // set value and fire events. chromiumoxide's type_str sends individual
-        // key events which is slow and fragile with JS frameworks.
-        let snapshot = self.context.extract_snapshot(&mut state).await?;
-        let selector = snapshot
-            .selector_for_index(args.index)
-            .ok_or_else(|| BrowserError::new(format!("element index {} not found", args.index)))?
-            .to_string();
+        // Resolve the CSS selector from the target.
+        let selector = match &target {
+            ElementTarget::Selector(sel) => sel.clone(),
+            ElementTarget::Index(index) => {
+                let snapshot = self.context.extract_snapshot(&mut state).await?;
+                snapshot
+                    .selector_for_index(*index)
+                    .ok_or_else(|| BrowserError::new(format!("element index {index} not found")))?
+                    .to_string()
+            }
+        };
 
         let page = self.context.require_active_page(&state)?;
 
+        // Use JS injection for reliable clear + type: focus the element, set
+        // its value, and fire input/change events. Also validates that the
+        // target is an input, textarea, or contenteditable element.
         let text_json = serde_json::to_string(&args.text).unwrap_or_default();
         let clear_js = if args.clear { "el.value = '';" } else { "" };
         let js = format!(
             r#"(() => {{
                 const el = document.querySelector({selector_json});
-                if (!el) return JSON.stringify({{success: false, error: 'element not found'}});
+                if (!el) return JSON.stringify({{success: false, error: 'element not found via selector'}});
+                const tag = el.tagName;
+                const editable = el.isContentEditable;
+                if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !editable) {{
+                    return JSON.stringify({{success: false, error: 'element is a ' + tag.toLowerCase() + ', not a text input — check your index or selector'}});
+                }}
                 el.focus();
-                {clear_js}
-                el.value = {text_json};
+                if (editable) {{
+                    {clear_editable}
+                    el.textContent = {text_json};
+                }} else {{
+                    {clear_js}
+                    el.value = {text_json};
+                }}
                 el.dispatchEvent(new Event('input', {{bubbles: true}}));
                 el.dispatchEvent(new Event('change', {{bubbles: true}}));
                 return JSON.stringify({{success: true}});
             }})()"#,
             selector_json = serde_json::to_string(&selector).unwrap_or_default(),
+            clear_editable = if args.clear {
+                "el.textContent = '';"
+            } else {
+                ""
+            },
             clear_js = clear_js,
             text_json = text_json,
         );
@@ -1092,8 +1162,7 @@ impl Tool for BrowserTypeTool {
             args.text.clone()
         };
         Ok(BrowserOutput::success(format!(
-            "Typed '{display_text}' into element at index {}",
-            args.index
+            "Typed '{display_text}' into element at {label}"
         )))
     }
 }
