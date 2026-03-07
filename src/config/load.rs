@@ -126,6 +126,21 @@ fn parse_close_policy(value: Option<&str>) -> Option<ClosePolicy> {
     }
 }
 
+/// Resolve the effective close policy. When `persist_session` is enabled and no
+/// explicit `close_policy` was provided, default to `Detach` so browser tabs and
+/// cookies survive across workers.
+fn resolve_close_policy(
+    explicit: Option<&str>,
+    persist_session: bool,
+    fallback: ClosePolicy,
+) -> ClosePolicy {
+    parse_close_policy(explicit).unwrap_or(if persist_session {
+        ClosePolicy::Detach
+    } else {
+        fallback
+    })
+}
+
 impl CortexConfig {
     fn resolve(overrides: TomlCortexConfig, defaults: CortexConfig) -> CortexConfig {
         CortexConfig {
@@ -1423,16 +1438,11 @@ impl Config {
                                 .map(PathBuf::from)
                                 .or_else(|| base.screenshot_dir.clone()),
                             persist_session: b.persist_session.unwrap_or(base.persist_session),
-                            close_policy: parse_close_policy(b.close_policy.as_deref())
-                                .unwrap_or_else(|| {
-                                    // When persist_session is enabled and no explicit close_policy
-                                    // is set, default to Detach so tabs survive across workers.
-                                    if b.persist_session.unwrap_or(base.persist_session) {
-                                        ClosePolicy::Detach
-                                    } else {
-                                        base.close_policy
-                                    }
-                                }),
+                            close_policy: resolve_close_policy(
+                                b.close_policy.as_deref(),
+                                b.persist_session.unwrap_or(base.persist_session),
+                                base.close_policy,
+                            ),
                             chrome_cache_dir: chrome_cache_dir.clone(),
                         }
                     })
@@ -1608,18 +1618,11 @@ impl Config {
                         persist_session: b
                             .persist_session
                             .unwrap_or(defaults.browser.persist_session),
-                        close_policy: parse_close_policy(b.close_policy.as_deref()).unwrap_or_else(
-                            || {
-                                // When persist_session is enabled and no explicit close_policy
-                                // is set, default to Detach so tabs survive across workers.
-                                if b.persist_session
-                                    .unwrap_or(defaults.browser.persist_session)
-                                {
-                                    ClosePolicy::Detach
-                                } else {
-                                    defaults.browser.close_policy
-                                }
-                            },
+                        close_policy: resolve_close_policy(
+                            b.close_policy.as_deref(),
+                            b.persist_session
+                                .unwrap_or(defaults.browser.persist_session),
+                            defaults.browser.close_policy,
                         ),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),

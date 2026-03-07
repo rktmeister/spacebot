@@ -212,7 +212,12 @@ impl Drop for BrowserState {
                 });
             } else {
                 // Dropped outside a tokio runtime (unlikely) — clean up inline.
-                let _ = std::fs::remove_dir_all(&dir);
+                if let Err(error) = std::fs::remove_dir_all(&dir) {
+                    eprintln!(
+                        "failed to clean up browser user data dir {}: {error}",
+                        dir.display()
+                    );
+                }
             }
         }
     }
@@ -620,7 +625,13 @@ impl BrowserTool {
             if !persistent_profile {
                 let dir = user_data_dir;
                 tokio::spawn(async move {
-                    let _ = tokio::fs::remove_dir_all(&dir).await;
+                    if let Err(error) = tokio::fs::remove_dir_all(&dir).await {
+                        tracing::debug!(
+                            path = %dir.display(),
+                            %error,
+                            "failed to clean up browser user data dir (concurrent launch race)"
+                        );
+                    }
                 });
             }
 
