@@ -109,7 +109,9 @@ Automate a headless Chrome browser. Each action is a separate tool.
 
 **Element indices** are assigned during `browser_snapshot` and look like `[index=0]`, `[index=1]`. Always snapshot before interacting — indices reset on each snapshot.
 
-**Other tools:** `browser_press_key` (Enter, Tab, Escape), `browser_evaluate` (run JS), `browser_tab_open`, `browser_tab_list`, `browser_tab_close`.
+**Other tools:** `browser_press_key` (Enter, Tab, Escape), `browser_evaluate` (run JS on the page), `browser_tab_open`, `browser_tab_list`, `browser_tab_close`.
+
+**Prefer index-based interaction:** Use `browser_snapshot` to get element indices, then `browser_click`/`browser_type`/`browser_press_key` to interact. Fall back to `browser_evaluate` for reading page data or when the index-based tools don't work for a specific page.
 
 ### secret_set
 

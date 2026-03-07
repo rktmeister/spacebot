@@ -625,7 +625,7 @@ JSON.stringify((function() {
     }
 
     // Collect selectors and iframe indices
-    function collectSelectorsAndIframes(ariaNode, selectors, iframeIndices) {
+    function collectSelectorsAndIframes(ariaNode, selectors, iframe_indices) {
         if (ariaNode.index !== undefined && ariaNode.element) {
             // Store CSS selector for element at its index position
             const selector = buildSelector(ariaNode.element);
@@ -636,13 +636,13 @@ JSON.stringify((function() {
             selectors[ariaNode.index] = selector;
             
             if (ariaNode.role === 'iframe') {
-                iframeIndices.push(ariaNode.index);
+                iframe_indices.push(ariaNode.index);
             }
         }
         
         for (const child of ariaNode.children) {
             if (typeof child !== 'string') {
-                collectSelectorsAndIframes(child, selectors, iframeIndices);
+                collectSelectorsAndIframes(child, selectors, iframe_indices);
             }
         }
     }
@@ -711,8 +711,8 @@ JSON.stringify((function() {
         
         // Collect selectors and iframe indices
         const selectors = [];
-        const iframeIndices = [];
-        collectSelectorsAndIframes(snapshot, selectors, iframeIndices);
+        const iframe_indices = [];
+        collectSelectorsAndIframes(snapshot, selectors, iframe_indices);
         
         // Serialize and return
         const serialized = serializeAriaNode(snapshot);
@@ -720,7 +720,7 @@ JSON.stringify((function() {
         return {
             root: serialized,
             selectors: selectors,
-            iframeIndices: iframeIndices
+            iframe_indices: iframe_indices
         };
         
     } catch (error) {
@@ -728,7 +728,7 @@ JSON.stringify((function() {
             error: error.toString(),
             root: { role: 'fragment', name: '', children: [], props: {}, box_info: { visible: false } },
             selectors: [],
-            iframeIndices: []
+            iframe_indices: []
         };
     }
 })())

@@ -31,9 +31,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-// ---------------------------------------------------------------------------
 // URL validation (SSRF protection)
-// ---------------------------------------------------------------------------
 
 /// Validate that a URL is safe for the browser to navigate to.
 /// Blocks private/loopback IPs, link-local addresses, and cloud metadata endpoints
@@ -125,9 +123,7 @@ fn is_v4_mapped_blocked(ip: std::net::Ipv6Addr) -> bool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // DOM snapshot types (ported from browser-use-rs)
-// ---------------------------------------------------------------------------
 
 /// An ARIA tree snapshot of a page, extracted via injected JavaScript.
 ///
@@ -327,9 +323,7 @@ fn render_child(child: &AriaChild, depth: usize, output: &mut String) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Shared browser state
-// ---------------------------------------------------------------------------
 
 /// Opaque handle to shared browser state that persists across worker lifetimes.
 ///
@@ -421,9 +415,7 @@ impl std::fmt::Debug for BrowserState {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Error type
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, thiserror::Error)]
 #[error("Browser error: {message}")]
@@ -439,9 +431,7 @@ impl BrowserError {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Common output type
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 pub struct BrowserOutput {
@@ -493,9 +483,7 @@ pub struct TabInfo {
     pub active: bool,
 }
 
-// ---------------------------------------------------------------------------
 // Shared helper struct that all tools reference
-// ---------------------------------------------------------------------------
 
 /// Shared context cloned into each browser tool. Holds the browser state mutex,
 /// config, and screenshot directory.
@@ -743,9 +731,7 @@ impl BrowserContext {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_launch
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserLaunchTool {
@@ -776,9 +762,7 @@ impl Tool for BrowserLaunchTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_navigate
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserNavigateTool {
@@ -834,9 +818,7 @@ impl Tool for BrowserNavigateTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_snapshot
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserSnapshotTool {
@@ -900,9 +882,7 @@ impl Tool for BrowserSnapshotTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_click
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserClickTool {
@@ -956,9 +936,7 @@ impl Tool for BrowserClickTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_type
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserTypeTool {
@@ -1067,9 +1045,7 @@ impl Tool for BrowserTypeTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_press_key
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserPressKeyTool {
@@ -1113,9 +1089,7 @@ impl Tool for BrowserPressKeyTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_screenshot
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserScreenshotTool {
@@ -1198,9 +1172,7 @@ impl Tool for BrowserScreenshotTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_evaluate
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserEvaluateTool {
@@ -1265,9 +1237,7 @@ impl Tool for BrowserEvaluateTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_tab_open
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserTabOpenTool {
@@ -1339,9 +1309,7 @@ impl Tool for BrowserTabOpenTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_tab_list
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserTabListTool {
@@ -1396,9 +1364,7 @@ impl Tool for BrowserTabListTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_tab_close
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserTabCloseTool {
@@ -1457,9 +1423,7 @@ impl Tool for BrowserTabCloseTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool: browser_close
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct BrowserCloseTool {
@@ -1574,9 +1538,7 @@ impl Tool for BrowserCloseTool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tool registration helper
-// ---------------------------------------------------------------------------
 
 /// Register all browser tools on a `ToolServer`. The tools share a single
 /// `BrowserState` (via `SharedBrowserHandle` for persistent sessions, or a
@@ -1636,9 +1598,7 @@ pub fn register_browser_tools(
         .tool(BrowserCloseTool { context })
 }
 
-// ---------------------------------------------------------------------------
 // Shared helpers
-// ---------------------------------------------------------------------------
 
 /// Get the active page, or create a first one if the browser has no pages yet.
 async fn get_or_create_page<'a>(
@@ -1703,9 +1663,7 @@ fn page_target_id(page: &chromiumoxide::Page) -> String {
     page.target_id().inner().clone()
 }
 
-// ---------------------------------------------------------------------------
 // Chrome executable resolution
-// ---------------------------------------------------------------------------
 
 async fn resolve_chrome_executable(config: &BrowserConfig) -> Result<PathBuf, BrowserError> {
     if let Some(path) = &config.executable_path {
