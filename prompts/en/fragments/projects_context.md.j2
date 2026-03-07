@@ -13,4 +13,4 @@
 {% for wt in project.worktrees %}- `{{ wt.name }}` at `{{ wt.path }}` (branch: `{{ wt.branch }}`, repo: `{{ wt.repo_name }}`)
 {% endfor %}{% endif %}
 {% endfor %}
-When spawning workers for project tasks, use the appropriate repo or worktree directory. For new features, consider creating a worktree in the project root using the `project_manage` tool before spawning an OpenCode worker.
+When spawning workers for project tasks, use the appropriate repo or worktree directory. For new features, select the target repository within the project, then use the `project_manage` tool's `create_worktree` action to create a worktree for that repo before spawning an OpenCode worker in it.

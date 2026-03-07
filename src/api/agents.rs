@@ -875,6 +875,12 @@ pub(super) async fn create_agent(
         sandboxes.insert(agent_id.clone(), sandbox);
         state.sandboxes.store(std::sync::Arc::new(sandboxes));
 
+        let mut project_stores_map = (**state.project_stores.load()).clone();
+        project_stores_map.insert(agent_id.clone(), project_store);
+        state
+            .project_stores
+            .store(std::sync::Arc::new(project_stores_map));
+
         let mut agent_infos = (**state.agent_configs.load()).clone();
         agent_infos.push(AgentInfo {
             id: agent_config.id.clone(),
@@ -1127,6 +1133,12 @@ pub(super) async fn delete_agent(
         state
             .cortex_chat_sessions
             .store(std::sync::Arc::new(sessions));
+
+        let mut project_stores_map = (**state.project_stores.load()).clone();
+        project_stores_map.remove(&agent_id);
+        state
+            .project_stores
+            .store(std::sync::Arc::new(project_stores_map));
     }
 
     // Signal the main event loop to remove the agent
