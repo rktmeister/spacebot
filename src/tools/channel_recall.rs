@@ -176,10 +176,14 @@ impl Tool for ChannelRecallTool {
             .iter()
             .map(|message| {
                 // Append saved attachment annotations from metadata if present
-                let content = if let Some(ref meta_json) = message.metadata {
-                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(meta_json) {
+                let content = if let Some(ref metadata_json) = message.metadata {
+                    if let Ok(metadata_value) =
+                        serde_json::from_str::<serde_json::Value>(metadata_json)
+                    {
                         if let Some(annotation) =
-                            crate::agent::channel_attachments::annotation_from_metadata(&meta)
+                            crate::agent::channel_attachments::annotation_from_metadata(
+                                &metadata_value,
+                            )
                         {
                             format!("{}\n{}", message.content, annotation)
                         } else {

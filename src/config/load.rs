@@ -1630,8 +1630,12 @@ impl Config {
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
                     channel: a.channel.map(|channel_config| ChannelConfig {
-                        listen_only_mode: channel_config.listen_only_mode.unwrap_or(false),
-                        save_attachments: channel_config.save_attachments.unwrap_or(false),
+                        listen_only_mode: channel_config
+                            .listen_only_mode
+                            .unwrap_or(defaults.channel.listen_only_mode),
+                        save_attachments: channel_config
+                            .save_attachments
+                            .unwrap_or(defaults.channel.save_attachments),
                     }),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(

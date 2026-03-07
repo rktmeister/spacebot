@@ -1268,11 +1268,8 @@ impl Channel {
                 let attachment_content = if let Some(ref saved) = saved_data {
                     let mut content = Vec::new();
                     let mut unsaved = Vec::new();
-                    for attachment in &attachments {
-                        if let Some((_, bytes)) = saved
-                            .iter()
-                            .find(|(meta, _)| meta.filename == attachment.filename)
-                        {
+                    for (index, attachment) in attachments.iter().enumerate() {
+                        if let Some((_, bytes)) = saved.get(index) {
                             if attachment.mime_type.starts_with("audio/") {
                                 unsaved.push(attachment.clone());
                             } else {
@@ -1597,11 +1594,8 @@ impl Channel {
                 let mut content = Vec::new();
                 let mut unsaved_attachments = Vec::new();
 
-                for attachment in &attachments {
-                    if let Some((_, bytes)) = saved_data
-                        .iter()
-                        .find(|(meta, _)| meta.filename == attachment.filename)
-                    {
+                for (index, attachment) in attachments.iter().enumerate() {
+                    if let Some((_, bytes)) = saved_data.get(index) {
                         // Audio attachments need transcription, not just bytes
                         if attachment.mime_type.starts_with("audio/") {
                             unsaved_attachments.push(attachment.clone());

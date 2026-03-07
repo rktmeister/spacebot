@@ -526,6 +526,18 @@ pub(crate) async fn save_channel_attachments(
     let mut results = Vec::with_capacity(attachments.len());
 
     for attachment in attachments {
+        let safe_name = match sanitize_filename(&attachment.filename) {
+            Ok(name) => name,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    filename = %attachment.filename,
+                    "rejected unsafe attachment filename"
+                );
+                continue;
+            }
+        };
+
         let bytes = match download_attachment_bytes(http, attachment).await {
             Ok(bytes) => bytes,
             Err(error) => {
@@ -538,8 +550,7 @@ pub(crate) async fn save_channel_attachments(
             }
         };
 
-        let saved_filename = match deduplicate_filename(pool, saved_dir, &attachment.filename).await
-        {
+        let saved_filename = match deduplicate_filename(pool, saved_dir, &safe_name).await {
             Ok(name) => name,
             Err(error) => {
                 tracing::warn!(
@@ -553,13 +564,18 @@ pub(crate) async fn save_channel_attachments(
 
         let disk_path = saved_dir.join(&saved_filename);
 
-        if let Err(error) = tokio::fs::write(&disk_path, &bytes).await {
-            tracing::warn!(
-                %error,
-                path = %disk_path.display(),
-                "failed to write attachment to disk"
-            );
-            continue;
+        // Use create_new for atomic creation — prevents race conditions where
+        // two concurrent saves compute the same deduplicated name.
+        match write_file_atomic(&disk_path, &bytes).await {
+            Ok(()) => {}
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    path = %disk_path.display(),
+                    "failed to write attachment to disk"
+                );
+                continue;
+            }
         }
 
         let id = uuid::Uuid::new_v4().to_string();
@@ -635,7 +651,7 @@ pub(crate) fn format_attachment_annotation(saved: &[SavedAttachmentMeta]) -> Str
                 attachment.filename,
                 attachment.mime_type,
                 size_str,
-                &attachment.id[..8]
+                attachment.id.get(..8).unwrap_or(&attachment.id)
             )
         })
         .collect();
@@ -667,6 +683,34 @@ pub(crate) fn annotation_from_metadata(metadata: &serde_json::Value) -> Option<S
     }
 
     Some(format_attachment_annotation(&saved))
+}
+
+/// Sanitize a user-provided filename to prevent path traversal attacks.
+///
+/// Extracts only the file name component (strips directory separators and
+/// parent references), rejects `.`, `..`, and empty results. Falls back to
+/// `attachment` if the stem is entirely stripped.
+fn sanitize_filename(raw: &str) -> Result<String, String> {
+    // Extract just the filename component — strips any directory prefixes
+    let basename = Path::new(raw)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Reject dangerous or empty names
+    let trimmed = basename.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        // If the original had an extension, preserve it with a safe stem
+        let extension = Path::new(raw)
+            .extension()
+            .map(|e| e.to_string_lossy().to_string());
+        return match extension {
+            Some(ext) => Ok(format!("attachment.{ext}")),
+            None => Ok("attachment".to_string()),
+        };
+    }
+
+    Ok(trimmed.to_string())
 }
 
 /// Compute a unique filename within `saved_dir`, appending `_N` suffixes
@@ -704,6 +748,33 @@ async fn deduplicate_filename(
     Err(format!(
         "could not find unique filename for '{original}' after 998 attempts"
     ))
+}
+
+/// Write bytes to a file atomically using `create_new` to prevent races.
+///
+/// If the file already exists (`AlreadyExists` error), returns an error
+/// rather than silently overwriting.
+async fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::result::Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+
+    let file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await
+        .map_err(|error| format!("failed to create file {}: {error}", path.display()))?;
+
+    let mut writer = tokio::io::BufWriter::new(file);
+    writer
+        .write_all(bytes)
+        .await
+        .map_err(|error| format!("failed to write to {}: {error}", path.display()))?;
+    writer
+        .flush()
+        .await
+        .map_err(|error| format!("failed to flush {}: {error}", path.display()))?;
+
+    Ok(())
 }
 
 /// Check whether a filename is already used — either by a DB record or a file

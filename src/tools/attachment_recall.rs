@@ -4,7 +4,6 @@
 use crate::ChannelId;
 
 use rig::completion::ToolDefinition;
-use rig::message::{MimeType, UserContent};
 use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -74,15 +73,22 @@ fn default_limit() -> i64 {
 }
 
 /// Output from attachment recall tool.
+///
+/// Note: `UserContent` is not serializable, so image content cannot be
+/// delivered through the tool's JSON output. Text file content is inlined
+/// directly into `summary` so the LLM receives it. For images, the summary
+/// confirms the image was loaded; the base64 data would need to be injected
+/// into the conversation history through a separate mechanism (future work).
 #[derive(Debug, Serialize)]
 pub struct AttachmentRecallOutput {
     pub action: String,
     pub attachments: Vec<AttachmentInfo>,
-    /// Human-readable summary for the LLM.
+    /// Human-readable summary for the LLM. For text files via `get_content`,
+    /// the file content is inlined here.
     pub summary: String,
-    /// For get_content: re-loaded file content (if applicable).
-    #[serde(skip)]
-    pub content: Option<UserContent>,
+    /// Whether this was an error result (unknown action, not found, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Info about a saved attachment.
@@ -93,7 +99,10 @@ pub struct AttachmentInfo {
     pub saved_filename: String,
     pub mime_type: String,
     pub size_bytes: i64,
-    pub disk_path: String,
+    /// Absolute disk path. Only populated for `get_path` responses to avoid
+    /// leaking filesystem layout in `list` responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk_path: Option<String>,
     pub created_at: String,
 }
 
@@ -146,9 +155,14 @@ impl Tool for AttachmentRecallTool {
                 self.get_attachment_content(args.attachment_id.as_deref(), args.filename.as_deref())
                     .await
             }
-            other => Err(AttachmentRecallError(format!(
-                "Unknown action: '{other}'. Use 'list', 'get_path', or 'get_content'."
-            ))),
+            other => Ok(AttachmentRecallOutput {
+                action: other.to_string(),
+                attachments: vec![],
+                summary: format!(
+                    "Unknown action: '{other}'. Use 'list', 'get_path', or 'get_content'."
+                ),
+                error: Some(format!("unknown_action: {other}")),
+            }),
         }
     }
 }
@@ -181,7 +195,7 @@ impl AttachmentRecallTool {
                 saved_filename: row.saved_filename,
                 mime_type: row.mime_type,
                 size_bytes: row.size_bytes,
-                disk_path: row.disk_path,
+                disk_path: None,
                 created_at: row.created_at,
             })
             .collect();
@@ -200,7 +214,7 @@ impl AttachmentRecallTool {
                     attachment.filename,
                     attachment.mime_type,
                     size_str,
-                    &attachment.id[..8.min(attachment.id.len())]
+                    attachment.id.get(..8).unwrap_or(&attachment.id)
                 ));
             }
             lines.join("\n")
@@ -210,7 +224,7 @@ impl AttachmentRecallTool {
             action: "list".to_string(),
             attachments,
             summary,
-            content: None,
+            error: None,
         })
     }
 
@@ -220,26 +234,30 @@ impl AttachmentRecallTool {
         filename: Option<&str>,
     ) -> Result<AttachmentRecallOutput, AttachmentRecallError> {
         let attachment = self.resolve_attachment(attachment_id, filename).await?;
+        let disk_path = attachment.disk_path.clone().unwrap_or_default();
 
         // Verify the file exists on disk
-        let path = PathBuf::from(&attachment.disk_path);
+        let path = PathBuf::from(&disk_path);
         if !path.exists() {
-            return Err(AttachmentRecallError(format!(
+            let summary = format!(
                 "File '{}' was saved but is no longer on disk at {}",
-                attachment.filename, attachment.disk_path
-            )));
+                attachment.filename, disk_path
+            );
+            return Ok(AttachmentRecallOutput {
+                action: "get_path".to_string(),
+                attachments: vec![attachment],
+                summary,
+                error: Some("file_missing".to_string()),
+            });
         }
 
-        let summary = format!(
-            "File '{}' is saved at: {}",
-            attachment.filename, attachment.disk_path
-        );
+        let summary = format!("File '{}' is saved at: {}", attachment.filename, disk_path);
 
         Ok(AttachmentRecallOutput {
             action: "get_path".to_string(),
             attachments: vec![attachment],
             summary,
-            content: None,
+            error: None,
         })
     }
 
@@ -249,23 +267,41 @@ impl AttachmentRecallTool {
         filename: Option<&str>,
     ) -> Result<AttachmentRecallOutput, AttachmentRecallError> {
         let attachment = self.resolve_attachment(attachment_id, filename).await?;
+        let disk_path = attachment.disk_path.clone().unwrap_or_default();
 
-        let path = PathBuf::from(&attachment.disk_path);
+        let path = PathBuf::from(&disk_path);
         if !path.exists() {
-            return Err(AttachmentRecallError(format!(
+            let summary = format!(
                 "File '{}' was saved but is no longer on disk at {}",
-                attachment.filename, attachment.disk_path
-            )));
+                attachment.filename, disk_path
+            );
+            return Ok(AttachmentRecallOutput {
+                action: "get_content".to_string(),
+                attachments: vec![attachment],
+                summary,
+                error: Some("file_missing".to_string()),
+            });
         }
 
-        let size = attachment.size_bytes as u64;
-        if size > MAX_CONTENT_SIZE {
-            let size_str = format_size(attachment.size_bytes);
-            return Err(AttachmentRecallError(format!(
+        // Check live file size from disk, not the DB value which may be stale
+        let live_size = tokio::fs::metadata(&path)
+            .await
+            .map(|metadata| metadata.len())
+            .unwrap_or(attachment.size_bytes as u64);
+
+        if live_size > MAX_CONTENT_SIZE {
+            let size_str = format_size(live_size as i64);
+            let summary = format!(
                 "File '{}' is too large for inline content ({}, max 10 MB). \
                  Use get_path instead and delegate to a worker.",
                 attachment.filename, size_str
-            )));
+            );
+            return Ok(AttachmentRecallOutput {
+                action: "get_content".to_string(),
+                attachments: vec![attachment],
+                summary,
+                error: Some("file_too_large".to_string()),
+            });
         }
 
         let is_image = IMAGE_MIME_PREFIXES
@@ -280,13 +316,13 @@ impl AttachmentRecallTool {
                 "File '{}' ({}) cannot be loaded inline — only images and text files \
                  are supported for get_content. Use get_path to get the disk path \
                  and delegate to a worker.\nPath: {}",
-                attachment.filename, attachment.mime_type, attachment.disk_path
+                attachment.filename, attachment.mime_type, disk_path
             );
             return Ok(AttachmentRecallOutput {
                 action: "get_content".to_string(),
                 attachments: vec![attachment],
                 summary,
-                content: None,
+                error: None,
             });
         }
 
@@ -297,20 +333,24 @@ impl AttachmentRecallTool {
             ))
         })?;
 
-        let (user_content, summary) = if is_image {
-            use base64::Engine as _;
-            let base64_data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            let media_type = rig::message::ImageMediaType::from_mime_type(&attachment.mime_type);
-            let content = UserContent::image_base64(base64_data, media_type, None);
-            let summary = format!(
-                "Re-loaded image '{}' ({}, {}) for analysis.",
+        let summary = if is_image {
+            // Images can't be delivered through JSON tool output — the LLM
+            // would need the image injected into conversation history as
+            // UserContent::Image, which requires a separate mechanism.
+            // For now, confirm the image exists and suggest using get_path
+            // to delegate to a worker for image analysis.
+            format!(
+                "Image '{}' ({}, {}) exists on disk at: {}\n\
+                 Note: Image content cannot be inlined in tool output. \
+                 Use get_path and delegate to a worker, or re-send the image in chat.",
                 attachment.filename,
                 attachment.mime_type,
-                format_size(attachment.size_bytes)
-            );
-            (Some(content), summary)
+                format_size(attachment.size_bytes),
+                disk_path
+            )
         } else {
-            // Text file
+            // Text file — inline content directly into summary so the LLM
+            // receives it through the serialized tool output.
             let text = String::from_utf8_lossy(&bytes);
             let truncated = if text.len() > 50_000 {
                 let end = text.floor_char_boundary(50_000);
@@ -322,24 +362,17 @@ impl AttachmentRecallTool {
             } else {
                 text.into_owned()
             };
-            let content = UserContent::text(format!(
+            format!(
                 "<file name=\"{}\" mime=\"{}\">\n{}\n</file>",
                 attachment.filename, attachment.mime_type, truncated
-            ));
-            let summary = format!(
-                "Re-loaded text file '{}' ({}, {}).",
-                attachment.filename,
-                attachment.mime_type,
-                format_size(attachment.size_bytes)
-            );
-            (Some(content), summary)
+            )
         };
 
         Ok(AttachmentRecallOutput {
             action: "get_content".to_string(),
             attachments: vec![attachment],
             summary,
-            content: user_content,
+            error: None,
         })
     }
 
@@ -350,15 +383,16 @@ impl AttachmentRecallTool {
         filename: Option<&str>,
     ) -> Result<AttachmentInfo, AttachmentRecallError> {
         let row = if let Some(id) = attachment_id {
-            // Look up by exact ID or ID prefix
+            // Look up by exact ID or literal ID prefix (no LIKE wildcards)
             let row = sqlx::query_as::<_, AttachmentRow>(
                 "SELECT id, original_filename, saved_filename, mime_type, size_bytes, disk_path, created_at \
                  FROM saved_attachments \
-                 WHERE channel_id = ? AND id LIKE ? || '%' \
+                 WHERE channel_id = ? AND substr(id, 1, length(?)) = ? \
                  ORDER BY created_at DESC \
                  LIMIT 1",
             )
             .bind(self.channel_id.as_ref())
+            .bind(id)
             .bind(id)
             .fetch_optional(&self.pool)
             .await
@@ -366,7 +400,14 @@ impl AttachmentRecallTool {
                 AttachmentRecallError(format!("Failed to look up attachment: {error}"))
             })?;
 
-            row.ok_or_else(|| AttachmentRecallError(format!("No attachment found with ID '{id}'")))?
+            match row {
+                Some(row) => row,
+                None => {
+                    return Err(AttachmentRecallError(format!(
+                        "not_found: No attachment found with ID '{id}'"
+                    )));
+                }
+            }
         } else if let Some(name) = filename {
             // Look up by original filename, most recent match
             let row = sqlx::query_as::<_, AttachmentRow>(
@@ -384,12 +425,17 @@ impl AttachmentRecallTool {
                 AttachmentRecallError(format!("Failed to look up attachment: {error}"))
             })?;
 
-            row.ok_or_else(|| {
-                AttachmentRecallError(format!("No attachment found with filename '{name}'"))
-            })?
+            match row {
+                Some(row) => row,
+                None => {
+                    return Err(AttachmentRecallError(format!(
+                        "not_found: No attachment found with filename '{name}'"
+                    )));
+                }
+            }
         } else {
             return Err(AttachmentRecallError(
-                "Either attachment_id or filename is required for get_path and get_content."
+                "missing_args: Either attachment_id or filename is required for get_path and get_content."
                     .to_string(),
             ));
         };
@@ -400,7 +446,7 @@ impl AttachmentRecallTool {
             saved_filename: row.saved_filename,
             mime_type: row.mime_type,
             size_bytes: row.size_bytes,
-            disk_path: row.disk_path,
+            disk_path: Some(row.disk_path),
             created_at: row.created_at,
         })
     }

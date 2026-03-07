@@ -48,7 +48,7 @@ Key fields:
 
 Saved attachments live in a new `saved/` directory under the workspace:
 
-```
+```text
 workspace/
   ingest/          -- existing: user drops files for ingestion
   skills/          -- existing: skill files
@@ -144,7 +144,7 @@ When `save_attachments` is enabled and attachments are processed, the `Conversat
 
 When history is loaded for LLM context (the `Vec<Message>` that gets passed to `agent.prompt().with_history()`), messages with attachment metadata get an annotation appended to their content:
 
-```
+```text
 [User sent 2 attachments: screenshot.png (image/png, 240 KB, id:a1b2c3d4), diagram.png (image/png, 185 KB, id:e5f6g7h8)]
 ```
 
@@ -209,7 +209,7 @@ pub struct AttachmentRecallTool {
 
 #### Inbound (attachment received)
 
-```
+```text
 User sends message with attachments
   → Adapter extracts Attachment structs (unchanged)
     → Channel receives InboundMessage with MessageContent::Media
@@ -233,7 +233,7 @@ Actually, simpler: download once, save to disk, then read from disk for base64 e
 
 Revised flow:
 
-```
+```text
 For each attachment (when save_attachments = true):
   1. Download raw bytes from URL
   2. Compute saved_filename (dedup)
@@ -246,7 +246,7 @@ For step 5, images are re-read and base64 encoded. Text files are re-read and in
 
 #### Recall (channel wants to reference a past attachment)
 
-```
+```text
 User: "Can you analyze that screenshot I sent earlier?"
   → Channel sees attachment annotation in history:
     [User sent 1 attachment: screenshot.png (image/png, 240 KB, id:a1b2c3d4)]
@@ -258,7 +258,7 @@ User: "Can you analyze that screenshot I sent earlier?"
 
 #### Delegation (channel passes file to worker)
 
-```
+```text
 User: "Resize that screenshot to 800x600"
   → Channel sees attachment annotation in history
   → Channel calls attachment_recall(action: "get_path", attachment_id: "a1b2c3d4")
@@ -272,7 +272,7 @@ User: "Resize that screenshot to 800x600"
 ### What the LLM Sees
 
 **Turn 1 (image sent):**
-```
+```text
 [User content]
 <base64 image data>          ← actual image for vision analysis
 screenshot.png (image/png)
@@ -281,7 +281,7 @@ screenshot.png (image/png)
 ```
 
 **Turn 3 (later in conversation, image data is gone from context):**
-```
+```text
 [History entry for Turn 1]
 Jamie: Here's a screenshot of the bug
 [Attachments: screenshot.png (image/png, 240 KB, id:a1b2c3d4)]
@@ -351,7 +351,7 @@ The LLM sees the annotation, knows the file exists, and can use `attachment_reca
 
 ### Phase Ordering
 
-```
+```text
 Phase 1 (storage)    — standalone
 Phase 2 (channel)    — depends on Phase 1
 Phase 3 (tool)       — depends on Phase 1, independent of Phase 2
