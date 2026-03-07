@@ -57,8 +57,11 @@ pub async fn discover_repos(project_root: &Path) -> anyhow::Result<Vec<Discovere
             continue;
         }
 
-        // Check if this is a git repo by looking for .git.
-        if !path.join(".git").exists() {
+        // Check if this is a git repo by looking for .git *directory*.
+        // Worktrees have a .git *file* (not directory) — skip those so they
+        // are discovered as worktrees of their parent repo instead.
+        let dot_git = path.join(".git");
+        if !dot_git.exists() || !dot_git.is_dir() {
             continue;
         }
 

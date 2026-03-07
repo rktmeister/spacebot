@@ -136,6 +136,80 @@ fn default_true() -> bool {
     true
 }
 
+/// Discover worktrees for all repos in a project and register any new ones.
+async fn discover_and_register_worktrees(
+    store: &Arc<crate::projects::ProjectStore>,
+    project_id: &str,
+    root: &std::path::Path,
+) {
+    let repos = match store.list_repos(project_id).await {
+        Ok(repos) => repos,
+        Err(error) => {
+            tracing::warn!(%error, "failed to list repos for worktree discovery");
+            return;
+        }
+    };
+
+    for repo in &repos {
+        let repo_abs_path = root.join(&repo.path);
+        if !repo_abs_path.is_dir() {
+            continue;
+        }
+        match crate::projects::git::list_worktrees(&repo_abs_path).await {
+            Ok(discovered) => {
+                for worktree in discovered {
+                    // Compute relative path from project root.
+                    let relative_path = worktree
+                        .path
+                        .strip_prefix(root)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|_| {
+                            worktree
+                                .path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default()
+                        });
+
+                    let name = worktree
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+
+                    // Skip if already registered.
+                    if store
+                        .get_worktree_by_path(project_id, &relative_path)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some()
+                    {
+                        continue;
+                    }
+
+                    if let Err(error) = store
+                        .create_worktree(CreateWorktreeInput {
+                            project_id: project_id.to_string(),
+                            repo_id: repo.id.clone(),
+                            name,
+                            path: relative_path,
+                            branch: worktree.branch,
+                            created_by: "scan".into(),
+                        })
+                        .await
+                    {
+                        tracing::warn!(%error, "failed to register discovered worktree");
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, repo = %repo.name, "failed to discover worktrees for repo");
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -187,7 +261,7 @@ pub(super) async fn create_project(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    // Auto-discover repos if requested.
+    // Auto-discover repos and worktrees if requested.
     if request.auto_discover {
         let root = std::path::PathBuf::from(&request.root_path);
         if root.is_dir() {
@@ -213,6 +287,9 @@ pub(super) async fn create_project(
                     tracing::warn!(%error, "failed to discover repos in project root");
                 }
             }
+
+            // Discover worktrees for all registered repos.
+            discover_and_register_worktrees(store, &project.id, &root).await;
         }
     }
 
@@ -379,69 +456,7 @@ pub(super) async fn scan_project(
     }
 
     // Discover worktrees for each known repo.
-    let repos = store.list_repos(&project_id).await.map_err(|error| {
-        tracing::error!(%error, "failed to list repos for worktree scan");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    for repo in &repos {
-        let repo_abs_path = root.join(&repo.path);
-        if !repo_abs_path.is_dir() {
-            continue;
-        }
-        match crate::projects::git::list_worktrees(&repo_abs_path).await {
-            Ok(discovered) => {
-                for worktree in discovered {
-                    // Compute relative path from project root.
-                    let relative_path = worktree
-                        .path
-                        .strip_prefix(&root)
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|_| {
-                            worktree
-                                .path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default()
-                        });
-
-                    let name = worktree
-                        .path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    // Skip if already registered.
-                    if store
-                        .get_worktree_by_path(&project_id, &relative_path)
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some()
-                    {
-                        continue;
-                    }
-
-                    if let Err(error) = store
-                        .create_worktree(CreateWorktreeInput {
-                            project_id: project_id.clone(),
-                            repo_id: repo.id.clone(),
-                            name,
-                            path: relative_path,
-                            branch: worktree.branch,
-                            created_by: "user".into(),
-                        })
-                        .await
-                    {
-                        tracing::warn!(%error, "failed to register discovered worktree during scan");
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, repo = %repo.name, "failed to discover worktrees for repo");
-            }
-        }
-    }
+    discover_and_register_worktrees(store, &project_id, &root).await;
 
     // Reload with relations.
     let full = store
