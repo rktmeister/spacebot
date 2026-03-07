@@ -41,6 +41,7 @@ pub mod mcp;
 pub mod memory_delete;
 pub mod memory_recall;
 pub mod memory_save;
+pub mod project_manage;
 pub mod react;
 pub mod read_skill;
 pub mod reply;
@@ -85,6 +86,9 @@ pub use memory_recall::{
 };
 pub use memory_save::{
     AssociationInput, MemorySaveArgs, MemorySaveError, MemorySaveOutput, MemorySaveTool,
+};
+pub use project_manage::{
+    ProjectManageArgs, ProjectManageError, ProjectManageOutput, ProjectManageTool,
 };
 pub use react::{ReactArgs, ReactError, ReactOutput, ReactTool};
 pub use read_skill::{ReadSkillArgs, ReadSkillError, ReadSkillOutput, ReadSkillTool};
@@ -337,6 +341,12 @@ pub async fn add_channel_tools(
             state.deps.sandbox.clone(),
         ))
         .await?;
+    handle
+        .add_tool(ProjectManageTool::new(
+            state.deps.project_store.clone(),
+            state.deps.agent_id.to_string(),
+        ))
+        .await?;
     handle.add_tool(CancelTool::new(state)).await?;
     handle
         .add_tool(SkipTool::new(skip_flag.clone(), response_tx.clone()))
@@ -381,6 +391,7 @@ pub async fn remove_channel_tools(
     handle.remove_tool(SkipTool::NAME).await?;
     handle.remove_tool(SendFileTool::NAME).await?;
     handle.remove_tool(ReactTool::NAME).await?;
+    handle.remove_tool(ProjectManageTool::NAME).await?;
     // Cron, send_message, and send_agent_message removal is best-effort since not all channels have them
     let _ = handle.remove_tool(CronTool::NAME).await;
     let _ = handle.remove_tool(SendMessageTool::NAME).await;

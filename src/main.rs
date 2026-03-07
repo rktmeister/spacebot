@@ -2418,6 +2418,7 @@ async fn initialize_agents(
         let memory_store =
             spacebot::memory::MemoryStore::with_agent_id(db.sqlite.clone(), &agent_config.id);
         let task_store = Arc::new(spacebot::tasks::TaskStore::new(db.sqlite.clone()));
+        let project_store = Arc::new(spacebot::projects::ProjectStore::new(db.sqlite.clone()));
         let embedding_table = spacebot::memory::EmbeddingTable::open_or_create(&db.lance)
             .await
             .with_context(|| {
@@ -2513,6 +2514,7 @@ async fn initialize_agents(
             llm_manager: llm_manager.clone(),
             mcp_manager,
             task_store: task_store.clone(),
+            project_store: project_store.clone(),
             cron_tool: None,
             runtime_config,
             event_tx,
@@ -2583,6 +2585,7 @@ async fn initialize_agents(
         let mut memory_searches = std::collections::HashMap::new();
         let mut mcp_managers = std::collections::HashMap::new();
         let mut task_stores = std::collections::HashMap::new();
+        let mut project_stores = std::collections::HashMap::new();
         let mut agent_workspaces = std::collections::HashMap::new();
         let mut runtime_configs = std::collections::HashMap::new();
         let mut sandboxes = std::collections::HashMap::new();
@@ -2593,6 +2596,7 @@ async fn initialize_agents(
             memory_searches.insert(agent_id.to_string(), agent.deps.memory_search.clone());
             mcp_managers.insert(agent_id.to_string(), agent.deps.mcp_manager.clone());
             task_stores.insert(agent_id.to_string(), agent.deps.task_store.clone());
+            project_stores.insert(agent_id.to_string(), agent.deps.project_store.clone());
             agent_workspaces.insert(agent_id.to_string(), agent.config.workspace.clone());
             runtime_configs.insert(agent_id.to_string(), agent.deps.runtime_config.clone());
             sandboxes.insert(agent_id.to_string(), agent.deps.sandbox.clone());
@@ -2612,6 +2616,7 @@ async fn initialize_agents(
         api_state.set_memory_searches(memory_searches);
         api_state.set_mcp_managers(mcp_managers);
         api_state.set_task_stores(task_stores);
+        api_state.set_project_stores(project_stores);
         api_state.set_runtime_configs(runtime_configs);
         api_state.set_agent_workspaces(agent_workspaces);
         api_state.set_sandboxes(sandboxes);

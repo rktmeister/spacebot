@@ -404,6 +404,8 @@ pub(super) async fn trigger_warmup(
         let injection_tx = state.injection_tx.clone();
         tokio::spawn(async move {
             let (event_tx, memory_event_tx) = crate::create_process_event_buses();
+            let project_store =
+                std::sync::Arc::new(crate::projects::ProjectStore::new(sqlite_pool.clone()));
             let deps = crate::AgentDeps {
                 agent_id: Arc::from(agent_id.as_str()),
                 memory_search,
@@ -417,6 +419,7 @@ pub(super) async fn trigger_warmup(
                 messaging_manager: None,
                 sandbox,
                 task_store,
+                project_store,
                 links: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
                 agent_names: Arc::new(std::collections::HashMap::new()),
                 task_store_registry,
@@ -708,12 +711,15 @@ pub(super) async fn create_agent(
         .await,
     );
 
+    let project_store = std::sync::Arc::new(crate::projects::ProjectStore::new(db.sqlite.clone()));
+
     let deps = crate::AgentDeps {
         agent_id: arc_agent_id.clone(),
         memory_search: memory_search.clone(),
         llm_manager,
         mcp_manager: mcp_manager.clone(),
         task_store: task_store.clone(),
+        project_store: project_store.clone(),
         cron_tool: None,
         runtime_config: runtime_config.clone(),
         event_tx: event_tx.clone(),
