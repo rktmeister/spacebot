@@ -283,16 +283,16 @@ JSON.stringify((function() {
             return;
         }
         
-        // Check if this is an interactive role that should have an index
+        // Only truly interactive roles get an index — things the user can
+        // click, type into, or toggle.  Structural/landmark roles (region,
+        // navigation, banner, contentinfo, article, list, listitem, heading,
+        // generic, etc.) are intentionally excluded to keep snapshots small.
         const interactiveRoles = [
             'button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio',
             'combobox', 'listbox', 'option', 'menuitem', 'menuitemcheckbox',
-            'menuitemradio', 'tab', 'tabpanel', 'slider', 'spinbutton',
-            'switch', 'img', 'article', 'region', 'navigation', 'main',
-            'complementary', 'banner', 'contentinfo', 'form', 'search',
-            'tree', 'treeitem', 'grid', 'gridcell', 'row', 'columnheader',
-            'rowheader', 'heading', 'dialog', 'alertdialog', 'alert',
-            'status', 'progressbar', 'list', 'listitem', 'generic'
+            'menuitemradio', 'tab', 'slider', 'spinbutton',
+            'switch', 'treeitem', 'gridcell', 'columnheader', 'rowheader',
+            'dialog', 'alertdialog', 'img'
         ];
         
         // Only assign index to interactive roles or elements with pointer cursor
@@ -647,40 +647,78 @@ JSON.stringify((function() {
         }
     }
 
-    // Build CSS selector for element
+    // Build a short, stable CSS selector for an element.
+    // Strategy: walk up the tree looking for the nearest ancestor with an ID,
+    // then build a short relative path from there.  Falls back to a short
+    // path from <body> if no ID is found within a reasonable depth.
     function buildSelector(element) {
+        // Quick path: element itself has an ID
         if (element.id) {
-            return '#' + element.id;
+            return '#' + CSS.escape(element.id);
         }
-        
-        const path = [];
-        let current = element;
-        
-        while (current && current !== document.body) {
-            let selector = current.tagName.toLowerCase();
-            
-            if (current.className && typeof current.className === 'string') {
-                const classes = current.className.trim().split(/\s+/);
-                if (classes.length > 0 && classes[0]) {
-                    selector += '.' + classes[0];
+
+        // Build a segment for one level: tag + first-class + nth-child if needed
+        function segment(el) {
+            let sel = el.tagName.toLowerCase();
+            if (el.className && typeof el.className === 'string') {
+                const cls = el.className.trim().split(/\s+/).filter(Boolean);
+                if (cls.length > 0) {
+                    sel += '.' + CSS.escape(cls[0]);
                 }
             }
-            
-            // Add nth-child if needed for uniqueness
-            const parent = current.parentElement;
+            const parent = el.parentElement;
             if (parent) {
-                const siblings = Array.from(parent.children);
-                const index = siblings.indexOf(current);
-                if (siblings.filter(s => s.tagName === current.tagName).length > 1) {
-                    selector += ':nth-child(' + (index + 1) + ')';
+                const sameTag = Array.from(parent.children).filter(
+                    s => s.tagName === el.tagName
+                );
+                if (sameTag.length > 1) {
+                    const idx = Array.from(parent.children).indexOf(el);
+                    sel += ':nth-child(' + (idx + 1) + ')';
                 }
             }
-            
-            path.unshift(selector);
+            return sel;
+        }
+
+        // Walk up looking for an ancestor with an ID (max 6 levels)
+        const parts = [];
+        let current = element;
+        const maxDepth = 6;
+
+        for (let i = 0; i < maxDepth && current && current !== document.body; i++) {
+            if (i > 0 && current.id) {
+                // Found an ID anchor — build selector from here
+                const anchor = '#' + CSS.escape(current.id);
+                parts.unshift(anchor);
+                const candidate = parts.join(' > ');
+                // Verify uniqueness
+                try {
+                    if (document.querySelectorAll(candidate).length === 1) {
+                        return candidate;
+                    }
+                } catch(e) { /* selector parse error, fall through */ }
+                // If not unique with ID anchor, keep going
+                parts.shift();
+                parts.unshift(segment(current));
+            } else {
+                parts.unshift(segment(current));
+            }
             current = current.parentElement;
         }
-        
-        return path.join(' > ');
+
+        // No nearby ID found — use the path from body
+        const candidate = parts.join(' > ');
+        try {
+            if (document.querySelectorAll(candidate).length === 1) {
+                return candidate;
+            }
+        } catch(e) { /* fall through */ }
+
+        // If still not unique, keep walking up to body
+        while (current && current !== document.body) {
+            parts.unshift(segment(current));
+            current = current.parentElement;
+        }
+        return parts.join(' > ');
     }
 
     // Main execution

@@ -123,6 +123,49 @@ fn is_v4_mapped_blocked(ip: std::net::Ipv6Addr) -> bool {
     }
 }
 
+// Page readiness helper
+
+/// Wait for the page to be "ready enough" for DOM extraction.
+///
+/// Many sites are SPAs that load a shell document and then hydrate with JS.
+/// `chromiumoxide::Page::goto` returns after the main-frame load event, but
+/// interactive content may not exist yet. This helper polls the page's
+/// `document.readyState` and body child count to detect when content has
+/// rendered, with a generous timeout so we don't block forever on broken pages.
+async fn wait_for_page_ready(page: &chromiumoxide::Page) {
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
+    const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+    let start = std::time::Instant::now();
+
+    loop {
+        if start.elapsed() >= MAX_WAIT {
+            break;
+        }
+
+        // Check if the page has meaningful content: readyState is "complete"
+        // and the body has at least one child element.
+        let ready = page
+            .evaluate(
+                "(document.readyState === 'complete' && \
+                 document.body && document.body.children.length > 0)",
+            )
+            .await
+            .ok()
+            .and_then(|result| result.value().cloned())
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+
+        if ready {
+            // Give JS frameworks one more tick to finish hydration.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            break;
+        }
+
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
 // DOM snapshot types (ported from browser-use-rs)
 
 /// An ARIA tree snapshot of a page, extracted via injected JavaScript.
@@ -809,6 +852,11 @@ impl Tool for BrowserNavigateTool {
             .await
             .map_err(|error| BrowserError::new(format!("navigation failed: {error}")))?;
 
+        // Wait briefly for SPA content to render. Many sites load a shell via
+        // the initial HTML then hydrate with JS — without this pause,
+        // `browser_snapshot` runs before any interactive elements exist.
+        wait_for_page_ready(page).await;
+
         let title = page.get_title().await.ok().flatten();
         let current_url = page.url().await.ok().flatten();
         state.invalidate_snapshot();
@@ -926,6 +974,11 @@ impl Tool for BrowserClickTool {
             .click()
             .await
             .map_err(|error| BrowserError::new(format!("click failed: {error}")))?;
+
+        // Clicks often trigger navigation or DOM changes — give the page a
+        // moment to settle before the next snapshot.
+        let page = self.context.require_active_page(&state)?;
+        wait_for_page_ready(page).await;
 
         state.invalidate_snapshot();
 
