@@ -246,6 +246,12 @@ pub enum ApiEvent {
         worker_id: String,
         part: crate::opencode::types::OpenCodePart,
     },
+    /// A worker emitted text content (model reasoning between tool calls).
+    WorkerText {
+        agent_id: String,
+        worker_id: String,
+        text: String,
+    },
 }
 
 impl ApiState {
@@ -590,6 +596,27 @@ impl ApiState {
                                         agent_id: agent_id.clone(),
                                         worker_id: worker_id.to_string(),
                                         part: part.clone(),
+                                    })
+                                    .ok();
+                            }
+                            ProcessEvent::WorkerText {
+                                worker_id, text, ..
+                            } => {
+                                // Accumulate into live transcript cache
+                                let step = TranscriptStep::Action {
+                                    content: vec![ActionContent::Text { text: text.clone() }],
+                                };
+                                let mut guard = live_transcripts.write().await;
+                                if let Some(steps) = guard.get_mut(&worker_id.to_string()) {
+                                    steps.push(step);
+                                }
+                                drop(guard);
+
+                                api_tx
+                                    .send(ApiEvent::WorkerText {
+                                        agent_id: agent_id.clone(),
+                                        worker_id: worker_id.to_string(),
+                                        text: text.clone(),
                                     })
                                     .ok();
                             }
