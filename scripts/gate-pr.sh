@@ -177,7 +177,7 @@ run_step "cargo check --all-targets" cargo check --all-targets
 if $fast_mode; then
 	log "fast mode enabled: skipping clippy and integration test compile"
 else
-	run_step "cargo clippy --all-targets" cargo clippy --all-targets
+	run_step "RUSTFLAGS=\"-Dwarnings\" cargo clippy --all-targets" env RUSTFLAGS="-Dwarnings" cargo clippy --all-targets
 fi
 
 run_step "cargo test --lib" cargo test --lib
