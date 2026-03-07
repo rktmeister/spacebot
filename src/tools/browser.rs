@@ -584,6 +584,18 @@ impl BrowserTool {
             (dir, false)
         };
 
+        // Chrome writes a SingletonLock file to prevent multiple instances from
+        // sharing a profile. When the agent restarts after a crash or kill, the
+        // lock file is left behind as a stale artifact. Remove it so Chrome can
+        // launch with the persistent profile.
+        if persistent_profile {
+            let lock_file = user_data_dir.join("SingletonLock");
+            if lock_file.exists() {
+                tracing::debug!(path = %lock_file.display(), "removing stale Chrome SingletonLock");
+                let _ = std::fs::remove_file(&lock_file);
+            }
+        }
+
         let mut builder = ChromeConfig::builder()
             .no_sandbox()
             .chrome_executable(&executable)
