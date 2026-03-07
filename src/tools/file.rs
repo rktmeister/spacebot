@@ -48,21 +48,21 @@ impl FileTool {
             return Ok(canonical);
         }
 
-        let workspace_canonical = self
-            .workspace
-            .canonicalize()
-            .unwrap_or_else(|_| self.workspace.clone());
-
-        if !canonical.starts_with(&workspace_canonical) {
+        if !self.sandbox.is_path_allowed(&canonical) {
             return Err(FileError(format!(
                 "ACCESS DENIED: Path is outside the workspace boundary. \
-                 File operations are restricted to {}. \
+                 File operations are restricted to {} and allowed project paths. \
                  You do not have access to this file and must not attempt to reproduce, \
                  guess, or fabricate its contents. Inform the user that the path is \
                  outside your workspace.",
                 self.workspace.display()
             )));
         }
+
+        let workspace_canonical = self
+            .workspace
+            .canonicalize()
+            .unwrap_or_else(|_| self.workspace.clone());
 
         // Reject paths containing symlinks to prevent TOCTOU races where a
         // path component is replaced with a symlink between resolution and I/O.

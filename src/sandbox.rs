@@ -26,6 +26,10 @@ pub struct SandboxConfig {
     /// in the store. The field is additive either way.
     #[serde(default)]
     pub passthrough_env: Vec<String>,
+    /// Project root paths auto-injected into the sandbox allowlist.
+    /// Managed by `refresh_project_paths`, not user-configured.
+    #[serde(skip)]
+    pub project_paths: Vec<PathBuf>,
 }
 
 impl Default for SandboxConfig {
@@ -34,7 +38,15 @@ impl Default for SandboxConfig {
             mode: SandboxMode::Enabled,
             writable_paths: Vec::new(),
             passthrough_env: Vec::new(),
+            project_paths: Vec::new(),
         }
+    }
+}
+
+impl SandboxConfig {
+    /// All writable paths: user-configured + auto-injected project paths.
+    pub fn all_writable_paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.writable_paths.iter().chain(self.project_paths.iter())
     }
 }
 
@@ -222,6 +234,42 @@ impl Sandbox {
         self.config.load().mode == SandboxMode::Enabled
     }
 
+    /// Update the sandbox allowlist with project root paths.
+    ///
+    /// Merges the given project root paths into the sandbox config alongside
+    /// the user-configured `writable_paths`. Takes effect immediately — the
+    /// next `wrap()` call will include these paths.
+    pub fn refresh_project_paths(&self, paths: Vec<PathBuf>) {
+        self.config.rcu(|current| {
+            let mut next = (**current).clone();
+            next.project_paths = paths.clone();
+            Arc::new(next)
+        });
+    }
+
+    /// Check whether a canonical path falls within the workspace or any
+    /// allowed writable path (user-configured or project-injected).
+    ///
+    /// Used by shell/exec/file tools to relax the workspace boundary when
+    /// project paths are registered.
+    pub fn is_path_allowed(&self, canonical: &Path) -> bool {
+        let workspace_canonical = self
+            .workspace
+            .canonicalize()
+            .unwrap_or_else(|_| self.workspace.clone());
+        if canonical.starts_with(&workspace_canonical) {
+            return true;
+        }
+        let config = self.config.load();
+        for path in config.all_writable_paths() {
+            let allowed = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if canonical.starts_with(&allowed) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// True when OS-level containment is currently active.
     ///
     /// If mode is enabled but no backend is available, this returns false
@@ -255,7 +303,7 @@ impl Sandbox {
 
                 push_unique_path(&mut paths, canonicalize_or_self(&self.workspace));
 
-                for path in &config.writable_paths {
+                for path in config.all_writable_paths() {
                     if let Ok(canonical) = path.canonicalize() {
                         push_unique_path(&mut paths, canonical);
                     }
@@ -275,7 +323,7 @@ impl Sandbox {
 
                 push_unique_path(&mut paths, canonicalize_or_self(&self.workspace));
 
-                for path in &config.writable_paths {
+                for path in config.all_writable_paths() {
                     push_unique_path(&mut paths, canonicalize_or_self(path));
                 }
             }
@@ -300,14 +348,14 @@ impl Sandbox {
 
         match self.backend {
             SandboxBackend::Bubblewrap { .. } => {
-                for path in &config.writable_paths {
+                for path in config.all_writable_paths() {
                     if let Ok(canonical) = path.canonicalize() {
                         push_unique_path(&mut paths, canonical);
                     }
                 }
             }
             SandboxBackend::SandboxExec => {
-                for path in &config.writable_paths {
+                for path in config.all_writable_paths() {
                     push_unique_path(&mut paths, canonicalize_or_self(path));
                 }
             }
@@ -428,8 +476,8 @@ impl Sandbox {
         // 5. Workspace writable
         cmd.arg("--bind").arg(&self.workspace).arg(&self.workspace);
 
-        // 6. Each configured writable path (canonicalized dynamically)
-        for path in &config.writable_paths {
+        // 6. Each configured + project writable path (canonicalized dynamically)
+        for path in config.all_writable_paths() {
             match path.canonicalize() {
                 Ok(canonical) => {
                     cmd.arg("--bind").arg(&canonical).arg(&canonical);
@@ -691,8 +739,8 @@ impl Sandbox {
             escape_sbpl_path(&workspace)
         ));
 
-        // Additional writable paths (canonicalized dynamically) are readable and writable.
-        for (index, path) in config.writable_paths.iter().enumerate() {
+        // Additional writable paths (user-configured + project paths) are readable and writable.
+        for (index, path) in config.all_writable_paths().enumerate() {
             let canonical = canonicalize_or_self(path);
             profile.push_str(&format!(
                 "; writable path {index}\n(allow file-read* (subpath \"{}\"))\n(allow file-write* (subpath \"{}\"))\n",

@@ -1394,6 +1394,8 @@ impl Channel {
 
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
 
+        let project_context = self.build_project_context(&prompt_engine).await;
+
         prompt_engine.render_channel_prompt_with_links(
             empty_to_none(identity_context),
             empty_to_none(memory_bulletin.to_string()),
@@ -1406,6 +1408,7 @@ impl Channel {
             sandbox_enabled,
             org_context,
             adapter_prompt,
+            project_context,
         )
     }
 
@@ -1841,6 +1844,104 @@ impl Channel {
         prompt_engine.render_org_context(org_context).ok()
     }
 
+    /// Build pre-rendered project context for prompt injection.
+    ///
+    /// Fetches all active projects with their repos and worktrees, converts them
+    /// to prompt-friendly structs, and renders via the projects_context template.
+    /// Returns `None` if no projects exist or if rendering fails.
+    async fn build_project_context(
+        &self,
+        prompt_engine: &crate::prompts::engine::PromptEngine,
+    ) -> Option<String> {
+        use crate::prompts::engine::{ProjectContext, ProjectRepoContext, ProjectWorktreeContext};
+
+        let store = &self.deps.project_store;
+        let projects = match store
+            .list_projects(
+                &self.deps.agent_id,
+                Some(crate::projects::ProjectStatus::Active),
+            )
+            .await
+        {
+            Ok(projects) => projects,
+            Err(error) => {
+                tracing::warn!(%error, "failed to load projects for prompt injection");
+                return None;
+            }
+        };
+
+        if projects.is_empty() {
+            return None;
+        }
+
+        let mut contexts = Vec::with_capacity(projects.len());
+        for project in &projects {
+            let repos = match store.list_repos(&project.id).await {
+                Ok(repos) => repos,
+                Err(error) => {
+                    tracing::warn!(%error, project_id = %project.id, "failed to load repos for project");
+                    Vec::new()
+                }
+            };
+
+            let worktrees = match store.list_worktrees_with_repos(&project.id).await {
+                Ok(worktrees) => worktrees,
+                Err(error) => {
+                    tracing::warn!(%error, project_id = %project.id, "failed to load worktrees for project");
+                    Vec::new()
+                }
+            };
+
+            contexts.push(ProjectContext {
+                name: project.name.clone(),
+                root_path: project.root_path.clone(),
+                description: if project.description.is_empty() {
+                    None
+                } else {
+                    Some(project.description.clone())
+                },
+                tags: project.tags.clone(),
+                repos: repos
+                    .into_iter()
+                    .map(|repo| ProjectRepoContext {
+                        name: repo.name.clone(),
+                        path: repo.path.clone(),
+                        default_branch: repo.default_branch.clone(),
+                        remote_url: if repo.remote_url.is_empty() {
+                            None
+                        } else {
+                            Some(repo.remote_url.clone())
+                        },
+                    })
+                    .collect(),
+                worktrees: worktrees
+                    .into_iter()
+                    .map(|worktree_with_repo| ProjectWorktreeContext {
+                        name: worktree_with_repo.worktree.name.clone(),
+                        path: worktree_with_repo.worktree.path.clone(),
+                        branch: worktree_with_repo.worktree.branch.clone(),
+                        repo_name: worktree_with_repo.repo_name.clone(),
+                    })
+                    .collect(),
+            });
+        }
+
+        match prompt_engine.render_projects_context(contexts) {
+            Ok(rendered) => {
+                let rendered = rendered.trim().to_string();
+                if rendered.is_empty() {
+                    None
+                } else {
+                    Some(rendered)
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to render projects context");
+                None
+            }
+        }
+    }
+
     /// Assemble the full system prompt using the PromptEngine.
     async fn build_system_prompt(&self) -> crate::error::Result<String> {
         let rc = &self.deps.runtime_config;
@@ -1876,6 +1977,8 @@ impl Channel {
             .current_adapter()
             .and_then(|adapter| prompt_engine.render_channel_adapter_prompt(adapter));
 
+        let project_context = self.build_project_context(&prompt_engine).await;
+
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
 
         prompt_engine.render_channel_prompt_with_links(
@@ -1890,6 +1993,7 @@ impl Channel {
             sandbox_enabled,
             org_context,
             adapter_prompt,
+            project_context,
         )
     }
 
