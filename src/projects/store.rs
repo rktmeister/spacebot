@@ -39,6 +39,25 @@ impl std::fmt::Display for ProjectStatus {
     }
 }
 
+/// Per-project settings overrides. Each field is optional — `None` means
+/// "inherit from the agent-level `ProjectsConfig`". Stored as JSON in the
+/// `settings` column of the `projects` table.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProjectSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_worktrees: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_name_template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_create_worktrees: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_discover_repos: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_discover_worktrees: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk_usage_warning_threshold: Option<u64>,
+}
+
 // Domain types
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +73,14 @@ pub struct Project {
     pub status: ProjectStatus,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl Project {
+    /// Deserialize the `settings` JSON blob into a typed `ProjectSettings`.
+    /// Returns defaults if the blob is empty or malformed.
+    pub fn typed_settings(&self) -> ProjectSettings {
+        serde_json::from_value(self.settings.clone()).unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

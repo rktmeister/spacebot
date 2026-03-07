@@ -624,6 +624,15 @@ export interface SandboxSection {
 	writable_paths: string[];
 }
 
+export interface ProjectsSection {
+	use_worktrees: boolean;
+	worktree_name_template: string;
+	auto_create_worktrees: boolean;
+	auto_discover_repos: boolean;
+	auto_discover_worktrees: boolean;
+	disk_usage_warning_threshold: number;
+}
+
 export interface DiscordSection {
 	enabled: boolean;
 	allow_bot_messages: boolean;
@@ -640,6 +649,7 @@ export interface AgentConfigResponse {
 	channel: ChannelSection;
 	discord: DiscordSection;
 	sandbox: SandboxSection;
+	projects: ProjectsSection;
 }
 
 // Partial update types - all fields are optional
@@ -713,6 +723,15 @@ export interface SandboxUpdate {
 	writable_paths?: string[];
 }
 
+export interface ProjectsUpdate {
+	use_worktrees?: boolean;
+	worktree_name_template?: string;
+	auto_create_worktrees?: boolean;
+	auto_discover_repos?: boolean;
+	auto_discover_worktrees?: boolean;
+	disk_usage_warning_threshold?: number;
+}
+
 export interface DiscordUpdate {
 	allow_bot_messages?: boolean;
 }
@@ -729,6 +748,7 @@ export interface AgentConfigUpdateRequest {
 	channel?: ChannelUpdate;
 	discord?: DiscordUpdate;
 	sandbox?: SandboxUpdate;
+	projects?: ProjectsUpdate;
 }
 
 // -- Cron Types --

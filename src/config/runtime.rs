@@ -69,6 +69,8 @@ pub struct RuntimeConfig {
     /// Wrapped in `Arc` so it can be shared with the `Sandbox` struct, which
     /// reads the current mode dynamically on every `wrap()` call.
     pub sandbox: Arc<ArcSwap<crate::sandbox::SandboxConfig>>,
+    /// Projects workspace management configuration.
+    pub projects: ArcSwap<crate::config::ProjectsConfig>,
     /// Shared browser state for persistent sessions.
     ///
     /// When `browser.persist_session = true`, all workers share this handle so
@@ -130,6 +132,7 @@ impl RuntimeConfig {
             channel_listen_only_explicit: ArcSwap::from_pointee(None),
             secrets: ArcSwap::from_pointee(None),
             sandbox: Arc::new(ArcSwap::from_pointee(agent_config.sandbox.clone())),
+            projects: ArcSwap::from_pointee(agent_config.projects.clone()),
             shared_browser: if agent_config.browser.persist_session {
                 Some(crate::tools::browser::new_shared_browser_handle())
             } else {
@@ -271,6 +274,7 @@ impl RuntimeConfig {
         self.cortex.store(Arc::new(resolved.cortex));
         self.warmup.store(Arc::new(resolved.warmup));
         self.sandbox.store(Arc::new(resolved.sandbox.clone()));
+        self.projects.store(Arc::new(resolved.projects.clone()));
 
         let old_opencode = self.opencode.load().as_ref().clone();
         let new_opencode = config.defaults.opencode.clone();

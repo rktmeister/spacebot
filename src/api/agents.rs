@@ -575,6 +575,7 @@ pub(super) async fn create_agent(
         cron_timezone: None,
         user_timezone: None,
         sandbox: None,
+        projects: None,
         cron: Vec::new(),
     };
     let agent_config = raw_config.resolve(&instance_dir, defaults);
