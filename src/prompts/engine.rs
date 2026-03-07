@@ -253,6 +253,7 @@ impl PromptEngine {
         sandbox_read_allowlist: Vec<String>,
         sandbox_write_allowlist: Vec<String>,
         tool_secret_names: &[String],
+        browser_persist_session: bool,
     ) -> Result<String> {
         self.render(
             "worker",
@@ -264,6 +265,7 @@ impl PromptEngine {
                 sandbox_read_allowlist => sandbox_read_allowlist,
                 sandbox_write_allowlist => sandbox_write_allowlist,
                 tool_secret_names => tool_secret_names,
+                browser_persist_session => browser_persist_session,
             },
         )
     }

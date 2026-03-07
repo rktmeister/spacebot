@@ -356,6 +356,7 @@ async fn dump_worker_context() {
     let prompt_engine = rc.prompts.load();
     let instance_dir = rc.instance_dir.to_string_lossy();
     let workspace_dir = rc.workspace_dir.to_string_lossy();
+    let browser_config = (**rc.browser_config.load()).clone();
     let worker_prompt = prompt_engine
         .render_worker_prompt(
             &instance_dir,
@@ -365,13 +366,11 @@ async fn dump_worker_context() {
             Vec::new(),
             Vec::new(),
             &[],
+            browser_config.persist_session,
         )
         .expect("failed to render worker prompt");
     print_section("WORKER SYSTEM PROMPT", &worker_prompt);
     print_stats("System prompt", &worker_prompt);
-
-    // Build the actual worker tool server
-    let browser_config = (**rc.browser_config.load()).clone();
     let brave_search_key = (**rc.brave_search_key.load()).clone();
     let worker_id = uuid::Uuid::new_v4();
 
@@ -530,6 +529,7 @@ async fn dump_all_contexts() {
     println!("--- TOTAL BRANCH: ~{} tokens ---", branch_total / 4);
 
     // ── Worker ──
+    let browser_config = (**rc.browser_config.load()).clone();
     let worker_prompt = prompt_engine
         .render_worker_prompt(
             &instance_dir,
@@ -539,9 +539,9 @@ async fn dump_all_contexts() {
             Vec::new(),
             Vec::new(),
             &[],
+            browser_config.persist_session,
         )
         .expect("failed to render worker prompt");
-    let browser_config = (**rc.browser_config.load()).clone();
     let brave_search_key = (**rc.brave_search_key.load()).clone();
     let worker_tool_server = spacebot::tools::create_worker_tool_server(
         deps.agent_id.clone(),
