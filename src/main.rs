@@ -214,7 +214,10 @@ fn cmd_start(
     debug: bool,
     foreground: bool,
 ) -> anyhow::Result<()> {
-    let paths = spacebot::daemon::DaemonPaths::from_default();
+    // Use the config path (if provided) to derive the correct instance dir
+    // for the PID check, so it matches the PID file written during daemonize.
+    let instance_dir = resolve_instance_dir(&config_path);
+    let paths = spacebot::daemon::DaemonPaths::new(&instance_dir);
 
     // Bail if already running
     if let Some(pid) = spacebot::daemon::is_running(&paths) {
@@ -245,8 +248,6 @@ fn cmd_start(
         //
         // Tokio's I/O driver and thread pool also don't survive fork, so the
         // runtime and tracing init must happen after this call as well.
-        let instance_dir = resolve_instance_dir(&resolved_config_path);
-        let paths = spacebot::daemon::DaemonPaths::new(&instance_dir);
         spacebot::daemon::daemonize(&paths)?;
     }
 
@@ -1169,13 +1170,7 @@ fn bootstrap_secrets_store(
     // is disabled but workers still start normally.
     spacebot::secrets::keystore::probe_keyring_support();
 
-    let instance_dir = if let Some(path) = config_path {
-        path.parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-    } else {
-        spacebot::config::Config::default_instance_dir()
-    };
+    let instance_dir = resolve_instance_dir(config_path);
 
     let data_dir = instance_dir.join("data");
     if let Err(error) = std::fs::create_dir_all(&data_dir) {
