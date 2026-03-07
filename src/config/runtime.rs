@@ -191,6 +191,11 @@ impl RuntimeConfig {
         self.work_readiness().ready
     }
 
+    /// Path to the saved attachments directory for persisted channel files.
+    pub fn saved_dir(&self) -> std::path::PathBuf {
+        self.workspace_dir.join("saved")
+    }
+
     /// Reload tunable config values from a freshly parsed Config.
     ///
     /// Finds the matching agent by ID, re-resolves it against defaults, and
@@ -240,6 +245,7 @@ impl RuntimeConfig {
             next.listen_only_mode = configured_listen_only
                 .or(persisted_listen_only)
                 .unwrap_or(current.as_ref().listen_only_mode);
+            // save_attachments has no persisted override — config is authoritative
             Arc::new(next)
         });
         self.max_turns.store(Arc::new(resolved.max_turns));

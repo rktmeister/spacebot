@@ -773,6 +773,10 @@ impl Default for BrowserConfig {
 pub struct ChannelConfig {
     /// When true, unsolicited chat messages are ignored unless command/mention/reply.
     pub listen_only_mode: bool,
+    /// When true, file attachments received in the channel are saved to
+    /// `workspace/saved/` and tracked in the `saved_attachments` table so
+    /// they can be recalled on later turns.
+    pub save_attachments: bool,
 }
 
 /// OpenCode subprocess worker configuration.
@@ -1199,6 +1203,11 @@ impl ResolvedAgentConfig {
     /// Path to the memory ingestion directory where users drop files.
     pub fn ingest_dir(&self) -> PathBuf {
         self.workspace.join("ingest")
+    }
+
+    /// Path to the saved attachments directory for persisted channel files.
+    pub fn saved_dir(&self) -> PathBuf {
+        self.workspace.join("saved")
     }
 }
 
