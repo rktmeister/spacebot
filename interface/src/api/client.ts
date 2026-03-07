@@ -542,6 +542,7 @@ export type CortexChatSSEEvent =
 export interface IdentityFiles {
 	soul: string | null;
 	identity: string | null;
+	user: string | null;
 }
 
 export interface IdentityUpdateRequest {

@@ -46,7 +46,7 @@ const isIdentityField = (id: SectionId): id is "soul" | "identity" => {
 	return id === "soul" || id === "identity";
 };
 
-const getIdentityField = (data: { soul: string | null; identity: string | null }, field: SectionId): string | null => {
+const getIdentityField = (data: { soul: string | null; identity: string | null; user: string | null }, field: SectionId): string | null => {
 	if (isIdentityField(field)) {
 		return data[field];
 	}
