@@ -265,6 +265,7 @@ impl ProjectManageTool {
                 repo_count += 1;
 
                 // Discover worktrees for this repo
+                let is_root_repo = repo_info.relative_path == ".";
                 let repo_abs_path = root.join(&repo_info.relative_path);
                 if let Ok(worktrees) = git::list_worktrees(&repo_abs_path).await {
                     for worktree_info in worktrees {
@@ -274,12 +275,21 @@ impl ProjectManageTool {
                             .map(|name| name.to_string_lossy().to_string())
                             .unwrap_or_else(|| worktree_info.branch.replace('/', "-"));
 
-                        // Compute relative path from project root
-                        let relative_path = worktree_info
-                            .path
-                            .strip_prefix(root)
-                            .map(|path| path.to_string_lossy().to_string())
-                            .unwrap_or_else(|_| worktree_name.clone());
+                        // For root repos (path == "."), worktrees live in the parent
+                        // directory. Store as `../name` relative to root.
+                        let relative_path = if is_root_repo {
+                            let parent = root.parent();
+                            parent
+                                .and_then(|p| worktree_info.path.strip_prefix(p).ok())
+                                .map(|p| format!("../{}", p.to_string_lossy()))
+                                .unwrap_or_else(|| worktree_info.path.to_string_lossy().to_string())
+                        } else {
+                            worktree_info
+                                .path
+                                .strip_prefix(root)
+                                .map(|path| path.to_string_lossy().to_string())
+                                .unwrap_or_else(|_| worktree_name.clone())
+                        };
 
                         let worktree_result = self
                             .project_store
@@ -383,6 +393,7 @@ impl ProjectManageTool {
 
         for repo in &all_repos {
             let repo_abs_path = root.join(&repo.path);
+            let is_root_repo = repo.path == ".";
             if let Ok(worktrees) = git::list_worktrees(&repo_abs_path).await {
                 let existing_worktrees = self
                     .project_store
@@ -407,11 +418,19 @@ impl ProjectManageTool {
                         .map(|name| name.to_string_lossy().to_string())
                         .unwrap_or_else(|| worktree_info.branch.replace('/', "-"));
 
-                    let relative_path = worktree_info
-                        .path
-                        .strip_prefix(root)
-                        .map(|path| path.to_string_lossy().to_string())
-                        .unwrap_or_else(|_| worktree_name.clone());
+                    let relative_path = if is_root_repo {
+                        let parent = root.parent();
+                        parent
+                            .and_then(|p| worktree_info.path.strip_prefix(p).ok())
+                            .map(|p| format!("../{}", p.to_string_lossy()))
+                            .unwrap_or_else(|| worktree_info.path.to_string_lossy().to_string())
+                    } else {
+                        worktree_info
+                            .path
+                            .strip_prefix(root)
+                            .map(|path| path.to_string_lossy().to_string())
+                            .unwrap_or_else(|_| worktree_name.clone())
+                    };
 
                     let result = self
                         .project_store
@@ -503,10 +522,14 @@ impl ProjectManageTool {
             });
         }
 
-        // Compute relative path from project root.
+        // Compute relative path from project root. When the repo IS the project
+        // root (single-repo project), use "." as the canonical relative path.
         let relative_path = canonical_abs
             .strip_prefix(&canonical_root)
-            .map(|path| path.to_string_lossy().to_string())
+            .map(|path| {
+                let s = path.to_string_lossy().to_string();
+                if s.is_empty() { ".".to_string() } else { s }
+            })
             .unwrap_or_else(|_| repo_path.clone());
 
         let name = abs_path
@@ -615,7 +638,22 @@ impl ProjectManageTool {
 
         let root = Path::new(&project.root_path);
         let repo_abs_path = root.join(&repo.path);
-        let worktree_abs_path = root.join(&worktree_dir_name);
+        let is_single_repo = repo.path == ".";
+
+        // For single-repo projects, place worktrees in the parent directory
+        // (as siblings of the repo). For multi-repo projects, place them
+        // inside the project root.
+        let (worktree_abs_path, worktree_db_path) = if is_single_repo {
+            let parent = root.parent().ok_or_else(|| {
+                ProjectManageError("single-repo project root has no parent directory".into())
+            })?;
+            (
+                parent.join(&worktree_dir_name),
+                format!("../{worktree_dir_name}"),
+            )
+        } else {
+            (root.join(&worktree_dir_name), worktree_dir_name.clone())
+        };
 
         // Create the git worktree (branch from HEAD of the repo)
         git::create_worktree(&repo_abs_path, &worktree_abs_path, &branch, None)
@@ -629,7 +667,7 @@ impl ProjectManageTool {
                 project_id: project_id.clone(),
                 repo_id: repo_id.clone(),
                 name: worktree_dir_name.clone(),
-                path: worktree_dir_name.clone(),
+                path: worktree_db_path,
                 branch: branch.clone(),
                 created_by: "agent".to_string(),
             })

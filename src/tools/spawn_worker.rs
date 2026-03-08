@@ -179,6 +179,27 @@ impl Tool for SpawnWorkerTool {
         let readiness = self.state.deps.runtime_config.work_readiness();
         let is_opencode = args.worker_type.as_deref() == Some("opencode");
 
+        // Reject if an active worker already has the same task. This prevents
+        // duplicate workers when the LLM emits multiple spawn_worker calls in
+        // a single response and one fails/retries.
+        //
+        // Returned as a structured result (not an error) so the LLM can
+        // recover deterministically — e.g. route to the existing worker.
+        {
+            let status = self.state.status_block.read().await;
+            if let Some(existing_id) = status.find_duplicate_worker_task(&args.task) {
+                return Ok(SpawnWorkerOutput {
+                    worker_id: existing_id,
+                    spawned: false,
+                    interactive: args.interactive,
+                    message: format!(
+                        "A worker is already running this task (worker {existing_id}). \
+                         Use route to send additional context to the running worker instead."
+                    ),
+                });
+            }
+        }
+
         // Resolve working directory from project/worktree if not explicitly set.
         let resolved_directory = resolve_directory_from_project(
             &self.state.deps,
