@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { cx } from "@/ui/utils";
-import type { ActionContent, TranscriptStep, OpenCodePart } from "@/api/client";
+import type { TranscriptStep, OpenCodePart } from "@/api/client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -428,12 +428,12 @@ const toolRenderers: Record<string, ToolRenderer> = {
 			if (!path && !content) return null;
 			return (
 				<div className="border-b border-app-line/20 px-3 py-2">
-					{path && (
+					{!!path && (
 						<p className="mb-1 font-mono text-tiny text-ink-dull">
 							{String(path)}
 						</p>
 					)}
-					{content && (
+					{!!content && (
 						<pre className="max-h-40 overflow-auto font-mono text-tiny text-ink-faint">
 							{truncate(String(content), 2000)}
 						</pre>
@@ -463,7 +463,7 @@ const toolRenderers: Record<string, ToolRenderer> = {
 					<p className="mb-1 font-mono text-tiny text-ink-dull">
 						{String(path)}
 					</p>
-					{oldStr && (
+					{!!oldStr && (
 						<div className="mt-1">
 							<p className="text-tiny font-medium text-red-400/70">
 								Old
@@ -473,7 +473,7 @@ const toolRenderers: Record<string, ToolRenderer> = {
 							</pre>
 						</div>
 					)}
-					{newStr && (
+					{!!newStr && (
 						<div className="mt-1">
 							<p className="text-tiny font-medium text-emerald-400/70">
 								New
@@ -581,12 +581,12 @@ const toolRenderers: Record<string, ToolRenderer> = {
 			if (!filePath && !content) return null;
 			return (
 				<div className="border-b border-app-line/20 px-3 py-2">
-					{filePath && (
+					{!!filePath && (
 						<p className="mb-1 font-mono text-tiny text-ink-dull">
 							{String(filePath)}
 						</p>
 					)}
-					{content && (
+					{!!content && (
 						<pre className="max-h-40 overflow-auto font-mono text-tiny text-ink-faint">
 							{truncate(String(content), 2000)}
 						</pre>
@@ -616,7 +616,7 @@ const toolRenderers: Record<string, ToolRenderer> = {
 					<p className="mb-1 font-mono text-tiny text-ink-dull">
 						{String(filePath)}
 					</p>
-					{oldStr && (
+					{!!oldStr && (
 						<div className="mt-1">
 							<p className="text-tiny font-medium text-red-400/70">
 								Old
@@ -626,7 +626,7 @@ const toolRenderers: Record<string, ToolRenderer> = {
 							</pre>
 						</div>
 					)}
-					{newStr && (
+					{!!newStr && (
 						<div className="mt-1">
 							<p className="text-tiny font-medium text-emerald-400/70">
 								New
@@ -749,7 +749,7 @@ const toolRenderers: Record<string, ToolRenderer> = {
 						<span className="select-none text-ink-faint">Search: </span>
 						{String(query)}
 					</p>
-					{(count || freshness) && (
+					{!!(count || freshness) && (
 						<p className="mt-0.5 text-tiny text-ink-faint">
 							{count ? `${count} results` : ""}
 							{count && freshness ? " · " : ""}
@@ -782,12 +782,12 @@ const toolRenderers: Record<string, ToolRenderer> = {
 			if (!action && !docId) return null;
 			return (
 				<div className="border-b border-app-line/20 px-3 py-2">
-					{docId && (
+					{!!docId && (
 						<p className="font-mono text-tiny text-ink-dull">
 							{String(docId)}
 						</p>
 					)}
-					{query && (
+					{!!query && (
 						<p className="mt-0.5 text-tiny text-ink-faint">
 							filter: {String(query)}
 						</p>
