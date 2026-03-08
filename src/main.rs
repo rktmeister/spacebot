@@ -2319,7 +2319,7 @@ async fn wait_for_startup_warmup_tasks(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 async fn initialize_agents(
     config: &spacebot::config::Config,
     llm_manager: &Arc<spacebot::llm::LlmManager>,
@@ -3186,8 +3186,10 @@ async fn initialize_agents(
                 spacebot::conversation::history::ConversationLogger::new(agent.db.sqlite.clone());
             let channel_store = spacebot::conversation::ChannelStore::new(agent.db.sqlite.clone());
             let run_logger = spacebot::conversation::ProcessRunLogger::new(agent.db.sqlite.clone());
+            let cortex_ctx = spacebot::agent::cortex_chat::CortexChatSession::create_context();
             let tool_server = spacebot::tools::create_cortex_chat_tool_server(
                 agent.deps.agent_id.clone(),
+                agent.deps.clone(),
                 agent.deps.task_store.clone(),
                 agent.deps.memory_search.clone(),
                 agent.deps.memory_event_tx.clone(),
@@ -3201,6 +3203,7 @@ async fn initialize_agents(
                 agent.deps.sandbox.clone(),
                 agent.deps.runtime_config.clone(),
                 api_state.clone(),
+                Some(cortex_ctx.clone()),
             );
             // Add factory tools to the cortex chat tool server
             let factory_enabled = match spacebot::tools::add_factory_tools(
@@ -3222,9 +3225,12 @@ async fn initialize_agents(
                 agent.deps.clone(),
                 tool_server,
                 store,
+                cortex_ctx,
             )
             .with_factory(factory_enabled);
-            sessions.insert(agent_id.to_string(), std::sync::Arc::new(session));
+            let session = std::sync::Arc::new(session);
+            session.start_event_loop();
+            sessions.insert(agent_id.to_string(), session);
         }
         api_state.set_cortex_chat_sessions(sessions);
         tracing::info!("cortex chat sessions initialized");

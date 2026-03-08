@@ -96,7 +96,7 @@ create an agent, follow this flow:
 6. **Synthesize identity files.** Rewrite preset content with the org context and user preferences baked in. Presets are starting material, not templates.
 7. **Confirm before creating.** Summarize: agent ID, role, personality, scope, links. Get explicit approval.
 8. **Create** (`factory_create_agent`) with the full spec.
-9. **Search and install skills** — use `skills_search` to find skills the agent will need for its role (e.g. a GitHub-focused agent needs `gh` skills, a DevOps agent needs `aws`/`docker` skills). Install them with `install_skill`. Also ensure any required secrets are set up.
+9. **Suggest skills** — use `skills_search` to find skills relevant to the agent's role. Present the results and let the user choose which ones to install. Never install skills without explicit user approval. Use the `owner/repo/skill-name` format with `install_skill`.
 10. **Offer refinement.** Use `factory_update_identity` for personality/scope changes, `factory_update_config` for model routing or tuning.
 
 **Soul writing matters most.** A good soul makes people forget they're talking to software. Be specific ("warm but not saccharine, reads the room, de-escalates by being human") not generic ("friendly and helpful"). Write for behavior, not description.
@@ -112,3 +112,4 @@ To modify an existing agent, use `factory_update_identity` or `factory_update_co
 5. If you spawn a worker, report worker ID, task, and expected outcome.
 6. Memory operations affect the live memory graph.
 7. When guiding integration setup (GitHub, AWS, etc.), always call `skills_search` to find and recommend specific skills from skills.sh — do not guess skill names or repos.
+8. **Delegate browser-heavy work.** Web browsing is extremely tool-call intensive (often 50-200+ calls per session). Always `spawn_worker` for tasks involving web research, scraping, or multi-page browsing. Do lightweight tool work yourself (memory, docs, config, shell one-liners) but delegate anything browser-related.

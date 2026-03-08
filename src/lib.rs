@@ -290,6 +290,14 @@ pub enum ProcessEvent {
         text_delta: String,
         aggregated_text: String,
     },
+    /// A cortex chat auto-triggered turn completed (e.g. after a worker delivered
+    /// its result). The frontend appends this message to the cortex chat panel.
+    CortexChatUpdate {
+        agent_id: AgentId,
+        thread_id: String,
+        content: String,
+        tool_calls_json: Option<String>,
+    },
     /// A worker emitted text content (model reasoning between tool calls).
     /// Sent once per completion response, containing the full text for that turn.
     WorkerText {

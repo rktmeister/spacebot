@@ -107,6 +107,11 @@ pub async fn start_http_server(
         )
         .route("/cortex/events", get(cortex::cortex_events))
         .route("/cortex-chat/messages", get(cortex::cortex_chat_messages))
+        .route("/cortex-chat/threads", get(cortex::cortex_chat_threads))
+        .route(
+            "/cortex-chat/thread",
+            delete(cortex::cortex_chat_delete_thread),
+        )
         .route("/cortex-chat/send", post(cortex::cortex_chat_send))
         .route("/agents/profile", get(agents::get_agent_profile))
         .route(

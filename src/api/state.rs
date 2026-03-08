@@ -267,6 +267,14 @@ pub enum ApiEvent {
         worker_id: String,
         text: String,
     },
+    /// A cortex chat auto-triggered response (e.g. after a worker result was
+    /// delivered). The frontend appends this as a new assistant message.
+    CortexChatMessage {
+        agent_id: String,
+        thread_id: String,
+        content: String,
+        tool_calls: Option<Vec<crate::agent::cortex_chat::CortexChatToolCall>>,
+    },
 }
 
 impl ApiState {
@@ -636,6 +644,26 @@ impl ApiState {
                                         agent_id: agent_id.clone(),
                                         worker_id: worker_id.to_string(),
                                         text: text.clone(),
+                                    })
+                                    .ok();
+                            }
+                            ProcessEvent::CortexChatUpdate {
+                                thread_id,
+                                content,
+                                tool_calls_json,
+                                ..
+                            } => {
+                                let tool_calls: Option<
+                                    Vec<crate::agent::cortex_chat::CortexChatToolCall>,
+                                > = tool_calls_json
+                                    .as_deref()
+                                    .and_then(|json| serde_json::from_str(json).ok());
+                                api_tx
+                                    .send(ApiEvent::CortexChatMessage {
+                                        agent_id: agent_id.clone(),
+                                        thread_id: thread_id.clone(),
+                                        content: content.clone(),
+                                        tool_calls,
                                     })
                                     .ok();
                             }

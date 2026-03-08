@@ -169,6 +169,34 @@ export function useCortexChat(agentId: string, channelId?: string, options?: { f
 		}
 	}, [agentId, channelId, threadId, isStreaming]);
 
+	// Listen for auto-triggered cortex chat messages (e.g. worker results)
+	// delivered via the global SSE stream.
+	useEffect(() => {
+		const handler = (event: Event) => {
+			const detail = (event as CustomEvent).detail;
+			if (!detail || detail.agent_id !== agentId) return;
+			if (threadId && detail.thread_id !== threadId) return;
+
+			const toolCalls = Array.isArray(detail.tool_calls) && detail.tool_calls.length > 0
+				? detail.tool_calls
+				: undefined;
+
+			const message: CortexChatMessage = {
+				id: `auto-${Date.now()}`,
+				thread_id: detail.thread_id,
+				role: "assistant",
+				content: detail.content,
+				channel_context: channelId ?? null,
+				created_at: new Date().toISOString(),
+				tool_calls: toolCalls,
+			};
+			setMessages((prev) => [...prev, message]);
+		};
+
+		window.addEventListener("cortex-chat-message", handler);
+		return () => window.removeEventListener("cortex-chat-message", handler);
+	}, [agentId, threadId, channelId]);
+
 	const newThread = useCallback(() => {
 		setThreadId(generateThreadId());
 		setMessages([]);
@@ -176,5 +204,18 @@ export function useCortexChat(agentId: string, channelId?: string, options?: { f
 		setToolActivity([]);
 	}, []);
 
-	return { messages, threadId, isStreaming, error, toolActivity, sendMessage, newThread };
+	const loadThread = useCallback(async (targetThreadId: string) => {
+		if (isStreaming) return;
+		try {
+			const data = await api.cortexChatMessages(agentId, targetThreadId);
+			setThreadId(data.thread_id);
+			setMessages(data.messages);
+			setError(null);
+			setToolActivity([]);
+		} catch (error) {
+			console.warn("Failed to load thread:", error);
+		}
+	}, [agentId, isStreaming]);
+
+	return { messages, threadId, isStreaming, error, toolActivity, sendMessage, newThread, loadThread };
 }

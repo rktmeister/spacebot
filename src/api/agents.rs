@@ -842,8 +842,10 @@ pub async fn create_agent_internal(
         crate::conversation::history::ConversationLogger::new(db.sqlite.clone());
     let channel_store = crate::conversation::ChannelStore::new(db.sqlite.clone());
     let run_logger = crate::conversation::ProcessRunLogger::new(db.sqlite.clone());
+    let cortex_ctx = crate::agent::cortex_chat::CortexChatSession::create_context();
     let cortex_tool_server = crate::tools::create_cortex_chat_tool_server(
         deps.agent_id.clone(),
+        deps.clone(),
         deps.task_store.clone(),
         memory_search.clone(),
         deps.memory_event_tx.clone(),
@@ -857,6 +859,7 @@ pub async fn create_agent_internal(
         sandbox.clone(),
         runtime_config.clone(),
         state.clone(),
+        Some(cortex_ctx.clone()),
     );
     // Add factory tools to the cortex chat tool server
     if let Err(error) =
@@ -871,6 +874,7 @@ pub async fn create_agent_internal(
         deps.clone(),
         cortex_tool_server,
         cortex_store,
+        cortex_ctx,
     )
     .with_factory(true);
 
@@ -981,7 +985,9 @@ pub async fn create_agent_internal(
             .store(std::sync::Arc::new(cron_schedulers));
 
         let mut sessions = (**state.cortex_chat_sessions.load()).clone();
-        sessions.insert(agent_id.clone(), std::sync::Arc::new(cortex_session));
+        let cortex_session = std::sync::Arc::new(cortex_session);
+        cortex_session.start_event_loop();
+        sessions.insert(agent_id.clone(), cortex_session);
         state
             .cortex_chat_sessions
             .store(std::sync::Arc::new(sessions));

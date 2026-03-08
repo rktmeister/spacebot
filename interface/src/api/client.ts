@@ -153,6 +153,14 @@ export interface WorkerTextEvent {
 	text: string;
 }
 
+export interface CortexChatMessageEvent {
+	type: "cortex_chat_message";
+	agent_id: string;
+	thread_id: string;
+	content: string;
+	tool_calls?: CortexChatToolCall[];
+}
+
 export type ApiEvent =
 	| InboundMessageEvent
 	| OutboundMessageEvent
@@ -167,7 +175,8 @@ export type ApiEvent =
 	| ToolStartedEvent
 	| ToolCompletedEvent
 	| OpenCodePartUpdatedEvent
-	| WorkerTextEvent;
+	| WorkerTextEvent
+	| CortexChatMessageEvent;
 
 async function fetchJson<T>(path: string): Promise<T> {
 	const response = await fetch(`${API_BASE}${path}`);
@@ -552,6 +561,18 @@ export interface CortexChatMessage {
 export interface CortexChatMessagesResponse {
 	messages: CortexChatMessage[];
 	thread_id: string;
+}
+
+export interface CortexChatThread {
+	thread_id: string;
+	preview: string;
+	message_count: number;
+	first_message_at: string;
+	last_message_at: string;
+}
+
+export interface CortexChatThreadsResponse {
+	threads: CortexChatThread[];
 }
 
 export type CortexChatSSEEvent =
@@ -1653,6 +1674,18 @@ export const api = {
 				channel_id: channelId ?? null,
 			}),
 		}),
+	cortexChatThreads: (agentId: string) =>
+		fetchJson<CortexChatThreadsResponse>(
+			`/cortex-chat/threads?agent_id=${encodeURIComponent(agentId)}`,
+		),
+	cortexChatDeleteThread: async (agentId: string, threadId: string) => {
+		const response = await fetch(`${API_BASE}/cortex-chat/thread`, {
+			method: "DELETE",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ agent_id: agentId, thread_id: threadId }),
+		});
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+	},
 	agentProfile: (agentId: string) =>
 		fetchJson<AgentProfileResponse>(`/agents/profile?agent_id=${encodeURIComponent(agentId)}`),
 	agentIdentity: (agentId: string) =>

@@ -8,7 +8,7 @@
 use crate::conversation::history::ProcessRunLogger;
 use crate::hooks::SpacebotHook;
 use crate::llm::SpacebotModel;
-use crate::{AgentDeps, ProcessId, ProcessType};
+use crate::{AgentDeps, ProcessEvent, ProcessId, ProcessType};
 
 use rig::agent::{AgentBuilder, HookAction, PromptHook, ToolCallHookAction};
 use rig::completion::{AssistantContent, CompletionModel, CompletionResponse, Message, Prompt};
@@ -17,9 +17,10 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 /// A persisted cortex chat message.
 #[derive(Debug, Clone, Serialize)]
@@ -33,6 +34,16 @@ pub struct CortexChatMessage {
     /// Serialized JSON array of tool calls (for assistant messages).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<CortexChatToolCall>>,
+}
+
+/// Summary of a cortex chat thread (returned by list_threads).
+#[derive(Debug, Clone, Serialize)]
+pub struct CortexChatThread {
+    pub thread_id: String,
+    pub preview: String,
+    pub message_count: i64,
+    pub first_message_at: String,
+    pub last_message_at: String,
 }
 
 /// A tool call + result pair persisted alongside assistant messages.
@@ -273,6 +284,27 @@ impl ChatMessageRow {
     }
 }
 
+#[derive(sqlx::FromRow)]
+struct CortexChatThreadRow {
+    thread_id: String,
+    message_count: i32,
+    first_message_at: chrono::NaiveDateTime,
+    last_message_at: chrono::NaiveDateTime,
+    preview: String,
+}
+
+impl CortexChatThreadRow {
+    fn into_thread(self) -> CortexChatThread {
+        CortexChatThread {
+            thread_id: self.thread_id,
+            preview: self.preview,
+            message_count: self.message_count as i64,
+            first_message_at: self.first_message_at.and_utc().to_rfc3339(),
+            last_message_at: self.last_message_at.and_utc().to_rfc3339(),
+        }
+    }
+}
+
 impl CortexChatStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
@@ -335,11 +367,51 @@ impl CortexChatStore {
         .await?;
         Ok(row.map(|r| r.0))
     }
+
+    /// List all threads with metadata (first message preview, message count, timestamps).
+    pub async fn list_threads(&self) -> Result<Vec<CortexChatThread>, sqlx::Error> {
+        let rows: Vec<CortexChatThreadRow> = sqlx::query_as(
+            "SELECT \
+                 thread_id, \
+                 COUNT(*) as message_count, \
+                 MIN(created_at) as first_message_at, \
+                 MAX(created_at) as last_message_at, \
+                 ( \
+                     SELECT content FROM cortex_chat_messages m2 \
+                     WHERE m2.thread_id = cortex_chat_messages.thread_id \
+                     ORDER BY m2.created_at ASC LIMIT 1 \
+                 ) as preview \
+             FROM cortex_chat_messages \
+             GROUP BY thread_id \
+             ORDER BY MAX(created_at) DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|row| row.into_thread()).collect())
+    }
+
+    /// Delete all messages in a thread.
+    pub async fn delete_thread(&self, thread_id: &str) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM cortex_chat_messages WHERE thread_id = ?")
+            .bind(thread_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 /// The cortex chat session for a single agent.
 ///
 /// Holds the deps, tool server, store, and a mutex to prevent concurrent sends.
+/// Tracked worker entry: maps a cortex-spawned worker to the thread it was
+/// spawned from so the event loop can deliver results to the right conversation.
+#[derive(Debug, Clone)]
+pub struct TrackedWorker {
+    pub thread_id: String,
+    pub channel_context: Option<String>,
+}
+
 pub struct CortexChatSession {
     pub deps: AgentDeps,
     pub tool_server: ToolServerHandle,
@@ -348,16 +420,34 @@ pub struct CortexChatSession {
     pub factory_enabled: bool,
     /// Prevent concurrent sends — only one request at a time per agent.
     send_lock: Arc<Mutex<()>>,
+    /// Shared context between the session and DetachedSpawnWorkerTool.
+    cortex_ctx: crate::tools::spawn_worker::CortexChatContext,
 }
 
 impl CortexChatSession {
-    pub fn new(deps: AgentDeps, tool_server: ToolServerHandle, store: CortexChatStore) -> Self {
+    pub fn new(
+        deps: AgentDeps,
+        tool_server: ToolServerHandle,
+        store: CortexChatStore,
+        cortex_ctx: crate::tools::spawn_worker::CortexChatContext,
+    ) -> Self {
         Self {
             deps,
             tool_server,
             store,
             factory_enabled: false,
             send_lock: Arc::new(Mutex::new(())),
+            cortex_ctx,
+        }
+    }
+
+    /// Create a default `CortexChatContext` for use when building the tool server
+    /// and session together. Pass the same context to both.
+    pub fn create_context() -> crate::tools::spawn_worker::CortexChatContext {
+        crate::tools::spawn_worker::CortexChatContext {
+            current_thread_id: Arc::new(RwLock::new(None)),
+            current_channel_context: Arc::new(RwLock::new(None)),
+            tracked_workers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -365,6 +455,128 @@ impl CortexChatSession {
     pub fn with_factory(mut self, enabled: bool) -> Self {
         self.factory_enabled = enabled;
         self
+    }
+
+    /// Get the cortex chat context (used by DetachedSpawnWorkerTool).
+    pub fn cortex_context(&self) -> crate::tools::spawn_worker::CortexChatContext {
+        self.cortex_ctx.clone()
+    }
+
+    /// Start the background event loop that listens for worker completions and
+    /// auto-triggers follow-up cortex chat turns.
+    pub fn start_event_loop(self: &Arc<Self>) {
+        let session = Arc::clone(self);
+        let mut event_rx = session.deps.event_tx.subscribe();
+        let agent_id = session.deps.agent_id.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let event = match event_rx.recv().await {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                        tracing::debug!(count, "cortex chat event loop lagged");
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+
+                let (worker_id, result, success) = match &event {
+                    ProcessEvent::WorkerComplete {
+                        agent_id: event_agent_id,
+                        worker_id,
+                        result,
+                        success,
+                        ..
+                    } if *event_agent_id == agent_id => (*worker_id, result.clone(), *success),
+                    _ => continue,
+                };
+
+                let tracked: Option<TrackedWorker> = session
+                    .cortex_ctx
+                    .tracked_workers
+                    .write()
+                    .await
+                    .remove(&worker_id);
+                let Some(tracked) = tracked else {
+                    continue;
+                };
+
+                // Persist completion to worker_runs (no channel handler does this
+                // for channel_id: None workers).
+                let run_logger = ProcessRunLogger::new(session.deps.sqlite_pool.clone());
+                run_logger.log_worker_completed(worker_id, &result, success);
+
+                tracing::info!(
+                    %worker_id,
+                    thread_id = %tracked.thread_id,
+                    success,
+                    "cortex chat worker completed, auto-triggering follow-up"
+                );
+
+                let status_label = if success { "completed" } else { "failed" };
+                let retrigger_message = format!("[Worker {worker_id} {status_label}]\n\n{result}");
+
+                let channel_ref = tracked.channel_context.as_deref();
+
+                // The send_lock may be held if the admin is mid-conversation.
+                // Wait for it rather than dropping the result.
+                let event_rx = match session
+                    .send_message_blocking(&tracked.thread_id, &retrigger_message, channel_ref)
+                    .await
+                {
+                    Ok(rx) => rx,
+                    Err(error) => {
+                        tracing::warn!(
+                            %worker_id,
+                            %error,
+                            "failed to auto-trigger cortex chat for worker result"
+                        );
+                        continue;
+                    }
+                };
+
+                // Drain the event stream and emit the final response through the
+                // ProcessEvent pipeline so the frontend SSE picks it up.
+                Self::drain_auto_trigger_events(event_rx, &session.deps, &tracked.thread_id).await;
+            }
+        });
+    }
+
+    /// Drain events from an auto-triggered cortex chat turn and emit the final
+    /// response as a `ProcessEvent::CortexChatUpdate`.
+    async fn drain_auto_trigger_events(
+        mut event_rx: mpsc::Receiver<CortexChatEvent>,
+        deps: &AgentDeps,
+        thread_id: &str,
+    ) {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                CortexChatEvent::Done {
+                    full_text,
+                    tool_calls,
+                } => {
+                    let tool_calls_json = if tool_calls.is_empty() {
+                        None
+                    } else {
+                        serde_json::to_string(&tool_calls).ok()
+                    };
+                    let _ = deps.event_tx.send(ProcessEvent::CortexChatUpdate {
+                        agent_id: deps.agent_id.clone(),
+                        thread_id: thread_id.to_string(),
+                        content: full_text,
+                        tool_calls_json,
+                    });
+                }
+                CortexChatEvent::Error { message } => {
+                    tracing::warn!(
+                        thread_id,
+                        error = %message,
+                        "cortex chat auto-trigger turn errored"
+                    );
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Send a message and stream events (tool calls, completion) back via an mpsc channel.
@@ -379,19 +591,75 @@ impl CortexChatSession {
         channel_context_id: Option<&str>,
     ) -> std::result::Result<mpsc::Receiver<CortexChatEvent>, CortexChatSendError> {
         let send_guard = try_acquire_send_lock(&self.send_lock)?;
+        self.send_message_impl(send_guard, thread_id, user_text, channel_context_id)
+            .await
+    }
 
-        // Save the user message
-        self.store
-            .save_message(thread_id, "user", user_text, channel_context_id, None)
-            .await?;
+    /// Like `send_message_with_events` but waits for the send lock instead of
+    /// returning `Busy`. Used by the background event loop for auto-triggered turns.
+    /// The input message is NOT persisted — only the assistant's synthesis gets saved.
+    async fn send_message_blocking(
+        self: &Arc<Self>,
+        thread_id: &str,
+        user_text: &str,
+        channel_context_id: Option<&str>,
+    ) -> std::result::Result<mpsc::Receiver<CortexChatEvent>, CortexChatSendError> {
+        let send_guard = self.send_lock.clone().lock_owned().await;
+        self.send_message_inner(send_guard, thread_id, user_text, channel_context_id, false)
+            .await
+    }
+
+    async fn send_message_impl(
+        self: &Arc<Self>,
+        send_guard: tokio::sync::OwnedMutexGuard<()>,
+        thread_id: &str,
+        user_text: &str,
+        channel_context_id: Option<&str>,
+    ) -> std::result::Result<mpsc::Receiver<CortexChatEvent>, CortexChatSendError> {
+        self.send_message_inner(send_guard, thread_id, user_text, channel_context_id, true)
+            .await
+    }
+
+    /// Core send implementation. When `persist_input` is false the incoming
+    /// message is sent to the LLM but not saved to the thread — used for
+    /// auto-triggered worker results where only the assistant's synthesis
+    /// should appear in history.
+    async fn send_message_inner(
+        self: &Arc<Self>,
+        send_guard: tokio::sync::OwnedMutexGuard<()>,
+        thread_id: &str,
+        user_text: &str,
+        channel_context_id: Option<&str>,
+        persist_input: bool,
+    ) -> std::result::Result<mpsc::Receiver<CortexChatEvent>, CortexChatSendError> {
+        // Update the shared context so DetachedSpawnWorkerTool knows which
+        // thread to associate spawned workers with.
+        *self.cortex_ctx.current_thread_id.write().await = Some(thread_id.to_string());
+        *self.cortex_ctx.current_channel_context.write().await =
+            channel_context_id.map(|s| s.to_string());
+
+        if persist_input {
+            self.store
+                .save_message(thread_id, "user", user_text, channel_context_id, None)
+                .await?;
+        }
 
         // Build the system prompt
         let system_prompt = self.build_system_prompt(channel_context_id).await?;
 
-        // Load chat history and convert to Rig messages
+        // Load chat history and convert to Rig messages.
+        // When we persisted the input, the last message in history is the one
+        // we just saved — skip it since Rig adds it via `agent.prompt()`.
+        // When the input wasn't persisted (auto-triggered turns), include all
+        // messages since none of them duplicate the prompt.
         let chat_messages = self.store.load_history(thread_id, 100).await?;
+        let history_end = if persist_input {
+            chat_messages.len().saturating_sub(1)
+        } else {
+            chat_messages.len()
+        };
         let mut history: Vec<rig::message::Message> = Vec::new();
-        for message in &chat_messages[..chat_messages.len().saturating_sub(1)] {
+        for message in &chat_messages[..history_end] {
             match message.role.as_str() {
                 "user" => {
                     history.push(rig::message::Message::from(message.content.as_str()));

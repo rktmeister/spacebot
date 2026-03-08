@@ -26,7 +26,7 @@
 //! - `memory_save` — registered at startup
 //!
 //! **Cortex Chat ToolServer** (interactive admin chat):
-//! - branch + worker tool superset plus `spacebot_docs` and `config_inspect`
+//! - branch + worker tool superset plus `spacebot_docs`, `config_inspect`, and `spawn_worker`
 
 pub mod attachment_recall;
 pub mod branch_tool;
@@ -129,7 +129,9 @@ pub use skip::{SkipArgs, SkipError, SkipFlag, SkipOutput, SkipTool, new_skip_fla
 pub use spacebot_docs::{
     SpacebotDocContent, SpacebotDocsArgs, SpacebotDocsError, SpacebotDocsOutput, SpacebotDocsTool,
 };
-pub use spawn_worker::{SpawnWorkerArgs, SpawnWorkerError, SpawnWorkerOutput, SpawnWorkerTool};
+pub use spawn_worker::{
+    DetachedSpawnWorkerTool, SpawnWorkerArgs, SpawnWorkerError, SpawnWorkerOutput, SpawnWorkerTool,
+};
 pub use task_create::{TaskCreateArgs, TaskCreateError, TaskCreateOutput, TaskCreateTool};
 pub use task_list::{TaskListArgs, TaskListError, TaskListOutput, TaskListTool};
 pub use task_update::{TaskUpdateArgs, TaskUpdateError, TaskUpdateOutput, TaskUpdateTool};
@@ -601,6 +603,7 @@ pub fn create_cortex_tool_server(
 #[allow(clippy::too_many_arguments)]
 pub fn create_cortex_chat_tool_server(
     agent_id: AgentId,
+    deps: crate::AgentDeps,
     task_store: Arc<TaskStore>,
     memory_search: Arc<MemorySearch>,
     memory_event_tx: broadcast::Sender<ProcessEvent>,
@@ -614,7 +617,18 @@ pub fn create_cortex_chat_tool_server(
     sandbox: Arc<Sandbox>,
     runtime_config: Arc<RuntimeConfig>,
     api_state: Arc<crate::api::ApiState>,
+    cortex_ctx: Option<crate::tools::spawn_worker::CortexChatContext>,
 ) -> ToolServerHandle {
+    let logs_dir = workspace.join(".spacebot").join("logs");
+
+    let spawn_tool = {
+        let tool = DetachedSpawnWorkerTool::new(deps, screenshot_dir.clone(), logs_dir);
+        match cortex_ctx {
+            Some(ctx) => tool.with_cortex_context(ctx),
+            None => tool,
+        }
+    };
+
     let mut server = ToolServer::new()
         .tool(memory_save_with_events(
             memory_search.clone(),
@@ -632,6 +646,7 @@ pub fn create_cortex_chat_tool_server(
         .tool(SkillsSearchTool::new(runtime_config.clone()))
         .tool(InstallSkillTool::new(runtime_config.clone(), api_state))
         .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
+        .tool(spawn_tool)
         .tool(TaskCreateTool::new(
             task_store.clone(),
             agent_id.to_string(),

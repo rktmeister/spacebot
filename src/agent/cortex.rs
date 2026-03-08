@@ -1258,7 +1258,8 @@ fn signal_from_event(event: ProcessEvent) -> Option<Signal> {
         ProcessEvent::OpenCodeSessionCreated { .. }
         | ProcessEvent::OpenCodePartUpdated { .. }
         | ProcessEvent::WorkerInitialResult { .. }
-        | ProcessEvent::WorkerText { .. } => return None,
+        | ProcessEvent::WorkerText { .. }
+        | ProcessEvent::CortexChatUpdate { .. } => return None,
     })
 }
 
