@@ -90,6 +90,16 @@ pub struct ChannelState {
     /// Input senders for interactive workers, keyed by worker ID.
     /// Used by the route tool to deliver follow-up messages.
     pub worker_inputs: Arc<RwLock<HashMap<WorkerId, tokio::sync::mpsc::Sender<String>>>>,
+    /// Injection senders for all workers, keyed by worker ID.
+    /// Used by the route tool to deliver addendum context to running workers
+    /// without requiring the worker to be interactive.
+    pub worker_injections: Arc<RwLock<HashMap<WorkerId, tokio::sync::mpsc::Sender<String>>>>,
+    /// Task descriptions reserved for spawn. Prevents the TOCTOU race where
+    /// two concurrent `spawn_worker` calls both pass `check_duplicate_task`
+    /// before either registers in the status block. Reservations are
+    /// claimed under a write lock before any async spawn work and released
+    /// when the worker is registered in the status block or the spawn fails.
+    pub reserved_tasks: Arc<RwLock<HashSet<String>>>,
     pub status_block: Arc<RwLock<StatusBlock>>,
     pub deps: AgentDeps,
     pub conversation_logger: ConversationLogger,
@@ -129,6 +139,7 @@ impl ChannelState {
             .await
             .remove(&worker_id)
             .is_some();
+        self.worker_injections.write().await.remove(&worker_id);
         let removed_status = self.status_block.write().await.remove_worker(worker_id);
         let should_emit = removed || handle.is_some();
 
@@ -400,6 +411,8 @@ impl Channel {
             active_workers: active_workers.clone(),
             worker_handles: Arc::new(RwLock::new(HashMap::new())),
             worker_inputs: Arc::new(RwLock::new(HashMap::new())),
+            worker_injections: Arc::new(RwLock::new(HashMap::new())),
+            reserved_tasks: Arc::new(RwLock::new(HashSet::new())),
             status_block: status_block.clone(),
             deps: deps.clone(),
             conversation_logger,
@@ -2530,6 +2543,7 @@ impl Channel {
 
                 self.state.active_workers.write().await.remove(worker_id);
                 self.state.worker_inputs.write().await.remove(worker_id);
+                self.state.worker_injections.write().await.remove(worker_id);
 
                 if *notify {
                     // Accumulate result for the next retrigger instead of
