@@ -2235,7 +2235,8 @@ async fn get_element_center(
         .map_err(|error| {
             BrowserError::new(format!(
                 "failed to get box model for element: {error}. \
-                 The element may not be visible — try scrolling or taking a screenshot."
+                 The element may not be visible or may have been removed from the DOM. \
+                 Run browser_snapshot to get the current interactable elements and their indices."
             ))
         })?;
 

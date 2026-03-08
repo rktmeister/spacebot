@@ -9,17 +9,28 @@ use crate::llm::routing::is_context_overflow_error;
 use crate::{AgentDeps, ChannelId, ProcessId, ProcessType, WorkerId};
 use rig::agent::AgentBuilder;
 use rig::completion::CompletionModel;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 /// How many turns per segment before we check context and potentially compact.
-const TURNS_PER_SEGMENT: usize = 25;
+///
+/// Kept relatively low so compaction checks run frequently. Fast models can
+/// burn through many tool-call turns quickly, and each turn may add large
+/// tool results (browser snapshots, shell output). Checking every 15 turns
+/// instead of 25 reduces the chance of blowing past the context window
+/// within a single segment.
+const TURNS_PER_SEGMENT: usize = 15;
 
 /// Max consecutive context overflow recoveries before giving up.
-/// Prevents infinite compact-retry loops if something is fundamentally wrong.
-const MAX_OVERFLOW_RETRIES: usize = 3;
+/// Each retry dedup-strips stale tool results and force-compacts 75% of
+/// remaining messages. Two retries is enough to handle the edge case where
+/// a single message is enormous — beyond that, something is fundamentally
+/// broken (system prompt alone exceeds the context window, or the compaction
+/// floor of 4 messages is still too large).
+const MAX_OVERFLOW_RETRIES: usize = 2;
 
 /// Max segments before the worker gives up and returns a partial result.
 /// Prevents unbounded worker loops when the LLM keeps hitting max_turns
@@ -311,6 +322,17 @@ impl Worker {
             loop {
                 segments_run += 1;
 
+                // Pre-prompt maintenance: dedup stale tool results and check
+                // context usage *before* each LLM call, not just at segment
+                // boundaries. Fast models can accumulate large tool results
+                // within a single segment and exceed the context window before
+                // we ever reach a checkpoint.
+                if segments_run > 1 {
+                    dedup_tool_results(&mut history);
+                    self.maybe_compact_history(&mut compacted_history, &mut history)
+                        .await;
+                }
+
                 match self
                     .hook
                     .prompt_with_tool_nudge_retry(&agent, &mut history, &prompt)
@@ -337,6 +359,7 @@ impl Worker {
                         }
 
                         self.persist_transcript(&compacted_history, &history).await;
+                        dedup_tool_results(&mut history);
                         self.maybe_compact_history(&mut compacted_history, &mut history)
                             .await;
                         prompt =
@@ -377,6 +400,7 @@ impl Worker {
                             "context overflow, compacting and retrying"
                         );
                         self.hook.send_status("compacting (overflow recovery)");
+                        dedup_tool_results(&mut history);
                         self.force_compact_history(&mut compacted_history, &mut history)
                             .await;
                         prompt = "Continue where you left off. Do not repeat completed work. \
@@ -440,7 +464,8 @@ impl Worker {
                 self.state = WorkerState::Running;
                 self.hook.send_status("processing follow-up");
 
-                // Compact before follow-up if needed
+                // Dedup stale tool results and compact before follow-up if needed
+                dedup_tool_results(&mut history);
                 self.maybe_compact_history(&mut compacted_history, &mut history)
                     .await;
 
@@ -474,6 +499,7 @@ impl Worker {
                                 "follow-up context overflow, compacting and retrying"
                             );
                             self.hook.send_status("compacting (overflow recovery)");
+                            dedup_tool_results(&mut history);
                             self.force_compact_history(&mut compacted_history, &mut history)
                                 .await;
                             let prompt_engine = self.deps.runtime_config.prompts.load();
@@ -862,6 +888,99 @@ impl Worker {
                 "worker failure log written"
             );
         }
+    }
+}
+
+/// Tool names whose results are bulky and superseded by the latest call.
+/// Only the most recent result for each tool is kept in full; older results
+/// are replaced with a short marker to save context space.
+///
+/// This runs in-place on the history before every LLM call, so the model
+/// always has the latest snapshot but doesn't waste context on stale ones.
+const DEDUP_TOOL_RESULTS: &[&str] = &["browser_snapshot", "browser_tab_list"];
+
+/// Replace all but the most recent result for each tool in `DEDUP_TOOL_RESULTS`
+/// with a short placeholder. This dramatically reduces context usage for
+/// browser-heavy workflows where `browser_snapshot` returns large ARIA trees
+/// on every call.
+///
+/// The full results are still preserved in the transcript (via
+/// `compacted_history` and `persist_transcript`).
+fn dedup_tool_results(history: &mut [rig::message::Message]) {
+    // Step 1: Build a map from tool-call ID → tool name for dedup-eligible tools.
+    // We need this because ToolResult only has call_id, not the tool name.
+    let mut call_id_to_tool: HashMap<String, String> = HashMap::new();
+    for message in history.iter() {
+        if let rig::message::Message::Assistant { content, .. } = message {
+            for item in content.iter() {
+                if let rig::message::AssistantContent::ToolCall(tc) = item {
+                    if DEDUP_TOOL_RESULTS.contains(&tc.function.name.as_str()) {
+                        // Rig uses call_id when present, falls back to id.
+                        let effective_id = tc.call_id.as_ref().unwrap_or(&tc.id);
+                        call_id_to_tool.insert(effective_id.clone(), tc.function.name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    if call_id_to_tool.is_empty() {
+        return;
+    }
+
+    // Step 2: Find the last (most recent) result index for each tool name.
+    let mut last_result_index: HashMap<&str, usize> = HashMap::new();
+    for (message_index, message) in history.iter().enumerate() {
+        if let rig::message::Message::User { content } = message {
+            for item in content.iter() {
+                if let rig::message::UserContent::ToolResult(tr) = item {
+                    if let Some(call_id) = &tr.call_id
+                        && let Some(tool_name) = call_id_to_tool.get(call_id)
+                    {
+                        last_result_index.insert(
+                            // Safe: tool_name came from DEDUP_TOOL_RESULTS which is 'static
+                            DEDUP_TOOL_RESULTS
+                                .iter()
+                                .find(|&&name| name == tool_name)
+                                .expect("tool name came from DEDUP_TOOL_RESULTS"),
+                            message_index,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 3: Replace older results with a compact marker.
+    let mut replaced = 0usize;
+    for (message_index, message) in history.iter_mut().enumerate() {
+        if let rig::message::Message::User { content } = message {
+            for item in content.iter_mut() {
+                if let rig::message::UserContent::ToolResult(tr) = item {
+                    if let Some(call_id) = &tr.call_id
+                        && let Some(tool_name) = call_id_to_tool.get(call_id)
+                    {
+                        let is_last = last_result_index
+                            .get(tool_name.as_str())
+                            .is_some_and(|&last| last == message_index);
+
+                        if !is_last {
+                            tr.content = rig::OneOrMany::one(
+                                rig::message::ToolResultContent::text(format!(
+                                    "[{tool_name} output superseded by a more recent call — \
+                                     see latest {tool_name} result below]"
+                                )),
+                            );
+                            replaced += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if replaced > 0 {
+        tracing::debug!(replaced, "deduped stale tool results in history");
     }
 }
 
