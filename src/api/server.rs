@@ -3,8 +3,8 @@
 use super::state::ApiState;
 use super::{
     agents, bindings, channels, config, cortex, cron, factory, ingest, links, mcp, memories,
-    messaging, models, opencode_proxy, providers, secrets, settings, skills, system, tasks, tools,
-    webchat, workers,
+    messaging, models, opencode_proxy, projects, providers, secrets, settings, skills, system,
+    tasks, tools, webchat, workers,
 };
 
 use axum::Json;
@@ -138,6 +138,34 @@ pub async fn start_http_server(
         )
         .route("/agents/tasks/{number}/approve", post(tasks::approve_task))
         .route("/agents/tasks/{number}/execute", post(tasks::execute_task))
+        .route(
+            "/agents/projects",
+            get(projects::list_projects).post(projects::create_project),
+        )
+        .route(
+            "/agents/projects/{id}",
+            get(projects::get_project)
+                .put(projects::update_project)
+                .delete(projects::delete_project),
+        )
+        .route("/agents/projects/{id}/scan", post(projects::scan_project))
+        .route(
+            "/agents/projects/{id}/disk-usage",
+            get(projects::disk_usage),
+        )
+        .route("/agents/projects/{id}/repos", post(projects::create_repo))
+        .route(
+            "/agents/projects/{id}/repos/{repo_id}",
+            delete(projects::delete_repo),
+        )
+        .route(
+            "/agents/projects/{id}/worktrees",
+            post(projects::create_worktree),
+        )
+        .route(
+            "/agents/projects/{id}/worktrees/{wt_id}",
+            delete(projects::delete_worktree),
+        )
         .route("/channels/cancel", post(channels::cancel_process))
         .route(
             "/agents/ingest/files",

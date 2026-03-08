@@ -372,6 +372,57 @@ impl ProcessRunLogger {
         });
     }
 
+    /// Link a worker run to a project and/or worktree. Fire-and-forget.
+    ///
+    /// Called after spawn when `project_id` or `worktree_id` was set in the
+    /// spawn args. Uses a separate UPDATE to avoid changing the WorkerStarted
+    /// event shape.
+    pub fn log_worker_project_link(
+        &self,
+        worker_id: WorkerId,
+        project_id: Option<&str>,
+        worktree_id: Option<&str>,
+    ) {
+        if project_id.is_none() && worktree_id.is_none() {
+            return;
+        }
+        let pool = self.pool.clone();
+        let id = worker_id.to_string();
+        let project_id = project_id.map(|s| s.to_string());
+        let worktree_id = worktree_id.map(|s| s.to_string());
+
+        tokio::spawn(async move {
+            // The worker_run INSERT may not have committed yet (it's also
+            // fire-and-forget). Retry a few times with a short delay so we
+            // don't silently update 0 rows.
+            for attempt in 0..3u8 {
+                if attempt > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                match sqlx::query(
+                    "UPDATE worker_runs SET project_id = COALESCE(?, project_id), \
+                     worktree_id = COALESCE(?, worktree_id) WHERE id = ?",
+                )
+                .bind(&project_id)
+                .bind(&worktree_id)
+                .bind(&id)
+                .execute(&pool)
+                .await
+                {
+                    Ok(result) if result.rows_affected() > 0 => return,
+                    Ok(_) => {
+                        // Row doesn't exist yet — retry.
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, worker_id = %id, "failed to link worker to project");
+                        return;
+                    }
+                }
+            }
+            tracing::debug!(worker_id = %id, "worker_runs row not found after retries for project link");
+        });
+    }
+
     /// Update a worker's status. Fire-and-forget.
     /// Most status text updates are transient — they're available via the
     /// in-memory StatusBlock for live workers and don't need to be persisted.

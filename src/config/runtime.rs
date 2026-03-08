@@ -69,6 +69,8 @@ pub struct RuntimeConfig {
     /// Wrapped in `Arc` so it can be shared with the `Sandbox` struct, which
     /// reads the current mode dynamically on every `wrap()` call.
     pub sandbox: Arc<ArcSwap<crate::sandbox::SandboxConfig>>,
+    /// Projects workspace management configuration.
+    pub projects: ArcSwap<crate::config::ProjectsConfig>,
     /// Shared browser state for persistent sessions.
     ///
     /// When `browser.persist_session = true`, all workers share this handle so
@@ -130,6 +132,7 @@ impl RuntimeConfig {
             channel_listen_only_explicit: ArcSwap::from_pointee(None),
             secrets: ArcSwap::from_pointee(None),
             sandbox: Arc::new(ArcSwap::from_pointee(agent_config.sandbox.clone())),
+            projects: ArcSwap::from_pointee(agent_config.projects.clone()),
             shared_browser: if agent_config.browser.persist_session {
                 Some(crate::tools::browser::new_shared_browser_handle())
             } else {
@@ -191,6 +194,11 @@ impl RuntimeConfig {
         self.work_readiness().ready
     }
 
+    /// Path to the saved attachments directory for persisted channel files.
+    pub fn saved_dir(&self) -> std::path::PathBuf {
+        self.workspace_dir.join("saved")
+    }
+
     /// Reload tunable config values from a freshly parsed Config.
     ///
     /// Finds the matching agent by ID, re-resolves it against defaults, and
@@ -240,6 +248,7 @@ impl RuntimeConfig {
             next.listen_only_mode = configured_listen_only
                 .or(persisted_listen_only)
                 .unwrap_or(current.as_ref().listen_only_mode);
+            // save_attachments has no persisted override — config is authoritative
             Arc::new(next)
         });
         self.max_turns.store(Arc::new(resolved.max_turns));
@@ -270,7 +279,13 @@ impl RuntimeConfig {
         self.user_timezone.store(Arc::new(resolved.user_timezone));
         self.cortex.store(Arc::new(resolved.cortex));
         self.warmup.store(Arc::new(resolved.warmup));
-        self.sandbox.store(Arc::new(resolved.sandbox.clone()));
+        // Preserve project_paths from the current sandbox config when
+        // reloading — the resolved config only has user-configured paths.
+        let existing_project_paths = self.sandbox.load().project_paths.clone();
+        let mut new_sandbox = resolved.sandbox.clone();
+        new_sandbox.project_paths = existing_project_paths;
+        self.sandbox.store(Arc::new(new_sandbox));
+        self.projects.store(Arc::new(resolved.projects.clone()));
 
         let old_opencode = self.opencode.load().as_ref().clone();
         let new_opencode = config.defaults.opencode.clone();

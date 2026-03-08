@@ -15,7 +15,7 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 		|| id.includes("sonnet-4-6") || id.includes("sonnet-4.6");
 }
 
-type SectionId = "general" | "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "channel" | "sandbox";
+type SectionId = "general" | "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "channel" | "sandbox" | "projects";
 
 const SECTIONS: {
 	id: SectionId;
@@ -35,7 +35,8 @@ const SECTIONS: {
 	{ id: "memory", label: "Memory Persistence", group: "config", description: "Auto-save interval", detail: "Spawns a silent background branch at regular intervals to recall existing memories and save new ones from the recent conversation. Runs without blocking the channel." },
 	{ id: "browser", label: "Browser", group: "config", description: "Chrome automation", detail: "Controls browser automation tools available to workers. When enabled, workers can navigate web pages, take screenshots, and interact with sites. JavaScript evaluation is a separate permission." },
 	{ id: "channel", label: "Channel Behavior", group: "config", description: "Reply behavior", detail: "Listen-only mode suppresses unsolicited replies in busy channels. The agent still responds to slash commands, @mentions, and replies to its own messages." },
-	{ id: "sandbox", label: "Sandbox", group: "config", description: "Process containment", detail: "OS-level filesystem containment for shell and exec tool subprocesses. When enabled, worker processes run inside a kernel-enforced sandbox (bubblewrap on Linux, sandbox-exec on macOS) with an allowlist-only filesystem — only system paths, the workspace, and explicitly configured extra paths are accessible." },
+	{ id: "sandbox", label: "Sandbox", group: "config", description: "Process containment", detail: "OS-level filesystem containment for shell tool subprocesses. When enabled, worker processes run inside a kernel-enforced sandbox (bubblewrap on Linux, sandbox-exec on macOS) with an allowlist-only filesystem — only system paths, the workspace, and explicitly configured extra paths are accessible." },
+	{ id: "projects", label: "Projects", group: "config", description: "Workspace management", detail: "Controls how the agent manages project workspaces, git repos, and worktrees. Use worktrees for parallel feature branches, auto-discover to scan for repos on project creation, and set a disk usage warning threshold." },
 ];
 
 interface AgentConfigProps {
@@ -583,6 +584,8 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 				return { ...channel } as ConfigValues;
 			case "sandbox":
 				return { mode: sandbox.mode, writable_paths: sandbox.writable_paths } as ConfigValues;
+			case "projects":
+				return { ...config.projects } as ConfigValues;
 			default:
 				return {};
 		}
@@ -624,6 +627,9 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 					break;
 				case "sandbox":
 					setLocalValues({ mode: sandbox.mode, writable_paths: sandbox.writable_paths });
+					break;
+				case "projects":
+					setLocalValues({ ...config.projects });
 					break;
 			}
 		}
@@ -667,6 +673,9 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 				break;
 			case "sandbox":
 				setLocalValues({ mode: sandbox.mode, writable_paths: sandbox.writable_paths });
+				break;
+			case "projects":
+				setLocalValues({ ...config.projects });
 				break;
 		}
 		setLocalDirty(false);
@@ -1006,7 +1015,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 					<div className="grid gap-4">
 						<div className="flex flex-col gap-1.5">
 							<label className="text-sm font-medium text-ink">Mode</label>
-							<p className="text-tiny text-ink-faint">Kernel-enforced filesystem containment for shell and exec subprocesses.</p>
+							<p className="text-tiny text-ink-faint">Kernel-enforced filesystem containment for shell subprocesses.</p>
 							<Select
 								value={localValues.mode as string}
 								onValueChange={(v) => handleChange("mode", v)}
@@ -1039,6 +1048,53 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 							description="Only respond when explicitly invoked (slash command, @mention, or reply-to-bot)."
 							value={localValues.listen_only_mode as boolean}
 							onChange={(v) => handleChange("listen_only_mode", v)}
+						/>
+					</div>
+				);
+			case "projects":
+				return (
+					<div className="grid gap-4">
+						<ConfigToggleField
+							label="Use Worktrees"
+							description="Enable git worktree support for parallel feature branches within projects."
+							value={localValues.use_worktrees as boolean}
+							onChange={(v) => handleChange("use_worktrees", v)}
+						/>
+						<div className="flex flex-col gap-1.5">
+							<label className="text-sm font-medium text-ink">Worktree Name Template</label>
+							<p className="text-tiny text-ink-faint">Template for naming new worktrees. Use <code className="text-ink-dull">{"{branch}"}</code> for the branch name.</p>
+							<Input
+								value={localValues.worktree_name_template as string}
+								onChange={(e) => handleChange("worktree_name_template", e.target.value)}
+								placeholder="{branch}"
+								className="border-app-line/50 bg-app-darkBox/30"
+							/>
+						</div>
+						<ConfigToggleField
+							label="Auto-Create Worktrees"
+							description="Automatically create a worktree when spawning a worker on a new branch."
+							value={localValues.auto_create_worktrees as boolean}
+							onChange={(v) => handleChange("auto_create_worktrees", v)}
+						/>
+						<ConfigToggleField
+							label="Auto-Discover Repos"
+							description="Scan the project root for git repositories when a project is created."
+							value={localValues.auto_discover_repos as boolean}
+							onChange={(v) => handleChange("auto_discover_repos", v)}
+						/>
+						<ConfigToggleField
+							label="Auto-Discover Worktrees"
+							description="Scan discovered repos for existing git worktrees on project creation."
+							value={localValues.auto_discover_worktrees as boolean}
+							onChange={(v) => handleChange("auto_discover_worktrees", v)}
+						/>
+						<NumberStepper
+							label="Disk Usage Warning"
+							description={`Warn when total project disk usage exceeds this threshold (${Math.round((localValues.disk_usage_warning_threshold as number) / 1073741824)} GB)`}
+							value={localValues.disk_usage_warning_threshold as number}
+							onChange={(v) => handleChange("disk_usage_warning_threshold", v)}
+							min={0}
+							step={1073741824}
 						/>
 					</div>
 				);

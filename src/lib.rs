@@ -19,6 +19,7 @@ pub mod memory;
 pub mod messaging;
 pub mod openai_auth;
 pub mod opencode;
+pub mod projects;
 pub mod prompts;
 pub mod sandbox;
 pub mod secrets;
@@ -289,6 +290,14 @@ pub enum ProcessEvent {
         text_delta: String,
         aggregated_text: String,
     },
+    /// A worker emitted text content (model reasoning between tool calls).
+    /// Sent once per completion response, containing the full text for that turn.
+    WorkerText {
+        agent_id: AgentId,
+        worker_id: WorkerId,
+        channel_id: Option<ChannelId>,
+        text: String,
+    },
 }
 
 /// Default broadcast capacity for the per-agent control event bus.
@@ -366,6 +375,7 @@ pub struct AgentDeps {
     pub llm_manager: Arc<llm::LlmManager>,
     pub mcp_manager: Arc<mcp::McpManager>,
     pub task_store: Arc<tasks::TaskStore>,
+    pub project_store: Arc<projects::ProjectStore>,
     pub cron_tool: Option<tools::CronTool>,
     pub runtime_config: Arc<config::RuntimeConfig>,
     pub event_tx: tokio::sync::broadcast::Sender<ProcessEvent>,

@@ -352,6 +352,7 @@ pub async fn spawn_worker_from_state(
         None => Vec::new(),
     };
 
+    let browser_config = (**rc.browser_config.load()).clone();
     let worker_system_prompt = prompt_engine
         .render_worker_prompt(
             &rc.instance_dir.display().to_string(),
@@ -361,10 +362,10 @@ pub async fn spawn_worker_from_state(
             sandbox_read_allowlist,
             sandbox_write_allowlist,
             &tool_secret_names,
+            browser_config.persist_session,
         )
         .map_err(|e| AgentError::Other(anyhow::anyhow!("{e}")))?;
     let skills = rc.skills.load();
-    let browser_config = (**rc.browser_config.load()).clone();
     let brave_search_key = (**rc.brave_search_key.load()).clone();
 
     // Append skills listing to worker system prompt. Suggested skills are
@@ -418,7 +419,6 @@ pub async fn spawn_worker_from_state(
         "worker.run",
         worker_id = %worker_id,
         channel_id = %state.channel_id,
-        task = %task,
     );
     let secrets_store = state.deps.runtime_config.secrets.load().as_ref().clone();
     let handle = spawn_worker_task(
@@ -549,7 +549,6 @@ pub async fn spawn_opencode_worker_from_state(
         "worker.run",
         worker_id = %worker_id,
         channel_id = %state.channel_id,
-        task = %task,
         worker_type = "opencode",
     );
     let sqlite_pool = state.deps.sqlite_pool.clone();
@@ -801,7 +800,6 @@ pub async fn resume_idle_worker_into_state(
                 "worker.resume",
                 worker_id = %worker_id,
                 channel_id = %state.channel_id,
-                task = %idle_worker.task,
                 worker_type = "opencode",
             );
             let sqlite_pool = state.deps.sqlite_pool.clone();
@@ -887,6 +885,7 @@ pub async fn resume_idle_worker_into_state(
                 Some(store) => store.tool_secret_names(),
                 None => Vec::new(),
             };
+            let browser_config = (**rc.browser_config.load()).clone();
             let system_prompt = prompt_engine
                 .render_worker_prompt(
                     &rc.instance_dir.display().to_string(),
@@ -896,9 +895,9 @@ pub async fn resume_idle_worker_into_state(
                     sandbox_read_allowlist,
                     sandbox_write_allowlist,
                     &tool_secret_names,
+                    browser_config.persist_session,
                 )
                 .map_err(|error| format!("failed to render worker prompt: {error}"))?;
-            let browser_config = (**rc.browser_config.load()).clone();
             let brave_search_key = (**rc.brave_search_key.load()).clone();
 
             let (worker, input_tx) = Worker::resume_interactive(
@@ -924,7 +923,6 @@ pub async fn resume_idle_worker_into_state(
                 "worker.resume",
                 worker_id = %worker_id,
                 channel_id = %state.channel_id,
-                task = %idle_worker.task,
             );
             let secrets_store = state.deps.runtime_config.secrets.load().as_ref().clone();
             let handle = spawn_worker_task(

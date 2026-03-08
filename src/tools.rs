@@ -18,7 +18,7 @@
 //! - `spawn_worker` is included for channel-originated branches only
 //!
 //! **Worker ToolServer** (one per worker, created at spawn time):
-//! - `shell`, `file`, `exec` — stateless, registered at creation
+//! - `shell`, `file_read`/`file_write`/`file_edit`/`file_list` — stateless, registered at creation
 //! - `task_update` — scoped to the worker's assigned task
 //! - `set_status` — per-worker instance, registered at creation
 //!
@@ -28,6 +28,7 @@
 //! **Cortex Chat ToolServer** (interactive admin chat):
 //! - branch + worker tool superset plus `spacebot_docs` and `config_inspect`
 
+pub mod attachment_recall;
 pub mod branch_tool;
 pub mod browser;
 pub mod cancel;
@@ -35,12 +36,12 @@ pub mod channel_recall;
 pub mod config_inspect;
 pub mod cron;
 pub mod email_search;
-pub mod exec;
 pub mod file;
 pub mod mcp;
 pub mod memory_delete;
 pub mod memory_recall;
 pub mod memory_save;
+pub mod project_manage;
 pub mod react;
 pub mod read_skill;
 pub mod reply;
@@ -67,10 +68,13 @@ pub mod factory_search_context;
 pub mod factory_update_config;
 pub mod factory_update_identity;
 
+pub use attachment_recall::{
+    AttachmentRecallArgs, AttachmentRecallError, AttachmentRecallOutput, AttachmentRecallTool,
+};
 pub use branch_tool::{BranchArgs, BranchError, BranchOutput, BranchTool};
 pub use browser::{
-    ActKind, BrowserAction, BrowserArgs, BrowserError, BrowserOutput, BrowserTool, ElementSummary,
-    SharedBrowserHandle, TabInfo,
+    BrowserError, BrowserOutput, SharedBrowserHandle, TabInfo, new_shared_browser_handle,
+    register_browser_tools,
 };
 pub use cancel::{CancelArgs, CancelError, CancelOutput, CancelTool};
 pub use channel_recall::{
@@ -81,8 +85,11 @@ pub use config_inspect::{
 };
 pub use cron::{CronArgs, CronError, CronOutput, CronTool};
 pub use email_search::{EmailSearchArgs, EmailSearchError, EmailSearchOutput, EmailSearchTool};
-pub use exec::{EnvVar, ExecArgs, ExecError, ExecOutput, ExecResult, ExecTool};
-pub use file::{FileArgs, FileEntry, FileEntryOutput, FileError, FileOutput, FileTool, FileType};
+pub use file::{
+    FileEditArgs, FileEditTool, FileEntry, FileEntryOutput, FileError, FileListArgs, FileListTool,
+    FileOutput, FileReadArgs, FileReadTool, FileType, FileWriteArgs, FileWriteTool,
+    register_file_tools,
+};
 pub use mcp::{McpToolAdapter, McpToolError, McpToolOutput};
 pub use memory_delete::{
     MemoryDeleteArgs, MemoryDeleteError, MemoryDeleteOutput, MemoryDeleteTool,
@@ -92,6 +99,9 @@ pub use memory_recall::{
 };
 pub use memory_save::{
     AssociationInput, MemorySaveArgs, MemorySaveError, MemorySaveOutput, MemorySaveTool,
+};
+pub use project_manage::{
+    ProjectManageArgs, ProjectManageError, ProjectManageOutput, ProjectManageTool,
 };
 pub use react::{ReactArgs, ReactError, ReactOutput, ReactTool};
 pub use read_skill::{ReadSkillArgs, ReadSkillError, ReadSkillOutput, ReadSkillTool};
@@ -106,7 +116,7 @@ pub use send_message_to_another_channel::{
     SendMessageArgs, SendMessageError, SendMessageOutput, SendMessageTool,
 };
 pub use set_status::{SetStatusArgs, SetStatusError, SetStatusOutput, SetStatusTool, StatusKind};
-pub use shell::{ShellArgs, ShellError, ShellOutput, ShellResult, ShellTool};
+pub use shell::{EnvVar, ShellArgs, ShellError, ShellOutput, ShellResult, ShellTool};
 pub use skip::{SkipArgs, SkipError, SkipFlag, SkipOutput, SkipTool, new_skip_flag};
 pub use spacebot_docs::{
     SpacebotDocContent, SpacebotDocsArgs, SpacebotDocsError, SpacebotDocsOutput, SpacebotDocsTool,
@@ -368,6 +378,27 @@ pub async fn add_channel_tools(
             state.deps.sandbox.clone(),
         ))
         .await?;
+    handle
+        .add_tool(ProjectManageTool::new(
+            state.deps.project_store.clone(),
+            state.deps.agent_id.to_string(),
+        ))
+        .await?;
+    // Add attachment recall tool when save_attachments is enabled
+    if state
+        .deps
+        .runtime_config
+        .channel_config
+        .load()
+        .save_attachments
+    {
+        handle
+            .add_tool(AttachmentRecallTool::new(
+                state.deps.sqlite_pool.clone(),
+                state.channel_id.clone(),
+            ))
+            .await?;
+    }
     handle.add_tool(CancelTool::new(state)).await?;
     handle
         .add_tool(SkipTool::new(skip_flag.clone(), response_tx.clone()))
@@ -412,10 +443,13 @@ pub async fn remove_channel_tools(
     handle.remove_tool(SkipTool::NAME).await?;
     handle.remove_tool(SendFileTool::NAME).await?;
     handle.remove_tool(ReactTool::NAME).await?;
-    // Cron, send_message, and send_agent_message removal is best-effort since not all channels have them
+    handle.remove_tool(ProjectManageTool::NAME).await?;
+    // Cron, send_message, send_agent_message, and attachment_recall removal is
+    // best-effort since not all channels have them
     let _ = handle.remove_tool(CronTool::NAME).await;
     let _ = handle.remove_tool(SendMessageTool::NAME).await;
     let _ = handle.remove_tool(SendAgentMessageTool::NAME).await;
+    let _ = handle.remove_tool(AttachmentRecallTool::NAME).await;
     Ok(())
 }
 
@@ -477,7 +511,7 @@ pub fn create_branch_tool_server(
 /// the specific worker's ID so status updates route correctly. The browser tool
 /// is included when browser automation is enabled in the agent config.
 ///
-/// Shell and exec commands are sandboxed via the `Sandbox` backend.
+/// Shell commands are sandboxed via the `Sandbox` backend.
 /// File operations are restricted to `workspace` via path validation.
 #[allow(clippy::too_many_arguments)]
 pub fn create_worker_tool_server(
@@ -496,8 +530,6 @@ pub fn create_worker_tool_server(
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(ShellTool::new(workspace.clone(), sandbox.clone()))
-        .tool(FileTool::new(workspace.clone(), sandbox.clone()))
-        .tool(ExecTool::new(workspace, sandbox))
         .tool(TaskUpdateTool::for_worker(
             task_store,
             agent_id.clone(),
@@ -512,21 +544,14 @@ pub fn create_worker_tool_server(
         })
         .tool(ReadSkillTool::new(runtime_config.clone()));
 
+    server = register_file_tools(server, workspace, sandbox);
+
     if let Some(store) = runtime_config.secrets.load().as_ref() {
         server = server.tool(SecretSetTool::new(store.clone()));
     }
 
     if browser_config.enabled {
-        let browser_tool = if let Some(shared) = runtime_config
-            .shared_browser
-            .as_ref()
-            .filter(|_| browser_config.persist_session)
-        {
-            BrowserTool::new_shared(shared.clone(), browser_config, screenshot_dir)
-        } else {
-            BrowserTool::new(browser_config, screenshot_dir)
-        };
-        server = server.tool(browser_tool);
+        server = register_browser_tools(server, browser_config, screenshot_dir, &runtime_config);
     }
 
     if let Some(key) = brave_search_key {
@@ -560,7 +585,7 @@ pub fn create_cortex_tool_server(
 
 /// Create a ToolServer for cortex chat sessions.
 ///
-/// Combines branch tools (memory) with worker tools (shell, file, exec) to give
+/// Combines branch tools (memory) with worker tools (shell, file) to give
 /// the interactive cortex full capabilities. Does not include channel-specific
 /// tools (reply, react, skip) since the cortex chat doesn't talk to platforms.
 /// Adds `config_inspect` for live runtime config introspection and
@@ -603,21 +628,12 @@ pub fn create_cortex_chat_tool_server(
         ))
         .tool(TaskListTool::new(task_store.clone(), agent_id.to_string()))
         .tool(TaskUpdateTool::for_branch(task_store, agent_id.clone()))
-        .tool(ShellTool::new(workspace.clone(), sandbox.clone()))
-        .tool(FileTool::new(workspace.clone(), sandbox.clone()))
-        .tool(ExecTool::new(workspace, sandbox));
+        .tool(ShellTool::new(workspace.clone(), sandbox.clone()));
+
+    server = register_file_tools(server, workspace, sandbox);
 
     if browser_config.enabled {
-        let browser_tool = if let Some(shared) = runtime_config
-            .shared_browser
-            .as_ref()
-            .filter(|_| browser_config.persist_session)
-        {
-            BrowserTool::new_shared(shared.clone(), browser_config, screenshot_dir)
-        } else {
-            BrowserTool::new(browser_config, screenshot_dir)
-        };
-        server = server.tool(browser_tool);
+        server = register_browser_tools(server, browser_config, screenshot_dir, &runtime_config);
     }
 
     if let Some(key) = brave_search_key {
@@ -704,17 +720,166 @@ mod tests {
     }
 
     #[test]
-    fn exec_args_parses_timeout_as_string() {
-        let args: exec::ExecArgs =
-            serde_json::from_str(r#"{"program": "/bin/ls", "timeout_seconds": "300"}"#).unwrap();
-        assert_eq!(args.timeout_seconds, 300);
+    fn shell_args_parses_env_field() {
+        let args: shell::ShellArgs = serde_json::from_str(
+            r#"{"command": "echo $FOO", "env": [{"key": "FOO", "value": "bar"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(args.env.len(), 1);
+        assert_eq!(args.env[0].key, "FOO");
+        assert_eq!(args.env[0].value, "bar");
     }
 
     #[test]
-    fn exec_args_parses_timeout_as_integer() {
-        let args: exec::ExecArgs =
-            serde_json::from_str(r#"{"program": "/bin/ls", "timeout_seconds": 90}"#).unwrap();
-        assert_eq!(args.timeout_seconds, 90);
+    fn shell_args_defaults_empty_env() {
+        let args: shell::ShellArgs = serde_json::from_str(r#"{"command": "ls"}"#).unwrap();
+        assert!(args.env.is_empty());
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_empty_env_var_name() {
+        let config = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            crate::sandbox::SandboxConfig::default(),
+        ));
+        let workspace = std::env::temp_dir();
+        let sandbox = std::sync::Arc::new(crate::sandbox::Sandbox::new_for_test(
+            config,
+            workspace.clone(),
+        ));
+        let tool = shell::ShellTool::new(workspace, sandbox);
+        let args = shell::ShellArgs {
+            command: "echo hi".into(),
+            working_dir: None,
+            env: vec![shell::EnvVar {
+                key: "".into(),
+                value: "val".into(),
+            }],
+            timeout_seconds: 5,
+        };
+        let result = rig::tool::Tool::call(&tool, args).await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("cannot be empty"),
+            "should reject empty env var name"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_env_var_name_with_equals() {
+        let config = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            crate::sandbox::SandboxConfig::default(),
+        ));
+        let workspace = std::env::temp_dir();
+        let sandbox = std::sync::Arc::new(crate::sandbox::Sandbox::new_for_test(
+            config,
+            workspace.clone(),
+        ));
+        let tool = shell::ShellTool::new(workspace, sandbox);
+        let args = shell::ShellArgs {
+            command: "echo hi".into(),
+            working_dir: None,
+            env: vec![shell::EnvVar {
+                key: "FOO=BAR".into(),
+                value: "val".into(),
+            }],
+            timeout_seconds: 5,
+        };
+        let result = rig::tool::Tool::call(&tool, args).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot contain '='"),
+            "should reject env var name containing ="
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_env_var_with_null_bytes() {
+        let config = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            crate::sandbox::SandboxConfig::default(),
+        ));
+        let workspace = std::env::temp_dir();
+        let sandbox = std::sync::Arc::new(crate::sandbox::Sandbox::new_for_test(
+            config,
+            workspace.clone(),
+        ));
+        let tool = shell::ShellTool::new(workspace, sandbox);
+        let args = shell::ShellArgs {
+            command: "echo hi".into(),
+            working_dir: None,
+            env: vec![shell::EnvVar {
+                key: "FOO\0BAR".into(),
+                value: "val".into(),
+            }],
+            timeout_seconds: 5,
+        };
+        let result = rig::tool::Tool::call(&tool, args).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot contain null"),
+            "should reject env var with null bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_dangerous_env_var() {
+        let config = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            crate::sandbox::SandboxConfig::default(),
+        ));
+        let workspace = std::env::temp_dir();
+        let sandbox = std::sync::Arc::new(crate::sandbox::Sandbox::new_for_test(
+            config,
+            workspace.clone(),
+        ));
+        let tool = shell::ShellTool::new(workspace, sandbox);
+        let args = shell::ShellArgs {
+            command: "echo hi".into(),
+            working_dir: None,
+            env: vec![shell::EnvVar {
+                key: "LD_PRELOAD".into(),
+                value: "/evil.so".into(),
+            }],
+            timeout_seconds: 5,
+        };
+        let result = rig::tool::Tool::call(&tool, args).await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("code injection"),
+            "should reject dangerous env var"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_dangerous_env_var_case_insensitive() {
+        let config = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            crate::sandbox::SandboxConfig::default(),
+        ));
+        let workspace = std::env::temp_dir();
+        let sandbox = std::sync::Arc::new(crate::sandbox::Sandbox::new_for_test(
+            config,
+            workspace.clone(),
+        ));
+        let tool = shell::ShellTool::new(workspace, sandbox);
+        let args = shell::ShellArgs {
+            command: "echo hi".into(),
+            working_dir: None,
+            env: vec![shell::EnvVar {
+                key: "ld_preload".into(),
+                value: "/evil.so".into(),
+            }],
+            timeout_seconds: 5,
+        };
+        let result = rig::tool::Tool::call(&tool, args).await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("code injection"),
+            "should reject dangerous env var regardless of case"
+        );
     }
 
     #[test]

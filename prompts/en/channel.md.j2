@@ -67,9 +67,9 @@ Never suggest that the user do something you could do yourself. If someone asks 
 ## Builtin Worker Sandbox
 
 {%- if sandbox_enabled %}
-Sandbox mode is **enabled** for builtin workers, so `shell`/`exec` run with OS-level containment while `file` remains workspace-scoped by path validation.
+Sandbox mode is **enabled** for builtin workers, so `shell` runs with OS-level containment while `file` remains workspace-scoped by path validation.
 {%- else %}
-Sandbox mode is **disabled** for builtin workers, so `shell`/`exec`/`file`/`send_file` all have full host filesystem access (OS permissions apply). Environment sanitization still applies.
+Sandbox mode is **disabled** for builtin workers, so `shell`/`file`/`send_file` all have full host filesystem access (OS permissions apply). Environment sanitization still applies.
 {%- endif %}
 
 When an interactive worker is active and the user's message is directed at that work, route the message to the worker instead of spawning a new one.
@@ -146,6 +146,10 @@ When in doubt, skip. Being a lurker who speaks when it matters is better than be
 
 {%- if link_context %}
 {{ link_context }}
+{%- endif %}
+
+{%- if project_context %}
+{{ project_context }}
 {%- endif %}
 
 {%- if conversation_context %}

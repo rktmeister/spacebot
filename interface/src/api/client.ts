@@ -146,6 +146,13 @@ export interface OpenCodePartUpdatedEvent {
 	part: OpenCodePart;
 }
 
+export interface WorkerTextEvent {
+	type: "worker_text";
+	agent_id: string;
+	worker_id: string;
+	text: string;
+}
+
 export type ApiEvent =
 	| InboundMessageEvent
 	| OutboundMessageEvent
@@ -159,7 +166,8 @@ export type ApiEvent =
 	| BranchCompletedEvent
 	| ToolStartedEvent
 	| ToolCompletedEvent
-	| OpenCodePartUpdatedEvent;
+	| OpenCodePartUpdatedEvent
+	| WorkerTextEvent;
 
 async function fetchJson<T>(path: string): Promise<T> {
 	const response = await fetch(`${API_BASE}${path}`);
@@ -623,6 +631,15 @@ export interface SandboxSection {
 	writable_paths: string[];
 }
 
+export interface ProjectsSection {
+	use_worktrees: boolean;
+	worktree_name_template: string;
+	auto_create_worktrees: boolean;
+	auto_discover_repos: boolean;
+	auto_discover_worktrees: boolean;
+	disk_usage_warning_threshold: number;
+}
+
 export interface DiscordSection {
 	enabled: boolean;
 	allow_bot_messages: boolean;
@@ -639,6 +656,7 @@ export interface AgentConfigResponse {
 	channel: ChannelSection;
 	discord: DiscordSection;
 	sandbox: SandboxSection;
+	projects: ProjectsSection;
 }
 
 // Partial update types - all fields are optional
@@ -712,6 +730,15 @@ export interface SandboxUpdate {
 	writable_paths?: string[];
 }
 
+export interface ProjectsUpdate {
+	use_worktrees?: boolean;
+	worktree_name_template?: string;
+	auto_create_worktrees?: boolean;
+	auto_discover_repos?: boolean;
+	auto_discover_worktrees?: boolean;
+	disk_usage_warning_threshold?: number;
+}
+
 export interface DiscordUpdate {
 	allow_bot_messages?: boolean;
 }
@@ -728,6 +755,7 @@ export interface AgentConfigUpdateRequest {
 	channel?: ChannelUpdate;
 	discord?: DiscordUpdate;
 	sandbox?: SandboxUpdate;
+	projects?: ProjectsUpdate;
 }
 
 // -- Cron Types --
@@ -1316,6 +1344,121 @@ export interface AgentMessageEvent {
 	to_agent_id: string;
 	link_id: string;
 	channel_id: string;
+}
+
+// ── Projects ─────────────────────────────────────────────────────────────
+
+export type ProjectStatus = "active" | "archived";
+
+export interface Project {
+	id: string;
+	agent_id: string;
+	name: string;
+	description: string;
+	icon: string;
+	tags: string[];
+	root_path: string;
+	settings: Record<string, unknown>;
+	status: ProjectStatus;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface ProjectRepo {
+	id: string;
+	project_id: string;
+	name: string;
+	path: string;
+	remote_url: string;
+	default_branch: string;
+	current_branch: string | null;
+	description: string;
+	disk_usage_bytes: number | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface ProjectWorktree {
+	id: string;
+	project_id: string;
+	repo_id: string;
+	name: string;
+	path: string;
+	branch: string;
+	created_by: string;
+	disk_usage_bytes: number | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface ProjectWorktreeWithRepo extends ProjectWorktree {
+	repo_name: string;
+}
+
+/** GET /agents/projects response */
+export interface ProjectListResponse {
+	projects: Project[];
+}
+
+/** GET /agents/projects/:id response — project fields are flattened */
+export interface ProjectWithRelations extends Project {
+	repos: ProjectRepo[];
+	worktrees: ProjectWorktreeWithRepo[];
+}
+
+export interface ProjectDetailResponse {
+	/** The flattened project + repos + worktrees (serde #[flatten]) */
+	[key: string]: unknown;
+}
+
+export interface ProjectActionResponse {
+	success: boolean;
+	message: string;
+}
+
+export interface DiskUsageEntry {
+	name: string;
+	bytes: number;
+	is_dir: boolean;
+}
+
+export interface DiskUsageResponse {
+	total_bytes: number;
+	entries: DiskUsageEntry[];
+}
+
+export interface CreateProjectRequest {
+	name: string;
+	description?: string;
+	icon?: string;
+	tags?: string[];
+	root_path: string;
+	settings?: Record<string, unknown>;
+	auto_discover?: boolean;
+}
+
+export interface UpdateProjectRequest {
+	name?: string;
+	description?: string;
+	icon?: string;
+	tags?: string[];
+	settings?: Record<string, unknown>;
+	status?: ProjectStatus;
+}
+
+export interface CreateRepoRequest {
+	name: string;
+	path: string;
+	remote_url?: string;
+	default_branch?: string;
+	description?: string;
+}
+
+export interface CreateWorktreeRequest {
+	repo_id: string;
+	branch: string;
+	worktree_name?: string;
+	start_point?: string;
 }
 
 // ── Secrets ──────────────────────────────────────────────────────────────
@@ -2136,6 +2279,99 @@ export const api = {
 			throw new Error(body.error || `API error: ${response.status}`);
 		}
 		return response.json() as Promise<MigrateResponse>;
+	},
+
+	// Projects API
+	listProjects: (agentId: string, status?: ProjectStatus) => {
+		const search = new URLSearchParams({ agent_id: agentId });
+		if (status) search.set("status", status);
+		return fetchJson<ProjectListResponse>(`/agents/projects?${search}`);
+	},
+
+	getProject: (agentId: string, projectId: string) =>
+		fetchJson<ProjectWithRelations>(
+			`/agents/projects/${encodeURIComponent(projectId)}?agent_id=${encodeURIComponent(agentId)}`,
+		),
+
+	createProject: async (agentId: string, request: CreateProjectRequest): Promise<ProjectWithRelations> => {
+		const response = await fetch(`${API_BASE}/agents/projects`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ ...request, agent_id: agentId }),
+		});
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<ProjectWithRelations>;
+	},
+
+	updateProject: async (agentId: string, projectId: string, request: UpdateProjectRequest): Promise<ProjectWithRelations> => {
+		const response = await fetch(`${API_BASE}/agents/projects/${encodeURIComponent(projectId)}`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ ...request, agent_id: agentId }),
+		});
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<ProjectWithRelations>;
+	},
+
+	deleteProject: async (agentId: string, projectId: string): Promise<ProjectActionResponse> => {
+		const response = await fetch(
+			`${API_BASE}/agents/projects/${encodeURIComponent(projectId)}?agent_id=${encodeURIComponent(agentId)}`,
+			{ method: "DELETE" },
+		);
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<ProjectActionResponse>;
+	},
+
+	scanProject: async (agentId: string, projectId: string): Promise<ProjectWithRelations> => {
+		const response = await fetch(
+			`${API_BASE}/agents/projects/${encodeURIComponent(projectId)}/scan?agent_id=${encodeURIComponent(agentId)}`,
+			{ method: "POST" },
+		);
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<ProjectWithRelations>;
+	},
+
+	projectDiskUsage: (agentId: string, projectId: string) =>
+		fetchJson<DiskUsageResponse>(
+			`/agents/projects/${encodeURIComponent(projectId)}/disk-usage?agent_id=${encodeURIComponent(agentId)}`,
+		),
+
+	createProjectRepo: async (agentId: string, projectId: string, request: CreateRepoRequest): Promise<{ repo: ProjectRepo }> => {
+		const response = await fetch(`${API_BASE}/agents/projects/${encodeURIComponent(projectId)}/repos`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ ...request, agent_id: agentId }),
+		});
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<{ repo: ProjectRepo }>;
+	},
+
+	deleteProjectRepo: async (agentId: string, projectId: string, repoId: string): Promise<ProjectActionResponse> => {
+		const response = await fetch(
+			`${API_BASE}/agents/projects/${encodeURIComponent(projectId)}/repos/${encodeURIComponent(repoId)}?agent_id=${encodeURIComponent(agentId)}`,
+			{ method: "DELETE" },
+		);
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<ProjectActionResponse>;
+	},
+
+	createProjectWorktree: async (agentId: string, projectId: string, request: CreateWorktreeRequest): Promise<{ worktree: ProjectWorktree }> => {
+		const response = await fetch(`${API_BASE}/agents/projects/${encodeURIComponent(projectId)}/worktrees`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ ...request, agent_id: agentId }),
+		});
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<{ worktree: ProjectWorktree }>;
+	},
+
+	deleteProjectWorktree: async (agentId: string, projectId: string, worktreeId: string): Promise<ProjectActionResponse> => {
+		const response = await fetch(
+			`${API_BASE}/agents/projects/${encodeURIComponent(projectId)}/worktrees/${encodeURIComponent(worktreeId)}?agent_id=${encodeURIComponent(agentId)}`,
+			{ method: "DELETE" },
+		);
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<ProjectActionResponse>;
 	},
 
 	eventsUrl: `${API_BASE}/events`,

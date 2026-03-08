@@ -4,12 +4,14 @@ use crate::agent::channel::ChannelState;
 use crate::agent::cortex_chat::CortexChatSession;
 use crate::agent::status::StatusBlock;
 use crate::config::{Binding, DefaultsConfig, DiscordPermissions, RuntimeConfig, SlackPermissions};
+use crate::conversation::worker_transcript::{ActionContent, TranscriptStep};
 use crate::cron::{CronStore, Scheduler};
 use crate::llm::LlmManager;
 use crate::mcp::McpManager;
 use crate::memory::{EmbeddingModel, MemorySearch};
 use crate::messaging::MessagingManager;
 use crate::messaging::webchat::WebChatAdapter;
+use crate::projects::ProjectStore;
 use crate::prompts::PromptEngine;
 use crate::tasks::TaskStore;
 use crate::update::SharedUpdateStatus;
@@ -71,6 +73,8 @@ pub struct ApiState {
     pub cron_schedulers: arc_swap::ArcSwap<HashMap<String, Arc<Scheduler>>>,
     /// Per-agent task stores for task CRUD operations.
     pub task_stores: arc_swap::ArcSwap<HashMap<String, Arc<TaskStore>>>,
+    /// Per-agent project stores for project/repo/worktree CRUD operations.
+    pub project_stores: arc_swap::ArcSwap<HashMap<String, Arc<ProjectStore>>>,
     /// Per-agent RuntimeConfig for reading live hot-reloaded configuration.
     pub runtime_configs: ArcSwap<HashMap<String, Arc<RuntimeConfig>>>,
     /// Per-agent MCP managers for status and reconnect APIs.
@@ -118,6 +122,11 @@ pub struct ApiState {
     pub agent_groups: ArcSwap<Vec<crate::config::GroupDef>>,
     /// Org-level humans for the topology UI.
     pub agent_humans: ArcSwap<Vec<crate::config::HumanDef>>,
+    /// Live transcript cache for running workers. Accumulates `TranscriptStep`s
+    /// from `ToolStarted`/`ToolCompleted` events so that page refreshes can
+    /// recover the transcript without waiting for the worker to complete.
+    /// Keyed by worker_id, cleared on worker completion.
+    pub live_worker_transcripts: Arc<RwLock<HashMap<String, Vec<TranscriptStep>>>>,
 }
 
 /// Events sent to SSE clients. Wraps ProcessEvents with agent context.
@@ -243,6 +252,12 @@ pub enum ApiEvent {
         worker_id: String,
         part: crate::opencode::types::OpenCodePart,
     },
+    /// A worker emitted text content (model reasoning between tool calls).
+    WorkerText {
+        agent_id: String,
+        worker_id: String,
+        text: String,
+    },
 }
 
 impl ApiState {
@@ -272,6 +287,7 @@ impl ApiState {
             cron_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             cron_schedulers: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             task_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
+            project_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             runtime_configs: ArcSwap::from_pointee(HashMap::new()),
             mcp_managers: ArcSwap::from_pointee(HashMap::new()),
             sandboxes: ArcSwap::from_pointee(HashMap::new()),
@@ -295,6 +311,7 @@ impl ApiState {
             agent_links: ArcSwap::from_pointee(Vec::new()),
             agent_groups: ArcSwap::from_pointee(Vec::new()),
             agent_humans: ArcSwap::from_pointee(Vec::new()),
+            live_worker_transcripts: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -325,6 +342,16 @@ impl ApiState {
         self.channel_states.write().await.remove(channel_id);
     }
 
+    /// Retrieve the live transcript cache for a running worker.
+    ///
+    /// Returns `Some` with the accumulated transcript steps if the worker is
+    /// currently running and has emitted tool calls. Returns `None` if no
+    /// cached transcript exists (worker completed or never started).
+    pub async fn get_live_transcript(&self, worker_id: &str) -> Option<Vec<TranscriptStep>> {
+        let guard = self.live_worker_transcripts.read().await;
+        guard.get(worker_id).cloned()
+    }
+
     /// Register an agent's event stream. Spawns a task that forwards
     /// ProcessEvents into the aggregated API event stream.
     pub fn register_agent_events(
@@ -333,6 +360,7 @@ impl ApiState {
         mut agent_event_rx: broadcast::Receiver<ProcessEvent>,
     ) {
         let api_tx = self.event_tx.clone();
+        let live_transcripts = self.live_worker_transcripts.clone();
         tokio::spawn(async move {
             loop {
                 match agent_event_rx.recv().await {
@@ -347,6 +375,10 @@ impl ApiState {
                                 interactive,
                                 ..
                             } => {
+                                live_transcripts
+                                    .write()
+                                    .await
+                                    .insert(worker_id.to_string(), Vec::new());
                                 api_tx
                                     .send(ApiEvent::WorkerStarted {
                                         agent_id: agent_id.clone(),
@@ -408,6 +440,10 @@ impl ApiState {
                                 success,
                                 ..
                             } => {
+                                live_transcripts
+                                    .write()
+                                    .await
+                                    .remove(&worker_id.to_string());
                                 api_tx
                                     .send(ApiEvent::WorkerCompleted {
                                         agent_id: agent_id.clone(),
@@ -441,6 +477,21 @@ impl ApiState {
                                 ..
                             } => {
                                 let (process_type, id_str) = process_id_info(process_id);
+                                // Accumulate tool call into live transcript for workers.
+                                if let ProcessId::Worker(worker_id) = process_id {
+                                    let call_id = format!("live_{}", uuid::Uuid::new_v4());
+                                    let step = TranscriptStep::Action {
+                                        content: vec![ActionContent::ToolCall {
+                                            id: call_id,
+                                            name: tool_name.clone(),
+                                            args: args.clone(),
+                                        }],
+                                    };
+                                    let mut guard = live_transcripts.write().await;
+                                    if let Some(steps) = guard.get_mut(&worker_id.to_string()) {
+                                        steps.push(step);
+                                    }
+                                }
                                 api_tx
                                     .send(ApiEvent::ToolStarted {
                                         agent_id: agent_id.clone(),
@@ -460,6 +511,18 @@ impl ApiState {
                                 ..
                             } => {
                                 let (process_type, id_str) = process_id_info(process_id);
+                                // Accumulate tool result into live transcript for workers.
+                                if let ProcessId::Worker(worker_id) = process_id {
+                                    let step = TranscriptStep::ToolResult {
+                                        call_id: String::new(),
+                                        name: tool_name.clone(),
+                                        text: result.clone(),
+                                    };
+                                    let mut guard = live_transcripts.write().await;
+                                    if let Some(steps) = guard.get_mut(&worker_id.to_string()) {
+                                        steps.push(step);
+                                    }
+                                }
                                 api_tx
                                     .send(ApiEvent::ToolCompleted {
                                         agent_id: agent_id.clone(),
@@ -544,6 +607,27 @@ impl ApiState {
                                     })
                                     .ok();
                             }
+                            ProcessEvent::WorkerText {
+                                worker_id, text, ..
+                            } => {
+                                // Accumulate into live transcript cache
+                                let step = TranscriptStep::Action {
+                                    content: vec![ActionContent::Text { text: text.clone() }],
+                                };
+                                let mut guard = live_transcripts.write().await;
+                                if let Some(steps) = guard.get_mut(&worker_id.to_string()) {
+                                    steps.push(step);
+                                }
+                                drop(guard);
+
+                                api_tx
+                                    .send(ApiEvent::WorkerText {
+                                        agent_id: agent_id.clone(),
+                                        worker_id: worker_id.to_string(),
+                                        text: text.clone(),
+                                    })
+                                    .ok();
+                            }
                             _ => {}
                         }
                     }
@@ -613,6 +697,11 @@ impl ApiState {
     /// Set the task stores for all agents.
     pub fn set_task_stores(&self, stores: HashMap<String, Arc<TaskStore>>) {
         self.task_stores.store(Arc::new(stores));
+    }
+
+    /// Set the project stores for all agents.
+    pub fn set_project_stores(&self, stores: HashMap<String, Arc<ProjectStore>>) {
+        self.project_stores.store(Arc::new(stores));
     }
 
     /// Set the runtime configs for all agents.

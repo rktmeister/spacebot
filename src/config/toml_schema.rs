@@ -286,6 +286,7 @@ pub(super) struct TomlDefaultsConfig {
     pub(super) user_timezone: Option<String>,
     pub(super) opencode: Option<TomlOpenCodeConfig>,
     pub(super) worker_log_mode: Option<String>,
+    pub(super) projects: Option<TomlProjectsConfig>,
 }
 
 #[derive(Deserialize, Default)]
@@ -375,6 +376,7 @@ pub(super) struct TomlBrowserConfig {
 #[derive(Deserialize)]
 pub(super) struct TomlChannelConfig {
     pub(super) listen_only_mode: Option<bool>,
+    pub(super) save_attachments: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -392,6 +394,16 @@ pub(super) struct TomlOpenCodePermissions {
     pub(super) edit: Option<String>,
     pub(super) bash: Option<String>,
     pub(super) webfetch: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TomlProjectsConfig {
+    pub(super) use_worktrees: Option<bool>,
+    pub(super) worktree_name_template: Option<String>,
+    pub(super) auto_create_worktrees: Option<bool>,
+    pub(super) auto_discover_repos: Option<bool>,
+    pub(super) auto_discover_worktrees: Option<bool>,
+    pub(super) disk_usage_warning_threshold: Option<u64>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -441,6 +453,7 @@ pub(super) struct TomlAgentConfig {
     pub(super) cron_timezone: Option<String>,
     pub(super) user_timezone: Option<String>,
     pub(super) sandbox: Option<crate::sandbox::SandboxConfig>,
+    pub(super) projects: Option<TomlProjectsConfig>,
     #[serde(default)]
     pub(super) cron: Vec<TomlCronDef>,
 }

@@ -112,6 +112,7 @@ async fn bootstrap_deps() -> anyhow::Result<spacebot::AgentDeps> {
         llm_manager,
         mcp_manager,
         task_store,
+        project_store: Arc::new(spacebot::projects::ProjectStore::new(db.sqlite.clone())),
         cron_tool: None,
         runtime_config,
         event_tx,

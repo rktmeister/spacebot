@@ -409,6 +409,8 @@ pub(super) async fn trigger_warmup(
         let injection_tx = state.injection_tx.clone();
         tokio::spawn(async move {
             let (event_tx, memory_event_tx) = crate::create_process_event_buses();
+            let project_store =
+                std::sync::Arc::new(crate::projects::ProjectStore::new(sqlite_pool.clone()));
             let deps = crate::AgentDeps {
                 agent_id: Arc::from(agent_id.as_str()),
                 memory_search,
@@ -422,6 +424,7 @@ pub(super) async fn trigger_warmup(
                 messaging_manager: None,
                 sandbox,
                 task_store,
+                project_store,
                 links: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
                 agent_names: Arc::new(std::collections::HashMap::new()),
                 humans: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
@@ -590,6 +593,7 @@ pub async fn create_agent_internal(
         cron_timezone: None,
         user_timezone: None,
         sandbox: None,
+        projects: None,
         cron: Vec::new(),
     };
     let agent_config = raw_config.resolve(&instance_dir, defaults);
@@ -726,12 +730,18 @@ pub async fn create_agent_internal(
         .await,
     );
 
+    let project_store = std::sync::Arc::new(crate::projects::ProjectStore::new(db.sqlite.clone()));
+
+    // Inject active project root paths into the sandbox allowlist.
+    crate::projects::refresh_sandbox_project_paths(&project_store, &arc_agent_id, &sandbox).await;
+
     let deps = crate::AgentDeps {
         agent_id: arc_agent_id.clone(),
         memory_search: memory_search.clone(),
         llm_manager,
         mcp_manager: mcp_manager.clone(),
         task_store: task_store.clone(),
+        project_store: project_store.clone(),
         cron_tool: None,
         runtime_config: runtime_config.clone(),
         event_tx: event_tx.clone(),
@@ -898,6 +908,12 @@ pub async fn create_agent_internal(
         let mut sandboxes = (**state.sandboxes.load()).clone();
         sandboxes.insert(agent_id.clone(), sandbox);
         state.sandboxes.store(std::sync::Arc::new(sandboxes));
+
+        let mut project_stores_map = (**state.project_stores.load()).clone();
+        project_stores_map.insert(agent_id.clone(), project_store);
+        state
+            .project_stores
+            .store(std::sync::Arc::new(project_stores_map));
 
         let mut agent_infos = (**state.agent_configs.load()).clone();
         agent_infos.push(AgentInfo {
@@ -1151,6 +1167,12 @@ pub(super) async fn delete_agent(
         state
             .cortex_chat_sessions
             .store(std::sync::Arc::new(sessions));
+
+        let mut project_stores_map = (**state.project_stores.load()).clone();
+        project_stores_map.remove(&agent_id);
+        state
+            .project_stores
+            .store(std::sync::Arc::new(project_stores_map));
     }
 
     // Signal the main event loop to remove the agent

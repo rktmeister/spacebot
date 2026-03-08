@@ -527,6 +527,8 @@ pub struct DefaultsConfig {
     pub opencode: OpenCodeConfig,
     /// Worker log mode: "errors_only", "all_separate", or "all_combined".
     pub worker_log_mode: crate::settings::WorkerLogMode,
+    /// Projects workspace management defaults.
+    pub projects: ProjectsConfig,
 }
 
 impl std::fmt::Debug for DefaultsConfig {
@@ -557,6 +559,7 @@ impl std::fmt::Debug for DefaultsConfig {
             .field("cron", &self.cron)
             .field("opencode", &self.opencode)
             .field("worker_log_mode", &self.worker_log_mode)
+            .field("projects", &self.projects)
             .finish()
     }
 }
@@ -776,6 +779,10 @@ impl Default for BrowserConfig {
 pub struct ChannelConfig {
     /// When true, unsolicited chat messages are ignored unless command/mention/reply.
     pub listen_only_mode: bool,
+    /// When true, file attachments received in the channel are saved to
+    /// `workspace/saved/` and tracked in the `saved_attachments` table so
+    /// they can be recalled on later turns.
+    pub save_attachments: bool,
 }
 
 /// OpenCode subprocess worker configuration.
@@ -874,6 +881,42 @@ impl Default for WarmupConfig {
             eager_embedding_load: true,
             refresh_secs: 900,
             startup_delay_secs: 5,
+        }
+    }
+}
+
+/// Projects configuration — agent-level defaults for project workspace management.
+#[derive(Debug, Clone)]
+pub struct ProjectsConfig {
+    /// Whether to use git worktrees for feature branches.
+    /// When true, "start a new feature" creates a worktree for the target repo.
+    /// When false, the agent works on branches within the repo directory.
+    pub use_worktrees: bool,
+    /// Worktree naming convention. Variables: {branch}, {feature}, {repo}.
+    pub worktree_name_template: String,
+    /// Whether the agent can create new worktrees autonomously
+    /// or should ask for confirmation first.
+    pub auto_create_worktrees: bool,
+    /// Whether to auto-discover repos when a project is created by scanning
+    /// the project root for git repositories.
+    pub auto_discover_repos: bool,
+    /// Whether to auto-discover existing worktrees by running
+    /// `git worktree list` on each known repo.
+    pub auto_discover_worktrees: bool,
+    /// Maximum disk usage warning threshold in bytes.
+    /// The UI shows a warning when a project exceeds this.
+    pub disk_usage_warning_threshold: u64,
+}
+
+impl Default for ProjectsConfig {
+    fn default() -> Self {
+        Self {
+            use_worktrees: true,
+            worktree_name_template: "{branch}".to_string(),
+            auto_create_worktrees: false,
+            auto_discover_repos: true,
+            auto_discover_worktrees: true,
+            disk_usage_warning_threshold: 53_687_091_200, // 50 GB
         }
     }
 }
@@ -1015,6 +1058,8 @@ pub struct AgentConfig {
     pub user_timezone: Option<String>,
     /// Sandbox configuration for process containment.
     pub sandbox: Option<crate::sandbox::SandboxConfig>,
+    /// Projects workspace management overrides.
+    pub projects: Option<ProjectsConfig>,
     /// Cron job definitions for this agent.
     pub cron: Vec<CronDef>,
 }
@@ -1068,6 +1113,8 @@ pub struct ResolvedAgentConfig {
     pub user_timezone: Option<String>,
     /// Sandbox configuration for process containment.
     pub sandbox: crate::sandbox::SandboxConfig,
+    /// Projects workspace management settings.
+    pub projects: ProjectsConfig,
     /// Number of messages to fetch from the platform when a new channel is created.
     pub history_backfill_count: usize,
     pub cron: Vec<CronDef>,
@@ -1098,6 +1145,7 @@ impl Default for DefaultsConfig {
             cron: Vec::new(),
             opencode: OpenCodeConfig::default(),
             worker_log_mode: crate::settings::WorkerLogMode::default(),
+            projects: ProjectsConfig::default(),
         }
     }
 }
@@ -1162,6 +1210,10 @@ impl AgentConfig {
             cron_timezone: resolved_cron_timezone,
             user_timezone: resolved_user_timezone,
             sandbox: self.sandbox.clone().unwrap_or_default(),
+            projects: self
+                .projects
+                .clone()
+                .unwrap_or_else(|| defaults.projects.clone()),
             history_backfill_count: defaults.history_backfill_count,
             cron: self.cron.clone(),
         }
@@ -1202,6 +1254,11 @@ impl ResolvedAgentConfig {
     /// Path to the memory ingestion directory where users drop files.
     pub fn ingest_dir(&self) -> PathBuf {
         self.workspace.join("ingest")
+    }
+
+    /// Path to the saved attachments directory for persisted channel files.
+    pub fn saved_dir(&self) -> PathBuf {
+        self.workspace.join("saved")
     }
 }
 

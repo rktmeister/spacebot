@@ -14,7 +14,7 @@ use super::{
     CoalesceConfig, CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
     DiscordInstanceConfig, EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig,
     LinkDef, LlmConfig, McpServerConfig, McpTransport, MemoryPersistenceConfig, MessagingConfig,
-    MetricsConfig, OpenCodeConfig, ProviderConfig, SlackCommandConfig, SlackConfig,
+    MetricsConfig, OpenCodeConfig, ProjectsConfig, ProviderConfig, SlackCommandConfig, SlackConfig,
     SlackInstanceConfig, TelegramConfig, TelegramInstanceConfig, TelemetryConfig, TwitchConfig,
     TwitchInstanceConfig, WarmupConfig, WebhookConfig, normalize_adapter,
     validate_named_messaging_adapters,
@@ -124,6 +124,21 @@ fn parse_close_policy(value: Option<&str>) -> Option<ClosePolicy> {
             None
         }
     }
+}
+
+/// Resolve the effective close policy. When `persist_session` is enabled and no
+/// explicit `close_policy` was provided, default to `Detach` so browser tabs and
+/// cookies survive across workers.
+fn resolve_close_policy(
+    explicit: Option<&str>,
+    persist_session: bool,
+    fallback: ClosePolicy,
+) -> ClosePolicy {
+    parse_close_policy(explicit).unwrap_or(if persist_session {
+        ClosePolicy::Detach
+    } else {
+        fallback
+    })
 }
 
 impl CortexConfig {
@@ -798,6 +813,7 @@ impl Config {
             cron_timezone: None,
             user_timezone: None,
             sandbox: None,
+            projects: None,
             cron: Vec::new(),
         }];
 
@@ -1424,8 +1440,11 @@ impl Config {
                                 .map(PathBuf::from)
                                 .or_else(|| base.screenshot_dir.clone()),
                             persist_session: b.persist_session.unwrap_or(base.persist_session),
-                            close_policy: parse_close_policy(b.close_policy.as_deref())
-                                .unwrap_or(base.close_policy),
+                            close_policy: resolve_close_policy(
+                                b.close_policy.as_deref(),
+                                b.persist_session.unwrap_or(base.persist_session),
+                                base.close_policy,
+                            ),
                             chrome_cache_dir: chrome_cache_dir.clone(),
                         }
                     })
@@ -1441,6 +1460,9 @@ impl Config {
                     listen_only_mode: channel_config
                         .listen_only_mode
                         .unwrap_or(base_defaults.channel.listen_only_mode),
+                    save_attachments: channel_config
+                        .save_attachments
+                        .unwrap_or(base_defaults.channel.save_attachments),
                 })
                 .unwrap_or(base_defaults.channel),
             mcp: default_mcp,
@@ -1499,6 +1521,31 @@ impl Config {
                 .as_deref()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(base_defaults.worker_log_mode),
+            projects: toml
+                .defaults
+                .projects
+                .map(|p| {
+                    let base = &base_defaults.projects;
+                    ProjectsConfig {
+                        use_worktrees: p.use_worktrees.unwrap_or(base.use_worktrees),
+                        worktree_name_template: p
+                            .worktree_name_template
+                            .unwrap_or_else(|| base.worktree_name_template.clone()),
+                        auto_create_worktrees: p
+                            .auto_create_worktrees
+                            .unwrap_or(base.auto_create_worktrees),
+                        auto_discover_repos: p
+                            .auto_discover_repos
+                            .unwrap_or(base.auto_discover_repos),
+                        auto_discover_worktrees: p
+                            .auto_discover_worktrees
+                            .unwrap_or(base.auto_discover_worktrees),
+                        disk_usage_warning_threshold: p
+                            .disk_usage_warning_threshold
+                            .unwrap_or(base.disk_usage_warning_threshold),
+                    }
+                })
+                .unwrap_or_else(|| base_defaults.projects.clone()),
         };
 
         let mut agents: Vec<AgentConfig> = toml
@@ -1601,14 +1648,21 @@ impl Config {
                         persist_session: b
                             .persist_session
                             .unwrap_or(defaults.browser.persist_session),
-                        close_policy: parse_close_policy(b.close_policy.as_deref())
-                            .unwrap_or(defaults.browser.close_policy),
+                        close_policy: resolve_close_policy(
+                            b.close_policy.as_deref(),
+                            b.persist_session
+                                .unwrap_or(defaults.browser.persist_session),
+                            defaults.browser.close_policy,
+                        ),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
-                    channel: a.channel.and_then(|channel_config| {
-                        channel_config
+                    channel: a.channel.map(|channel_config| ChannelConfig {
+                        listen_only_mode: channel_config
                             .listen_only_mode
-                            .map(|listen_only_mode| ChannelConfig { listen_only_mode })
+                            .unwrap_or(defaults.channel.listen_only_mode),
+                        save_attachments: channel_config
+                            .save_attachments
+                            .unwrap_or(defaults.channel.save_attachments),
                     }),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(
@@ -1623,6 +1677,27 @@ impl Config {
                     cron_timezone: a.cron_timezone.as_deref().and_then(resolve_env_value),
                     user_timezone: a.user_timezone.as_deref().and_then(resolve_env_value),
                     sandbox: a.sandbox,
+                    projects: a.projects.map(|p| {
+                        let base = &defaults.projects;
+                        ProjectsConfig {
+                            use_worktrees: p.use_worktrees.unwrap_or(base.use_worktrees),
+                            worktree_name_template: p
+                                .worktree_name_template
+                                .unwrap_or_else(|| base.worktree_name_template.clone()),
+                            auto_create_worktrees: p
+                                .auto_create_worktrees
+                                .unwrap_or(base.auto_create_worktrees),
+                            auto_discover_repos: p
+                                .auto_discover_repos
+                                .unwrap_or(base.auto_discover_repos),
+                            auto_discover_worktrees: p
+                                .auto_discover_worktrees
+                                .unwrap_or(base.auto_discover_worktrees),
+                            disk_usage_warning_threshold: p
+                                .disk_usage_warning_threshold
+                                .unwrap_or(base.disk_usage_warning_threshold),
+                        }
+                    }),
                     cron,
                 })
             })
@@ -1654,6 +1729,7 @@ impl Config {
                 cron_timezone: None,
                 user_timezone: None,
                 sandbox: None,
+                projects: None,
                 cron: Vec::new(),
             });
         }
