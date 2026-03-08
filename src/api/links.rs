@@ -646,6 +646,10 @@ pub struct CreateHumanRequest {
     pub role: Option<String>,
     pub bio: Option<String>,
     pub description: Option<String>,
+    pub discord_id: Option<String>,
+    pub telegram_id: Option<String>,
+    pub slack_id: Option<String>,
+    pub email: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -654,6 +658,10 @@ pub struct UpdateHumanRequest {
     pub role: Option<String>,
     pub bio: Option<String>,
     pub description: Option<String>,
+    pub discord_id: Option<String>,
+    pub telegram_id: Option<String>,
+    pub slack_id: Option<String>,
+    pub email: Option<String>,
 }
 
 /// List all humans.
@@ -724,6 +732,26 @@ pub async fn create_human(
     {
         table["description"] = toml_edit::value(description.as_str());
     }
+    if let Some(discord_id) = &request.discord_id
+        && !discord_id.is_empty()
+    {
+        table["discord_id"] = toml_edit::value(discord_id.as_str());
+    }
+    if let Some(telegram_id) = &request.telegram_id
+        && !telegram_id.is_empty()
+    {
+        table["telegram_id"] = toml_edit::value(telegram_id.as_str());
+    }
+    if let Some(slack_id) = &request.slack_id
+        && !slack_id.is_empty()
+    {
+        table["slack_id"] = toml_edit::value(slack_id.as_str());
+    }
+    if let Some(email) = &request.email
+        && !email.is_empty()
+    {
+        table["email"] = toml_edit::value(email.as_str());
+    }
     humans_array.push(table);
 
     tokio::fs::write(&config_path, doc.to_string())
@@ -739,6 +767,10 @@ pub async fn create_human(
         role: request.role.clone().filter(|s| !s.is_empty()),
         bio: request.bio.clone().filter(|s| !s.is_empty()),
         description: request.description.clone().filter(|s| !s.is_empty()),
+        discord_id: request.discord_id.clone().filter(|s| !s.is_empty()),
+        telegram_id: request.telegram_id.clone().filter(|s| !s.is_empty()),
+        slack_id: request.slack_id.clone().filter(|s| !s.is_empty()),
+        email: request.email.clone().filter(|s| !s.is_empty()),
     };
     let mut humans = (**existing).clone();
     humans.push(new_human.clone());
@@ -793,6 +825,34 @@ pub async fn update_human(
             Some(description.clone())
         };
     }
+    if let Some(discord_id) = &request.discord_id {
+        updated.discord_id = if discord_id.is_empty() {
+            None
+        } else {
+            Some(discord_id.clone())
+        };
+    }
+    if let Some(telegram_id) = &request.telegram_id {
+        updated.telegram_id = if telegram_id.is_empty() {
+            None
+        } else {
+            Some(telegram_id.clone())
+        };
+    }
+    if let Some(slack_id) = &request.slack_id {
+        updated.slack_id = if slack_id.is_empty() {
+            None
+        } else {
+            Some(slack_id.clone())
+        };
+    }
+    if let Some(email) = &request.email {
+        updated.email = if email.is_empty() {
+            None
+        } else {
+            Some(email.clone())
+        };
+    }
 
     let config_path = state.config_path.read().await.clone();
     let content = tokio::fs::read_to_string(&config_path)
@@ -832,6 +892,26 @@ pub async fn update_human(
                     table["description"] = toml_edit::value(description.as_str());
                 } else if request.description.is_some() {
                     table.remove("description");
+                }
+                if let Some(discord_id) = &updated.discord_id {
+                    table["discord_id"] = toml_edit::value(discord_id.as_str());
+                } else if request.discord_id.is_some() {
+                    table.remove("discord_id");
+                }
+                if let Some(telegram_id) = &updated.telegram_id {
+                    table["telegram_id"] = toml_edit::value(telegram_id.as_str());
+                } else if request.telegram_id.is_some() {
+                    table.remove("telegram_id");
+                }
+                if let Some(slack_id) = &updated.slack_id {
+                    table["slack_id"] = toml_edit::value(slack_id.as_str());
+                } else if request.slack_id.is_some() {
+                    table.remove("slack_id");
+                }
+                if let Some(email) = &updated.email {
+                    table["email"] = toml_edit::value(email.as_str());
+                } else if request.email.is_some() {
+                    table.remove("email");
                 }
                 break;
             }

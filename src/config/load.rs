@@ -831,7 +831,7 @@ impl Config {
             links: vec![LinkDef {
                 from: "admin".into(),
                 to: "main".into(),
-                direction: "down".into(),
+                direction: "one_way".into(),
                 kind: "hierarchical".into(),
             }],
             groups: Vec::new(),
@@ -841,6 +841,10 @@ impl Config {
                 role: None,
                 bio: None,
                 description: None,
+                discord_id: None,
+                telegram_id: None,
+                slack_id: None,
+                email: None,
             }],
             messaging: MessagingConfig::default(),
             bindings: Vec::new(),
@@ -2204,6 +2208,10 @@ impl Config {
                 role: h.role,
                 bio: h.bio,
                 description: h.description,
+                discord_id: h.discord_id,
+                telegram_id: h.telegram_id,
+                slack_id: h.slack_id,
+                email: h.email,
             })
             .collect();
 
@@ -2215,6 +2223,10 @@ impl Config {
                 role: None,
                 bio: None,
                 description: None,
+                discord_id: None,
+                telegram_id: None,
+                slack_id: None,
+                email: None,
             });
 
             // Link the default admin to the default agent so the agent sees
@@ -2224,7 +2236,7 @@ impl Config {
                     links.push(LinkDef {
                         from: "admin".into(),
                         to: default_agent.id.clone(),
-                        direction: "down".into(),
+                        direction: "one_way".into(),
                         kind: "hierarchical".into(),
                     });
                 }

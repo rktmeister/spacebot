@@ -1298,6 +1298,10 @@ export interface TopologyHuman {
 	role?: string;
 	bio?: string;
 	description?: string;
+	discord_id?: string;
+	telegram_id?: string;
+	slack_id?: string;
+	email?: string;
 }
 
 export interface TopologyResponse {
@@ -1313,6 +1317,10 @@ export interface CreateHumanRequest {
 	role?: string;
 	bio?: string;
 	description?: string;
+	discord_id?: string;
+	telegram_id?: string;
+	slack_id?: string;
+	email?: string;
 }
 
 export interface UpdateHumanRequest {
@@ -1320,6 +1328,10 @@ export interface UpdateHumanRequest {
 	role?: string;
 	bio?: string;
 	description?: string;
+	discord_id?: string;
+	telegram_id?: string;
+	slack_id?: string;
+	email?: string;
 }
 
 export interface CreateGroupRequest {

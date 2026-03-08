@@ -65,6 +65,10 @@ pub(super) struct TomlHumanDef {
     pub(super) role: Option<String>,
     pub(super) bio: Option<String>,
     pub(super) description: Option<String>,
+    pub(super) discord_id: Option<String>,
+    pub(super) telegram_id: Option<String>,
+    pub(super) slack_id: Option<String>,
+    pub(super) email: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

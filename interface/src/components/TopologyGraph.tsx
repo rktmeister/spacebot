@@ -539,10 +539,29 @@ function EdgeConfigPanel({
 // -- Human Edit Dialog --
 
 interface HumanEditDialogProps {
-	human: { id: string; display_name?: string; role?: string; bio?: string; description?: string } | null;
+	human: {
+		id: string;
+		display_name?: string;
+		role?: string;
+		bio?: string;
+		description?: string;
+		discord_id?: string;
+		telegram_id?: string;
+		slack_id?: string;
+		email?: string;
+	} | null;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	onUpdate: (displayName: string, role: string, bio: string, description: string) => void;
+	onUpdate: (fields: {
+		displayName: string;
+		role: string;
+		bio: string;
+		description: string;
+		discordId: string;
+		telegramId: string;
+		slackId: string;
+		email: string;
+	}) => void;
 	onDelete: () => void;
 }
 
@@ -557,7 +576,16 @@ function HumanEditDialog({
 	const [role, setRole] = useState("");
 	const [bio, setBio] = useState("");
 	const [description, setDescription] = useState("");
+	const [discordId, setDiscordId] = useState("");
+	const [telegramId, setTelegramId] = useState("");
+	const [slackId, setSlackId] = useState("");
+	const [email, setEmail] = useState("");
 	const [descriptionMode, setDescriptionMode] = useState<"edit" | "preview">("edit");
+
+	const { data: messagingStatus } = useQuery({
+		queryKey: ["messagingStatus"],
+		queryFn: api.messagingStatus,
+	});
 
 	// Sync state when a different human is selected
 	const prevId = useRef<string | null>(null);
@@ -567,6 +595,10 @@ function HumanEditDialog({
 		setRole(human.role ?? "");
 		setBio(human.bio ?? "");
 		setDescription(human.description ?? "");
+		setDiscordId(human.discord_id ?? "");
+		setTelegramId(human.telegram_id ?? "");
+		setSlackId(human.slack_id ?? "");
+		setEmail(human.email ?? "");
 		setDescriptionMode("edit");
 	}
 
@@ -574,13 +606,11 @@ function HumanEditDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-w-4xl h-[min(80vh,640px)] flex flex-col !gap-0 p-0 overflow-hidden">
-				<div className="flex items-center justify-between border-b border-app-line/50 px-6 py-4 shrink-0">
-					<div>
-						<DialogHeader>
-							<DialogTitle>Edit Human</DialogTitle>
-						</DialogHeader>
-						<div className="text-tiny text-ink-faint mt-1">{human.id}</div>
+			<DialogContent className="!max-w-5xl !w-[90vw] !h-[85vh] !flex !flex-col !gap-0 !p-0 overflow-hidden">
+				<div className="flex items-center justify-between border-b border-app-line/50 px-5 py-4 shrink-0">
+					<div className="flex items-baseline gap-2">
+						<DialogTitle className="text-sm font-semibold">Edit Human</DialogTitle>
+						<span className="text-tiny text-ink-faint">{human.id}</span>
 					</div>
 				</div>
 				<div className="flex flex-1 min-h-0">
@@ -614,6 +644,56 @@ function HumanEditDialog({
 								className="w-full rounded-md bg-app-input px-3 py-2 text-sm text-ink outline-none border border-app-line/50 focus:border-accent/50 resize-none"
 							/>
 						</div>
+						{/* Platform identity fields — only shown for configured platforms */}
+						{messagingStatus && (messagingStatus.discord.configured || messagingStatus.telegram.configured || messagingStatus.slack.configured || messagingStatus.email.configured) && (
+							<div className="border-t border-app-line/50 pt-3 flex flex-col gap-3">
+								<label className="block text-xs font-medium text-ink-faint uppercase tracking-wide">Platform IDs</label>
+								{messagingStatus.discord.configured && (
+									<div>
+										<label className="mb-1 block text-sm font-medium text-ink-dull">Discord</label>
+										<Input
+											size="lg"
+											value={discordId}
+											onChange={(e) => setDiscordId(e.target.value)}
+											placeholder="Discord user ID"
+										/>
+									</div>
+								)}
+								{messagingStatus.telegram.configured && (
+									<div>
+										<label className="mb-1 block text-sm font-medium text-ink-dull">Telegram</label>
+										<Input
+											size="lg"
+											value={telegramId}
+											onChange={(e) => setTelegramId(e.target.value)}
+											placeholder="Telegram user ID"
+										/>
+									</div>
+								)}
+								{messagingStatus.slack.configured && (
+									<div>
+										<label className="mb-1 block text-sm font-medium text-ink-dull">Slack</label>
+										<Input
+											size="lg"
+											value={slackId}
+											onChange={(e) => setSlackId(e.target.value)}
+											placeholder="Slack member ID"
+										/>
+									</div>
+								)}
+								{messagingStatus.email.configured && (
+									<div>
+										<label className="mb-1 block text-sm font-medium text-ink-dull">Email</label>
+										<Input
+											size="lg"
+											value={email}
+											onChange={(e) => setEmail(e.target.value)}
+											placeholder="email@example.com"
+										/>
+									</div>
+								)}
+							</div>
+						)}
 						<div className="flex-1" />
 						<div className="flex items-center gap-2 pt-2 border-t border-app-line/50">
 							<Button variant="destructive" size="sm" onClick={onDelete}>
@@ -623,7 +703,7 @@ function HumanEditDialog({
 							<Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
 								Cancel
 							</Button>
-							<Button size="sm" onClick={() => onUpdate(displayName, role, bio, description)}>
+							<Button size="sm" onClick={() => onUpdate({ displayName, role, bio, description, discordId, telegramId, slackId, email })}>
 								Save
 							</Button>
 						</div>
@@ -1043,12 +1123,26 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 	});
 
 	const updateHuman = useMutation({
-		mutationFn: (params: { id: string; displayName?: string; role?: string; bio?: string; description?: string }) =>
+		mutationFn: (params: {
+			id: string;
+			displayName?: string;
+			role?: string;
+			bio?: string;
+			description?: string;
+			discordId?: string;
+			telegramId?: string;
+			slackId?: string;
+			email?: string;
+		}) =>
 			api.updateHuman(params.id, {
 				display_name: params.displayName,
 				role: params.role,
 				bio: params.bio,
 				description: params.description,
+				discord_id: params.discordId,
+				telegram_id: params.telegramId,
+				slack_id: params.slackId,
+				email: params.email,
 			}),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["topology"] });
@@ -1466,14 +1560,18 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 					setHumanDialogOpen(open);
 					if (!open) setSelectedHuman(null);
 				}}
-				onUpdate={(displayName, role, bio, description) => {
+				onUpdate={(fields) => {
 					if (selectedHuman) {
 						updateHuman.mutate({
 							id: selectedHuman.id,
-							displayName: displayName || undefined,
-							role: role || undefined,
-							bio: bio || undefined,
-							description: description || undefined,
+							displayName: fields.displayName || undefined,
+							role: fields.role || undefined,
+							bio: fields.bio || undefined,
+							description: fields.description || undefined,
+							discordId: fields.discordId || undefined,
+							telegramId: fields.telegramId || undefined,
+							slackId: fields.slackId || undefined,
+							email: fields.email || undefined,
 						});
 						setHumanDialogOpen(false);
 					}

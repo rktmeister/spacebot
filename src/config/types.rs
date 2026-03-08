@@ -107,6 +107,15 @@ pub struct HumanDef {
     /// Rich long-form context about this person — replaces per-agent USER.md.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Platform user IDs for correlating inbound messages to this human.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discord_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub telegram_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slack_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
 }
 
 /// A visual group definition for the topology UI.
