@@ -40,10 +40,12 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install system dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
-          sudo apt-get install -y nodejs
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Install bun
         uses: oven-sh/setup-bun@v2
