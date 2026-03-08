@@ -1,5 +1,7 @@
 /** Deterministic gradient avatar with initials, custom gradient, or uploaded image. */
 
+import { useEffect, useState } from "react";
+
 export function seedGradient(seed: string): [string, string] {
 	let hash = 0;
 	for (let i = 0; i < seed.length; i++) {
@@ -37,8 +39,13 @@ export function ProfileAvatar({
 	gradientEnd,
 	avatarUrl,
 }: ProfileAvatarProps) {
-	// If an uploaded avatar exists, render an img instead of SVG.
-	if (avatarUrl) {
+	const [imgFailed, setImgFailed] = useState(false);
+
+	// Reset failure state when the URL changes (e.g. after uploading a new avatar).
+	useEffect(() => setImgFailed(false), [avatarUrl]);
+
+	// If an uploaded avatar exists and hasn't failed to load, render an img.
+	if (avatarUrl && !imgFailed) {
 		return (
 			<img
 				src={avatarUrl}
@@ -48,6 +55,7 @@ export function ProfileAvatar({
 				className={className}
 				style={{ objectFit: "cover" }}
 				draggable={false}
+				onError={() => setImgFailed(true)}
 			/>
 		);
 	}
