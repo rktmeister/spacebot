@@ -68,6 +68,7 @@ fn lookup(lang: &str, key: &str) -> &'static str {
 
         // Adapter-specific prompt fragments
         ("en", "adapters/email") => include_str!("../../prompts/en/adapters/email.md.j2"),
+        ("en", "adapters/cron") => include_str!("../../prompts/en/adapters/cron.md.j2"),
 
         // Fragment Templates
         ("en", "fragments/worker_capabilities") => {

@@ -429,10 +429,15 @@ pub async fn add_channel_tools(
 
 fn default_delivery_target_for_conversation(conversation_id: &str) -> Option<String> {
     let parsed = crate::messaging::target::parse_delivery_target(conversation_id)?;
-    if parsed.adapter != "discord" {
-        return None;
+    match parsed.adapter.as_str() {
+        // Cron channels can't receive broadcast delivery.
+        "cron" => None,
+        // Portal conversation IDs use the "portal:" prefix but the messaging
+        // adapter is registered as "webchat". Remap so the manager can find it,
+        // and pass the full original conversation_id as the target.
+        "portal" => Some(format!("webchat:{conversation_id}")),
+        _ => Some(parsed.to_string()),
     }
-    Some(parsed.to_string())
 }
 
 /// Remove per-channel tools from a running ToolServer.

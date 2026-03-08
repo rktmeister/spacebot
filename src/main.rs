@@ -3032,6 +3032,7 @@ async fn initialize_agents(
     let webchat_adapter = Arc::new(spacebot::messaging::webchat::WebChatAdapter::new(
         webchat_agent_pools,
     ));
+    webchat_adapter.set_event_tx(api_state.event_tx.clone());
     new_messaging_manager
         .register_shared(webchat_adapter.clone())
         .await;
