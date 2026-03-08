@@ -148,6 +148,9 @@ fn lookup(lang: &str, key: &str) -> &'static str {
             include_str!("../../prompts/en/tools/set_status_description.md.j2")
         }
         ("en", "tools/shell") => include_str!("../../prompts/en/tools/shell_description.md.j2"),
+        ("en", "tools/install_skill") => {
+            include_str!("../../prompts/en/tools/install_skill_description.md.j2")
+        }
         ("en", "tools/file_read") => {
             include_str!("../../prompts/en/tools/file_read_description.md.j2")
         }

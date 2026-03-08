@@ -37,6 +37,7 @@ pub mod config_inspect;
 pub mod cron;
 pub mod email_search;
 pub mod file;
+pub mod install_skill;
 pub mod mcp;
 pub mod memory_delete;
 pub mod memory_recall;
@@ -90,6 +91,9 @@ pub use file::{
     FileEditArgs, FileEditTool, FileEntry, FileEntryOutput, FileError, FileListArgs, FileListTool,
     FileOutput, FileReadArgs, FileReadTool, FileType, FileWriteArgs, FileWriteTool,
     register_file_tools,
+};
+pub use install_skill::{
+    InstallSkillArgs, InstallSkillError, InstallSkillOutput, InstallSkillTool,
 };
 pub use mcp::{McpToolAdapter, McpToolError, McpToolOutput};
 pub use memory_delete::{
@@ -625,6 +629,7 @@ pub fn create_cortex_chat_tool_server(
             runtime_config.clone(),
         ))
         .tool(SkillsSearchTool::new(runtime_config.clone()))
+        .tool(InstallSkillTool::new(runtime_config.clone()))
         .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
         .tool(TaskCreateTool::new(
             task_store.clone(),
