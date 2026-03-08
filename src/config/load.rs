@@ -828,7 +828,12 @@ impl Config {
             llm,
             defaults,
             agents,
-            links: Vec::new(),
+            links: vec![LinkDef {
+                from: "admin".into(),
+                to: "main".into(),
+                direction: "down".into(),
+                kind: "hierarchical".into(),
+            }],
             groups: Vec::new(),
             humans: vec![HumanDef {
                 id: "admin".into(),
@@ -2161,7 +2166,7 @@ impl Config {
             }
         };
 
-        let links = toml
+        let mut links: Vec<LinkDef> = toml
             .links
             .into_iter()
             .map(|l| {
@@ -2211,6 +2216,19 @@ impl Config {
                 bio: None,
                 description: None,
             });
+
+            // Link the default admin to the default agent so the agent sees
+            // the human's description in its system prompt automatically.
+            if links.is_empty() {
+                if let Some(default_agent) = agents.iter().find(|a| a.default) {
+                    links.push(LinkDef {
+                        from: "admin".into(),
+                        to: default_agent.id.clone(),
+                        direction: "down".into(),
+                        kind: "hierarchical".into(),
+                    });
+                }
+            }
         }
 
         Ok(Config {
