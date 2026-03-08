@@ -120,6 +120,7 @@ pub fn is_retriable_error(error_message: &str) -> bool {
     let lower = error_message.to_lowercase();
     // Rate limits and server errors
     lower.contains("429")
+        || lower.contains("500")
         || lower.contains("502")
         || lower.contains("503")
         || lower.contains("504")
@@ -127,6 +128,11 @@ pub fn is_retriable_error(error_message: &str) -> bool {
         || lower.contains("overloaded")
         || lower.contains("timeout")
         || lower.contains("connection")
+        // Generic server errors (OpenRouter wraps upstream 500s in various
+        // phrasings like "The server had an error while processing your request")
+        || lower.contains("server error")
+        || lower.contains("server had an error")
+        || lower.contains("internal error")
         // Empty/malformed responses are transient provider issues
         || lower.contains("empty response")
         || lower.contains("failed to read response body")
