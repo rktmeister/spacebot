@@ -41,6 +41,7 @@ pub(super) struct GlobalSettingsUpdate {
     api_bind: Option<String>,
     worker_log_mode: Option<String>,
     opencode: Option<OpenCodeSettingsUpdate>,
+    ssh_enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -326,6 +327,27 @@ pub(super) async fn update_global_settings(
             if let Some(webfetch) = permissions.webfetch {
                 doc["defaults"]["opencode"]["permissions"]["webfetch"] = toml_edit::value(webfetch);
             }
+        }
+    }
+
+    // Handle SSH daemon toggle (hosted instances only).
+    if let Some(enabled) = request.ssh_enabled {
+        if enabled {
+            if let Err(error) = super::ssh::enable(&state).await {
+                tracing::warn!(%error, "failed to enable SSH");
+                return Ok(Json(GlobalSettingsUpdateResponse {
+                    success: false,
+                    message: format!("failed to enable SSH: {error}"),
+                    requires_restart: false,
+                }));
+            }
+        } else if let Err(error) = super::ssh::disable().await {
+            tracing::warn!(%error, "failed to disable SSH");
+            return Ok(Json(GlobalSettingsUpdateResponse {
+                success: false,
+                message: format!("failed to disable SSH: {error}"),
+                requires_restart: false,
+            }));
         }
     }
 
