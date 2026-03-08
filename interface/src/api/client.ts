@@ -313,6 +313,7 @@ export interface AgentsResponse {
 export interface CronJobInfo {
 	id: string;
 	prompt: string;
+	cron_expr: string | null;
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
@@ -763,11 +764,13 @@ export interface AgentConfigUpdateRequest {
 export interface CronJobWithStats {
 	id: string;
 	prompt: string;
+	cron_expr: string | null;
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
 	run_once: boolean;
 	active_hours: [number, number] | null;
+	timeout_secs: number | null;
 	success_count: number;
 	failure_count: number;
 	last_executed_at: string | null;
@@ -782,6 +785,7 @@ export interface CronExecutionEntry {
 
 export interface CronListResponse {
 	jobs: CronJobWithStats[];
+	timezone: string;
 }
 
 export interface CronExecutionsResponse {
@@ -796,12 +800,14 @@ export interface CronActionResponse {
 export interface CreateCronRequest {
 	id: string;
 	prompt: string;
-	interval_secs: number;
+	cron_expr?: string;
+	interval_secs?: number;
 	delivery_target: string;
 	active_start_hour?: number;
 	active_end_hour?: number;
 	enabled: boolean;
 	run_once: boolean;
+	timeout_secs?: number;
 }
 
 export interface CronExecutionsParams {

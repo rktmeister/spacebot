@@ -21,7 +21,18 @@ export function formatTimestamp(ts: number): string {
 
 export function formatDuration(seconds: number): string {
 	if (seconds < 60) return `${seconds}s`;
+	if (seconds % 86400 === 0) return `${seconds / 86400}d`;
+	if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+	if (seconds % 60 === 0) return `${seconds / 60}m`;
 	return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+export function formatCronSchedule(cronExpr: string | null, intervalSecs: number): string {
+	if (cronExpr) return cronExpr;
+	if (intervalSecs % 86400 === 0) return `every ${intervalSecs / 86400}d`;
+	if (intervalSecs % 3600 === 0) return `every ${intervalSecs / 3600}h`;
+	if (intervalSecs % 60 === 0) return `every ${intervalSecs / 60}m`;
+	return `every ${intervalSecs}s`;
 }
 
 export function platformIcon(platform: string): string {

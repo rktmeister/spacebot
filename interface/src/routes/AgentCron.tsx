@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type CronJobWithStats, type CreateCronRequest } from "@/api/client";
-import { formatDuration, formatTimeAgo } from "@/lib/format";
-import { Clock05Icon } from "@hugeicons/core-free-icons";
+import { api, type CronJobWithStats, type CreateCronRequest, type ChannelInfo } from "@/api/client";
+import { formatCronSchedule, formatTimeAgo } from "@/lib/format";
+import { Clock05Icon, PauseIcon, PlayIcon, FlashIcon, PencilEdit02Icon, Delete02Icon, ArrowDown01Icon, ArrowUp01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
 	Button,
@@ -25,6 +25,8 @@ import {
 
 // -- Helpers --
 
+type ScheduleMode = "cron" | "interval";
+
 function intervalToSeconds(value: number, unit: string): number {
 	switch (unit) {
 		case "minutes": return value * 60;
@@ -43,6 +45,8 @@ function secondsToInterval(seconds: number): { value: number; unit: "minutes" | 
 interface CronFormData {
 	id: string;
 	prompt: string;
+	schedule_mode: ScheduleMode;
+	cron_expr: string;
 	interval_value: number;
 	interval_unit: "minutes" | "hours" | "days";
 	delivery_target: string;
@@ -50,12 +54,15 @@ interface CronFormData {
 	active_end_hour: string;
 	enabled: boolean;
 	run_once: boolean;
+	timeout_secs: string;
 }
 
 function defaultFormData(): CronFormData {
 	return {
 		id: "",
 		prompt: "",
+		schedule_mode: "cron",
+		cron_expr: "",
 		interval_value: 1,
 		interval_unit: "hours",
 		delivery_target: "",
@@ -63,6 +70,7 @@ function defaultFormData(): CronFormData {
 		active_end_hour: "",
 		enabled: true,
 		run_once: false,
+		timeout_secs: "",
 	};
 }
 
@@ -71,6 +79,8 @@ function jobToFormData(job: CronJobWithStats): CronFormData {
 	return {
 		id: job.id,
 		prompt: job.prompt,
+		schedule_mode: job.cron_expr ? "cron" : "interval",
+		cron_expr: job.cron_expr ?? "",
 		interval_value: interval.value,
 		interval_unit: interval.unit,
 		delivery_target: job.delivery_target,
@@ -78,23 +88,40 @@ function jobToFormData(job: CronJobWithStats): CronFormData {
 		active_end_hour: job.active_hours?.[1]?.toString() ?? "",
 		enabled: job.enabled,
 		run_once: job.run_once,
+		timeout_secs: job.timeout_secs?.toString() ?? "",
 	};
 }
 
 function formDataToRequest(data: CronFormData): CreateCronRequest {
 	const active_start = data.active_start_hour ? parseInt(data.active_start_hour, 10) : undefined;
 	const active_end = data.active_end_hour ? parseInt(data.active_end_hour, 10) : undefined;
+	const timeout = data.timeout_secs ? parseInt(data.timeout_secs, 10) : undefined;
 	return {
 		id: data.id,
 		prompt: data.prompt,
-		interval_secs: intervalToSeconds(data.interval_value, data.interval_unit),
+		cron_expr: data.schedule_mode === "cron" && data.cron_expr.trim() ? data.cron_expr.trim() : undefined,
+		interval_secs: data.schedule_mode === "interval" ? intervalToSeconds(data.interval_value, data.interval_unit) : undefined,
 		delivery_target: data.delivery_target,
 		active_start_hour: active_start,
 		active_end_hour: active_end,
 		enabled: data.enabled,
 		run_once: data.run_once,
+		timeout_secs: timeout || undefined,
 	};
 }
+
+// Cron expression presets for the dropdown
+const CRON_PRESETS: { label: string; value: string }[] = [
+	{ label: "Every hour", value: "0 * * * *" },
+	{ label: "Every 15 minutes", value: "*/15 * * * *" },
+	{ label: "Every 30 minutes", value: "*/30 * * * *" },
+	{ label: "Daily at 9:00", value: "0 9 * * *" },
+	{ label: "Daily at midnight", value: "0 0 * * *" },
+	{ label: "Weekdays at 9:00", value: "0 9 * * 1-5" },
+	{ label: "Weekdays at 17:00", value: "0 17 * * 1-5" },
+	{ label: "Every Monday at 9:00", value: "0 9 * * 1" },
+	{ label: "1st of month at noon", value: "0 12 1 * *" },
+];
 
 // -- Main Component --
 
@@ -115,6 +142,22 @@ export function AgentCron({ agentId }: AgentCronProps) {
 		queryFn: () => api.listCronJobs(agentId),
 		refetchInterval: 15_000,
 	});
+
+	const { data: channelsData } = useQuery({
+		queryKey: ["channels"],
+		queryFn: () => api.channels(),
+	});
+
+	// Build delivery target options from known channels (exclude cron and link channels)
+	const EXCLUDED_PLATFORMS = new Set(["cron", "link"]);
+	const deliveryTargets = (channelsData?.channels ?? [])
+		.filter((ch: ChannelInfo) => !EXCLUDED_PLATFORMS.has(ch.platform))
+		.map((ch: ChannelInfo) => ({
+			value: ch.id,
+			label: ch.display_name ?? ch.id,
+			platform: ch.platform,
+			agentId: ch.agent_id,
+		}));
 
 	const toggleMutation = useMutation({
 		mutationFn: ({ cronId, enabled }: { cronId: string; enabled: boolean }) =>
@@ -165,6 +208,7 @@ export function AgentCron({ agentId }: AgentCronProps) {
 
 	const handleSave = () => {
 		if (!formData.id.trim() || !formData.prompt.trim() || !formData.delivery_target.trim()) return;
+		if (formData.schedule_mode === "cron" && !formData.cron_expr.trim()) return;
 		saveMutation.mutate(formDataToRequest(formData));
 	};
 
@@ -191,6 +235,9 @@ export function AgentCron({ agentId }: AgentCronProps) {
 					<Badge variant="green" size="md">{enabledJobs} enabled</Badge>
 					<Badge variant="outline" size="md">{totalRuns} runs</Badge>
 					{failedRuns > 0 && <Badge variant="red" size="md">{failedRuns} failed</Badge>}
+					{data?.timezone && (
+						<span className="text-tiny text-ink-faint">tz: {data.timezone}</span>
+					)}
 
 					<div className="flex-1" />
 
@@ -256,103 +303,204 @@ export function AgentCron({ agentId }: AgentCronProps) {
 
 			{/* Create / Edit Modal */}
 			<Dialog open={isModalOpen} onOpenChange={(open) => !open && closeModal()}>
-				<DialogContent>
+				<DialogContent className="max-w-4xl">
 					<DialogHeader>
 						<DialogTitle>{editingJob ? "Edit Cron Job" : "Create Cron Job"}</DialogTitle>
 					</DialogHeader>
-					<div className="flex flex-col gap-4">
-						<Field label="Job ID">
-							<Input
-								value={formData.id}
-								onChange={(e) => setFormData((d) => ({ ...d, id: e.target.value }))}
-								placeholder="e.g. check-email"
-								disabled={!!editingJob}
-								autoComplete="off"
-							/>
-						</Field>
-
-						<Field label="Prompt">
-							<TextArea
-								value={formData.prompt}
-								onChange={(e) => setFormData((d) => ({ ...d, prompt: e.target.value }))}
-								placeholder="What should the agent do on each run?"
-								rows={3}
-							/>
-						</Field>
-
-						<Field label="Interval">
-							<div className="flex items-center gap-2">
-								<span className="text-sm text-ink-faint">Every</span>
-								<NumberStepper
-									value={formData.interval_value}
-									onChange={(v) => setFormData((d) => ({ ...d, interval_value: v }))}
-									min={1}
-									max={999}
-									variant="compact"
-									suffix={` ${formData.interval_unit}`}
-								/>
-								<Select
-									value={formData.interval_unit}
-									onValueChange={(value) =>
-										setFormData((d) => ({ ...d, interval_unit: value as "minutes" | "hours" | "days" }))
-									}
-								>
-									<SelectTrigger className="w-32">
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value="minutes">minutes</SelectItem>
-										<SelectItem value="hours">hours</SelectItem>
-										<SelectItem value="days">days</SelectItem>
-									</SelectContent>
-								</Select>
-							</div>
-							<p className="mt-1 text-tiny text-ink-faint">How often this job should run</p>
-						</Field>
-
-						<div className="grid grid-cols-2 gap-4">
-
-							<Field label="Delivery Target">
+					<div className="grid grid-cols-2 gap-6">
+						{/* Left column — what & when */}
+						<div className="flex flex-col gap-4">
+							<Field label="Job ID">
 								<Input
-									value={formData.delivery_target}
-									onChange={(e) => setFormData((d) => ({ ...d, delivery_target: e.target.value }))}
-									placeholder="discord:channel_id"
+									value={formData.id}
+									onChange={(e) => setFormData((d) => ({ ...d, id: e.target.value }))}
+									placeholder="e.g. daily-summary"
+									disabled={!!editingJob}
+									autoComplete="off"
 								/>
+							</Field>
+
+							<Field label="Prompt">
+								<TextArea
+									value={formData.prompt}
+									onChange={(e) => setFormData((d) => ({ ...d, prompt: e.target.value }))}
+									placeholder="What should the agent do on each run?"
+									rows={4}
+								/>
+							</Field>
+
+							<Field label="Schedule">
+								<div className="flex flex-col gap-3">
+									<div className="flex gap-1 rounded-lg bg-app-lightBox p-0.5">
+										<button
+											type="button"
+											className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+												formData.schedule_mode === "cron"
+													? "bg-app-darkBox text-ink shadow-sm"
+													: "text-ink-faint hover:text-ink"
+											}`}
+											onClick={() => setFormData((d) => ({ ...d, schedule_mode: "cron" }))}
+										>
+											Cron Expression
+										</button>
+										<button
+											type="button"
+											className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+												formData.schedule_mode === "interval"
+													? "bg-app-darkBox text-ink shadow-sm"
+													: "text-ink-faint hover:text-ink"
+											}`}
+											onClick={() => setFormData((d) => ({ ...d, schedule_mode: "interval" }))}
+										>
+											Interval
+										</button>
+									</div>
+
+									{formData.schedule_mode === "cron" && (
+										<div className="flex flex-col gap-2">
+											<Input
+												value={formData.cron_expr}
+												onChange={(e) => setFormData((d) => ({ ...d, cron_expr: e.target.value }))}
+												placeholder="0 9 * * *"
+												className="font-mono"
+												autoComplete="off"
+											/>
+											<div className="flex flex-wrap gap-1.5">
+												{CRON_PRESETS.map((preset) => (
+													<button
+														key={preset.value}
+														type="button"
+														className={`rounded-md border px-2 py-1 text-tiny transition-colors ${
+															formData.cron_expr === preset.value
+																? "border-accent/50 bg-accent/10 text-accent"
+																: "border-app-line bg-app-darkBox text-ink-faint hover:border-app-line/80 hover:text-ink-dull"
+														}`}
+														onClick={() => setFormData((d) => ({ ...d, cron_expr: preset.value }))}
+													>
+														{preset.label}
+													</button>
+												))}
+											</div>
+											<p className="text-tiny text-ink-faint">
+												min hour day-of-month month day-of-week
+											</p>
+										</div>
+									)}
+
+									{formData.schedule_mode === "interval" && (
+										<div>
+											<div className="flex items-center gap-2">
+												<span className="text-sm text-ink-faint">Every</span>
+												<NumberStepper
+													value={formData.interval_value}
+													onChange={(v) => setFormData((d) => ({ ...d, interval_value: v }))}
+													min={1}
+													max={999}
+													variant="compact"
+												/>
+												<Select
+													value={formData.interval_unit}
+													onValueChange={(value) =>
+														setFormData((d) => ({ ...d, interval_unit: value as "minutes" | "hours" | "days" }))
+													}
+												>
+													<SelectTrigger className="w-32">
+														<SelectValue />
+													</SelectTrigger>
+													<SelectContent>
+														<SelectItem value="minutes">minutes</SelectItem>
+														<SelectItem value="hours">hours</SelectItem>
+														<SelectItem value="days">days</SelectItem>
+													</SelectContent>
+												</Select>
+											</div>
+											<p className="mt-1 text-tiny text-ink-faint">May drift. Prefer cron expressions.</p>
+										</div>
+									)}
+								</div>
 							</Field>
 						</div>
 
-						<Field label="Active Hours (optional)">
-							<div className="flex items-center gap-2">
-								<NumberStepper
-									value={parseInt(formData.active_start_hour) || 0}
-									onChange={(v) => setFormData((d) => ({ ...d, active_start_hour: v.toString() }))}
-									min={0}
-									max={23}
-									suffix="h"
-									variant="compact"
+						{/* Right column — delivery & options */}
+						<div className="flex flex-col gap-4">
+							<Field label="Delivery Target">
+								<Select
+									value={formData.delivery_target}
+									onValueChange={(value) => {
+										if (value === "__custom__") {
+											setFormData((d) => ({ ...d, delivery_target: "" }));
+										} else {
+											setFormData((d) => ({ ...d, delivery_target: value }));
+										}
+									}}
+								>
+									<SelectTrigger>
+										<SelectValue placeholder="Select a channel..." />
+									</SelectTrigger>
+									<SelectContent>
+										{deliveryTargets.map((target) => (
+											<SelectItem key={target.value} value={target.value}>
+												<span>{target.label}</span>
+												<span className="ml-1.5 text-ink-faint">{target.agentId}</span>
+											</SelectItem>
+										))}
+										<SelectItem value="__custom__">Custom...</SelectItem>
+									</SelectContent>
+								</Select>
+								{(formData.delivery_target === "" || !deliveryTargets.some((t) => t.value === formData.delivery_target)) && (
+									<Input
+										value={formData.delivery_target}
+										onChange={(e) => setFormData((d) => ({ ...d, delivery_target: e.target.value }))}
+										placeholder="adapter:target (e.g. discord:123456)"
+										className="mt-1.5"
+									/>
+								)}
+							</Field>
+
+							<Field label="Active Hours (optional)">
+								<div className="flex items-center gap-2">
+									<NumberStepper
+										value={parseInt(formData.active_start_hour) || 0}
+										onChange={(v) => setFormData((d) => ({ ...d, active_start_hour: v.toString() }))}
+										min={0}
+										max={23}
+										suffix="h"
+										variant="compact"
+									/>
+									<span className="text-sm text-ink-faint">to</span>
+									<NumberStepper
+										value={parseInt(formData.active_end_hour) || 23}
+										onChange={(v) => setFormData((d) => ({ ...d, active_end_hour: v.toString() }))}
+										min={0}
+										max={23}
+										suffix="h"
+										variant="compact"
+									/>
+								</div>
+								<p className="mt-1 text-tiny text-ink-faint">Only run during these hours (24h)</p>
+							</Field>
+
+							<Field label="Timeout (optional)">
+								<Input
+									value={formData.timeout_secs}
+									onChange={(e) => setFormData((d) => ({ ...d, timeout_secs: e.target.value.replace(/\D/g, "") }))}
+									placeholder="120"
+									className="w-32"
 								/>
-								<span className="text-sm text-ink-faint">to</span>
-								<NumberStepper
-									value={parseInt(formData.active_end_hour) || 23}
-									onChange={(v) => setFormData((d) => ({ ...d, active_end_hour: v.toString() }))}
-									min={0}
-									max={23}
-									suffix="h"
-									variant="compact"
-								/>
+								<p className="mt-1 text-tiny text-ink-faint">Max seconds per run (default 120)</p>
+							</Field>
+
+							<div className="flex items-center justify-between">
+								<Label>Enabled</Label>
+								<Toggle checked={formData.enabled} onCheckedChange={(checked) => setFormData((d) => ({ ...d, enabled: checked }))} size="lg" />
 							</div>
-							<p className="mt-1 text-tiny text-ink-faint">Job will only run during these hours (0-23, 24-hour format)</p>
-						</Field>
 
-						<div className="flex items-center justify-between">
-							<Label>Enabled</Label>
-							<Toggle checked={formData.enabled} onCheckedChange={(checked) => setFormData((d) => ({ ...d, enabled: checked }))} size="lg" />
+							<div className="flex items-center justify-between">
+								<Label>Run Once</Label>
+								<Toggle checked={formData.run_once} onCheckedChange={(checked) => setFormData((d) => ({ ...d, run_once: checked }))} size="lg" />
+							</div>
 						</div>
-
-						<div className="flex items-center justify-between">
-							<Label>Run Once</Label>
-							<Toggle checked={formData.run_once} onCheckedChange={(checked) => setFormData((d) => ({ ...d, run_once: checked }))} size="lg" />
-						</div>
+					</div>
 
 					<div className="mt-2 flex justify-end gap-2">
 						<Button variant="ghost" size="sm" onClick={closeModal}>
@@ -361,12 +509,16 @@ export function AgentCron({ agentId }: AgentCronProps) {
 						<Button
 							size="sm"
 							onClick={handleSave}
-							disabled={!formData.id.trim() || !formData.prompt.trim() || !formData.delivery_target.trim()}
+							disabled={
+								!formData.id.trim() ||
+								!formData.prompt.trim() ||
+								!formData.delivery_target.trim() ||
+								(formData.schedule_mode === "cron" && !formData.cron_expr.trim())
+							}
 							loading={saveMutation.isPending}
 						>
 							{editingJob ? "Save Changes" : "Create Job"}
 						</Button>
-					</div>
 					</div>
 				</DialogContent>
 			</Dialog>
@@ -439,6 +591,7 @@ function CronJobCard({
 }) {
 	const totalRuns = job.success_count + job.failure_count;
 	const successRate = totalRuns > 0 ? Math.round((job.success_count / totalRuns) * 100) : null;
+	const schedule = formatCronSchedule(job.cron_expr, job.interval_secs);
 
 	return (
 		<div className="overflow-hidden rounded-xl border border-app-line bg-app-darkBox">
@@ -457,9 +610,12 @@ function CronJobCard({
 						<code className="rounded bg-app-lightBox px-1.5 py-0.5 text-xs font-medium text-ink">
 							{job.id}
 						</code>
+						<code className="rounded bg-app-lightBox/60 px-1.5 py-0.5 font-mono text-tiny text-ink-dull">
+							{schedule}
+						</code>
 						{job.active_hours && (
 							<span className="text-tiny text-ink-faint">
-								{String(job.active_hours[0]).padStart(2, "0")}:00–{String(job.active_hours[1]).padStart(2, "0")}:00
+								{String(job.active_hours[0]).padStart(2, "0")}:00-{String(job.active_hours[1]).padStart(2, "0")}:00
 							</span>
 						)}
 						{!job.enabled && (
@@ -475,8 +631,6 @@ function CronJobCard({
 					</p>
 
 					<div className="flex flex-wrap items-center gap-3 text-tiny text-ink-faint">
-						<span>every {formatDuration(job.interval_secs)}</span>
-						<span className="text-ink-faint/50">·</span>
 						<span>{job.delivery_target}</span>
 						{job.last_executed_at && (
 							<>
@@ -488,7 +642,7 @@ function CronJobCard({
 							<>
 								<span className="text-ink-faint/50">·</span>
 								<span className={successRate >= 90 ? "text-green-500" : successRate >= 50 ? "text-yellow-500" : "text-red-500"}>
-									{successRate}% success ({job.success_count}/{totalRuns})
+									{successRate}% ({job.success_count}/{totalRuns})
 								</span>
 							</>
 						)}
@@ -497,24 +651,30 @@ function CronJobCard({
 
 				{/* Actions */}
 				<div className="flex items-center gap-0.5">
-					<ActionButton
+					<Button
 						title={job.enabled ? "Disable" : "Enable"}
 						onClick={onToggleEnabled}
 						disabled={isToggling}
+						variant="ghost"
+						size="sm"
 					>
-						{job.enabled ? "⏸" : "▶"}
-					</ActionButton>
-					<ActionButton
+						<HugeiconsIcon icon={job.enabled ? PauseIcon : PlayIcon} className="h-3.5 w-3.5" />
+					</Button>
+					<Button
 						title="Run now"
 						onClick={onTrigger}
 						disabled={isTriggering || !job.enabled}
+						variant="ghost"
+						size="sm"
 					>
-						⚡
-					</ActionButton>
-					<ActionButton title="Edit" onClick={onEdit}>✎</ActionButton>
-					<ActionButton title="Delete" onClick={onDelete} className="hover:text-red-400">
-						✕
-					</ActionButton>
+						<HugeiconsIcon icon={FlashIcon} className="h-3.5 w-3.5" />
+					</Button>
+					<Button title="Edit" onClick={onEdit} variant="ghost" size="sm">
+						<HugeiconsIcon icon={PencilEdit02Icon} className="h-3.5 w-3.5" />
+					</Button>
+					<Button title="Delete" onClick={onDelete} variant="ghost" size="sm" className="hover:text-red-400">
+						<HugeiconsIcon icon={Delete02Icon} className="h-3.5 w-3.5" />
+					</Button>
 				</div>
 			</div>
 
@@ -526,42 +686,15 @@ function CronJobCard({
 			)}
 
 			{/* Expand toggle */}
-			<Button
-				variant="ghost"
-				size="sm"
+			<button
+				type="button"
 				onClick={onToggleExpand}
-				className="w-full rounded-none border-t border-app-line/50"
+				className="flex w-full items-center justify-center gap-1.5 border-t border-app-line/50 px-3 py-1.5 text-tiny text-ink-faint transition-colors hover:bg-app-lightBox/30 hover:text-ink-dull"
 			>
-				{isExpanded ? "▾ Hide history" : "▸ Show history"}
-			</Button>
+				<HugeiconsIcon icon={isExpanded ? ArrowUp01Icon : ArrowDown01Icon} className="h-3 w-3" />
+				{isExpanded ? "Hide history" : "Show history"}
+			</button>
 		</div>
-	);
-}
-
-function ActionButton({
-	title,
-	onClick,
-	disabled,
-	className,
-	children,
-}: {
-	title: string;
-	onClick: () => void;
-	disabled?: boolean;
-	className?: string;
-	children: React.ReactNode;
-}) {
-	return (
-		<Button
-			title={title}
-			onClick={onClick}
-			disabled={disabled}
-			variant="ghost"
-			size="sm"
-			className={className}
-		>
-			{children}
-		</Button>
 	);
 }
 
@@ -590,9 +723,7 @@ function JobExecutions({ agentId, jobId }: { agentId: string; jobId: string }) {
 					key={execution.id}
 					className="flex items-center gap-3 rounded-lg px-3 py-1.5"
 				>
-					<span className={`text-xs ${execution.success ? "text-green-500" : "text-red-500"}`}>
-						{execution.success ? "✓" : "✗"}
-					</span>
+					<span className={`h-1.5 w-1.5 rounded-full ${execution.success ? "bg-green-500" : "bg-red-500"}`} />
 					<span className="text-tiny tabular-nums text-ink-faint">
 						{formatTimeAgo(execution.executed_at)}
 					</span>
