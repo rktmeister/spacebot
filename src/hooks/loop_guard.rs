@@ -8,6 +8,14 @@ use std::collections::{HashMap, HashSet, VecDeque};
 const POLL_TOOLS: &[&str] = &["shell"];
 const HISTORY_CAPACITY: usize = 30;
 
+/// Tools that read changing state and are expected to be called repeatedly with
+/// identical arguments across a session. `browser_snapshot` always takes `{}`
+/// but returns different content after each page mutation. These tools get the
+/// poll multiplier on their consecutive-call threshold and are excluded from
+/// ping-pong detection patterns (since alternating snapshot→click is the normal
+/// browser workflow, not a stuck loop).
+const OBSERVATION_TOOLS: &[&str] = &["browser_snapshot", "browser_tab_list"];
+
 /// Avoids hashing multi-MB tool outputs while still catching identical short
 /// results. Large outputs that differ only in the tail (growing log files,
 /// etc.) won't hash-match, which is correct — the tool is returning new data.
@@ -79,7 +87,15 @@ pub enum LoopGuardVerdict {
 /// within one Rig `agent.prompt()` invocation, reset at prompt boundaries.
 pub struct LoopGuard {
     config: LoopGuardConfig,
+    /// Consecutive call count per `(tool, args)` hash. Reset to 0 for all
+    /// hashes except the current one whenever a *different* call is made.
+    /// This means `browser_snapshot` (empty args) can be called 50 times
+    /// across a session as long as other tools run in between — but 7 calls
+    /// in a row with nothing else is a real loop.
     call_counts: HashMap<String, u32>,
+    /// The call hash of the most recent `check()`. Used to detect whether the
+    /// current call is a continuation of the same repeated sequence.
+    last_call_hash: Option<String>,
     total_calls: u32,
     outcome_counts: HashMap<String, u32>,
     // Call hashes poisoned by outcome detection — next check() auto-blocks.
@@ -94,6 +110,7 @@ impl LoopGuard {
         Self {
             config,
             call_counts: HashMap::new(),
+            last_call_hash: None,
             total_calls: 0,
             outcome_counts: HashMap::new(),
             blocked_outcomes: HashSet::new(),
@@ -105,6 +122,7 @@ impl LoopGuard {
 
     pub fn reset(&mut self) {
         self.call_counts.clear();
+        self.last_call_hash = None;
         self.total_calls = 0;
         self.outcome_counts.clear();
         self.blocked_outcomes.clear();
@@ -141,6 +159,23 @@ impl LoopGuard {
                 tool_name
             ));
         }
+
+        // Reset consecutive counts when the call hash changes. A different
+        // tool call in between means the model is doing real work, not looping.
+        // This prevents observation tools like `browser_snapshot` (which always
+        // have the same empty args) from being permanently blocked after N
+        // total uses across a long session.
+        let is_same_as_last = self.last_call_hash.as_ref() == Some(&call_hash);
+        if !is_same_as_last {
+            self.call_counts.clear();
+            // Reset per-hash warnings so the model gets fresh warnings if it
+            // starts a new loop with this tool later. Retain ping-pong warning
+            // counters so the max_warnings_per_call escalation still works for
+            // alternating patterns detected across tool switches.
+            self.warnings_emitted
+                .retain(|key, _| key.starts_with("pingpong_"));
+        }
+        self.last_call_hash = Some(call_hash.clone());
 
         let count = self.call_counts.entry(call_hash.clone()).or_insert(0);
         *count += 1;
@@ -240,6 +275,14 @@ impl LoopGuard {
             if a != b && tail[2] == a && tail[3] == b && tail[4] == a && tail[5] == b {
                 let tool_a = self.resolve_tool_name(a);
                 let tool_b = self.resolve_tool_name(b);
+
+                // Observation tools alternate with action tools as part of
+                // normal workflow (snapshot→click→snapshot→click). Don't flag
+                // these patterns as ping-pong.
+                if Self::involves_observation_tool(&tool_a, &tool_b) {
+                    return None;
+                }
+
                 return Some(format!(
                     "Ping-pong detected: tools '{}' and '{}' are alternating \
                      repeatedly. Break the cycle by trying a different approach.",
@@ -266,6 +309,14 @@ impl LoopGuard {
                 let tool_a = self.resolve_tool_name(a);
                 let tool_b = self.resolve_tool_name(b);
                 let tool_c = self.resolve_tool_name(c);
+
+                if Self::involves_observation_tool(&tool_a, &tool_b)
+                    || Self::involves_observation_tool(&tool_a, &tool_c)
+                    || Self::involves_observation_tool(&tool_b, &tool_c)
+                {
+                    return None;
+                }
+
                 return Some(format!(
                     "Ping-pong detected: tools '{}', '{}', '{}' are cycling \
                      repeatedly. Break the cycle by trying a different approach.",
@@ -275,6 +326,15 @@ impl LoopGuard {
         }
 
         None
+    }
+
+    /// Returns true if exactly one tool is an observation tool. Observation
+    /// tools (like `browser_snapshot`) naturally alternate with action tools
+    /// as part of normal workflow (snapshot→click) and should not be flagged
+    /// as ping-pong. Two observation tools alternating (snapshot↔tab_list)
+    /// is still suspicious and should be caught.
+    fn involves_observation_tool(tool_a: &str, tool_b: &str) -> bool {
+        OBSERVATION_TOOLS.contains(&tool_a) ^ OBSERVATION_TOOLS.contains(&tool_b)
     }
 
     fn count_ping_pong_repeats(&self) -> u32 {
@@ -332,9 +392,16 @@ impl LoopGuard {
             .unwrap_or_else(|| "unknown".to_string())
     }
 
-    // Poll tools get relaxed thresholds because they're expected to be
-    // called repeatedly (checking build output, watching deployment status).
+    // Poll/observation tools get relaxed thresholds because they're expected
+    // to be called repeatedly (checking build output, watching deployment
+    // status, re-snapshotting browser state after page mutations).
     fn is_poll_call(tool_name: &str, args: &str) -> bool {
+        // Observation tools are always considered poll calls — they read
+        // changing state with identical args every time.
+        if OBSERVATION_TOOLS.contains(&tool_name) {
+            return true;
+        }
+
         if POLL_TOOLS.contains(&tool_name) {
             let args_lower = args.to_lowercase();
             if args.len() < 200
@@ -612,6 +679,70 @@ mod tests {
         // After reset, the first call should be allowed again.
         assert_eq!(guard.check("shell", args), LoopGuardVerdict::Allow);
         assert_eq!(guard.total_calls, 1);
+    }
+
+    #[test]
+    fn non_consecutive_identical_calls_allowed() {
+        // This is the browser_snapshot bug fix: calling the same parameterless
+        // tool many times across a session should be fine as long as other
+        // tools run in between (the page state changes between snapshots).
+        let mut guard = LoopGuard::new(worker_config());
+        let snapshot_args = "{}";
+        let click_args = r#"{"index": 3}"#;
+
+        // Simulate 20 rounds of snapshot → click → snapshot → click...
+        for _ in 0..20 {
+            let verdict = guard.check("browser_snapshot", snapshot_args);
+            assert_eq!(
+                verdict,
+                LoopGuardVerdict::Allow,
+                "browser_snapshot should be allowed when interleaved with other tools"
+            );
+            let verdict = guard.check("browser_click", click_args);
+            assert_eq!(verdict, LoopGuardVerdict::Allow);
+        }
+    }
+
+    #[test]
+    fn consecutive_identical_calls_still_blocked() {
+        // Calling the same tool with the same args many times IN A ROW should
+        // still trigger the block — that's a real loop.
+        let mut guard = LoopGuard::new(worker_config());
+        let args = r#"{"query":"same thing"}"#;
+
+        // Worker warn_threshold = 4. Calls 1-3 are Allow, call 4 hits warn.
+        for _ in 0..3 {
+            assert_eq!(guard.check("web_search", args), LoopGuardVerdict::Allow);
+        }
+        // Call 4 hits warn threshold.
+        let verdict = guard.check("web_search", args);
+        assert!(matches!(verdict, LoopGuardVerdict::Block(_)));
+    }
+
+    #[test]
+    fn observation_tool_consecutive_gets_relaxed_threshold() {
+        // Observation tools like browser_snapshot get the poll multiplier even
+        // when called consecutively, so they can handle legitimate sequences
+        // of multiple snapshots.
+        let mut guard = LoopGuard::new(worker_config());
+        let args = "{}";
+
+        // Worker warn_threshold=4, poll_multiplier=3, so effective warn=12.
+        // Calls 1-11 should all be allowed.
+        for i in 1..=11 {
+            let verdict = guard.check("browser_snapshot", args);
+            assert_eq!(
+                verdict,
+                LoopGuardVerdict::Allow,
+                "Call {i} should be allowed for observation tool"
+            );
+        }
+        // Call 12 should trigger a warning.
+        let verdict = guard.check("browser_snapshot", args);
+        assert!(
+            matches!(verdict, LoopGuardVerdict::Block(ref message) if message.contains("Warning")),
+            "Expected warning at relaxed threshold, got: {verdict:?}"
+        );
     }
 
     #[test]
