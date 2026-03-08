@@ -2,9 +2,9 @@
 
 use super::state::ApiState;
 use super::{
-    agents, bindings, channels, config, cortex, cron, ingest, links, mcp, memories, messaging,
-    models, opencode_proxy, projects, providers, secrets, settings, skills, system, tasks, tools,
-    webchat, workers,
+    agents, bindings, channels, config, cortex, cron, factory, ingest, links, mcp, memories,
+    messaging, models, opencode_proxy, projects, providers, secrets, settings, skills, system,
+    tasks, tools, webchat, workers,
 };
 
 use axum::Json;
@@ -107,8 +107,19 @@ pub async fn start_http_server(
         )
         .route("/cortex/events", get(cortex::cortex_events))
         .route("/cortex-chat/messages", get(cortex::cortex_chat_messages))
+        .route("/cortex-chat/threads", get(cortex::cortex_chat_threads))
+        .route(
+            "/cortex-chat/thread",
+            delete(cortex::cortex_chat_delete_thread),
+        )
         .route("/cortex-chat/send", post(cortex::cortex_chat_send))
         .route("/agents/profile", get(agents::get_agent_profile))
+        .route(
+            "/agents/avatar",
+            get(agents::get_avatar)
+                .post(agents::upload_avatar)
+                .delete(agents::delete_avatar),
+        )
         .route(
             "/agents/identity",
             get(agents::get_identity).put(agents::update_identity),
@@ -265,6 +276,9 @@ pub async fn start_http_server(
             "/humans/{id}",
             put(links::update_human).delete(links::delete_human),
         )
+        // Factory: preset archetypes
+        .route("/factory/presets", get(factory::list_presets))
+        .route("/factory/presets/{id}", get(factory::get_preset))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(
             state.clone(),
