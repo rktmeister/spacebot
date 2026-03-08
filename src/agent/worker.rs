@@ -5,7 +5,7 @@ use crate::config::BrowserConfig;
 use crate::error::Result;
 use crate::hooks::{SpacebotHook, ToolNudgePolicy};
 use crate::llm::SpacebotModel;
-use crate::llm::routing::is_context_overflow_error;
+use crate::llm::routing::{is_context_overflow_error, is_retriable_error};
 use crate::{AgentDeps, ChannelId, ProcessId, ProcessType, WorkerId};
 use rig::agent::AgentBuilder;
 use rig::completion::CompletionModel;
@@ -31,6 +31,15 @@ const TURNS_PER_SEGMENT: usize = 15;
 /// broken (system prompt alone exceeds the context window, or the compaction
 /// floor of 4 messages is still too large).
 const MAX_OVERFLOW_RETRIES: usize = 2;
+
+/// Max consecutive transient provider error retries before giving up.
+/// Transient errors (upstream 500s, timeouts, rate limits that survived
+/// model-level retries) get a backoff-and-retry at the worker level so
+/// the worker survives temporary provider outages.
+const MAX_TRANSIENT_RETRIES: usize = 5;
+
+/// Base delay for worker-level transient error backoff (doubles each retry).
+const TRANSIENT_RETRY_BASE_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Max segments before the worker gives up and returns a partial result.
 /// Prevents unbounded worker loops when the LLM keeps hitting max_turns
@@ -313,6 +322,7 @@ impl Worker {
         let mut prompt = self.task.clone();
         let mut segments_run = 0;
         let mut overflow_retries = 0;
+        let mut transient_retries = 0;
 
         let mut result = if resuming {
             // For resumed workers, synthesize a "result" from the task
@@ -343,6 +353,7 @@ impl Worker {
                     }
                     Err(rig::completion::PromptError::MaxTurnsError { .. }) => {
                         overflow_retries = 0;
+                        transient_retries = 0;
 
                         if segments_run >= MAX_SEGMENTS {
                             tracing::warn!(
@@ -408,6 +419,43 @@ impl Worker {
                               has been compacted."
                             .into();
                     }
+                    Err(error) if is_retriable_error(&error.to_string()) => {
+                        transient_retries += 1;
+                        if transient_retries > MAX_TRANSIENT_RETRIES {
+                            self.state = WorkerState::Failed;
+                            self.hook.send_status("failed");
+                            self.write_failure_log(&history, &format!(
+                                "transient provider error after {MAX_TRANSIENT_RETRIES} retries: {error}"
+                            ));
+                            self.persist_transcript(&compacted_history, &history).await;
+                            tracing::error!(
+                                worker_id = %self.id,
+                                retries = MAX_TRANSIENT_RETRIES,
+                                %error,
+                                "worker transient error retries exhausted"
+                            );
+                            return Err(crate::error::AgentError::Other(error.into()).into());
+                        }
+
+                        let delay =
+                            TRANSIENT_RETRY_BASE_DELAY * 2u32.pow((transient_retries - 1) as u32);
+                        tracing::warn!(
+                            worker_id = %self.id,
+                            attempt = transient_retries,
+                            delay_secs = delay.as_secs(),
+                            %error,
+                            "transient provider error, backing off and retrying"
+                        );
+                        self.hook.send_status(format!(
+                            "provider error, retrying in {}s ({transient_retries}/{MAX_TRANSIENT_RETRIES})",
+                            delay.as_secs()
+                        ));
+                        tokio::time::sleep(delay).await;
+
+                        // Don't change the prompt — just retry with the same
+                        // state. The LLM never saw this request so there's
+                        // nothing to "continue" from.
+                    }
                     Err(error) => {
                         self.state = WorkerState::Failed;
                         self.hook.send_status("failed");
@@ -471,6 +519,7 @@ impl Worker {
 
                 let mut follow_up_prompt = follow_up.clone();
                 let mut follow_up_overflow_retries = 0;
+                let mut follow_up_transient_retries = 0u32;
                 let follow_up_hook = self
                     .hook
                     .clone()
@@ -505,6 +554,31 @@ impl Worker {
                             let prompt_engine = self.deps.runtime_config.prompts.load();
                             let overflow_msg = prompt_engine.render_system_worker_overflow()?;
                             follow_up_prompt = format!("{follow_up}\n\n{overflow_msg}");
+                        }
+                        Err(error) if is_retriable_error(&error.to_string()) => {
+                            follow_up_transient_retries += 1;
+                            if follow_up_transient_retries > MAX_TRANSIENT_RETRIES as u32 {
+                                let failure_reason = format!(
+                                    "follow-up transient error after {MAX_TRANSIENT_RETRIES} retries: {error}"
+                                );
+                                self.write_failure_log(&history, &failure_reason);
+                                tracing::error!(worker_id = %self.id, %error, "follow-up transient retries exhausted");
+                                break Err(failure_reason);
+                            }
+                            let delay = TRANSIENT_RETRY_BASE_DELAY
+                                * 2u32.pow(follow_up_transient_retries - 1);
+                            tracing::warn!(
+                                worker_id = %self.id,
+                                attempt = follow_up_transient_retries,
+                                delay_secs = delay.as_secs(),
+                                %error,
+                                "follow-up transient error, backing off and retrying"
+                            );
+                            self.hook.send_status(format!(
+                                "provider error, retrying in {}s ({follow_up_transient_retries}/{MAX_TRANSIENT_RETRIES})",
+                                delay.as_secs()
+                            ));
+                            tokio::time::sleep(delay).await;
                         }
                         Err(error) => {
                             let failure_reason = format!("follow-up failed: {error}");
