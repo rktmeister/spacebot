@@ -410,6 +410,7 @@ pub(super) async fn trigger_warmup(
         let agent_id = agent_id.clone();
         let task_store_registry = state.task_store_registry.clone();
         let injection_tx = state.injection_tx.clone();
+        let humans = (**state.agent_humans.load()).clone();
         tokio::spawn(async move {
             let (event_tx, memory_event_tx) = crate::create_process_event_buses();
             let project_store =
@@ -430,7 +431,7 @@ pub(super) async fn trigger_warmup(
                 project_store,
                 links: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
                 agent_names: Arc::new(std::collections::HashMap::new()),
-                humans: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
+                humans: Arc::new(arc_swap::ArcSwap::from_pointee(humans)),
                 task_store_registry,
                 process_control_registry: Arc::new(
                     crate::agent::process_control::ProcessControlRegistry::new(),
@@ -453,17 +454,32 @@ pub(super) async fn trigger_warmup(
 pub(super) async fn create_agent(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<CreateAgentRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> (StatusCode, Json<serde_json::Value>) {
     match create_agent_internal(&state, request).await {
-        Ok(result) => Ok(Json(serde_json::json!({
-            "success": result.success,
-            "agent_id": result.agent_id,
-            "message": result.message
-        }))),
-        Err(message) => Ok(Json(serde_json::json!({
-            "success": false,
-            "message": message
-        }))),
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "success": result.success,
+                "agent_id": result.agent_id,
+                "message": result.message
+            })),
+        ),
+        Err(message) => {
+            let status = if message.contains("already exists") {
+                StatusCode::CONFLICT
+            } else if message.contains("cannot be empty") || message.contains("agent limit") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (
+                status,
+                Json(serde_json::json!({
+                    "success": false,
+                    "message": message
+                })),
+            )
+        }
     }
 }
 
@@ -496,6 +512,9 @@ pub async fn create_agent_internal(
 
     let config_path = state.config_path.read().await.clone();
     let instance_dir = (**state.instance_dir.load()).clone();
+
+    // Acquire the config write mutex to prevent concurrent read-modify-write races.
+    let _config_guard = state.config_write_mutex.lock().await;
 
     let content = if config_path.exists() {
         tokio::fs::read_to_string(&config_path)
@@ -539,6 +558,9 @@ pub async fn create_agent_internal(
             tracing::warn!(%error, "failed to write config.toml");
             format!("failed to write config.toml: {error}")
         })?;
+
+    // Release the config write mutex — remaining work doesn't touch config.toml.
+    drop(_config_guard);
 
     // Read defaults directly from the config we just wrote to disk rather than
     // relying on the cached `defaults_config` which may be stale (e.g. if a
@@ -983,6 +1005,10 @@ pub(super) async fn update_agent(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let config_path = state.config_path.read().await.clone();
+
+    // Acquire the config write mutex to prevent concurrent read-modify-write races.
+    let _config_guard = state.config_write_mutex.lock().await;
+
     let content = tokio::fs::read_to_string(&config_path)
         .await
         .map_err(|error| {
@@ -1026,6 +1052,8 @@ pub(super) async fn update_agent(
             tracing::warn!(%error, "failed to write config.toml");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
+
+    drop(_config_guard);
 
     let mut configs = (**existing).clone();
     let info = &mut configs[index];
@@ -1081,6 +1109,9 @@ pub(super) async fn delete_agent(
     // Remove the [[agents]] entry from config.toml
     let config_path = state.config_path.read().await.clone();
     if config_path.exists() {
+        // Acquire the config write mutex to prevent concurrent read-modify-write races.
+        let _config_guard = state.config_write_mutex.lock().await;
+
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|error| {

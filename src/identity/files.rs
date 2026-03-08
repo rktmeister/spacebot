@@ -58,19 +58,16 @@ impl Identity {
 }
 
 /// Default identity file templates for new agents.
+///
+/// Uses the `main-agent` preset content so fresh instances start with a
+/// reasonable baseline rather than empty placeholder comments.
 const DEFAULT_IDENTITY_FILES: &[(&str, &str)] = &[
-    (
-        "SOUL.md",
-        "<!-- Define this agent's soul: personality, values, communication style, boundaries. -->\n",
-    ),
+    ("SOUL.md", include_str!("../../presets/main-agent/SOUL.md")),
     (
         "IDENTITY.md",
-        "<!-- Define this agent's identity: name, nature, purpose. -->\n",
+        include_str!("../../presets/main-agent/IDENTITY.md"),
     ),
-    (
-        "ROLE.md",
-        "<!-- Define this agent's role: responsibilities, scope, and expected outcomes. -->\n",
-    ),
+    ("ROLE.md", include_str!("../../presets/main-agent/ROLE.md")),
 ];
 
 /// Write template identity files into the agent root if they don't already exist.

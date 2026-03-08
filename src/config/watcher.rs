@@ -31,6 +31,7 @@ pub fn spawn_file_watcher(
     messaging_manager: Option<Arc<crate::messaging::MessagingManager>>,
     llm_manager: Arc<crate::llm::LlmManager>,
     agent_links: Arc<arc_swap::ArcSwap<Vec<crate::links::AgentLink>>>,
+    agent_humans: Arc<arc_swap::ArcSwap<Vec<crate::config::HumanDef>>>,
 ) -> tokio::task::JoinHandle<()> {
     use notify::{Event, RecursiveMode, Watcher};
     use std::time::Duration;
@@ -197,6 +198,9 @@ pub fn spawn_file_watcher(
                         tracing::error!(%error, "failed to parse links from reloaded config");
                     }
                 }
+
+                agent_humans.store(Arc::new(config.humans.clone()));
+                tracing::info!("agent humans reloaded ({} entries)", config.humans.len());
 
                 if let Some(ref perms) = discord_permissions
                     && let Some(discord_config) = &config.messaging.discord

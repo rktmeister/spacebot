@@ -96,6 +96,10 @@ pub struct FactoryUpdateConfigOutput {
     pub agent_id: String,
     pub sections_updated: Vec<String>,
     pub message: String,
+    /// Set when the config was written to disk but the hot-reload into the
+    /// running agent failed. The agent will use stale config until restarted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reload_warning: Option<String>,
 }
 
 impl Tool for FactoryUpdateConfigTool {
@@ -303,7 +307,7 @@ impl Tool for FactoryUpdateConfigTool {
             })?;
 
         // Hot-reload the config into RuntimeConfig
-        match crate::config::Config::load_from_path(&config_path) {
+        let reload_warning = match crate::config::Config::load_from_path(&config_path) {
             Ok(new_config) => {
                 self.state
                     .set_defaults_config(new_config.defaults.clone())
@@ -318,20 +322,35 @@ impl Tool for FactoryUpdateConfigTool {
                     runtime_config
                         .reload_config(&new_config, &agent_id, &mcp_manager)
                         .await;
+                    None
+                } else {
+                    let warning = format!(
+                        "config written but runtime not found for agent '{agent_id}' — changes take effect on restart"
+                    );
+                    tracing::warn!(agent_id = %agent_id, "{warning}");
+                    Some(warning)
                 }
             }
             Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "config.toml written but failed to reload immediately"
+                let warning = format!(
+                    "config written but failed to reload: {error} — changes take effect on restart"
                 );
+                tracing::warn!(%error, "config.toml written but failed to reload immediately");
+                Some(warning)
             }
-        }
+        };
 
-        let message = format!(
-            "Updated {} for agent '{agent_id}'",
-            sections_updated.join(", ")
-        );
+        let message = if reload_warning.is_some() {
+            format!(
+                "Updated {} for agent '{agent_id}' (warning: reload failed, restart required)",
+                sections_updated.join(", ")
+            )
+        } else {
+            format!(
+                "Updated {} for agent '{agent_id}'",
+                sections_updated.join(", ")
+            )
+        };
 
         tracing::info!(
             agent_id = %agent_id,
@@ -343,6 +362,7 @@ impl Tool for FactoryUpdateConfigTool {
             agent_id,
             sections_updated,
             message,
+            reload_warning,
         })
     }
 }

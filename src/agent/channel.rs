@@ -1810,7 +1810,7 @@ impl Channel {
                 &link.from_agent_id
             };
 
-            let is_human = !self.deps.agent_names.contains_key(other_id.as_str());
+            let is_human = humans_by_id.contains_key(other_id.as_str());
 
             let (name, role, description) = if let Some(human) = humans_by_id.get(other_id.as_str())
             {

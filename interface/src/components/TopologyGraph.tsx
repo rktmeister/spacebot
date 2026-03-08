@@ -33,7 +33,8 @@ import {
 	type LinkDirection,
 	type LinkKind,
 } from "@/api/client";
-import { Button, Input, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/ui";
+import { Button, Input, TextArea, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, cx } from "@/ui";
+import { Markdown } from "@/components/Markdown";
 import { Link } from "@tanstack/react-router";
 
 // -- Colors --
@@ -556,6 +557,7 @@ function HumanEditDialog({
 	const [role, setRole] = useState("");
 	const [bio, setBio] = useState("");
 	const [description, setDescription] = useState("");
+	const [descriptionMode, setDescriptionMode] = useState<"edit" | "preview">("edit");
 
 	// Sync state when a different human is selected
 	const prevId = useRef<string | null>(null);
@@ -565,70 +567,118 @@ function HumanEditDialog({
 		setRole(human.role ?? "");
 		setBio(human.bio ?? "");
 		setDescription(human.description ?? "");
+		setDescriptionMode("edit");
 	}
 
 	if (!human) return null;
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-w-md">
-				<DialogHeader>
-					<DialogTitle>Edit Human</DialogTitle>
-				</DialogHeader>
-				<div className="flex flex-col gap-3">
-					<div className="text-tiny text-ink-faint">{human.id}</div>
+			<DialogContent className="max-w-4xl h-[min(80vh,640px)] flex flex-col !gap-0 p-0 overflow-hidden">
+				<div className="flex items-center justify-between border-b border-app-line/50 px-6 py-4 shrink-0">
 					<div>
-						<label className="mb-1.5 block text-sm font-medium text-ink-dull">Display Name</label>
-						<Input
-							size="lg"
-							value={displayName}
-							onChange={(e) => setDisplayName(e.target.value)}
-							placeholder={human.id}
-						/>
-					</div>
-					<div>
-						<label className="mb-1.5 block text-sm font-medium text-ink-dull">Role</label>
-						<Input
-							size="lg"
-							value={role}
-							onChange={(e) => setRole(e.target.value)}
-							placeholder="e.g. CEO, Lead Developer"
-						/>
-					</div>
-					<div>
-						<label className="mb-1.5 block text-sm font-medium text-ink-dull">Bio</label>
-						<textarea
-							value={bio}
-							onChange={(e) => setBio(e.target.value)}
-							placeholder="A short description..."
-							rows={2}
-							className="w-full rounded-md bg-app-input px-3 py-2 text-sm text-ink outline-none border border-app-line/50 focus:border-accent/50 resize-none"
-						/>
-					</div>
-					<div>
-						<label className="mb-1.5 block text-sm font-medium text-ink-dull">Full Context</label>
-						<p className="mb-1.5 text-tiny text-ink-faint">Background, preferences, communication style, timezone. Agents linked to this human will see this in their system prompt.</p>
-						<textarea
-							value={description}
-							onChange={(e) => setDescription(e.target.value)}
-							placeholder="e.g. Jamie Pine (@jamiepine). Timezone: America/Vancouver. Full-stack developer, prefers direct communication..."
-							rows={6}
-							className="w-full rounded-md bg-app-input px-3 py-2 text-sm text-ink outline-none border border-app-line/50 focus:border-accent/50 resize-y"
-						/>
+						<DialogHeader>
+							<DialogTitle>Edit Human</DialogTitle>
+						</DialogHeader>
+						<div className="text-tiny text-ink-faint mt-1">{human.id}</div>
 					</div>
 				</div>
-				<DialogFooter>
-					<Button variant="destructive" size="sm" onClick={onDelete}>
-						Delete
-					</Button>
-					<div className="flex-1" />
-					<Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
-						Cancel
-					</Button>
-					<Button size="sm" onClick={() => onUpdate(displayName, role, bio, description)}>
-						Save
-					</Button>
-				</DialogFooter>
+				<div className="flex flex-1 min-h-0">
+					{/* Left column — metadata fields */}
+					<div className="w-72 shrink-0 border-r border-app-line/50 p-5 flex flex-col gap-4 overflow-y-auto">
+						<div>
+							<label className="mb-1.5 block text-sm font-medium text-ink-dull">Display Name</label>
+							<Input
+								size="lg"
+								value={displayName}
+								onChange={(e) => setDisplayName(e.target.value)}
+								placeholder={human.id}
+							/>
+						</div>
+						<div>
+							<label className="mb-1.5 block text-sm font-medium text-ink-dull">Role</label>
+							<Input
+								size="lg"
+								value={role}
+								onChange={(e) => setRole(e.target.value)}
+								placeholder="e.g. CEO, Lead Developer"
+							/>
+						</div>
+						<div>
+							<label className="mb-1.5 block text-sm font-medium text-ink-dull">Bio</label>
+							<textarea
+								value={bio}
+								onChange={(e) => setBio(e.target.value)}
+								placeholder="A short one-liner..."
+								rows={2}
+								className="w-full rounded-md bg-app-input px-3 py-2 text-sm text-ink outline-none border border-app-line/50 focus:border-accent/50 resize-none"
+							/>
+						</div>
+						<div className="flex-1" />
+						<div className="flex items-center gap-2 pt-2 border-t border-app-line/50">
+							<Button variant="destructive" size="sm" onClick={onDelete}>
+								Delete
+							</Button>
+							<div className="flex-1" />
+							<Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+								Cancel
+							</Button>
+							<Button size="sm" onClick={() => onUpdate(displayName, role, bio, description)}>
+								Save
+							</Button>
+						</div>
+					</div>
+					{/* Right column — description markdown editor */}
+					<div className="flex-1 flex flex-col min-w-0">
+						<div className="flex items-center justify-between border-b border-app-line/50 bg-app-darkBox/20 px-5 py-2.5 shrink-0">
+							<div className="flex items-center gap-3">
+								<h3 className="text-sm font-medium text-ink">Description</h3>
+								<span className="rounded bg-app-darkBox px-1.5 py-0.5 font-mono text-tiny text-ink-faint">Markdown</span>
+							</div>
+							<div className="flex items-center gap-3">
+								<div className="flex items-center rounded border border-app-line/50 text-tiny">
+									<button
+										onClick={() => setDescriptionMode("edit")}
+										className={cx(
+											"px-2 py-0.5 rounded-l transition-colors",
+											descriptionMode === "edit" ? "bg-app-darkBox text-ink" : "text-ink-faint hover:text-ink",
+										)}
+									>
+										Edit
+									</button>
+									<button
+										onClick={() => setDescriptionMode("preview")}
+										className={cx(
+											"px-2 py-0.5 rounded-r transition-colors",
+											descriptionMode === "preview" ? "bg-app-darkBox text-ink" : "text-ink-faint hover:text-ink",
+										)}
+									>
+										Preview
+									</button>
+								</div>
+							</div>
+						</div>
+						<div className="flex-1 overflow-y-auto p-4">
+							{descriptionMode === "edit" ? (
+								<TextArea
+									value={description}
+									onChange={(e) => setDescription(e.target.value)}
+									placeholder={"Write a full description of this person...\n\nBackground, preferences, communication style, timezone, working hours, areas of expertise — anything that helps agents interact with them effectively."}
+									className="h-full w-full resize-none border-transparent bg-app-darkBox/30 px-4 py-3 font-mono leading-relaxed placeholder:text-ink-faint/40"
+									spellCheck={false}
+								/>
+							) : (
+								<div className="prose-sm px-4 py-3">
+									{description.trim() ? (
+										<Markdown>{description}</Markdown>
+									) : (
+										<span className="text-ink-faint/40 text-sm">Nothing to preview.</span>
+									)}
+								</div>
+							)}
+						</div>
+					</div>
+				</div>
 			</DialogContent>
 		</Dialog>
 	);

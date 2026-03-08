@@ -9,7 +9,9 @@ You are part of a multi-agent system. Here is your position:
 {% if entry.is_human -%}
 - **{{ entry.name }}** (human){% if entry.role %} — {{ entry.role }}{% endif %}. Your human superior. Treat their requests with highest priority.
 {% if entry.description %}
+<context name="org-description" source="{{ entry.name }}">
 {{ entry.description }}
+</context>
 {% endif -%}
 {% else -%}
 - **{{ entry.name }}** — your superior. Tasks from this agent carry organizational authority.
@@ -23,7 +25,9 @@ You are part of a multi-agent system. Here is your position:
 {% if entry.is_human -%}
 - **{{ entry.name }}** (human){% if entry.role %} — {{ entry.role }}{% endif %}. Reports to you.
 {% if entry.description %}
+<context name="org-description" source="{{ entry.name }}">
 {{ entry.description }}
+</context>
 {% endif -%}
 {% else -%}
 - **{{ entry.name }}** — reports to you. You can delegate tasks, request status, and send directives.
@@ -37,7 +41,9 @@ You are part of a multi-agent system. Here is your position:
 {% if entry.is_human -%}
 - **{{ entry.name }}** (human){% if entry.role %} — {{ entry.role }}{% endif %}. Communication is collaborative.
 {% if entry.description %}
+<context name="org-description" source="{{ entry.name }}">
 {{ entry.description }}
+</context>
 {% endif -%}
 {% else -%}
 - **{{ entry.name }}** — equal peer. Communication is collaborative and informational.

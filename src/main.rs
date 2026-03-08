@@ -1543,6 +1543,7 @@ async fn run(
             Some(messaging_manager.clone()),
             llm_manager.clone(),
             agent_links.clone(),
+            agent_humans.clone(),
         );
     } else {
         // Start file watcher in setup mode (no agents to watch yet)
@@ -1558,6 +1559,7 @@ async fn run(
             None,
             llm_manager.clone(),
             agent_links.clone(),
+            agent_humans.clone(),
         );
     }
 
@@ -2178,6 +2180,10 @@ async fn run(
                         {
                             Ok(new_llm) => {
                                 let new_llm_manager = Arc::new(new_llm);
+                                // Update agent_humans from the reloaded config
+                                // before initialize_agents so agents see the
+                                // latest [[humans]] entries.
+                                agent_humans.store(Arc::new(new_config.humans.clone()));
                                 let mut new_watcher_agents = Vec::new();
                                 let mut new_discord_permissions = None;
                                 let mut new_slack_permissions = None;
@@ -2221,6 +2227,7 @@ async fn run(
                                             Some(messaging_manager.clone()),
                                             new_llm_manager.clone(),
                                             agent_links.clone(),
+                                            agent_humans.clone(),
                                         );
                                         tracing::info!("agents initialized after provider setup");
                                     }
@@ -3190,15 +3197,19 @@ async fn initialize_agents(
                 agent.deps.runtime_config.clone(),
             );
             // Add factory tools to the cortex chat tool server
-            if let Err(error) = spacebot::tools::add_factory_tools(
+            let factory_enabled = match spacebot::tools::add_factory_tools(
                 &tool_server,
                 api_state.clone(),
                 agent.deps.memory_search.clone(),
             )
             .await
             {
-                tracing::warn!(%error, agent_id = %agent_id, "failed to add factory tools to cortex chat");
-            }
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(%error, agent_id = %agent_id, "failed to add factory tools to cortex chat");
+                    false
+                }
+            };
 
             let store = spacebot::agent::cortex_chat::CortexChatStore::new(agent.db.sqlite.clone());
             let session = spacebot::agent::cortex_chat::CortexChatSession::new(
@@ -3206,7 +3217,7 @@ async fn initialize_agents(
                 tool_server,
                 store,
             )
-            .with_factory(true);
+            .with_factory(factory_enabled);
             sessions.insert(agent_id.to_string(), std::sync::Arc::new(session));
         }
         api_state.set_cortex_chat_sessions(sessions);

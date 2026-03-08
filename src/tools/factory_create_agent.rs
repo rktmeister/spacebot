@@ -291,33 +291,27 @@ impl Tool for FactoryCreateAgentTool {
                 continue;
             }
 
-            // Check for duplicate link
-            let existing_links = self.state.agent_links.load();
-            let duplicate = existing_links.iter().any(|link| {
-                (link.from_agent_id == agent_id && link.to_agent_id == link_spec.target)
-                    || (link.from_agent_id == link_spec.target && link.to_agent_id == agent_id)
-            });
-            if duplicate {
-                link_errors.push(format!(
-                    "link between '{agent_id}' and '{}' already exists",
-                    link_spec.target
-                ));
-                continue;
-            }
-
-            // Write link to config.toml
-            if let Err(error) =
-                write_link_to_config(&self.state, &agent_id, &link_spec.target, &direction, &kind)
-                    .await
+            // Write link to config.toml (duplicate check is inside the mutex guard)
+            match write_link_to_config(&self.state, &agent_id, &link_spec.target, &direction, &kind)
+                .await
             {
-                link_errors.push(format!(
-                    "failed to write link to {}: {error}",
-                    link_spec.target
-                ));
-                continue;
+                Ok(()) => {}
+                Err(error) if error.contains("already exists") => {
+                    link_errors.push(error);
+                    continue;
+                }
+                Err(error) => {
+                    link_errors.push(format!(
+                        "failed to write link to {}: {error}",
+                        link_spec.target
+                    ));
+                    continue;
+                }
             }
 
-            // Update in-memory state
+            // Update in-memory state (under the same logical transaction — the
+            // config write mutex in write_link_to_config ensures no concurrent
+            // duplicate can slip through between check and write).
             let new_link = AgentLink {
                 from_agent_id: agent_id.clone(),
                 to_agent_id: link_spec.target.clone(),
@@ -390,6 +384,8 @@ fn validate_agent_id(id: &str) -> Result<(), String> {
 /// Write a link entry to config.toml.
 ///
 /// Acquires `config_write_mutex` to prevent concurrent read-modify-write races.
+/// The duplicate-link check is performed inside the mutex guard so that
+/// concurrent callers cannot both pass the check and then both write.
 async fn write_link_to_config(
     state: &ApiState,
     from: &str,
@@ -398,6 +394,16 @@ async fn write_link_to_config(
     kind: &LinkKind,
 ) -> Result<(), String> {
     let _guard = state.config_write_mutex.lock().await;
+
+    // Duplicate check inside the mutex to prevent TOCTOU races.
+    let existing_links = state.agent_links.load();
+    let duplicate = existing_links.iter().any(|link| {
+        (link.from_agent_id == from && link.to_agent_id == to)
+            || (link.from_agent_id == to && link.to_agent_id == from)
+    });
+    if duplicate {
+        return Err(format!("link between '{from}' and '{to}' already exists"));
+    }
 
     let config_path = state.config_path.read().await.clone();
     let content = tokio::fs::read_to_string(&config_path)
