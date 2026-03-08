@@ -50,11 +50,14 @@ RUN cd interface && bun run build
 #    build.rs is skipped (SPACEBOT_SKIP_FRONTEND_BUILD=1) since the
 #    frontend is already built above with the OpenCode embed included.
 #    prompts/ is needed for include_str! in src/prompts/text.rs.
+#    presets/ is needed for rust-embed in src/factory/presets.rs and
+#    include_str! in src/identity/files.rs.
 #    migrations/ is needed for sqlx::migrate! in src/db.rs.
 #    docs/ is needed for rust-embed in src/self_awareness.rs.
 #    AGENTS.md, README.md, CHANGELOG.md are needed for include_str! in src/self_awareness.rs.
 COPY build.rs ./
 COPY prompts/ prompts/
+COPY presets/ presets/
 COPY migrations/ migrations/
 COPY docs/ docs/
 COPY AGENTS.md README.md CHANGELOG.md ./
