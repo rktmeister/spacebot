@@ -144,6 +144,8 @@ pub(super) struct UpdateAgentRequest {
     agent_id: String,
     display_name: Option<String>,
     role: Option<String>,
+    gradient_start: Option<String>,
+    gradient_end: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -598,6 +600,8 @@ pub async fn create_agent_internal(
         default: false,
         display_name: request.display_name.clone().filter(|s| !s.is_empty()),
         role: request.role.clone().filter(|s| !s.is_empty()),
+        gradient_start: None,
+        gradient_end: None,
         workspace: None,
         routing: None,
         max_concurrent_branches: None,
@@ -928,6 +932,10 @@ pub async fn create_agent_internal(
             .agent_identity_dirs
             .store(std::sync::Arc::new(identity_dirs));
 
+        let mut data_dirs = (**state.agent_data_dirs.load()).clone();
+        data_dirs.insert(agent_id.clone(), agent_config.data_dir.clone());
+        state.agent_data_dirs.store(std::sync::Arc::new(data_dirs));
+
         let mut configs = (**state.runtime_configs.load()).clone();
         configs.insert(agent_id.clone(), runtime_config);
         state.runtime_configs.store(std::sync::Arc::new(configs));
@@ -951,6 +959,8 @@ pub async fn create_agent_internal(
             id: agent_config.id.clone(),
             display_name: agent_config.display_name.clone(),
             role: agent_config.role.clone(),
+            gradient_start: agent_config.gradient_start.clone(),
+            gradient_end: agent_config.gradient_end.clone(),
             workspace: agent_config.workspace.clone(),
             context_window: agent_config.context_window,
             max_turns: agent_config.max_turns,
@@ -1041,6 +1051,20 @@ pub(super) async fn update_agent(
                         table["role"] = toml_edit::value(role.as_str());
                     }
                 }
+                if let Some(gradient_start) = &request.gradient_start {
+                    if gradient_start.is_empty() {
+                        table.remove("gradient_start");
+                    } else {
+                        table["gradient_start"] = toml_edit::value(gradient_start.as_str());
+                    }
+                }
+                if let Some(gradient_end) = &request.gradient_end {
+                    if gradient_end.is_empty() {
+                        table.remove("gradient_end");
+                    } else {
+                        table["gradient_end"] = toml_edit::value(gradient_end.as_str());
+                    }
+                }
                 break;
             }
         }
@@ -1069,6 +1093,20 @@ pub(super) async fn update_agent(
             None
         } else {
             Some(role.clone())
+        };
+    }
+    if let Some(gradient_start) = &request.gradient_start {
+        info.gradient_start = if gradient_start.is_empty() {
+            None
+        } else {
+            Some(gradient_start.clone())
+        };
+    }
+    if let Some(gradient_end) = &request.gradient_end {
+        info.gradient_end = if gradient_end.is_empty() {
+            None
+        } else {
+            Some(gradient_end.clone())
         };
     }
     state.set_agent_configs(configs);
@@ -1185,6 +1223,10 @@ pub(super) async fn delete_agent(
         state
             .agent_identity_dirs
             .store(std::sync::Arc::new(identity_dirs));
+
+        let mut data_dirs = (**state.agent_data_dirs.load()).clone();
+        data_dirs.remove(&agent_id);
+        state.agent_data_dirs.store(std::sync::Arc::new(data_dirs));
 
         let mut configs = (**state.runtime_configs.load()).clone();
         configs.remove(&agent_id);
@@ -1760,5 +1802,144 @@ mod tests {
         .expect("expected warmup target acceptance");
 
         assert_eq!(accepted, vec![String::from("main")]);
+    }
+}
+
+// -- Avatar upload / serve / delete --
+
+#[derive(Deserialize)]
+pub(super) struct AvatarQuery {
+    agent_id: String,
+}
+
+/// Serve the agent's avatar image.
+pub(super) async fn get_avatar(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<AvatarQuery>,
+) -> Result<axum::response::Response, StatusCode> {
+    let data_dir = state
+        .agent_data_dirs
+        .load()
+        .get(&query.agent_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let avatar_path = find_avatar(&data_dir).await.ok_or(StatusCode::NOT_FOUND)?;
+    let bytes = tokio::fs::read(&avatar_path)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    let mime = mime_guess::from_path(&avatar_path)
+        .first_or_octet_stream()
+        .to_string();
+
+    Ok((
+        StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            (
+                axum::http::header::CACHE_CONTROL,
+                "public, max-age=3600".into(),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+use axum::response::IntoResponse;
+
+/// Upload (or replace) the agent's avatar image.
+pub(super) async fn upload_avatar(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<AvatarQuery>,
+    request: axum::extract::Request,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let data_dir = state
+        .agent_data_dirs
+        .load()
+        .get(&query.agent_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let content_type = request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    let ext = match content_type.as_str() {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        _ => {
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "message": "Unsupported image type. Use PNG, JPEG, GIF, WebP, or SVG."
+            })));
+        }
+    };
+
+    let body_bytes = axum::body::to_bytes(request.into_body(), 5 * 1024 * 1024)
+        .await
+        .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
+
+    // Remove any existing avatar files.
+    remove_existing_avatars(&data_dir).await;
+
+    let avatar_path = data_dir.join(format!("avatar.{ext}"));
+    tokio::fs::write(&avatar_path, &body_bytes)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to write avatar");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::info!(agent_id = %query.agent_id, path = %avatar_path.display(), "avatar uploaded");
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "path": avatar_path.display().to_string()
+    })))
+}
+
+/// Delete the agent's avatar image.
+pub(super) async fn delete_avatar(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<AvatarQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let data_dir = state
+        .agent_data_dirs
+        .load()
+        .get(&query.agent_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    remove_existing_avatars(&data_dir).await;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Avatar removed"
+    })))
+}
+
+/// Find the first avatar.* file in the data dir.
+async fn find_avatar(data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    for ext in &["png", "jpg", "jpeg", "gif", "webp", "svg"] {
+        let path = data_dir.join(format!("avatar.{ext}"));
+        if tokio::fs::metadata(&path).await.is_ok() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Remove all avatar.* files from the data dir.
+async fn remove_existing_avatars(data_dir: &std::path::Path) {
+    for ext in &["png", "jpg", "jpeg", "gif", "webp", "svg"] {
+        let path = data_dir.join(format!("avatar.{ext}"));
+        let _ = tokio::fs::remove_file(&path).await;
     }
 }

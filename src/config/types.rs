@@ -1041,6 +1041,10 @@ pub struct AgentConfig {
     pub display_name: Option<String>,
     /// User-defined role description (e.g. "handles tier 1 support").
     pub role: Option<String>,
+    /// Custom gradient start color (CSS color string, e.g. "hsl(260, 70%, 55%)").
+    pub gradient_start: Option<String>,
+    /// Custom gradient end color.
+    pub gradient_end: Option<String>,
     /// Custom workspace path. If None, resolved to instance_dir/agents/{id}/workspace.
     pub workspace: Option<PathBuf>,
     /// Per-agent routing overrides. None inherits from defaults.
@@ -1099,6 +1103,8 @@ pub struct ResolvedAgentConfig {
     pub id: String,
     pub display_name: Option<String>,
     pub role: Option<String>,
+    pub gradient_start: Option<String>,
+    pub gradient_end: Option<String>,
     pub workspace: PathBuf,
     /// Agent root directory (parent of workspace). Identity files (SOUL.md,
     /// IDENTITY.md, ROLE.md) live here — outside the workspace sandbox.
@@ -1182,6 +1188,8 @@ impl AgentConfig {
             id: self.id.clone(),
             display_name: self.display_name.clone(),
             role: self.role.clone(),
+            gradient_start: self.gradient_start.clone(),
+            gradient_end: self.gradient_end.clone(),
             workspace: self
                 .workspace
                 .clone()

@@ -2632,6 +2632,7 @@ async fn initialize_agents(
         let mut project_stores = std::collections::HashMap::new();
         let mut agent_workspaces = std::collections::HashMap::new();
         let mut agent_identity_dirs = std::collections::HashMap::new();
+        let mut agent_data_dirs = std::collections::HashMap::new();
         let mut runtime_configs = std::collections::HashMap::new();
         let mut sandboxes = std::collections::HashMap::new();
         for (agent_id, agent) in agents.iter() {
@@ -2644,12 +2645,15 @@ async fn initialize_agents(
             project_stores.insert(agent_id.to_string(), agent.deps.project_store.clone());
             agent_workspaces.insert(agent_id.to_string(), agent.config.workspace.clone());
             agent_identity_dirs.insert(agent_id.to_string(), agent.config.identity_dir.clone());
+            agent_data_dirs.insert(agent_id.to_string(), agent.config.data_dir.clone());
             runtime_configs.insert(agent_id.to_string(), agent.deps.runtime_config.clone());
             sandboxes.insert(agent_id.to_string(), agent.deps.sandbox.clone());
             agent_configs.push(spacebot::api::AgentInfo {
                 id: agent.config.id.clone(),
                 display_name: agent.config.display_name.clone(),
                 role: agent.config.role.clone(),
+                gradient_start: agent.config.gradient_start.clone(),
+                gradient_end: agent.config.gradient_end.clone(),
                 workspace: agent.config.workspace.clone(),
                 context_window: agent.config.context_window,
                 max_turns: agent.config.max_turns,
@@ -2666,6 +2670,7 @@ async fn initialize_agents(
         api_state.set_runtime_configs(runtime_configs);
         api_state.set_agent_workspaces(agent_workspaces);
         api_state.set_agent_identity_dirs(agent_identity_dirs);
+        api_state.set_agent_data_dirs(agent_data_dirs);
         api_state.set_sandboxes(sandboxes);
         // Wire the instance-level secrets store into the API state.
         if let Some(store) = &bootstrapped_store {

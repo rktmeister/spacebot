@@ -110,6 +110,12 @@ pub async fn start_http_server(
         .route("/cortex-chat/send", post(cortex::cortex_chat_send))
         .route("/agents/profile", get(agents::get_agent_profile))
         .route(
+            "/agents/avatar",
+            get(agents::get_avatar)
+                .post(agents::upload_avatar)
+                .delete(agents::delete_avatar),
+        )
+        .route(
             "/agents/identity",
             get(agents::get_identity).put(agents::update_identity),
         )

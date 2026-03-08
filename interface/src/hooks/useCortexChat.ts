@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type CortexChatMessage } from "@/api/client";
+import { api, type CortexChatMessage, type CortexChatToolCall } from "@/api/client";
 import { generateId } from "@/lib/id";
 
 export interface ToolActivity {
 	tool: string;
+	call_id: string;
+	args: string;
 	status: "running" | "done";
+	result?: string;
 	result_preview?: string;
 }
 
@@ -94,50 +97,65 @@ export function useCortexChat(agentId: string, channelId?: string) {
 				throw new Error(`HTTP ${response.status}`);
 			}
 
-			await consumeSSE(response, (eventType, data) => {
-				if (eventType === "tool_started") {
-					try {
-						const parsed = JSON.parse(data);
-						setToolActivity((prev) => [
-							...prev,
-							{ tool: parsed.tool, status: "running" },
-						]);
-					} catch { /* ignore */ }
-				} else if (eventType === "tool_completed") {
-					try {
-						const parsed = JSON.parse(data);
-						setToolActivity((prev) =>
-							prev.map((t) =>
-								t.tool === parsed.tool && t.status === "running"
-									? { ...t, status: "done", result_preview: parsed.result_preview }
-									: t,
-							),
-						);
-					} catch { /* ignore */ }
-				} else if (eventType === "done") {
-					try {
-						const parsed = JSON.parse(data);
-						const assistantMessage: CortexChatMessage = {
-							id: `resp-${Date.now()}`,
-							thread_id: threadId,
-							role: "assistant",
-							content: parsed.full_text,
-							channel_context: channelId ?? null,
-							created_at: new Date().toISOString(),
-						};
-						setMessages((prev) => [...prev, assistantMessage]);
-					} catch {
-						setError("Failed to parse response");
-					}
-				} else if (eventType === "error") {
-					try {
-						const parsed = JSON.parse(data);
-						setError(parsed.message);
-					} catch {
-						setError("Unknown error");
-					}
+		await consumeSSE(response, (eventType, data) => {
+			if (eventType === "tool_started") {
+				try {
+					const parsed = JSON.parse(data);
+					setToolActivity((prev) => [
+						...prev,
+						{
+							tool: parsed.tool,
+							call_id: parsed.call_id ?? "",
+							args: parsed.args ?? "",
+							status: "running",
+						},
+					]);
+				} catch { /* ignore */ }
+			} else if (eventType === "tool_completed") {
+				try {
+					const parsed = JSON.parse(data);
+					setToolActivity((prev) =>
+						prev.map((t) =>
+							t.call_id === parsed.call_id && t.status === "running"
+								? {
+									...t,
+									status: "done",
+									result: parsed.result,
+									result_preview: parsed.result_preview,
+								}
+								: t,
+						),
+					);
+				} catch { /* ignore */ }
+			} else if (eventType === "done") {
+				try {
+					const parsed = JSON.parse(data);
+					const toolCalls: CortexChatToolCall[] | undefined =
+						Array.isArray(parsed.tool_calls) && parsed.tool_calls.length > 0
+							? parsed.tool_calls
+							: undefined;
+					const assistantMessage: CortexChatMessage = {
+						id: `resp-${Date.now()}`,
+						thread_id: threadId,
+						role: "assistant",
+						content: parsed.full_text,
+						channel_context: channelId ?? null,
+						created_at: new Date().toISOString(),
+						tool_calls: toolCalls,
+					};
+					setMessages((prev) => [...prev, assistantMessage]);
+				} catch {
+					setError("Failed to parse response");
 				}
-			});
+			} else if (eventType === "error") {
+				try {
+					const parsed = JSON.parse(data);
+					setError(parsed.message);
+				} catch {
+					setError("Unknown error");
+				}
+			}
+		});
 		} catch (error) {
 			setError(error instanceof Error ? error.message : "Request failed");
 		} finally {

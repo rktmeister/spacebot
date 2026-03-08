@@ -5,6 +5,7 @@ import { Button, Input, SettingSidebarButton, TextArea, Toggle, NumberStepper, S
 import { ModelSelect } from "@/components/ModelSelect";
 import { TagInput } from "@/components/TagInput";
 import { Markdown } from "@/components/Markdown";
+import { ProfileAvatar, seedGradient } from "@/components/ProfileAvatar";
 import { motion, AnimatePresence } from "framer-motion";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 
@@ -98,7 +99,7 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 	});
 
 	const agentMutation = useMutation({
-		mutationFn: (update: { display_name?: string; role?: string }) =>
+		mutationFn: (update: { display_name?: string; role?: string; gradient_start?: string; gradient_end?: string }) =>
 			api.updateAgent(agentId, update),
 		onMutate: () => setSaving(true),
 		onSuccess: () => {
@@ -264,6 +265,8 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 				agentId={agentId}
 				displayName={currentAgent?.display_name ?? ""}
 				role={currentAgent?.role ?? ""}
+				gradientStart={currentAgent?.gradient_start ?? ""}
+				gradientEnd={currentAgent?.gradient_end ?? ""}
 				detail={active.detail}
 				onDirtyChange={setDirty}
 				saveHandlerRef={saveHandlerRef}
@@ -338,38 +341,101 @@ interface GeneralEditorProps {
 	agentId: string;
 	displayName: string;
 	role: string;
+	gradientStart: string;
+	gradientEnd: string;
 	detail: string;
 	onDirtyChange: (dirty: boolean) => void;
 	saveHandlerRef: React.MutableRefObject<{ save?: () => void; revert?: () => void }>;
-	onSave: (update: { display_name?: string; role?: string }) => void;
+	onSave: (update: { display_name?: string; role?: string; gradient_start?: string; gradient_end?: string }) => void;
 }
 
-function GeneralEditor({ agentId, displayName, role, detail, onDirtyChange, saveHandlerRef, onSave }: GeneralEditorProps) {
+const GRADIENT_PRESETS: { label: string; start: string; end: string }[] = [
+	{ label: "Purple", start: "hsl(270, 70%, 55%)", end: "hsl(310, 60%, 45%)" },
+	{ label: "Blue", start: "hsl(220, 70%, 55%)", end: "hsl(260, 60%, 45%)" },
+	{ label: "Teal", start: "hsl(170, 70%, 45%)", end: "hsl(200, 60%, 40%)" },
+	{ label: "Green", start: "hsl(140, 60%, 45%)", end: "hsl(170, 50%, 40%)" },
+	{ label: "Orange", start: "hsl(25, 80%, 55%)", end: "hsl(45, 70%, 45%)" },
+	{ label: "Red", start: "hsl(0, 70%, 55%)", end: "hsl(20, 60%, 45%)" },
+	{ label: "Pink", start: "hsl(330, 70%, 55%)", end: "hsl(350, 60%, 45%)" },
+	{ label: "Gold", start: "hsl(45, 80%, 55%)", end: "hsl(30, 70%, 40%)" },
+	{ label: "Indigo", start: "hsl(240, 60%, 55%)", end: "hsl(280, 50%, 45%)" },
+	{ label: "Slate", start: "hsl(220, 15%, 50%)", end: "hsl(220, 10%, 35%)" },
+];
+
+function GeneralEditor({ agentId, displayName, role, gradientStart, gradientEnd, detail, onDirtyChange, saveHandlerRef, onSave }: GeneralEditorProps) {
+	const queryClient = useQueryClient();
 	const [localDisplayName, setLocalDisplayName] = useState(displayName);
 	const [localRole, setLocalRole] = useState(role);
+	const [localGradientStart, setLocalGradientStart] = useState(gradientStart);
+	const [localGradientEnd, setLocalGradientEnd] = useState(gradientEnd);
 	const [localDirty, setLocalDirty] = useState(false);
+	const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
+
+	// Check if agent has an uploaded avatar
+	const avatarUrl = api.agentAvatarUrl(agentId);
+	const { data: avatarExists } = useQuery({
+		queryKey: ["agentAvatar", agentId],
+		queryFn: async () => {
+			try {
+				const response = await fetch(avatarUrl, { method: "HEAD" });
+				return response.ok;
+			} catch {
+				return false;
+			}
+		},
+	});
+
+	const uploadAvatarMutation = useMutation({
+		mutationFn: (file: File) => api.uploadAvatar(agentId, file),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["agentAvatar", agentId] });
+			queryClient.invalidateQueries({ queryKey: ["agents"] });
+			queryClient.invalidateQueries({ queryKey: ["topology"] });
+			setAvatarPreview(null);
+		},
+	});
+
+	const deleteAvatarMutation = useMutation({
+		mutationFn: () => api.deleteAvatar(agentId),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["agentAvatar", agentId] });
+			queryClient.invalidateQueries({ queryKey: ["agents"] });
+			queryClient.invalidateQueries({ queryKey: ["topology"] });
+			setAvatarPreview(null);
+		},
+	});
 
 	useEffect(() => {
 		if (!localDirty) {
 			setLocalDisplayName(displayName);
 			setLocalRole(role);
+			setLocalGradientStart(gradientStart);
+			setLocalGradientEnd(gradientEnd);
 		}
-	}, [displayName, role, localDirty]);
+	}, [displayName, role, gradientStart, gradientEnd, localDirty]);
 
 	useEffect(() => {
 		onDirtyChange(localDirty);
 	}, [localDirty, onDirtyChange]);
 
 	const handleSave = useCallback(() => {
-		onSave({ display_name: localDisplayName, role: localRole });
+		onSave({
+			display_name: localDisplayName,
+			role: localRole,
+			gradient_start: localGradientStart || undefined,
+			gradient_end: localGradientEnd || undefined,
+		});
 		setLocalDirty(false);
-	}, [onSave, localDisplayName, localRole]);
+	}, [onSave, localDisplayName, localRole, localGradientStart, localGradientEnd]);
 
 	const handleRevert = useCallback(() => {
 		setLocalDisplayName(displayName);
 		setLocalRole(role);
+		setLocalGradientStart(gradientStart);
+		setLocalGradientEnd(gradientEnd);
 		setLocalDirty(false);
-	}, [displayName, role]);
+	}, [displayName, role, gradientStart, gradientEnd]);
 
 	useEffect(() => {
 		saveHandlerRef.current.save = handleSave;
@@ -379,6 +445,21 @@ function GeneralEditor({ agentId, displayName, role, detail, onDirtyChange, save
 			saveHandlerRef.current.revert = undefined;
 		};
 	}, [handleSave, handleRevert]);
+
+	const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+		const file = event.target.files?.[0];
+		if (!file) return;
+		// Show preview immediately
+		const reader = new FileReader();
+		reader.onload = () => setAvatarPreview(reader.result as string);
+		reader.readAsDataURL(file);
+		// Upload
+		uploadAvatarMutation.mutate(file);
+	};
+
+	const [seedC1, seedC2] = seedGradient(agentId);
+	const previewC1 = localGradientStart || seedC1;
+	const previewC2 = localGradientEnd || seedC2;
 
 	return (
 		<>
@@ -424,6 +505,102 @@ function GeneralEditor({ agentId, displayName, role, detail, onDirtyChange, save
 							onChange={(e) => { setLocalRole(e.target.value); setLocalDirty(true); }}
 							placeholder="e.g. Research Assistant, Code Reviewer"
 						/>
+					</div>
+
+					{/* Avatar */}
+					<div className="flex flex-col gap-1.5">
+						<label className="text-sm font-medium text-ink">Avatar</label>
+						<p className="text-tiny text-ink-faint">Upload a custom image, or use the generated gradient avatar.</p>
+						<div className="flex items-center gap-4">
+							<ProfileAvatar
+								seed={agentId}
+								name={localDisplayName || agentId}
+								size={64}
+								className="rounded-full shrink-0"
+								gradientStart={localGradientStart || undefined}
+								gradientEnd={localGradientEnd || undefined}
+								avatarUrl={avatarPreview ?? (avatarExists ? `${avatarUrl}&t=${Date.now()}` : undefined)}
+							/>
+							<div className="flex flex-col gap-2">
+								<div className="flex items-center gap-2">
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={() => fileInputRef.current?.click()}
+									>
+										{avatarExists ? "Change Image" : "Upload Image"}
+									</Button>
+									{avatarExists && (
+										<Button
+											variant="ghost"
+											size="sm"
+											onClick={() => deleteAvatarMutation.mutate()}
+											className="text-ink-faint hover:text-red-400"
+										>
+											Remove
+										</Button>
+									)}
+								</div>
+								<p className="text-tiny text-ink-faint/60">PNG, JPEG, WebP, GIF, or SVG. Max 5 MB.</p>
+							</div>
+							<input
+								ref={fileInputRef}
+								type="file"
+								accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+								onChange={handleFileChange}
+								className="hidden"
+							/>
+						</div>
+					</div>
+
+					{/* Gradient Color */}
+					<div className="flex flex-col gap-1.5">
+						<label className="text-sm font-medium text-ink">Gradient</label>
+						<p className="text-tiny text-ink-faint">Choose a gradient for the avatar and banner. Only used when no image is uploaded.</p>
+						<div className="flex flex-wrap gap-2">
+							{/* Auto (seed-based) option */}
+							<button
+								onClick={() => { setLocalGradientStart(""); setLocalGradientEnd(""); setLocalDirty(true); }}
+								className={cx(
+									"flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition-colors",
+									!localGradientStart
+										? "border-accent bg-accent/10 text-ink"
+										: "border-app-line/50 text-ink-faint hover:border-app-line"
+								)}
+							>
+								<span
+									className="h-5 w-5 rounded-full shrink-0"
+									style={{ background: `linear-gradient(135deg, ${seedC1}, ${seedC2})` }}
+								/>
+								Auto
+							</button>
+							{GRADIENT_PRESETS.map((preset) => (
+								<button
+									key={preset.label}
+									onClick={() => { setLocalGradientStart(preset.start); setLocalGradientEnd(preset.end); setLocalDirty(true); }}
+									className={cx(
+										"flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition-colors",
+										localGradientStart === preset.start && localGradientEnd === preset.end
+											? "border-accent bg-accent/10 text-ink"
+											: "border-app-line/50 text-ink-faint hover:border-app-line"
+									)}
+								>
+									<span
+										className="h-5 w-5 rounded-full shrink-0"
+										style={{ background: `linear-gradient(135deg, ${preset.start}, ${preset.end})` }}
+									/>
+									{preset.label}
+								</button>
+							))}
+						</div>
+						{/* Live preview */}
+						<div className="mt-2 flex items-center gap-3">
+							<span className="text-tiny text-ink-faint">Preview:</span>
+							<span
+								className="h-6 w-20 rounded"
+								style={{ background: `linear-gradient(135deg, ${previewC1}, ${previewC2})` }}
+							/>
+						</div>
 					</div>
 				</div>
 			</div>

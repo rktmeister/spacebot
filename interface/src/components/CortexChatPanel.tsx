@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useCortexChat, type ToolActivity } from "@/hooks/useCortexChat";
 import { Markdown } from "@/components/Markdown";
+import { ToolCall, type ToolCallPair } from "@/components/ToolCall";
+import type { CortexChatToolCall } from "@/api/client";
 import { Button } from "@/ui";
 import { PlusSignIcon, Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -34,6 +36,50 @@ const STARTER_PROMPTS: StarterPrompt[] = [
 		prompt: "Turn this goal into a task spec with subtasks, then move it to ready when it is execution-ready: ",
 	},
 ];
+
+/** Convert a persisted CortexChatToolCall to the ToolCallPair format used by
+ * the ToolCall component. */
+function toToolCallPair(call: CortexChatToolCall): ToolCallPair {
+	const parsedArgs = tryParseJson(call.args);
+	const parsedResult = call.result ? tryParseJson(call.result) : null;
+	return {
+		id: call.id,
+		name: call.tool,
+		argsRaw: call.args,
+		args: parsedArgs,
+		resultRaw: call.result ?? null,
+		result: parsedResult,
+		status: call.status === "error" ? "error" : call.status === "completed" ? "completed" : "running",
+	};
+}
+
+/** Convert a live ToolActivity (from SSE streaming) to a ToolCallPair. */
+function activityToToolCallPair(activity: ToolActivity): ToolCallPair {
+	const parsedArgs = tryParseJson(activity.args);
+	const parsedResult = activity.result ? tryParseJson(activity.result) : null;
+	return {
+		id: activity.call_id,
+		name: activity.tool,
+		argsRaw: activity.args,
+		args: parsedArgs,
+		resultRaw: activity.result ?? null,
+		result: parsedResult,
+		status: activity.status === "done" ? "completed" : "running",
+	};
+}
+
+function tryParseJson(text: string): Record<string, unknown> | null {
+	if (!text || text.trim().length === 0) return null;
+	try {
+		const parsed = JSON.parse(text);
+		if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+			return parsed as Record<string, unknown>;
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
 
 function EmptyCortexState({
 	channelId,
@@ -79,24 +125,12 @@ function ToolActivityIndicator({ activity }: { activity: ToolActivity[] }) {
 	if (activity.length === 0) return null;
 
 	return (
-		<div className="flex flex-wrap items-center gap-1.5 mt-2">
-			{activity.map((tool, index) => (
-				<span
-					key={`${tool.tool}-${index}`}
-					className="inline-flex items-center gap-1.5 rounded-full bg-app-box/60 px-2.5 py-0.5"
-				>
-					{tool.status === "running" ? (
-						<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
-					) : (
-						<span className="h-1.5 w-1.5 rounded-full bg-green-400" />
-					)}
-					<span className="font-mono text-tiny text-ink-faint">{tool.tool}</span>
-					{tool.status === "done" && tool.result_preview && (
-						<span className="min-w-0 max-w-[120px] truncate text-tiny text-ink-faint/60">
-							{tool.result_preview.slice(0, 80)}
-						</span>
-					)}
-				</span>
+		<div className="flex flex-col gap-1.5 mt-2">
+			{activity.map((tool) => (
+				<ToolCall
+					key={tool.call_id}
+					pair={activityToToolCallPair(tool)}
+				/>
 			))}
 		</div>
 	);
@@ -104,7 +138,7 @@ function ToolActivityIndicator({ activity }: { activity: ToolActivity[] }) {
 
 function ThinkingIndicator() {
 	return (
-		<div className="flex items-center gap-1.5 py-1">
+		<div className="flex items-center gap-1.5 pt-3 pb-1">
 			<span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-ink-faint" />
 			<span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-ink-faint [animation-delay:0.2s]" />
 			<span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-ink-faint [animation-delay:0.4s]" />
@@ -252,27 +286,41 @@ export function CortexChatPanel({ agentId, channelId, onClose }: CortexChatPanel
 			{/* Messages */}
 			<div className="flex-1 overflow-y-auto">
 				<div className="flex flex-col gap-5 p-3 pb-4">
-					{messages.map((message) => (
-						<div key={message.id}>
-							{message.role === "user" ? (
-								<div className="flex justify-end">
-									<div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent/10 px-3 py-2">
-										<p className="text-sm text-ink">{message.content}</p>
+				{messages.map((message) => (
+					<div key={message.id}>
+						{message.role === "user" ? (
+							<div className="flex justify-end">
+								<div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent/10 px-3 py-2">
+									<p className="text-sm text-ink">{message.content}</p>
+								</div>
+							</div>
+						) : (
+							<div className="flex flex-col gap-2">
+								{message.tool_calls && message.tool_calls.length > 0 && (
+									<div className="flex flex-col gap-1.5">
+										{message.tool_calls.map((call) => (
+											<ToolCall
+												key={call.id}
+												pair={toToolCallPair(call)}
+											/>
+										))}
 									</div>
-								</div>
-							) : (
-								<div className="text-sm text-ink-dull">
-									<Markdown>{message.content}</Markdown>
-								</div>
-							)}
-						</div>
-					))}
+								)}
+								{message.content && (
+									<div className="text-sm text-ink-dull">
+										<Markdown>{message.content}</Markdown>
+									</div>
+								)}
+							</div>
+						)}
+					</div>
+				))}
 
 					{/* Streaming state */}
 					{isStreaming && (
 						<div>
 							<ToolActivityIndicator activity={toolActivity} />
-							{toolActivity.length === 0 && <ThinkingIndicator />}
+							{!toolActivity.some((t) => t.status === "running") && <ThinkingIndicator />}
 						</div>
 					)}
 

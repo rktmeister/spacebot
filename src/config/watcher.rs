@@ -6,6 +6,16 @@ use super::{
     TwitchPermissions, binding_runtime_adapter_key,
 };
 
+/// Per-agent context needed by the file watcher: (id, prompt_dir, identity_dir,
+/// runtime_config, mcp_manager).
+type WatchedAgent = (
+    String,
+    PathBuf,
+    PathBuf,
+    Arc<RuntimeConfig>,
+    Arc<crate::mcp::McpManager>,
+);
+
 /// Watches config, prompt, identity, and skill files for changes and triggers
 /// hot reload on the corresponding RuntimeConfig.
 ///
@@ -16,13 +26,7 @@ use super::{
 pub fn spawn_file_watcher(
     config_path: PathBuf,
     instance_dir: PathBuf,
-    agents: Vec<(
-        String,
-        PathBuf,
-        PathBuf,
-        Arc<RuntimeConfig>,
-        Arc<crate::mcp::McpManager>,
-    )>,
+    agents: Vec<WatchedAgent>,
     discord_permissions: Option<Arc<arc_swap::ArcSwap<DiscordPermissions>>>,
     slack_permissions: Option<Arc<arc_swap::ArcSwap<SlackPermissions>>>,
     telegram_permissions: Option<Arc<arc_swap::ArcSwap<TelegramPermissions>>>,

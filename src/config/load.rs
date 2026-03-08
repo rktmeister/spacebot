@@ -793,6 +793,8 @@ impl Config {
             default: true,
             display_name: None,
             role: None,
+            gradient_start: None,
+            gradient_end: None,
             workspace: None,
             routing: Some(routing),
             max_concurrent_branches: None,
@@ -1590,6 +1592,8 @@ impl Config {
                     default: a.default,
                     display_name: a.display_name,
                     role: a.role,
+                    gradient_start: a.gradient_start,
+                    gradient_end: a.gradient_end,
                     workspace: a.workspace.map(PathBuf::from),
                     routing: agent_routing,
                     max_concurrent_branches: a.max_concurrent_branches,
@@ -1718,6 +1722,8 @@ impl Config {
                 default: true,
                 display_name: None,
                 role: None,
+                gradient_start: None,
+                gradient_end: None,
                 workspace: None,
                 routing: None,
                 max_concurrent_branches: None,
@@ -2231,15 +2237,15 @@ impl Config {
 
             // Link the default admin to the default agent so the agent sees
             // the human's description in its system prompt automatically.
-            if links.is_empty() {
-                if let Some(default_agent) = agents.iter().find(|a| a.default) {
-                    links.push(LinkDef {
-                        from: "admin".into(),
-                        to: default_agent.id.clone(),
-                        direction: "one_way".into(),
-                        kind: "hierarchical".into(),
-                    });
-                }
+            if links.is_empty()
+                && let Some(default_agent) = agents.iter().find(|a| a.default)
+            {
+                links.push(LinkDef {
+                    from: "admin".into(),
+                    to: default_agent.id.clone(),
+                    direction: "one_way".into(),
+                    kind: "hierarchical".into(),
+                });
             }
         }
 

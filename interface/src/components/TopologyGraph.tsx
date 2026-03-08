@@ -98,16 +98,8 @@ function loadHandles(): SavedHandles {
 }
 
 /** Deterministic gradient from a seed string. */
-function seedGradient(seed: string): [string, string] {
-	let hash = 0;
-	for (let i = 0; i < seed.length; i++) {
-		hash = seed.charCodeAt(i) + ((hash << 5) - hash);
-		hash |= 0;
-	}
-	const hue1 = (hash >>> 0) % 360;
-	const hue2 = (hue1 + 40 + ((hash >>> 8) % 60)) % 360;
-	return [`hsl(${hue1}, 70%, 55%)`, `hsl(${hue2}, 60%, 45%)`];
-}
+// Re-export from shared module so existing references (e.g. banner gradient) still work.
+import { seedGradient, ProfileAvatar } from "@/components/ProfileAvatar";
 
 // -- Custom Node: Group --
 
@@ -159,11 +151,16 @@ const NODE_WIDTH = 240;
 function ProfileNode({ data, selected }: NodeProps) {
 	const nodeId = (data.nodeId as string) ?? "";
 	const avatarSeed = (data.avatarSeed as string) ?? nodeId;
-	const [c1, c2] = seedGradient(avatarSeed);
+	const [defaultC1, defaultC2] = seedGradient(avatarSeed);
 	const configDisplayName = data.configDisplayName as string | null;
 	const configRole = data.configRole as string | null;
 	const chosenName = data.chosenName as string | null;
 	const bio = data.bio as string | null;
+	const gradientStart = data.gradientStart as string | null;
+	const gradientEnd = data.gradientEnd as string | null;
+	const nodeAvatarUrl = data.avatarUrl as string | null;
+	const c1 = gradientStart || defaultC1;
+	const c2 = gradientEnd || defaultC2;
 	const isOnline = data.isOnline as boolean;
 	const channelCount = (data.channelCount as number) ?? 0;
 	const memoryCount = (data.memoryCount as number) ?? 0;
@@ -223,26 +220,15 @@ function ProfileNode({ data, selected }: NodeProps) {
 			{/* Avatar + badge row */}
 			<div className="relative -mt-6 px-4 pt-3 flex items-end justify-between">
 				<div className="relative inline-block">
-					<svg
-						width={48}
-						height={48}
-						viewBox="0 0 64 64"
+					<ProfileAvatar
+						seed={avatarSeed}
+						name={primaryName}
+						size={48}
 						className="rounded-full border-[3px] border-app-darkBox"
-					>
-						<defs>
-							<linearGradient
-								id={`av-${nodeId}`}
-								x1="0%"
-								y1="0%"
-								x2="100%"
-								y2="100%"
-							>
-								<stop offset="0%" stopColor={c1} />
-								<stop offset="100%" stopColor={c2} />
-							</linearGradient>
-						</defs>
-						<circle cx="32" cy="32" r="32" fill={`url(#av-${nodeId})`} />
-					</svg>
+						gradientStart={gradientStart ?? undefined}
+						gradientEnd={gradientEnd ?? undefined}
+						avatarUrl={isAgent && nodeAvatarUrl ? nodeAvatarUrl : undefined}
+					/>
 					{isAgent && (
 						<div
 							className={`absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-[2px] border-app-darkBox ${
@@ -297,10 +283,14 @@ function ProfileNode({ data, selected }: NodeProps) {
 					</p>
 				)}
 
-				{/* Bio */}
-				{bio && (
+			{/* Bio */}
+			{bio ? (
 					<p className="mt-2 text-[11px] leading-relaxed text-ink-faint line-clamp-3">
 						{bio}
+					</p>
+				) : !isAgent && !data.description && (
+					<p className="mt-2 text-[11px] leading-relaxed text-ink-faint/60 italic">
+						This is you, add your details.
 					</p>
 				)}
 
@@ -961,6 +951,13 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 	const openHumanEditRef = useRef<(humanId: string) => void>(() => {});
 	const openAgentEditRef = useRef<(agentId: string) => void>(() => {});
 
+	// Fetch agent info for gradient/appearance data
+	const { data: agentInfoData } = useQuery({
+		queryKey: ["agents"],
+		queryFn: api.agents,
+		refetchInterval: 30_000,
+	});
+
 	// Build agent profile lookup
 	const agentProfiles = useMemo(() => {
 		const map = new Map<string, AgentSummary>();
@@ -969,6 +966,15 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 		}
 		return map;
 	}, [agents]);
+
+	// Build agent info lookup (for gradient colors)
+	const agentInfoMap = useMemo(() => {
+		const map = new Map<string, { gradient_start?: string; gradient_end?: string }>();
+		for (const info of agentInfoData?.agents ?? []) {
+			map.set(info.id, { gradient_start: info.gradient_start, gradient_end: info.gradient_end });
+		}
+		return map;
+	}, [agentInfoData]);
 
 	/** Inject onEdit callbacks into profile nodes */
 	const patchEditCallbacks = useCallback((nodes: Node[]): Node[] =>
@@ -986,9 +992,9 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 	// Build nodes and edges from topology data
 	const { initialNodes, initialEdges } = useMemo(() => {
 		if (!data) return { initialNodes: [], initialEdges: [] };
-		const graph = buildGraph(data, activeEdges, agentProfiles);
+		const graph = buildGraph(data, activeEdges, agentProfiles, agentInfoMap);
 		return { initialNodes: patchEditCallbacks(graph.initialNodes), initialEdges: graph.initialEdges };
-	}, [data, activeEdges, agentProfiles, patchEditCallbacks]);
+	}, [data, activeEdges, agentProfiles, agentInfoMap, patchEditCallbacks]);
 
 	const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
 	const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -1004,6 +1010,7 @@ function TopologyGraphInner({ activeEdges, agents }: TopologyGraphInnerProps) {
 				data,
 				activeEdges,
 				agentProfiles,
+				agentInfoMap,
 			);
 
 			// Preserve existing node positions
@@ -1620,6 +1627,7 @@ function buildGraph(
 	data: TopologyResponse,
 	activeEdges: Set<string>,
 	agentProfiles: Map<string, AgentSummary>,
+	agentInfoMap: Map<string, { gradient_start?: string; gradient_end?: string }>,
 ): { initialNodes: Node[]; initialEdges: Edge[] } {
 	const saved = loadPositions();
 	const savedHandles = loadHandles();
@@ -1709,6 +1717,9 @@ function buildGraph(
 					chosenName: profile?.display_name ?? null,
 					avatarSeed: profile?.avatar_seed ?? agentId,
 					bio: profile?.bio ?? null,
+					gradientStart: agentInfoMap.get(agentId)?.gradient_start ?? null,
+					gradientEnd: agentInfoMap.get(agentId)?.gradient_end ?? null,
+					avatarUrl: api.agentAvatarUrl(agentId),
 					isOnline,
 					channelCount: summary?.channel_count ?? 0,
 					memoryCount: summary?.memory_total ?? 0,
@@ -1754,6 +1765,9 @@ function buildGraph(
 				chosenName: profile?.display_name ?? null,
 				avatarSeed: profile?.avatar_seed ?? agent.id,
 				bio: profile?.bio ?? null,
+				gradientStart: agentInfoMap.get(agent.id)?.gradient_start ?? null,
+				gradientEnd: agentInfoMap.get(agent.id)?.gradient_end ?? null,
+				avatarUrl: api.agentAvatarUrl(agent.id),
 				isOnline,
 				channelCount: summary?.channel_count ?? 0,
 				memoryCount: summary?.memory_total ?? 0,
@@ -1779,6 +1793,7 @@ function buildGraph(
 				configDisplayName: human.display_name ?? null,
 				configRole: human.role ?? null,
 				bio: human.bio ?? null,
+				description: human.description ?? null,
 				avatarSeed: human.id,
 				connectedHandles: { top: false, bottom: false, left: false, right: false },
 			},

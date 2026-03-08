@@ -34,6 +34,10 @@ pub struct AgentInfo {
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gradient_start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gradient_end: Option<String>,
     pub workspace: PathBuf,
     pub context_window: usize,
     pub max_turns: usize,
@@ -65,6 +69,8 @@ pub struct ApiState {
     /// Per-agent identity directories (agent root). Identity files live here,
     /// outside the workspace sandbox boundary.
     pub agent_identity_dirs: arc_swap::ArcSwap<HashMap<String, PathBuf>>,
+    /// Per-agent data directories (for avatars, logs, databases).
+    pub agent_data_dirs: arc_swap::ArcSwap<HashMap<String, PathBuf>>,
     /// Path to the instance config.toml file.
     pub config_path: RwLock<PathBuf>,
     /// Guards read-modify-write cycles on config.toml to prevent concurrent
@@ -286,6 +292,7 @@ impl ApiState {
             cortex_chat_sessions: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             agent_workspaces: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             agent_identity_dirs: arc_swap::ArcSwap::from_pointee(HashMap::new()),
+            agent_data_dirs: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             config_path: RwLock::new(PathBuf::new()),
             config_write_mutex: tokio::sync::Mutex::new(()),
             cron_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
@@ -685,6 +692,10 @@ impl ApiState {
     /// Set the identity directory paths for all agents.
     pub fn set_agent_identity_dirs(&self, dirs: HashMap<String, PathBuf>) {
         self.agent_identity_dirs.store(Arc::new(dirs));
+    }
+
+    pub fn set_agent_data_dirs(&self, dirs: HashMap<String, PathBuf>) {
+        self.agent_data_dirs.store(Arc::new(dirs));
     }
 
     /// Set the config.toml path.

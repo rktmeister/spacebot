@@ -299,6 +299,8 @@ export interface AgentInfo {
 	id: string;
 	display_name?: string;
 	role?: string;
+	gradient_start?: string;
+	gradient_end?: string;
 	workspace: string;
 	context_window: number;
 	max_turns: number;
@@ -529,6 +531,14 @@ export interface CortexEventsParams {
 
 // -- Cortex Chat --
 
+export interface CortexChatToolCall {
+	id: string;
+	tool: string;
+	args: string;
+	result: string | null;
+	status: "running" | "completed" | "error";
+}
+
 export interface CortexChatMessage {
 	id: string;
 	thread_id: string;
@@ -536,6 +546,7 @@ export interface CortexChatMessage {
 	content: string;
 	channel_context: string | null;
 	created_at: string;
+	tool_calls?: CortexChatToolCall[];
 }
 
 export interface CortexChatMessagesResponse {
@@ -545,7 +556,9 @@ export interface CortexChatMessagesResponse {
 
 export type CortexChatSSEEvent =
 	| { type: "thinking" }
-	| { type: "done"; full_text: string }
+	| { type: "tool_started"; tool: string; call_id: string; args: string }
+	| { type: "tool_completed"; tool: string; call_id: string; args: string; result: string; result_preview: string }
+	| { type: "done"; full_text: string; tool_calls: CortexChatToolCall[] }
 	| { type: "error"; message: string };
 
 export interface IdentityFiles {
@@ -1646,7 +1659,7 @@ export const api = {
 		return response.json() as Promise<{ success: boolean; agent_id: string; message: string }>;
 	},
 
-	updateAgent: async (agentId: string, update: { display_name?: string; role?: string }) => {
+	updateAgent: async (agentId: string, update: { display_name?: string; role?: string; gradient_start?: string; gradient_end?: string }) => {
 		const response = await fetch(`${API_BASE}/agents`, {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
@@ -1661,6 +1674,35 @@ export const api = {
 	deleteAgent: async (agentId: string) => {
 		const params = new URLSearchParams({ agent_id: agentId });
 		const response = await fetch(`${API_BASE}/agents?${params}`, {
+			method: "DELETE",
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ success: boolean; message: string }>;
+	},
+
+	/** Get the avatar URL for an agent (returns the raw URL, not fetched). */
+	agentAvatarUrl: (agentId: string) => `${API_BASE}/agents/avatar?agent_id=${encodeURIComponent(agentId)}`,
+
+	/** Upload an avatar image for an agent. */
+	uploadAvatar: async (agentId: string, file: File) => {
+		const params = new URLSearchParams({ agent_id: agentId });
+		const response = await fetch(`${API_BASE}/agents/avatar?${params}`, {
+			method: "POST",
+			headers: { "Content-Type": file.type },
+			body: file,
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ success: boolean; path?: string; message?: string }>;
+	},
+
+	/** Delete the avatar for an agent. */
+	deleteAvatar: async (agentId: string) => {
+		const params = new URLSearchParams({ agent_id: agentId });
+		const response = await fetch(`${API_BASE}/agents/avatar?${params}`, {
 			method: "DELETE",
 		});
 		if (!response.ok) {
