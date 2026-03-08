@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type CronJobWithStats, type CreateCronRequest } from "@/api/client";
+import { api, type CronJobWithStats, type CreateCronRequest, type ChannelInfo } from "@/api/client";
 import { formatCronSchedule, formatTimeAgo } from "@/lib/format";
 import { Clock05Icon, PauseIcon, PlayIcon, FlashIcon, PencilEdit02Icon, Delete02Icon, ArrowDown01Icon, ArrowUp01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -142,6 +142,22 @@ export function AgentCron({ agentId }: AgentCronProps) {
 		queryFn: () => api.listCronJobs(agentId),
 		refetchInterval: 15_000,
 	});
+
+	const { data: channelsData } = useQuery({
+		queryKey: ["channels"],
+		queryFn: () => api.channels(),
+	});
+
+	// Build delivery target options from known channels (exclude cron and link channels)
+	const EXCLUDED_PLATFORMS = new Set(["cron", "link"]);
+	const deliveryTargets = (channelsData?.channels ?? [])
+		.filter((ch: ChannelInfo) => !EXCLUDED_PLATFORMS.has(ch.platform))
+		.map((ch: ChannelInfo) => ({
+			value: ch.id,
+			label: ch.display_name ?? ch.id,
+			platform: ch.platform,
+			agentId: ch.agent_id,
+		}));
 
 	const toggleMutation = useMutation({
 		mutationFn: ({ cronId, enabled }: { cronId: string; enabled: boolean }) =>
@@ -287,174 +303,204 @@ export function AgentCron({ agentId }: AgentCronProps) {
 
 			{/* Create / Edit Modal */}
 			<Dialog open={isModalOpen} onOpenChange={(open) => !open && closeModal()}>
-				<DialogContent>
+				<DialogContent className="max-w-4xl">
 					<DialogHeader>
 						<DialogTitle>{editingJob ? "Edit Cron Job" : "Create Cron Job"}</DialogTitle>
 					</DialogHeader>
-					<div className="flex flex-col gap-4">
-						<Field label="Job ID">
-							<Input
-								value={formData.id}
-								onChange={(e) => setFormData((d) => ({ ...d, id: e.target.value }))}
-								placeholder="e.g. daily-summary"
-								disabled={!!editingJob}
-								autoComplete="off"
-							/>
-						</Field>
+					<div className="grid grid-cols-2 gap-6">
+						{/* Left column — what & when */}
+						<div className="flex flex-col gap-4">
+							<Field label="Job ID">
+								<Input
+									value={formData.id}
+									onChange={(e) => setFormData((d) => ({ ...d, id: e.target.value }))}
+									placeholder="e.g. daily-summary"
+									disabled={!!editingJob}
+									autoComplete="off"
+								/>
+							</Field>
 
-						<Field label="Prompt">
-							<TextArea
-								value={formData.prompt}
-								onChange={(e) => setFormData((d) => ({ ...d, prompt: e.target.value }))}
-								placeholder="What should the agent do on each run?"
-								rows={3}
-							/>
-						</Field>
+							<Field label="Prompt">
+								<TextArea
+									value={formData.prompt}
+									onChange={(e) => setFormData((d) => ({ ...d, prompt: e.target.value }))}
+									placeholder="What should the agent do on each run?"
+									rows={4}
+								/>
+							</Field>
 
-						<Field label="Schedule">
-							<div className="flex flex-col gap-3">
-								{/* Mode selector */}
-								<div className="flex gap-1 rounded-lg bg-app-lightBox p-0.5">
-									<button
-										type="button"
-										className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-											formData.schedule_mode === "cron"
-												? "bg-app-darkBox text-ink shadow-sm"
-												: "text-ink-faint hover:text-ink"
-										}`}
-										onClick={() => setFormData((d) => ({ ...d, schedule_mode: "cron" }))}
-									>
-										Cron Expression
-									</button>
-									<button
-										type="button"
-										className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-											formData.schedule_mode === "interval"
-												? "bg-app-darkBox text-ink shadow-sm"
-												: "text-ink-faint hover:text-ink"
-										}`}
-										onClick={() => setFormData((d) => ({ ...d, schedule_mode: "interval" }))}
-									>
-										Interval
-									</button>
-								</div>
-
-								{/* Cron expression input */}
-								{formData.schedule_mode === "cron" && (
-									<div className="flex flex-col gap-2">
-										<Input
-											value={formData.cron_expr}
-											onChange={(e) => setFormData((d) => ({ ...d, cron_expr: e.target.value }))}
-											placeholder="0 9 * * *"
-											className="font-mono"
-											autoComplete="off"
-										/>
-										<div className="flex flex-wrap gap-1.5">
-											{CRON_PRESETS.map((preset) => (
-												<button
-													key={preset.value}
-													type="button"
-													className={`rounded-md border px-2 py-1 text-tiny transition-colors ${
-														formData.cron_expr === preset.value
-															? "border-accent/50 bg-accent/10 text-accent"
-															: "border-app-line bg-app-darkBox text-ink-faint hover:border-app-line/80 hover:text-ink-dull"
-													}`}
-													onClick={() => setFormData((d) => ({ ...d, cron_expr: preset.value }))}
-												>
-													{preset.label}
-												</button>
-											))}
-										</div>
-										<p className="text-tiny text-ink-faint">
-											5-field cron: minute hour day-of-month month day-of-week
-										</p>
+							<Field label="Schedule">
+								<div className="flex flex-col gap-3">
+									<div className="flex gap-1 rounded-lg bg-app-lightBox p-0.5">
+										<button
+											type="button"
+											className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+												formData.schedule_mode === "cron"
+													? "bg-app-darkBox text-ink shadow-sm"
+													: "text-ink-faint hover:text-ink"
+											}`}
+											onClick={() => setFormData((d) => ({ ...d, schedule_mode: "cron" }))}
+										>
+											Cron Expression
+										</button>
+										<button
+											type="button"
+											className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+												formData.schedule_mode === "interval"
+													? "bg-app-darkBox text-ink shadow-sm"
+													: "text-ink-faint hover:text-ink"
+											}`}
+											onClick={() => setFormData((d) => ({ ...d, schedule_mode: "interval" }))}
+										>
+											Interval
+										</button>
 									</div>
-								)}
 
-								{/* Interval input */}
-								{formData.schedule_mode === "interval" && (
-									<div>
-										<div className="flex items-center gap-2">
-											<span className="text-sm text-ink-faint">Every</span>
-											<NumberStepper
-												value={formData.interval_value}
-												onChange={(v) => setFormData((d) => ({ ...d, interval_value: v }))}
-												min={1}
-												max={999}
-												variant="compact"
+									{formData.schedule_mode === "cron" && (
+										<div className="flex flex-col gap-2">
+											<Input
+												value={formData.cron_expr}
+												onChange={(e) => setFormData((d) => ({ ...d, cron_expr: e.target.value }))}
+												placeholder="0 9 * * *"
+												className="font-mono"
+												autoComplete="off"
 											/>
-											<Select
-												value={formData.interval_unit}
-												onValueChange={(value) =>
-													setFormData((d) => ({ ...d, interval_unit: value as "minutes" | "hours" | "days" }))
-												}
-											>
-												<SelectTrigger className="w-32">
-													<SelectValue />
-												</SelectTrigger>
-												<SelectContent>
-													<SelectItem value="minutes">minutes</SelectItem>
-													<SelectItem value="hours">hours</SelectItem>
-													<SelectItem value="days">days</SelectItem>
-												</SelectContent>
-											</Select>
+											<div className="flex flex-wrap gap-1.5">
+												{CRON_PRESETS.map((preset) => (
+													<button
+														key={preset.value}
+														type="button"
+														className={`rounded-md border px-2 py-1 text-tiny transition-colors ${
+															formData.cron_expr === preset.value
+																? "border-accent/50 bg-accent/10 text-accent"
+																: "border-app-line bg-app-darkBox text-ink-faint hover:border-app-line/80 hover:text-ink-dull"
+														}`}
+														onClick={() => setFormData((d) => ({ ...d, cron_expr: preset.value }))}
+													>
+														{preset.label}
+													</button>
+												))}
+											</div>
+											<p className="text-tiny text-ink-faint">
+												min hour day-of-month month day-of-week
+											</p>
 										</div>
-										<p className="mt-1 text-tiny text-ink-faint">Interval-based scheduling may drift. Prefer cron expressions for precise timing.</p>
-									</div>
+									)}
+
+									{formData.schedule_mode === "interval" && (
+										<div>
+											<div className="flex items-center gap-2">
+												<span className="text-sm text-ink-faint">Every</span>
+												<NumberStepper
+													value={formData.interval_value}
+													onChange={(v) => setFormData((d) => ({ ...d, interval_value: v }))}
+													min={1}
+													max={999}
+													variant="compact"
+												/>
+												<Select
+													value={formData.interval_unit}
+													onValueChange={(value) =>
+														setFormData((d) => ({ ...d, interval_unit: value as "minutes" | "hours" | "days" }))
+													}
+												>
+													<SelectTrigger className="w-32">
+														<SelectValue />
+													</SelectTrigger>
+													<SelectContent>
+														<SelectItem value="minutes">minutes</SelectItem>
+														<SelectItem value="hours">hours</SelectItem>
+														<SelectItem value="days">days</SelectItem>
+													</SelectContent>
+												</Select>
+											</div>
+											<p className="mt-1 text-tiny text-ink-faint">May drift. Prefer cron expressions.</p>
+										</div>
+									)}
+								</div>
+							</Field>
+						</div>
+
+						{/* Right column — delivery & options */}
+						<div className="flex flex-col gap-4">
+							<Field label="Delivery Target">
+								<Select
+									value={formData.delivery_target}
+									onValueChange={(value) => {
+										if (value === "__custom__") {
+											setFormData((d) => ({ ...d, delivery_target: "" }));
+										} else {
+											setFormData((d) => ({ ...d, delivery_target: value }));
+										}
+									}}
+								>
+									<SelectTrigger>
+										<SelectValue placeholder="Select a channel..." />
+									</SelectTrigger>
+									<SelectContent>
+										{deliveryTargets.map((target) => (
+											<SelectItem key={target.value} value={target.value}>
+												<span>{target.label}</span>
+												<span className="ml-1.5 text-ink-faint">{target.agentId}</span>
+											</SelectItem>
+										))}
+										<SelectItem value="__custom__">Custom...</SelectItem>
+									</SelectContent>
+								</Select>
+								{(formData.delivery_target === "" || !deliveryTargets.some((t) => t.value === formData.delivery_target)) && (
+									<Input
+										value={formData.delivery_target}
+										onChange={(e) => setFormData((d) => ({ ...d, delivery_target: e.target.value }))}
+										placeholder="adapter:target (e.g. discord:123456)"
+										className="mt-1.5"
+									/>
 								)}
-							</div>
-						</Field>
+							</Field>
 
-						<Field label="Delivery Target">
-							<Input
-								value={formData.delivery_target}
-								onChange={(e) => setFormData((d) => ({ ...d, delivery_target: e.target.value }))}
-								placeholder="discord:channel_id"
-							/>
-						</Field>
+							<Field label="Active Hours (optional)">
+								<div className="flex items-center gap-2">
+									<NumberStepper
+										value={parseInt(formData.active_start_hour) || 0}
+										onChange={(v) => setFormData((d) => ({ ...d, active_start_hour: v.toString() }))}
+										min={0}
+										max={23}
+										suffix="h"
+										variant="compact"
+									/>
+									<span className="text-sm text-ink-faint">to</span>
+									<NumberStepper
+										value={parseInt(formData.active_end_hour) || 23}
+										onChange={(v) => setFormData((d) => ({ ...d, active_end_hour: v.toString() }))}
+										min={0}
+										max={23}
+										suffix="h"
+										variant="compact"
+									/>
+								</div>
+								<p className="mt-1 text-tiny text-ink-faint">Only run during these hours (24h)</p>
+							</Field>
 
-						<Field label="Active Hours (optional)">
-							<div className="flex items-center gap-2">
-								<NumberStepper
-									value={parseInt(formData.active_start_hour) || 0}
-									onChange={(v) => setFormData((d) => ({ ...d, active_start_hour: v.toString() }))}
-									min={0}
-									max={23}
-									suffix="h"
-									variant="compact"
+							<Field label="Timeout (optional)">
+								<Input
+									value={formData.timeout_secs}
+									onChange={(e) => setFormData((d) => ({ ...d, timeout_secs: e.target.value.replace(/\D/g, "") }))}
+									placeholder="120"
+									className="w-32"
 								/>
-								<span className="text-sm text-ink-faint">to</span>
-								<NumberStepper
-									value={parseInt(formData.active_end_hour) || 23}
-									onChange={(v) => setFormData((d) => ({ ...d, active_end_hour: v.toString() }))}
-									min={0}
-									max={23}
-									suffix="h"
-									variant="compact"
-								/>
+								<p className="mt-1 text-tiny text-ink-faint">Max seconds per run (default 120)</p>
+							</Field>
+
+							<div className="flex items-center justify-between">
+								<Label>Enabled</Label>
+								<Toggle checked={formData.enabled} onCheckedChange={(checked) => setFormData((d) => ({ ...d, enabled: checked }))} size="lg" />
 							</div>
-							<p className="mt-1 text-tiny text-ink-faint">Job will only run during these hours (0-23, 24-hour format)</p>
-						</Field>
 
-						<Field label="Timeout (optional)">
-							<Input
-								value={formData.timeout_secs}
-								onChange={(e) => setFormData((d) => ({ ...d, timeout_secs: e.target.value.replace(/\D/g, "") }))}
-								placeholder="120"
-								className="w-32"
-							/>
-							<p className="mt-1 text-tiny text-ink-faint">Max seconds per run (default 120)</p>
-						</Field>
-
-						<div className="flex items-center justify-between">
-							<Label>Enabled</Label>
-							<Toggle checked={formData.enabled} onCheckedChange={(checked) => setFormData((d) => ({ ...d, enabled: checked }))} size="lg" />
+							<div className="flex items-center justify-between">
+								<Label>Run Once</Label>
+								<Toggle checked={formData.run_once} onCheckedChange={(checked) => setFormData((d) => ({ ...d, run_once: checked }))} size="lg" />
+							</div>
 						</div>
-
-						<div className="flex items-center justify-between">
-							<Label>Run Once</Label>
-							<Toggle checked={formData.run_once} onCheckedChange={(checked) => setFormData((d) => ({ ...d, run_once: checked }))} size="lg" />
-						</div>
+					</div>
 
 					<div className="mt-2 flex justify-end gap-2">
 						<Button variant="ghost" size="sm" onClick={closeModal}>
@@ -473,7 +519,6 @@ export function AgentCron({ agentId }: AgentCronProps) {
 						>
 							{editingJob ? "Save Changes" : "Create Job"}
 						</Button>
-					</div>
 					</div>
 				</DialogContent>
 			</Dialog>

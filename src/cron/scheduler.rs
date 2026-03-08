@@ -640,12 +640,18 @@ fn normalize_cron_expr(cron_expr: Option<String>) -> Result<Option<String>> {
         )));
     }
 
-    Schedule::from_str(trimmed).map_err(|error| {
+    // The `cron` crate uses 7-field expressions (sec min hour dom month dow year).
+    // Users write standard 5-field cron (min hour dom month dow). Convert by
+    // prepending "0" for seconds and appending "*" for year.
+    let expanded = format!("0 {trimmed} *");
+
+    Schedule::from_str(&expanded).map_err(|error| {
         crate::error::Error::Other(anyhow::anyhow!(
             "invalid cron expression '{trimmed}': {error}"
         ))
     })?;
 
+    // Store the original 5-field form — it's what users and the UI expect.
     Ok(Some(trimmed.to_string()))
 }
 
@@ -695,6 +701,18 @@ fn interval_initial_delay(interval_secs: u64) -> Duration {
     }
 }
 
+/// Expand a 5-field standard cron expression to the 7-field format required by
+/// the `cron` crate: `sec min hour dom month dow year`. If the expression
+/// already has 6+ fields, return it as-is.
+fn expand_cron_expr(expr: &str) -> String {
+    let field_count = expr.split_whitespace().count();
+    if field_count == 5 {
+        format!("0 {expr} *")
+    } else {
+        expr.to_string()
+    }
+}
+
 fn resolve_cron_timezone(context: &CronContext) -> (Option<chrono_tz::Tz>, String) {
     let timezone = context.deps.runtime_config.cron_timezone.load();
     match timezone.as_deref() {
@@ -719,7 +737,9 @@ fn next_fire_duration(
     cron_id: &str,
     cron_expr: &str,
 ) -> Option<(Duration, chrono::DateTime<chrono::Utc>, String)> {
-    let schedule = match Schedule::from_str(cron_expr) {
+    // Expand 5-field standard cron to 7-field for the `cron` crate.
+    let expanded = expand_cron_expr(cron_expr);
+    let schedule = match Schedule::from_str(&expanded) {
         Ok(schedule) => schedule,
         Err(error) => {
             tracing::warn!(cron_id = %cron_id, cron_expr, %error, "invalid cron expression");
