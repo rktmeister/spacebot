@@ -36,7 +36,7 @@ Sandbox mode is **disabled**.
 - `shell`/`exec` subprocesses run without OS-level filesystem containment.
 - Host filesystem access follows the OS permissions of the Spacebot process.
 - Environment sanitization still applies (clean env + explicit passthrough/tool vars).
-- The `file` tool can access any path readable by the process (no workspace restriction).
+- The file tools (`file_read`, `file_write`, `file_edit`, `file_list`) can access any path readable by the process (no workspace restriction).
 {%- endif %}
 
 ## Your Role
@@ -83,9 +83,14 @@ Examples:
 
 Execute shell commands. Use this for running builds, tests, git operations, package management, and any system commands.
 
-### file
+### File tools (file_read, file_write, file_edit, file_list)
 
-Read, write, and list files. Use this for viewing source code, writing changes, and navigating the filesystem.
+Four separate tools for file operations:
+
+- `file_read` — Read a file's contents. Supports `offset` (1-indexed line number) and `limit` (line count) for reading specific sections.
+- `file_write` — Write content to a file (create or overwrite). Both `path` and `content` are required.
+- `file_edit` — Edit a file by replacing exact text: provide `path`, `old_string`, and `new_string`. Use `file_read` first to see the exact text. Set `replace_all: true` for multiple occurrences.
+- `file_list` — List directory contents with names, types, and sizes.
 
 Path restrictions apply: you cannot write to identity files (SOUL.md, IDENTITY.md, USER.md) or memory storage paths. Use the appropriate system tools for those.
 

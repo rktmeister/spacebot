@@ -152,11 +152,15 @@ function isErrorResult(
 ): boolean {
 	if (parsed?.error) return true;
 	if (parsed?.status === "error") return true;
+	// Shell/exec structured results: { success: false } or non-zero exit code
+	if (parsed?.success === false) return true;
+	if (typeof parsed?.exit_code === "number" && parsed.exit_code !== 0) return true;
 	const lower = text.toLowerCase();
 	return (
 		lower.startsWith("error:") ||
 		lower.startsWith("error -") ||
-		lower.startsWith("failed:")
+		lower.startsWith("failed:") ||
+		lower.startsWith("toolset error:")
 	);
 }
 
@@ -358,7 +362,14 @@ const toolRenderers: Record<string, ToolRenderer> = {
 	shell: {
 		summary(pair) {
 			const command = pair.args?.command;
-			return command ? truncate(String(command), 60) : null;
+			if (!command) return null;
+			// If we have a parsed result, append exit code info
+			if (pair.result && typeof pair.result.exit_code === "number") {
+				const code = pair.result.exit_code;
+				const cmdStr = truncate(String(command), 50);
+				return code === 0 ? cmdStr : `${cmdStr} (exit ${code})`;
+			}
+			return truncate(String(command), 60);
 		},
 		argsView(pair) {
 			const command = pair.args?.command;
@@ -374,38 +385,118 @@ const toolRenderers: Record<string, ToolRenderer> = {
 		},
 		resultView(pair) {
 			if (!pair.resultRaw) return null;
-			return <CollapsiblePre text={pair.resultRaw} maxLines={30} />;
+			return <ShellResultView pair={pair} />;
 		},
 	},
 
-	file: {
+	file_read: {
 		summary(pair) {
 			if (pair.title) return pair.title;
 			const path = pair.args?.path;
-			const op = pair.args?.operation ?? pair.args?.action;
-			if (op && path) {
-				return `${op}: ${truncate(String(path), 50)}`;
-			}
 			return path ? truncate(String(path), 60) : null;
 		},
 		argsView(pair) {
 			const path = pair.args?.path;
-			const op = pair.args?.operation ?? pair.args?.action;
-			const content = pair.args?.content;
 			if (!path) return null;
+			const offset = pair.args?.offset;
+			const limit = pair.args?.limit;
 			return (
 				<div className="border-b border-app-line/20 px-3 py-2">
 					<p className="font-mono text-tiny text-ink-dull">
-						{op && <span className="text-ink-faint">{String(op)}: </span>}
 						{String(path)}
+						{offset ? ` (from line ${offset})` : ""}
+						{limit ? ` (${limit} lines)` : ""}
 					</p>
-					{op === "write" && content && (
-						<pre className="mt-1 max-h-40 overflow-auto font-mono text-tiny text-ink-faint">
+				</div>
+			);
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <CollapsiblePre text={pair.resultRaw} maxLines={30} />;
+		},
+	},
+
+	file_write: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const path = pair.args?.path;
+			return path ? truncate(String(path), 60) : null;
+		},
+		argsView(pair) {
+			const path = pair.args?.path;
+			const content = pair.args?.content;
+			if (!path && !content) return null;
+			return (
+				<div className="border-b border-app-line/20 px-3 py-2">
+					{path && (
+						<p className="mb-1 font-mono text-tiny text-ink-dull">
+							{String(path)}
+						</p>
+					)}
+					{content && (
+						<pre className="max-h-40 overflow-auto font-mono text-tiny text-ink-faint">
 							{truncate(String(content), 2000)}
 						</pre>
 					)}
 				</div>
 			);
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <ResultLine text={truncate(pair.resultRaw, 100)} />;
+		},
+	},
+
+	file_edit: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const path = pair.args?.path;
+			return path ? truncate(String(path), 60) : null;
+		},
+		argsView(pair) {
+			const path = pair.args?.path;
+			const oldStr = pair.args?.old_string;
+			const newStr = pair.args?.new_string;
+			if (!path) return null;
+			return (
+				<div className="border-b border-app-line/20 px-3 py-2">
+					<p className="mb-1 font-mono text-tiny text-ink-dull">
+						{String(path)}
+					</p>
+					{oldStr && (
+						<div className="mt-1">
+							<p className="text-tiny font-medium text-red-400/70">
+								Old
+							</p>
+							<pre className="max-h-20 overflow-auto font-mono text-tiny text-red-300/60">
+								{truncate(String(oldStr), 500)}
+							</pre>
+						</div>
+					)}
+					{newStr && (
+						<div className="mt-1">
+							<p className="text-tiny font-medium text-emerald-400/70">
+								New
+							</p>
+							<pre className="max-h-20 overflow-auto font-mono text-tiny text-emerald-300/60">
+								{truncate(String(newStr), 500)}
+							</pre>
+						</div>
+					)}
+				</div>
+			);
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <ResultLine text={truncate(pair.resultRaw, 100)} />;
+		},
+	},
+
+	file_list: {
+		summary(pair) {
+			if (pair.title) return pair.title;
+			const path = pair.args?.path;
+			return path ? truncate(String(path), 60) : null;
 		},
 		resultView(pair) {
 			if (!pair.resultRaw) return null;
@@ -416,11 +507,17 @@ const toolRenderers: Record<string, ToolRenderer> = {
 	exec: {
 		summary(pair) {
 			const command = pair.args?.command;
-			return command ? truncate(String(command), 60) : null;
+			if (!command) return null;
+			if (pair.result && typeof pair.result.exit_code === "number") {
+				const code = pair.result.exit_code;
+				const cmdStr = truncate(String(command), 50);
+				return code === 0 ? cmdStr : `${cmdStr} (exit ${code})`;
+			}
+			return truncate(String(command), 60);
 		},
 		resultView(pair) {
 			if (!pair.resultRaw) return null;
-			return <CollapsiblePre text={pair.resultRaw} maxLines={30} />;
+			return <ShellResultView pair={pair} />;
 		},
 	},
 
@@ -552,7 +649,13 @@ const toolRenderers: Record<string, ToolRenderer> = {
 		summary(pair) {
 			if (pair.title) return pair.title;
 			const command = pair.args?.command;
-			return command ? truncate(String(command), 60) : null;
+			if (!command) return null;
+			if (pair.result && typeof pair.result.exit_code === "number") {
+				const code = pair.result.exit_code;
+				const cmdStr = truncate(String(command), 50);
+				return code === 0 ? cmdStr : `${cmdStr} (exit ${code})`;
+			}
+			return truncate(String(command), 60);
 		},
 		argsView(pair) {
 			const command = pair.args?.command;
@@ -568,7 +671,7 @@ const toolRenderers: Record<string, ToolRenderer> = {
 		},
 		resultView(pair) {
 			if (!pair.resultRaw) return null;
-			return <CollapsiblePre text={pair.resultRaw} maxLines={30} />;
+			return <ShellResultView pair={pair} />;
 		},
 	},
 
@@ -787,6 +890,71 @@ function CollapsiblePre({
 }
 
 // ---------------------------------------------------------------------------
+// Shell result rendering
+// ---------------------------------------------------------------------------
+
+function ShellResultView({ pair }: { pair: ToolCallPair }) {
+	const r = pair.result;
+
+	// If we can't parse structured output, fall back to raw text
+	if (!r || typeof r.exit_code !== "number") {
+		return <CollapsiblePre text={pair.resultRaw!} maxLines={30} />;
+	}
+
+	const exitCode = r.exit_code as number;
+	const stdout = typeof r.stdout === "string" ? r.stdout : "";
+	const stderr = typeof r.stderr === "string" ? r.stderr : "";
+	const hasStdout = stdout.trim().length > 0;
+	const hasStderr = stderr.trim().length > 0;
+	const isError = exitCode !== 0;
+
+	// Nothing to show
+	if (!hasStdout && !hasStderr && exitCode === 0) {
+		return <ResultLine text="Completed with no output" />;
+	}
+
+	return (
+		<div className="flex flex-col">
+			{/* Exit code badge for non-zero */}
+			{isError && (
+				<div className="flex items-center gap-1.5 border-b border-app-line/20 px-3 py-1.5">
+					<span className="rounded bg-red-500/15 px-1.5 py-0.5 font-mono text-tiny font-medium text-red-400">
+						exit {exitCode}
+					</span>
+				</div>
+			)}
+
+			{/* stdout */}
+			{hasStdout && (
+				<div className={hasStderr ? "border-b border-app-line/20" : ""}>
+					<CollapsiblePre text={stdout.replace(/\n$/, "")} maxLines={30} />
+				</div>
+			)}
+
+			{/* stderr */}
+			{hasStderr && (
+				<div>
+					<div className="flex items-center gap-1.5 border-b border-app-line/10 px-3 pt-1.5 pb-1">
+						<span className={cx(
+							"text-tiny font-medium",
+							isError ? "text-red-400/70" : "text-yellow-500/70",
+						)}>
+							stderr
+						</span>
+					</div>
+					<pre className={cx(
+						"max-h-40 overflow-auto whitespace-pre-wrap px-3 py-2 font-mono text-tiny",
+						isError ? "text-red-300/60" : "text-yellow-300/50",
+					)}>
+						{stderr.replace(/\n$/, "")}
+					</pre>
+				</div>
+			)}
+		</div>
+	);
+}
+
+// ---------------------------------------------------------------------------
 // Status display helpers
 // ---------------------------------------------------------------------------
 
@@ -817,6 +985,7 @@ function formatToolName(name: string): string {
 	// Strip common prefixes for cleaner display
 	const stripped = name
 		.replace(/^browser_/, "")
+		.replace(/^file_/, "")
 		.replace(/^tab_/, "Tab ");
 
 	return stripped
@@ -828,6 +997,7 @@ function formatToolName(name: string): string {
 /** Tool category label shown as a faint prefix */
 function toolCategory(name: string): string | null {
 	if (name.startsWith("browser_")) return "Browser";
+	if (name.startsWith("file_")) return "File";
 	return null;
 }
 

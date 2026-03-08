@@ -1,5 +1,6 @@
 //! SpacebotHook: Prompt hook for channels, branches, and workers.
 
+use crate::hooks::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
 use crate::{AgentId, ChannelId, ProcessEvent, ProcessId, ProcessType};
 use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
 use rig::completion::{CompletionModel, CompletionResponse, Message, Prompt, PromptError};
@@ -45,6 +46,9 @@ pub struct SpacebotHook {
     /// tool call completes successfully, so the budget tracks *consecutive*
     /// text-only responses rather than total across the worker's lifetime.
     nudge_attempts: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Detects repetitive tool calling patterns (identical calls, identical
+    /// outcomes, ping-pong cycles) and blocks them before execution.
+    loop_guard: std::sync::Arc<std::sync::Mutex<LoopGuard>>,
 }
 
 impl SpacebotHook {
@@ -65,6 +69,7 @@ impl SpacebotHook {
         channel_id: Option<ChannelId>,
         event_tx: broadcast::Sender<ProcessEvent>,
     ) -> Self {
+        let loop_guard_config = LoopGuardConfig::for_process(process_type);
         Self {
             agent_id,
             process_id,
@@ -76,6 +81,9 @@ impl SpacebotHook {
             nudge_request_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             outcome_signaled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             nudge_attempts: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            loop_guard: std::sync::Arc::new(std::sync::Mutex::new(LoopGuard::new(
+                loop_guard_config,
+            ))),
         }
     }
 
@@ -90,7 +98,13 @@ impl SpacebotHook {
         self.tool_nudge_policy
     }
 
-    /// Reset per-prompt state (tool nudging and outcome tracking).
+    /// Returns `true` if the worker has called `set_status` with `kind: "outcome"`.
+    pub fn outcome_signaled(&self) -> bool {
+        self.outcome_signaled
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Reset per-prompt state (tool nudging, outcome tracking, and loop guard).
     pub fn reset_tool_nudge_state(&self) {
         self.completion_calls
             .store(0, std::sync::atomic::Ordering::Relaxed);
@@ -98,6 +112,9 @@ impl SpacebotHook {
             .store(false, std::sync::atomic::Ordering::Relaxed);
         self.nudge_attempts
             .store(0, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut guard) = self.loop_guard.lock() {
+            guard.reset();
+        }
     }
 
     fn set_tool_nudge_request_active(&self, active: bool) {
@@ -550,6 +567,31 @@ where
         _internal_call_id: &str,
         args: &str,
     ) -> ToolCallHookAction {
+        // Loop guard: check for repetitive tool calling before execution.
+        // Runs for all process types. Block → Skip (message becomes tool
+        // result), CircuitBreak → Terminate.
+        if let Ok(mut guard) = self.loop_guard.lock() {
+            match guard.check(tool_name, args) {
+                LoopGuardVerdict::Allow => {}
+                LoopGuardVerdict::Block(reason) => {
+                    tracing::warn!(
+                        process_id = %self.process_id,
+                        tool_name = %tool_name,
+                        "loop guard blocked tool call"
+                    );
+                    return ToolCallHookAction::Skip { reason };
+                }
+                LoopGuardVerdict::CircuitBreak(reason) => {
+                    tracing::warn!(
+                        process_id = %self.process_id,
+                        tool_name = %tool_name,
+                        "loop guard circuit-breaking agent loop"
+                    );
+                    return ToolCallHookAction::Terminate { reason };
+                }
+            }
+        }
+
         // Leak blocking is enforced at channel egress (`reply`). Worker and
         // branch tool calls may legitimately handle secrets internally.
         if self.process_type == ProcessType::Channel
@@ -648,10 +690,20 @@ where
 
         self.record_tool_result_metrics(tool_name, internal_call_id);
 
+        // Record outcome for loop guard (outcome-aware repetition detection).
+        // The guard uses the (tool_name, args, result) triple to detect when
+        // the same call produces the same result repeatedly, and poisons the
+        // call hash so the next check() in on_tool_call auto-blocks.
+        if let Ok(mut guard) = self.loop_guard.lock() {
+            guard.record_outcome(tool_name, _args, result);
+        }
+
         // A successful tool call proves the worker is still productive.
         // Reset the consecutive nudge counter so a brief narration blip
         // after many tool calls doesn't exhaust the retry budget.
-        if self.tool_nudge_policy.is_enabled() {
+        // Tool errors (from Rig's error path) don't count as productive.
+        let is_tool_error = result.starts_with("Toolset error:");
+        if self.tool_nudge_policy.is_enabled() && !is_tool_error {
             self.nudge_attempts
                 .store(0, std::sync::atomic::Ordering::Relaxed);
         }

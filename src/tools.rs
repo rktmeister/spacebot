@@ -18,7 +18,7 @@
 //! - `spawn_worker` is included for channel-originated branches only
 //!
 //! **Worker ToolServer** (one per worker, created at spawn time):
-//! - `shell`, `file`, `exec` — stateless, registered at creation
+//! - `shell`, `file_read`/`file_write`/`file_edit`/`file_list`, `exec` — stateless, registered at creation
 //! - `task_update` — scoped to the worker's assigned task
 //! - `set_status` — per-worker instance, registered at creation
 //!
@@ -80,7 +80,11 @@ pub use config_inspect::{
 pub use cron::{CronArgs, CronError, CronOutput, CronTool};
 pub use email_search::{EmailSearchArgs, EmailSearchError, EmailSearchOutput, EmailSearchTool};
 pub use exec::{EnvVar, ExecArgs, ExecError, ExecOutput, ExecResult, ExecTool};
-pub use file::{FileArgs, FileEntry, FileEntryOutput, FileError, FileOutput, FileTool, FileType};
+pub use file::{
+    FileEditArgs, FileEditTool, FileEntry, FileEntryOutput, FileError, FileListArgs, FileListTool,
+    FileOutput, FileReadArgs, FileReadTool, FileType, FileWriteArgs, FileWriteTool,
+    register_file_tools,
+};
 pub use mcp::{McpToolAdapter, McpToolError, McpToolOutput};
 pub use memory_delete::{
     MemoryDeleteArgs, MemoryDeleteError, MemoryDeleteOutput, MemoryDeleteTool,
@@ -497,8 +501,7 @@ pub fn create_worker_tool_server(
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(ShellTool::new(workspace.clone(), sandbox.clone()))
-        .tool(FileTool::new(workspace.clone(), sandbox.clone()))
-        .tool(ExecTool::new(workspace, sandbox))
+        .tool(ExecTool::new(workspace.clone(), sandbox.clone()))
         .tool(TaskUpdateTool::for_worker(
             task_store,
             agent_id.clone(),
@@ -512,6 +515,8 @@ pub fn create_worker_tool_server(
             status_tool
         })
         .tool(ReadSkillTool::new(runtime_config.clone()));
+
+    server = register_file_tools(server, workspace, sandbox);
 
     if let Some(store) = runtime_config.secrets.load().as_ref() {
         server = server.tool(SecretSetTool::new(store.clone()));
@@ -596,8 +601,9 @@ pub fn create_cortex_chat_tool_server(
         .tool(TaskListTool::new(task_store.clone(), agent_id.to_string()))
         .tool(TaskUpdateTool::for_branch(task_store, agent_id.clone()))
         .tool(ShellTool::new(workspace.clone(), sandbox.clone()))
-        .tool(FileTool::new(workspace.clone(), sandbox.clone()))
-        .tool(ExecTool::new(workspace, sandbox));
+        .tool(ExecTool::new(workspace.clone(), sandbox.clone()));
+
+    server = register_file_tools(server, workspace, sandbox);
 
     if browser_config.enabled {
         server = register_browser_tools(server, browser_config, screenshot_dir, &runtime_config);

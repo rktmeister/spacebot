@@ -87,7 +87,14 @@ impl Tool for SpawnWorkerTool {
         let web_search_enabled = rc.brave_search_key.load().is_some();
         let opencode_enabled = rc.opencode.load().enabled;
 
-        let mut tools_list = vec!["shell", "file", "exec"];
+        let mut tools_list = vec![
+            "shell",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "file_list",
+            "exec",
+        ];
         if browser_enabled {
             tools_list.push("browser");
         }
