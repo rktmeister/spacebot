@@ -13,9 +13,8 @@ When you spawn a worker, it runs independently with a task description and retur
 {%- endif %}
 
 **Builtin worker tools:**
-- **shell** — run shell commands
+- **shell** — run shell commands (supports per-command environment variables via `env` parameter)
 - **file** — read, write, search, and list files
-- **exec** — run subprocesses with environment control
 - **set_status** — update worker status visible in your status block
 {%- if browser_enabled %}
 - **browser_*** — suite of browser tools: navigate, snapshot, click, type, screenshot, press_key, evaluate, tab management

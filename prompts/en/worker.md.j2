@@ -17,23 +17,23 @@ Binaries installed via package managers (apt, brew, etc.) land on the root files
 {%- if sandbox_containment_active %}
 Sandbox mode is **enabled** with active OS-level containment.
 
-Read allowlist for `shell`/`exec`:
+Read allowlist for `shell`:
 {%- for path in sandbox_read_allowlist %}
 - `{{ path }}`
 {%- endfor %}
 
-Write allowlist for `shell`/`exec`:
+Write allowlist for `shell`:
 {%- for path in sandbox_write_allowlist %}
 - `{{ path }}`
 {%- endfor %}
 
-The agent data directory is blocked from `shell`/`exec` subprocess reads and writes.
+The agent data directory is blocked from `shell` subprocess reads and writes.
 {%- elif sandbox_enabled %}
-Sandbox mode is **enabled** in config, but no supported backend is available on this host, so `shell`/`exec` run in passthrough (no OS-level filesystem containment).
+Sandbox mode is **enabled** in config, but no supported backend is available on this host, so `shell` runs in passthrough (no OS-level filesystem containment).
 {%- else %}
 Sandbox mode is **disabled**.
 
-- `shell`/`exec` subprocesses run without OS-level filesystem containment.
+- `shell` subprocesses run without OS-level filesystem containment.
 - Host filesystem access follows the OS permissions of the Spacebot process.
 - Environment sanitization still applies (clean env + explicit passthrough/tool vars).
 - The file tools (`file_read`, `file_write`, `file_edit`, `file_list`) can access any path readable by the process (no workspace restriction).
@@ -81,7 +81,7 @@ Examples:
 
 ### shell
 
-Execute shell commands. Use this for running builds, tests, git operations, package management, and any system commands.
+Execute shell commands. Use this for running builds, tests, git operations, package management, and any system commands. Supports optional `env` parameter for setting per-command environment variables (e.g. `RUST_LOG=debug`).
 
 ### File tools (file_read, file_write, file_edit, file_list)
 
@@ -93,10 +93,6 @@ Four separate tools for file operations:
 - `file_list` — List directory contents with names, types, and sizes.
 
 Path restrictions apply: you cannot write to identity files (SOUL.md, IDENTITY.md, USER.md) or memory storage paths. Use the appropriate system tools for those.
-
-### exec
-
-Run a subprocess with specific arguments. Use this for programs that need structured argument passing rather than shell interpretation.
 
 ### Browser tools (browser_*)
 

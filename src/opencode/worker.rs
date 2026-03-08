@@ -1,6 +1,6 @@
 //! OpenCode worker: drives an OpenCode session for coding tasks.
 //!
-//! Instead of running a Rig agent loop with shell/file/exec tools, this worker
+//! Instead of running a Rig agent loop with shell/file tools, this worker
 //! delegates to an OpenCode subprocess that has its own codebase exploration,
 //! context management, and tool suite. Communication happens over HTTP + SSE.
 
