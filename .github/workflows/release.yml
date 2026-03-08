@@ -50,10 +50,13 @@ jobs:
       - name: Install bun
         uses: oven-sh/setup-bun@v2
 
-      - name: Build OpenCode embed
+      - name: Build frontend
+        env:
+          SPACEBOT_SKIP_FRONTEND_BUILD: "1"
         run: |
           cd interface && bun install --frozen-lockfile && cd ..
           ./scripts/build-opencode-embed.sh
+          cd interface && bun run build
 
       - name: Determine version tag
         id: version
