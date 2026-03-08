@@ -54,7 +54,7 @@ jobs:
         env:
           SPACEBOT_SKIP_FRONTEND_BUILD: "1"
         run: |
-          cd interface && bun install && npm install --no-save @rollup/rollup-linux-x64-gnu @rollup/rollup-linux-arm64-gnu 2>/dev/null || true && cd ..
+          cd interface && rm -f bun.lock && bun install && cd ..
           ./scripts/build-opencode-embed.sh
           cd interface && bun run build
 
