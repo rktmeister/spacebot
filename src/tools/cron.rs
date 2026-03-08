@@ -133,7 +133,7 @@ impl Tool for CronTool {
                     },
                     "interval_secs": {
                         "type": "integer",
-                        "description": "For 'create': seconds between runs (e.g. 3600 = hourly, 86400 = daily)."
+                        "description": "DEPRECATED — legacy fallback only. Use `cron_expr` instead. Interval scheduling drifts and does not align to wall-clock times."
                     },
                     "delivery_target": {
                         "type": "string",

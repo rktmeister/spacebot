@@ -66,6 +66,7 @@ struct HeatmapCell {
 struct CronJobInfo {
     id: String,
     prompt: String,
+    cron_expr: Option<String>,
     interval_secs: u64,
     delivery_target: String,
     enabled: bool,
@@ -1190,7 +1191,7 @@ pub(super) async fn agent_overview(
     let channel_count = channels.len();
 
     let cron_rows = sqlx::query(
-        "SELECT id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled, run_once, timeout_secs FROM cron_jobs ORDER BY created_at ASC",
+        "SELECT id, prompt, cron_expr, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled, run_once, timeout_secs FROM cron_jobs ORDER BY created_at ASC",
     )
     .fetch_all(pool)
     .await
@@ -1204,6 +1205,7 @@ pub(super) async fn agent_overview(
             CronJobInfo {
                 id: row.get("id"),
                 prompt: row.get("prompt"),
+                cron_expr: row.try_get::<Option<String>, _>("cron_expr").ok().flatten(),
                 interval_secs: row.get::<i64, _>("interval_secs") as u64,
                 delivery_target: row.get("delivery_target"),
                 enabled: row.get::<i64, _>("enabled") != 0,
