@@ -152,7 +152,7 @@ function isErrorResult(
 ): boolean {
 	if (parsed?.error) return true;
 	if (parsed?.status === "error") return true;
-	// Shell/exec structured results: { success: false } or non-zero exit code
+	// Shell structured results: { success: false } or non-zero exit code
 	if (parsed?.success === false) return true;
 	if (typeof parsed?.exit_code === "number" && parsed.exit_code !== 0) return true;
 	const lower = text.toLowerCase();
@@ -501,23 +501,6 @@ const toolRenderers: Record<string, ToolRenderer> = {
 		resultView(pair) {
 			if (!pair.resultRaw) return null;
 			return <CollapsiblePre text={pair.resultRaw} maxLines={30} />;
-		},
-	},
-
-	exec: {
-		summary(pair) {
-			const command = pair.args?.command;
-			if (!command) return null;
-			if (pair.result && typeof pair.result.exit_code === "number") {
-				const code = pair.result.exit_code;
-				const cmdStr = truncate(String(command), 50);
-				return code === 0 ? cmdStr : `${cmdStr} (exit ${code})`;
-			}
-			return truncate(String(command), 60);
-		},
-		resultView(pair) {
-			if (!pair.resultRaw) return null;
-			return <ShellResultView pair={pair} />;
 		},
 	},
 

@@ -1,4 +1,8 @@
-//! Shell tool for executing shell commands (task workers only).
+//! Shell tool for executing shell commands and subprocesses (task workers only).
+//!
+//! This is the unified execution tool — it replaces the previous `shell` + `exec`
+//! split. Commands run through `sh -c` with optional per-command environment
+//! variables. Dangerous env vars that enable library injection are blocked.
 
 use crate::sandbox::Sandbox;
 use rig::completion::ToolDefinition;
@@ -9,6 +13,24 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::Command;
+
+/// Env vars that enable library injection or alter runtime loading behavior.
+/// These are blocked even when sandbox mode is disabled because they allow
+/// arbitrary code execution regardless of filesystem containment.
+const DANGEROUS_ENV_VARS: &[&str] = &[
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "NODE_OPTIONS",
+    "RUBYOPT",
+    "PERL5OPT",
+    "PERL5LIB",
+    "BASH_ENV",
+    "ENV",
+];
 
 /// Tool for executing shell commands within a sandboxed environment.
 #[derive(Debug, Clone)]
@@ -32,6 +54,15 @@ pub struct ShellError {
     exit_code: i32,
 }
 
+/// A key-value environment variable pair.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EnvVar {
+    /// The variable name.
+    pub key: String,
+    /// The variable value.
+    pub value: String,
+}
+
 /// Arguments for shell tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ShellArgs {
@@ -39,6 +70,9 @@ pub struct ShellArgs {
     pub command: String,
     /// Optional working directory for the command.
     pub working_dir: Option<String>,
+    /// Environment variables to set for this command (key-value pairs).
+    #[serde(default)]
+    pub env: Vec<EnvVar>,
     /// Optional timeout in seconds (default: 60).
     #[serde(
         default = "default_timeout",
@@ -88,6 +122,24 @@ impl Tool for ShellTool {
                         "type": "string",
                         "description": "Optional working directory where the command should run"
                     },
+                    "env": {
+                        "type": "array",
+                        "description": "Environment variables to set for this command",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "key": {
+                                    "type": "string",
+                                    "description": "Environment variable name"
+                                },
+                                "value": {
+                                    "type": "string",
+                                    "description": "Environment variable value"
+                                }
+                            },
+                            "required": ["key", "value"]
+                        }
+                    },
                     "timeout_seconds": {
                         "type": "integer",
                         "minimum": 1,
@@ -128,6 +180,24 @@ impl Tool for ShellTool {
             self.workspace.clone()
         };
 
+        // Block env vars that enable library injection or alter runtime
+        // loading behavior — these allow arbitrary code execution regardless
+        // of filesystem sandbox state.
+        for env_var in &args.env {
+            if DANGEROUS_ENV_VARS
+                .iter()
+                .any(|blocked| env_var.key.eq_ignore_ascii_case(blocked))
+            {
+                return Err(ShellError {
+                    message: format!(
+                        "Cannot set {}: this environment variable enables code injection.",
+                        env_var.key
+                    ),
+                    exit_code: -1,
+                });
+            }
+        }
+
         let mut cmd = if cfg!(target_os = "windows") {
             self.sandbox
                 .wrap("cmd", &["/C", &args.command], &working_dir)
@@ -135,6 +205,11 @@ impl Tool for ShellTool {
             self.sandbox
                 .wrap("sh", &["-c", &args.command], &working_dir)
         };
+
+        // Apply user-specified env vars after sandbox wrapping
+        for env_var in args.env {
+            cmd.env(env_var.key, env_var.value);
+        }
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 

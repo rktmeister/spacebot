@@ -1,4 +1,4 @@
-//! OS-level filesystem containment for shell and exec tool subprocesses.
+//! OS-level filesystem containment for shell tool subprocesses.
 //!
 //! Replaces string-based command filtering with kernel-enforced boundaries.
 //! On Linux, uses bubblewrap (bwrap) for mount namespace isolation.
@@ -250,7 +250,7 @@ impl Sandbox {
     /// Check whether a canonical path falls within the workspace or any
     /// allowed writable path (user-configured or project-injected).
     ///
-    /// Used by shell/exec/file tools to relax the workspace boundary when
+    /// Used by shell/file tools to relax the workspace boundary when
     /// project paths are registered.
     pub fn is_path_allowed(&self, canonical: &Path) -> bool {
         let workspace_canonical = self
@@ -278,7 +278,7 @@ impl Sandbox {
         self.mode_enabled() && !matches!(self.backend, SandboxBackend::None)
     }
 
-    /// Read-allowlisted filesystem paths exposed to shell/exec subprocesses when
+    /// Read-allowlisted filesystem paths exposed to shell subprocesses when
     /// containment is active.
     pub fn prompt_read_allowlist(&self) -> Vec<String> {
         if !self.containment_active() {
@@ -333,7 +333,7 @@ impl Sandbox {
         paths
     }
 
-    /// Write-allowlisted filesystem paths exposed to shell/exec subprocesses when
+    /// Write-allowlisted filesystem paths exposed to shell subprocesses when
     /// containment is active.
     pub fn prompt_write_allowlist(&self) -> Vec<String> {
         if !self.containment_active() {

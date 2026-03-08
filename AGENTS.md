@@ -80,11 +80,11 @@ Two kinds:
 - **Interactive:** Long-running, accepts follow-up input from the channel. Coding sessions, complex multi-step tasks.
 
 Workers are pluggable. A worker can be:
-- A Rig agent with shell/file/exec tools
+- A Rig agent with shell/file tools
 - An OpenCode subprocess
 - Any external process that accepts a task and reports status
 
-**Tools:** shell, file, exec, set_status (varies by worker type)  
+**Tools:** shell, file, set_status (varies by worker type)  
 **Context:** Fresh prompt + task description. No channel history.  
 **Lifecycle:** Fire-and-forget or long-running. Reports status via `set_status` tool.
 
@@ -176,9 +176,8 @@ src/
 │   ├── memory_recall.rs— search + curate memories (branch only)
 │   ├── channel_recall.rs— retrieve transcript from any channel (branch only)
 │   ├── set_status.rs   — update worker status (workers only)
-│   ├── shell.rs        — execute shell commands (task workers)
+│   ├── shell.rs        — execute shell commands and subprocesses (task workers)
 │   ├── file.rs         — read/write/list files (task workers)
-│   ├── exec.rs         — run subprocess (task workers)
 │   ├── browser.rs      — web browsing (task workers)
 │   ├── task_create.rs  — create task-board task (branch + cortex chat)
 │   ├── task_list.rs    — list task-board tasks (branch + cortex chat)
@@ -292,7 +291,7 @@ let branch_history = channel_history.clone();
 **ToolServer topology:**
 - Per-channel `ToolServer` (no memory tools, just channel action tools added per turn)
 - Per-branch `ToolServer` with memory tools (memory_save, memory_recall, memory_delete), channel recall, docs introspection (`spacebot_docs`), and task-board tools
-- Per-worker `ToolServer` with task-specific tools (shell, file, exec)
+- Per-worker `ToolServer` with task-specific tools (shell, file)
 - Per-cortex `ToolServer` with memory_save
 
 **Max turns:** Rig defaults to 0 (single call). Always set explicitly.
