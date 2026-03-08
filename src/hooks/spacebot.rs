@@ -1,5 +1,6 @@
 //! SpacebotHook: Prompt hook for channels, branches, and workers.
 
+use crate::hooks::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
 use crate::{AgentId, ChannelId, ProcessEvent, ProcessId, ProcessType};
 use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
 use rig::completion::{CompletionModel, CompletionResponse, Message, Prompt, PromptError};
@@ -41,6 +42,13 @@ pub struct SpacebotHook {
     /// Once signaled, the nudge system allows text-only responses to pass
     /// through as legitimate completions.
     outcome_signaled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Counts consecutive text-only nudge attempts. Reset to zero whenever a
+    /// tool call completes successfully, so the budget tracks *consecutive*
+    /// text-only responses rather than total across the worker's lifetime.
+    nudge_attempts: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Detects repetitive tool calling patterns (identical calls, identical
+    /// outcomes, ping-pong cycles) and blocks them before execution.
+    loop_guard: std::sync::Arc<std::sync::Mutex<LoopGuard>>,
 }
 
 impl SpacebotHook {
@@ -61,6 +69,7 @@ impl SpacebotHook {
         channel_id: Option<ChannelId>,
         event_tx: broadcast::Sender<ProcessEvent>,
     ) -> Self {
+        let loop_guard_config = LoopGuardConfig::for_process(process_type);
         Self {
             agent_id,
             process_id,
@@ -71,6 +80,10 @@ impl SpacebotHook {
             completion_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             nudge_request_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             outcome_signaled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            nudge_attempts: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            loop_guard: std::sync::Arc::new(std::sync::Mutex::new(LoopGuard::new(
+                loop_guard_config,
+            ))),
         }
     }
 
@@ -85,12 +98,23 @@ impl SpacebotHook {
         self.tool_nudge_policy
     }
 
-    /// Reset per-prompt state (tool nudging and outcome tracking).
+    /// Returns `true` if the worker has called `set_status` with `kind: "outcome"`.
+    pub fn outcome_signaled(&self) -> bool {
+        self.outcome_signaled
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Reset per-prompt state (tool nudging, outcome tracking, and loop guard).
     pub fn reset_tool_nudge_state(&self) {
         self.completion_calls
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.outcome_signaled
             .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.nudge_attempts
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut guard) = self.loop_guard.lock() {
+            guard.reset();
+        }
     }
 
     fn set_tool_nudge_request_active(&self, active: bool) {
@@ -119,7 +143,6 @@ impl SpacebotHook {
         self.reset_tool_nudge_state();
         self.set_tool_nudge_request_active(true);
 
-        let mut nudge_attempts = 0usize;
         let mut current_prompt = std::borrow::Cow::Borrowed(prompt);
         let mut using_tool_nudge_prompt = false;
 
@@ -133,19 +156,29 @@ impl SpacebotHook {
 
             match &result {
                 Err(PromptError::PromptCancelled { reason, .. })
-                    if Self::is_tool_nudge_reason(reason)
-                        && nudge_attempts < Self::TOOL_NUDGE_MAX_RETRIES =>
+                    if Self::is_tool_nudge_reason(reason) =>
                 {
+                    // Read the current attempt count. on_tool_result resets
+                    // this to zero whenever a tool call completes, so this
+                    // tracks *consecutive* text-only responses rather than
+                    // total nudges across the worker's lifetime.
+                    let attempts = self
+                        .nudge_attempts
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if attempts >= Self::TOOL_NUDGE_MAX_RETRIES {
+                        // Retries exhausted — propagate the cancellation.
+                        self.set_tool_nudge_request_active(false);
+                        return result;
+                    }
                     Self::prune_tool_nudge_retry_history(
                         history,
                         history_len_before_attempt,
                         using_tool_nudge_prompt,
                     );
-                    nudge_attempts += 1;
                     tracing::warn!(
                         process_id = %self.process_id,
                         process_type = %self.process_type,
-                        attempt = nudge_attempts,
+                        attempt = attempts + 1,
                         "text-only response without outcome signal, nudging tool usage"
                     );
                     current_prompt = std::borrow::Cow::Borrowed(Self::TOOL_NUDGE_PROMPT);
@@ -402,14 +435,29 @@ impl SpacebotHook {
             return false;
         }
 
-        // Text-only response without a prior outcome signal — nudge.
-        response.choice.iter().any(|content| {
+        // Response without tool calls and without a prior outcome signal.
+        // Nudge if the response contains any non-empty text, OR if it
+        // contains no text at all (e.g. reasoning-only). A response that
+        // is purely reasoning/image with no text and no tool calls means
+        // the worker hasn't actually done anything — send it back.
+        let has_any_text = response.choice.iter().any(|content| {
             if let rig::message::AssistantContent::Text(text) = content {
                 !text.text.trim().is_empty()
             } else {
                 false
             }
-        })
+        });
+
+        // Nudge on non-empty text (worker tried to narrate instead of
+        // working) or on no text at all (reasoning-only exit attempt).
+        has_any_text
+            || !response.choice.iter().any(|content| {
+                matches!(
+                    content,
+                    rig::message::AssistantContent::Text(_)
+                        | rig::message::AssistantContent::ToolCall(_)
+                )
+            })
     }
 }
 
@@ -458,6 +506,40 @@ where
             };
         }
 
+        // Emit text content from worker completion responses so the live
+        // transcript can show the model's reasoning between tool calls.
+        if self.process_type == ProcessType::Worker {
+            let text: String = response
+                .choice
+                .iter()
+                .filter_map(|content| {
+                    if let rig::message::AssistantContent::Text(text) = content {
+                        let trimmed = text.text.trim();
+                        if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed)
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+
+            if !text.is_empty()
+                && let ProcessId::Worker(worker_id) = &self.process_id
+            {
+                let event = ProcessEvent::WorkerText {
+                    agent_id: self.agent_id.clone(),
+                    worker_id: *worker_id,
+                    channel_id: self.channel_id.clone(),
+                    text,
+                };
+                self.event_tx.send(event).ok();
+            }
+        }
+
         HookAction::Continue
     }
 
@@ -485,6 +567,31 @@ where
         _internal_call_id: &str,
         args: &str,
     ) -> ToolCallHookAction {
+        // Loop guard: check for repetitive tool calling before execution.
+        // Runs for all process types. Block → Skip (message becomes tool
+        // result), CircuitBreak → Terminate.
+        if let Ok(mut guard) = self.loop_guard.lock() {
+            match guard.check(tool_name, args) {
+                LoopGuardVerdict::Allow => {}
+                LoopGuardVerdict::Block(reason) => {
+                    tracing::warn!(
+                        process_id = %self.process_id,
+                        tool_name = %tool_name,
+                        "loop guard blocked tool call"
+                    );
+                    return ToolCallHookAction::Skip { reason };
+                }
+                LoopGuardVerdict::CircuitBreak(reason) => {
+                    tracing::warn!(
+                        process_id = %self.process_id,
+                        tool_name = %tool_name,
+                        "loop guard circuit-breaking agent loop"
+                    );
+                    return ToolCallHookAction::Terminate { reason };
+                }
+            }
+        }
+
         // Leak blocking is enforced at channel egress (`reply`). Worker and
         // branch tool calls may legitimately handle secrets internally.
         if self.process_type == ProcessType::Channel
@@ -582,6 +689,24 @@ where
         );
 
         self.record_tool_result_metrics(tool_name, internal_call_id);
+
+        // Record outcome for loop guard (outcome-aware repetition detection).
+        // The guard uses the (tool_name, args, result) triple to detect when
+        // the same call produces the same result repeatedly, and poisons the
+        // call hash so the next check() in on_tool_call auto-blocks.
+        if let Ok(mut guard) = self.loop_guard.lock() {
+            guard.record_outcome(tool_name, _args, result);
+        }
+
+        // A successful tool call proves the worker is still productive.
+        // Reset the consecutive nudge counter so a brief narration blip
+        // after many tool calls doesn't exhaust the retry budget.
+        // Tool errors (from Rig's error path) don't count as productive.
+        let is_tool_error = result.starts_with("Toolset error:");
+        if self.tool_nudge_policy.is_enabled() && !is_tool_error {
+            self.nudge_attempts
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+        }
 
         // Detect terminal outcome signal from successful set_status results.
         // We check the *result* (not the args) so the flag is only set after the
@@ -1133,5 +1258,105 @@ mod tests {
                 ..
             } if text_delta == "hi" && aggregated_text == "hi"
         ));
+    }
+
+    #[tokio::test]
+    async fn tool_result_resets_consecutive_nudge_counter() {
+        // The exact scenario from the Railway browser worker failure:
+        // worker makes many tool calls, then narrates, gets nudged, but the
+        // nudge counter should have been reset by the prior tool calls so
+        // the budget isn't exhausted from earlier narration blips.
+        let hook = make_hook().with_tool_nudge_policy(ToolNudgePolicy::Enabled);
+        hook.reset_tool_nudge_state();
+        hook.set_tool_nudge_request_active(true);
+
+        // Simulate 2 nudge attempts (would exhaust budget under old behavior)
+        hook.nudge_attempts
+            .store(2, std::sync::atomic::Ordering::Relaxed);
+
+        // A successful tool call should reset the counter
+        let _ = <SpacebotHook as PromptHook<SpacebotModel>>::on_tool_result(
+            &hook,
+            "browser_click",
+            None,
+            "internal_1",
+            "{\"index\": 13}",
+            "{\"success\":true,\"message\":\"Clicked element at index 13\"}",
+        )
+        .await;
+
+        assert_eq!(
+            hook.nudge_attempts
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "Tool result should reset consecutive nudge counter to zero"
+        );
+    }
+
+    #[tokio::test]
+    async fn nudge_counter_not_reset_when_policy_disabled() {
+        // When nudge policy is disabled, on_tool_result should not touch
+        // the counter (it's irrelevant but ensures no side effects).
+        let hook = make_hook().with_tool_nudge_policy(ToolNudgePolicy::Disabled);
+        hook.reset_tool_nudge_state();
+
+        hook.nudge_attempts
+            .store(2, std::sync::atomic::Ordering::Relaxed);
+
+        let _ = <SpacebotHook as PromptHook<SpacebotModel>>::on_tool_result(
+            &hook,
+            "shell",
+            None,
+            "internal_1",
+            "{\"command\":\"ls\"}",
+            "file1.txt\nfile2.txt",
+        )
+        .await;
+
+        assert_eq!(
+            hook.nudge_attempts
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "Nudge counter should not be reset when policy is disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn nudges_on_reasoning_only_response_without_outcome() {
+        // A response with only Reasoning content (no Text, no ToolCall) should
+        // trigger a nudge. This is the exact bug case: models with extended
+        // thinking produce a Reasoning block and exit the agent loop without
+        // doing any work.
+        let hook = make_hook().with_tool_nudge_policy(ToolNudgePolicy::Enabled);
+        let prompt = prompt_message();
+        hook.reset_tool_nudge_state();
+        hook.set_tool_nudge_request_active(true);
+
+        let reasoning_response = CompletionResponse {
+            choice: OneOrMany::one(AssistantContent::reasoning("thinking about the task...")),
+            message_id: None,
+            usage: Usage::default(),
+            raw_response: RawResponse {
+                body: serde_json::json!({}),
+            },
+        };
+
+        let _ =
+            <SpacebotHook as PromptHook<SpacebotModel>>::on_completion_call(&hook, &prompt, &[])
+                .await;
+        let response = <SpacebotHook as PromptHook<SpacebotModel>>::on_completion_response(
+            &hook,
+            &prompt,
+            &reasoning_response,
+        )
+        .await;
+        assert!(
+            matches!(
+                response,
+                HookAction::Terminate { ref reason }
+                if reason == SpacebotHook::TOOL_NUDGE_REASON
+            ),
+            "Expected nudge — reasoning-only response without outcome should be rejected"
+        );
     }
 }

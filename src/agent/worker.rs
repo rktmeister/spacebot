@@ -303,7 +303,7 @@ impl Worker {
         let mut segments_run = 0;
         let mut overflow_retries = 0;
 
-        let result = if resuming {
+        let mut result = if resuming {
             // For resumed workers, synthesize a "result" from the task
             // since the original initial result was already relayed.
             String::new()
@@ -336,6 +336,7 @@ impl Worker {
                                 });
                         }
 
+                        self.persist_transcript(&compacted_history, &history).await;
                         self.maybe_compact_history(&mut compacted_history, &mut history)
                             .await;
                         prompt =
@@ -394,6 +395,34 @@ impl Worker {
                 }
             }
         };
+
+        // Safety net: if the worker produced an empty result (e.g. reasoning-only
+        // response that slipped past the nudge gate), treat it as a failure — unless
+        // the worker already signaled a meaningful outcome via set_status. A worker
+        // that signaled outcome but ran out of turns still completed its task; the
+        // outcome status text is the result.
+        if !resuming && result.trim().is_empty() {
+            if self.hook.outcome_signaled() {
+                tracing::info!(
+                    worker_id = %self.id,
+                    "worker produced empty text but outcome was signaled, treating as success"
+                );
+                // Use a synthetic result — the channel already received the
+                // outcome status via the event stream, so this is just for the
+                // worker result record.
+                result = "Task completed (outcome signaled via set_status).".to_string();
+            } else {
+                self.state = WorkerState::Failed;
+                self.hook.send_status("failed (empty result)");
+                self.write_failure_log(&history, "worker produced empty result — likely a reasoning-only exit that bypassed the outcome gate");
+                self.persist_transcript(&compacted_history, &history).await;
+                tracing::error!(worker_id = %self.id, "worker produced empty result, treating as failure");
+                return Err(crate::error::AgentError::Other(anyhow::anyhow!(
+                    "worker produced empty result without signaling a meaningful outcome"
+                ))
+                .into());
+            }
+        }
 
         // For interactive workers, enter a follow-up loop
         let mut follow_up_failure: Option<String> = None;
