@@ -49,8 +49,13 @@ pub struct Worker {
     pub hook: SpacebotHook,
     /// System prompt loaded from prompts/WORKER.md.
     pub system_prompt: String,
-    /// Input channel for interactive workers.
+    /// Input channel for interactive workers (follow-up loop).
     pub input_rx: Option<mpsc::Receiver<String>>,
+    /// Context injection channel. Unlike `input_rx` (which drives the
+    /// interactive follow-up state machine), this delivers addendum context
+    /// to a running worker at the next LLM turn boundary without changing
+    /// worker state.
+    pub inject_rx: mpsc::Receiver<String>,
     /// Browser automation config.
     pub browser_config: BrowserConfig,
     /// Directory for browser screenshots.
@@ -78,7 +83,7 @@ impl Worker {
         brave_search_key: Option<String>,
         logs_dir: PathBuf,
         input_rx: Option<mpsc::Receiver<String>>,
-    ) -> Self {
+    ) -> (Self, mpsc::Sender<String>) {
         let id = Uuid::new_v4();
         let process_id = ProcessId::Worker(id);
         let hook = SpacebotHook::new(
@@ -89,27 +94,36 @@ impl Worker {
             deps.event_tx.clone(),
         );
         let (status_tx, status_rx) = watch::channel("starting".to_string());
+        let (inject_tx, inject_rx) = mpsc::channel(8);
 
-        Self {
-            id,
-            channel_id,
-            task: task.into(),
-            state: WorkerState::Running,
-            deps,
-            hook,
-            system_prompt: system_prompt.into(),
-            input_rx,
-            browser_config,
-            screenshot_dir,
-            brave_search_key,
-            logs_dir,
-            status_tx,
-            status_rx,
-            prior_history: None,
-        }
+        (
+            Self {
+                id,
+                channel_id,
+                task: task.into(),
+                state: WorkerState::Running,
+                deps,
+                hook,
+                system_prompt: system_prompt.into(),
+                input_rx,
+                inject_rx,
+                browser_config,
+                screenshot_dir,
+                brave_search_key,
+                logs_dir,
+                status_tx,
+                status_rx,
+                prior_history: None,
+            },
+            inject_tx,
+        )
     }
 
     /// Create a new fire-and-forget worker.
+    ///
+    /// Returns the worker and a sender for context injection. The injection
+    /// channel delivers addendum context at LLM turn boundaries without
+    /// requiring the worker to be interactive.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         channel_id: Option<ChannelId>,
@@ -120,7 +134,7 @@ impl Worker {
         screenshot_dir: PathBuf,
         brave_search_key: Option<String>,
         logs_dir: PathBuf,
-    ) -> Self {
+    ) -> (Self, mpsc::Sender<String>) {
         Self::build(
             channel_id,
             task,
@@ -135,6 +149,10 @@ impl Worker {
     }
 
     /// Create a new interactive worker.
+    ///
+    /// Returns `(worker, input_tx, inject_tx)`. The `input_tx` drives the
+    /// interactive follow-up loop. The `inject_tx` delivers addendum context
+    /// at LLM turn boundaries independently of the follow-up state machine.
     #[allow(clippy::too_many_arguments)]
     pub fn new_interactive(
         channel_id: Option<ChannelId>,
@@ -145,9 +163,9 @@ impl Worker {
         screenshot_dir: PathBuf,
         brave_search_key: Option<String>,
         logs_dir: PathBuf,
-    ) -> (Self, mpsc::Sender<String>) {
+    ) -> (Self, mpsc::Sender<String>, mpsc::Sender<String>) {
         let (input_tx, input_rx) = mpsc::channel(32);
-        let worker = Self::build(
+        let (worker, inject_tx) = Self::build(
             channel_id,
             task,
             system_prompt,
@@ -159,7 +177,7 @@ impl Worker {
             Some(input_rx),
         );
 
-        (worker, input_tx)
+        (worker, input_tx, inject_tx)
     }
 
     /// Resume an interactive worker that was idle at shutdown.
@@ -179,9 +197,9 @@ impl Worker {
         brave_search_key: Option<String>,
         logs_dir: PathBuf,
         prior_history: Vec<rig::message::Message>,
-    ) -> (Self, mpsc::Sender<String>) {
+    ) -> (Self, mpsc::Sender<String>, mpsc::Sender<String>) {
         let (input_tx, input_rx) = mpsc::channel(32);
-        let mut worker = Self::build(
+        let (mut worker, inject_tx) = Self::build(
             channel_id,
             task,
             system_prompt,
@@ -207,7 +225,7 @@ impl Worker {
         worker.state = WorkerState::WaitingForInput;
         // Stash the prior history so `run_follow_up_loop()` can pick it up.
         worker.prior_history = Some(prior_history);
-        (worker, input_tx)
+        (worker, input_tx, inject_tx)
     }
 
     /// Check if the worker can transition to a new state.
@@ -245,6 +263,14 @@ impl Worker {
     /// This prevents long-running workers from dying mid-task due to context
     /// exhaustion.
     pub async fn run(mut self) -> Result<String> {
+        // Wire the injection receiver into the hook so `on_completion_call`
+        // can drain pending injected context before each LLM turn.
+        let inject_rx = std::mem::replace(
+            &mut self.inject_rx,
+            mpsc::channel(1).1, // placeholder; the real receiver moves into the hook
+        );
+        self.hook = self.hook.clone().with_inject_rx(inject_rx);
+
         self.status_tx.send_modify(|s| *s = "running".to_string());
         self.hook.send_status("running");
 

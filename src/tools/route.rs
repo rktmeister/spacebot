@@ -79,32 +79,61 @@ impl Tool for RouteTool {
             .parse::<WorkerId>()
             .map_err(|e| RouteError(format!("Invalid worker ID: {e}")))?;
 
-        // Look up the input sender for this worker
+        // Try interactive input first (worker is WaitingForInput).
         let inputs = self.state.worker_inputs.read().await;
-        let input_tx = inputs.get(&worker_id)
-            .ok_or_else(|| RouteError(format!(
-                "Worker {worker_id} not found or not interactive. Only interactive workers accept follow-up messages."
-            )))?
-            .clone();
+        if let Some(input_tx) = inputs.get(&worker_id).cloned() {
+            drop(inputs);
+
+            input_tx.send(args.message).await.map_err(|_| {
+                RouteError(format!(
+                    "Worker {worker_id} has stopped accepting input (channel closed)"
+                ))
+            })?;
+
+            tracing::info!(
+                worker_id = %worker_id,
+                channel_id = %self.state.channel_id,
+                "message routed to interactive worker (input)"
+            );
+
+            return Ok(RouteOutput {
+                routed: true,
+                worker_id,
+                message: format!("Message delivered to worker {worker_id} (follow-up input)."),
+            });
+        }
         drop(inputs);
 
-        // Deliver the message
-        input_tx.send(args.message).await.map_err(|_| {
-            RouteError(format!(
-                "Worker {worker_id} has stopped accepting input (channel closed)"
-            ))
-        })?;
+        // Fall back to context injection (worker is Running).
+        let injections = self.state.worker_injections.read().await;
+        if let Some(inject_tx) = injections.get(&worker_id).cloned() {
+            drop(injections);
 
-        tracing::info!(
-            worker_id = %worker_id,
-            channel_id = %self.state.channel_id,
-            "message routed to worker"
-        );
+            inject_tx.send(args.message).await.map_err(|_| {
+                RouteError(format!(
+                    "Worker {worker_id} has stopped running (injection channel closed)"
+                ))
+            })?;
 
-        Ok(RouteOutput {
-            routed: true,
-            worker_id,
-            message: format!("Message delivered to worker {worker_id}."),
-        })
+            tracing::info!(
+                worker_id = %worker_id,
+                channel_id = %self.state.channel_id,
+                "context injected into running worker"
+            );
+
+            return Ok(RouteOutput {
+                routed: true,
+                worker_id,
+                message: format!(
+                    "Context injected into running worker {worker_id}. \
+                     The worker will incorporate this at its next turn boundary."
+                ),
+            });
+        }
+        drop(injections);
+
+        Err(RouteError(format!(
+            "Worker {worker_id} not found. It may have already completed or been cancelled."
+        )))
     }
 }

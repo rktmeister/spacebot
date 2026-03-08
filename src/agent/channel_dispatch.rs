@@ -324,6 +324,25 @@ async fn check_worker_limit(state: &ChannelState) -> std::result::Result<(), Age
     reserve_worker_slot_local(active_worker_count, &state.channel_id, max_workers)
 }
 
+/// Reject spawn if an active worker already has the same task.
+///
+/// This prevents duplicate workers when the LLM emits multiple spawn_worker
+/// calls in a single response and one fails then gets retried on the next
+/// depth.
+async fn check_duplicate_task(
+    state: &ChannelState,
+    task: &str,
+) -> std::result::Result<(), AgentError> {
+    let status = state.status_block.read().await;
+    if let Some(existing_id) = status.find_duplicate_worker_task(task) {
+        return Err(AgentError::DuplicateWorkerTask {
+            channel_id: state.channel_id.to_string(),
+            existing_worker_id: existing_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Spawn a worker from a ChannelState. Used by the SpawnWorkerTool.
 pub async fn spawn_worker_from_state(
     state: &ChannelState,
@@ -332,8 +351,9 @@ pub async fn spawn_worker_from_state(
     suggested_skills: &[&str],
 ) -> std::result::Result<WorkerId, AgentError> {
     check_worker_limit(state).await?;
-    ensure_dispatch_readiness(state, "worker");
     let task = task.into();
+    check_duplicate_task(state, &task).await?;
+    ensure_dispatch_readiness(state, "worker");
 
     let rc = &state.deps.runtime_config;
     let prompt_engine = rc.prompts.load();
@@ -383,7 +403,7 @@ pub async fn spawn_worker_from_state(
     };
 
     let worker = if interactive {
-        let (worker, input_tx) = Worker::new_interactive(
+        let (worker, input_tx, inject_tx) = Worker::new_interactive(
             Some(state.channel_id.clone()),
             &worker_task,
             &system_prompt,
@@ -399,9 +419,14 @@ pub async fn spawn_worker_from_state(
             .write()
             .await
             .insert(worker_id, input_tx);
+        state
+            .worker_injections
+            .write()
+            .await
+            .insert(worker_id, inject_tx);
         worker
     } else {
-        Worker::new(
+        let (worker, inject_tx) = Worker::new(
             Some(state.channel_id.clone()),
             &worker_task,
             &system_prompt,
@@ -410,7 +435,13 @@ pub async fn spawn_worker_from_state(
             state.screenshot_dir.clone(),
             brave_search_key,
             state.logs_dir.clone(),
-        )
+        );
+        state
+            .worker_injections
+            .write()
+            .await
+            .insert(worker.id, inject_tx);
+        worker
     };
 
     let worker_id = worker.id;
@@ -474,8 +505,9 @@ pub async fn spawn_opencode_worker_from_state(
     }
 
     check_worker_limit(state).await?;
-    ensure_dispatch_readiness(state, "opencode_worker");
     let task = task.into();
+    check_duplicate_task(state, &task).await?;
+    ensure_dispatch_readiness(state, "opencode_worker");
     let directory = expand_tilde(directory);
 
     let rc = &state.deps.runtime_config;
@@ -900,7 +932,7 @@ pub async fn resume_idle_worker_into_state(
                 .map_err(|error| format!("failed to render worker prompt: {error}"))?;
             let brave_search_key = (**rc.brave_search_key.load()).clone();
 
-            let (worker, input_tx) = Worker::resume_interactive(
+            let (worker, input_tx, inject_tx) = Worker::resume_interactive(
                 worker_id,
                 Some(state.channel_id.clone()),
                 &idle_worker.task,
@@ -918,6 +950,11 @@ pub async fn resume_idle_worker_into_state(
                 .write()
                 .await
                 .insert(worker_id, input_tx);
+            state
+                .worker_injections
+                .write()
+                .await
+                .insert(worker_id, inject_tx);
 
             let worker_span = tracing::info_span!(
                 "worker.resume",
