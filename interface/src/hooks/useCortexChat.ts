@@ -51,7 +51,7 @@ function generateThreadId(): string {
 	return generateId();
 }
 
-export function useCortexChat(agentId: string, channelId?: string) {
+export function useCortexChat(agentId: string, channelId?: string, options?: { freshThread?: boolean }) {
 	const [messages, setMessages] = useState<CortexChatMessage[]>([]);
 	const [threadId, setThreadId] = useState<string | null>(null);
 	const [isStreaming, setIsStreaming] = useState(false);
@@ -59,10 +59,15 @@ export function useCortexChat(agentId: string, channelId?: string) {
 	const [toolActivity, setToolActivity] = useState<ToolActivity[]>([]);
 	const loadedRef = useRef(false);
 
-	// Load latest thread on mount
+	// Load latest thread on mount, or start fresh if requested
 	useEffect(() => {
 		if (loadedRef.current) return;
 		loadedRef.current = true;
+
+		if (options?.freshThread) {
+			setThreadId(generateThreadId());
+			return;
+		}
 
 		api.cortexChatMessages(agentId).then((data) => {
 			setThreadId(data.thread_id);

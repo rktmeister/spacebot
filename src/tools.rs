@@ -52,6 +52,7 @@ pub mod send_file;
 pub mod send_message_to_another_channel;
 pub mod set_status;
 pub mod shell;
+pub mod skills_search;
 pub mod skip;
 pub mod spacebot_docs;
 pub mod spawn_worker;
@@ -117,6 +118,9 @@ pub use send_message_to_another_channel::{
 };
 pub use set_status::{SetStatusArgs, SetStatusError, SetStatusOutput, SetStatusTool, StatusKind};
 pub use shell::{EnvVar, ShellArgs, ShellError, ShellOutput, ShellResult, ShellTool};
+pub use skills_search::{
+    SkillsSearchArgs, SkillsSearchError, SkillsSearchOutput, SkillsSearchTool,
+};
 pub use skip::{SkipArgs, SkipError, SkipFlag, SkipOutput, SkipTool, new_skip_flag};
 pub use spacebot_docs::{
     SpacebotDocContent, SpacebotDocsArgs, SpacebotDocsError, SpacebotDocsOutput, SpacebotDocsTool,
@@ -620,6 +624,7 @@ pub fn create_cortex_chat_tool_server(
             agent_id.to_string(),
             runtime_config.clone(),
         ))
+        .tool(SkillsSearchTool::new(runtime_config.clone()))
         .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
         .tool(TaskCreateTool::new(
             task_store.clone(),

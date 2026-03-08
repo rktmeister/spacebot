@@ -204,6 +204,9 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         ("en", "tools/task_update") => {
             include_str!("../../prompts/en/tools/task_update_description.md.j2")
         }
+        ("en", "tools/skills_search") => {
+            include_str!("../../prompts/en/tools/skills_search_description.md.j2")
+        }
         ("en", "tools/spacebot_docs") => {
             include_str!("../../prompts/en/tools/spacebot_docs_description.md.j2")
         }

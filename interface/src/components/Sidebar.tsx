@@ -337,7 +337,9 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 					</div>
 				</>
 			)}
-			<CreateAgentDialog open={createOpen} onOpenChange={setCreateOpen} />
+			{agents[0] && (
+				<CreateAgentDialog open={createOpen} onOpenChange={setCreateOpen} agentId={agents[0].id} />
+			)}
 		</motion.nav>
 	);
 }

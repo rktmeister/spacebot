@@ -561,6 +561,26 @@ export type CortexChatSSEEvent =
 	| { type: "done"; full_text: string; tool_calls: CortexChatToolCall[] }
 	| { type: "error"; message: string };
 
+// -- Factory Presets --
+
+export interface PresetDefaults {
+	max_concurrent_workers: number | null;
+	max_turns: number | null;
+}
+
+export interface PresetMeta {
+	id: string;
+	name: string;
+	description: string;
+	icon: string;
+	tags: string[];
+	defaults: PresetDefaults;
+}
+
+export interface PresetsResponse {
+	presets: PresetMeta[];
+}
+
 export interface IdentityFiles {
 	soul: string | null;
 	identity: string | null;
@@ -1557,6 +1577,7 @@ export const api = {
 	status: () => fetchJson<StatusResponse>("/status"),
 	overview: () => fetchJson<InstanceOverviewResponse>("/overview"),
 	agents: () => fetchJson<AgentsResponse>("/agents"),
+	factoryPresets: () => fetchJson<PresetsResponse>("/factory/presets"),
 	agentOverview: (agentId: string) =>
 		fetchJson<AgentOverviewResponse>(`/agents/overview?agent_id=${encodeURIComponent(agentId)}`),
 	channels: () => fetchJson<ChannelsResponse>("/channels"),

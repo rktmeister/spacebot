@@ -1,16 +1,20 @@
-import { useEffect, useRef, useState } from "react";
-import { useCortexChat, type ToolActivity } from "@/hooks/useCortexChat";
-import { Markdown } from "@/components/Markdown";
-import { ToolCall, type ToolCallPair } from "@/components/ToolCall";
-import type { CortexChatToolCall } from "@/api/client";
-import { Button } from "@/ui";
-import { PlusSignIcon, Cancel01Icon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
+import {useEffect, useRef, useState} from "react";
+import {useCortexChat, type ToolActivity} from "@/hooks/useCortexChat";
+import {Markdown} from "@/components/Markdown";
+import {ToolCall, type ToolCallPair} from "@/components/ToolCall";
+import type {CortexChatToolCall} from "@/api/client";
+import {Button} from "@/ui";
+import {PlusSignIcon, Cancel01Icon} from "@hugeicons/core-free-icons";
+import {HugeiconsIcon} from "@hugeicons/react";
 
 interface CortexChatPanelProps {
 	agentId: string;
 	channelId?: string;
 	onClose?: () => void;
+	/** If set, automatically sent as the first message once the thread is ready. */
+	initialPrompt?: string;
+	/** If true, hides the header bar (useful when embedded in another dialog). */
+	hideHeader?: boolean;
 }
 
 interface StarterPrompt {
@@ -21,19 +25,23 @@ interface StarterPrompt {
 const STARTER_PROMPTS: StarterPrompt[] = [
 	{
 		label: "Run health check",
-		prompt: "Give me an agent health report with active risks, stale work, and the top 3 fixes to do now.",
+		prompt:
+			"Give me an agent health report with active risks, stale work, and the top 3 fixes to do now.",
 	},
 	{
 		label: "Audit memories",
-		prompt: "Audit memory quality, find stale or contradictory memories, and propose exact cleanup actions.",
+		prompt:
+			"Audit memory quality, find stale or contradictory memories, and propose exact cleanup actions.",
 	},
 	{
 		label: "Review workers",
-		prompt: "List recent worker runs, inspect failures, and summarize root cause plus next actions.",
+		prompt:
+			"List recent worker runs, inspect failures, and summarize root cause plus next actions.",
 	},
 	{
 		label: "Draft task spec",
-		prompt: "Turn this goal into a task spec with subtasks, then move it to ready when it is execution-ready: ",
+		prompt:
+			"Turn this goal into a task spec with subtasks, then move it to ready when it is execution-ready: ",
 	},
 ];
 
@@ -49,7 +57,12 @@ function toToolCallPair(call: CortexChatToolCall): ToolCallPair {
 		args: parsedArgs,
 		resultRaw: call.result ?? null,
 		result: parsedResult,
-		status: call.status === "error" ? "error" : call.status === "completed" ? "completed" : "running",
+		status:
+			call.status === "error"
+				? "error"
+				: call.status === "completed"
+					? "completed"
+					: "running",
 	};
 }
 
@@ -72,7 +85,11 @@ function tryParseJson(text: string): Record<string, unknown> | null {
 	if (!text || text.trim().length === 0) return null;
 	try {
 		const parsed = JSON.parse(text);
-		if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+		if (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			!Array.isArray(parsed)
+		) {
 			return parsed as Record<string, unknown>;
 		}
 		return null;
@@ -97,9 +114,12 @@ function EmptyCortexState({
 	return (
 		<div className="mx-auto w-full max-w-md">
 			<div className="rounded-2xl border border-app-line/40 bg-app-darkBox/15 p-5">
-				<h3 className="font-plex text-base font-medium text-ink">Cortex chat</h3>
+				<h3 className="font-plex text-base font-medium text-ink">
+					Cortex chat
+				</h3>
 				<p className="mt-2 text-sm leading-relaxed text-ink-dull">
-					System-level control for this agent: memory, tasks, worker inspection, and direct tool execution.
+					System-level control for this agent: memory, tasks, worker inspection,
+					and direct tool execution.
 				</p>
 				<p className="mt-2 text-tiny text-ink-faint">{contextHint}</p>
 
@@ -121,16 +141,13 @@ function EmptyCortexState({
 	);
 }
 
-function ToolActivityIndicator({ activity }: { activity: ToolActivity[] }) {
+function ToolActivityIndicator({activity}: {activity: ToolActivity[]}) {
 	if (activity.length === 0) return null;
 
 	return (
 		<div className="flex flex-col gap-1.5 mt-2">
 			{activity.map((tool) => (
-				<ToolCall
-					key={tool.call_id}
-					pair={activityToToolCallPair(tool)}
-				/>
+				<ToolCall key={tool.call_id} pair={activityToToolCallPair(tool)} />
 			))}
 		</div>
 	);
@@ -195,11 +212,13 @@ function CortexChatInput({
 					value={value}
 					onChange={(event) => onChange(event.target.value)}
 					onKeyDown={handleKeyDown}
-					placeholder={isStreaming ? "Waiting for response..." : "Message the cortex..."}
+					placeholder={
+						isStreaming ? "Waiting for response..." : "Message the cortex..."
+					}
 					disabled={isStreaming}
 					rows={1}
 					className="flex-1 resize-none bg-transparent px-1 py-1 text-sm text-ink placeholder:text-ink-faint/60 focus:outline-none disabled:opacity-40"
-					style={{ maxHeight: "160px" }}
+					style={{maxHeight: "160px"}}
 				/>
 				<button
 					type="button"
@@ -225,13 +244,42 @@ function CortexChatInput({
 	);
 }
 
-export function CortexChatPanel({ agentId, channelId, onClose }: CortexChatPanelProps) {
-	const { messages, threadId, isStreaming, error, toolActivity, sendMessage, newThread } = useCortexChat(agentId, channelId);
+export function CortexChatPanel({
+	agentId,
+	channelId,
+	onClose,
+	initialPrompt,
+	hideHeader,
+}: CortexChatPanelProps) {
+	const {
+		messages,
+		threadId,
+		isStreaming,
+		error,
+		toolActivity,
+		sendMessage,
+		newThread,
+	} = useCortexChat(agentId, channelId, {freshThread: !!initialPrompt});
 	const [input, setInput] = useState("");
 	const messagesEndRef = useRef<HTMLDivElement>(null);
+	const initialPromptSentRef = useRef(false);
+
+	// Auto-send initial prompt once the fresh thread is ready
+	useEffect(() => {
+		if (
+			initialPrompt &&
+			threadId &&
+			!initialPromptSentRef.current &&
+			!isStreaming &&
+			messages.length === 0
+		) {
+			initialPromptSentRef.current = true;
+			sendMessage(initialPrompt);
+		}
+	}, [initialPrompt, threadId, isStreaming, messages.length, sendMessage]);
 
 	useEffect(() => {
-		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+		messagesEndRef.current?.scrollIntoView({behavior: "smooth"});
 	}, [messages.length, isStreaming, toolActivity.length]);
 
 	const handleSubmit = () => {
@@ -249,78 +297,81 @@ export function CortexChatPanel({ agentId, channelId, onClose }: CortexChatPanel
 	return (
 		<div className="flex h-full w-full flex-col">
 			{/* Header */}
-			<div className="flex h-10 items-center justify-between border-b border-app-line/50 px-3">
-				<div className="flex items-center gap-2">
-					<span className="text-sm font-medium text-ink">Cortex</span>
-					{channelId && (
-						<span className="rounded-full bg-app-box px-2 py-0.5 text-tiny text-ink-faint">
-							{channelId.length > 20 ? `${channelId.slice(0, 20)}...` : channelId}
-						</span>
-					)}
-				</div>
-				<div className="flex items-center gap-0.5">
-					<Button
-						onClick={newThread}
-						variant="ghost"
-						size="icon"
-						disabled={isStreaming}
-						className="h-7 w-7"
-						title="New thread"
-					>
-						<HugeiconsIcon icon={PlusSignIcon} className="h-3.5 w-3.5" />
-					</Button>
-					{onClose && (
-						<Button
-							onClick={onClose}
-							variant="ghost"
-							size="icon"
-							className="h-7 w-7"
-							title="Close"
-						>
-							<HugeiconsIcon icon={Cancel01Icon} className="h-3.5 w-3.5" />
-						</Button>
-					)}
-				</div>
-			</div>
-
-			{/* Messages */}
-			<div className="flex-1 overflow-y-auto">
-				<div className="flex flex-col gap-5 p-3 pb-4">
-				{messages.map((message) => (
-					<div key={message.id}>
-						{message.role === "user" ? (
-							<div className="flex justify-end">
-								<div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent/10 px-3 py-2">
-									<p className="text-sm text-ink">{message.content}</p>
-								</div>
-							</div>
-						) : (
-							<div className="flex flex-col gap-2">
-								{message.tool_calls && message.tool_calls.length > 0 && (
-									<div className="flex flex-col gap-1.5">
-										{message.tool_calls.map((call) => (
-											<ToolCall
-												key={call.id}
-												pair={toToolCallPair(call)}
-											/>
-										))}
-									</div>
-								)}
-								{message.content && (
-									<div className="text-sm text-ink-dull">
-										<Markdown>{message.content}</Markdown>
-									</div>
-								)}
-							</div>
+			{!hideHeader && (
+				<div className="flex h-10 items-center justify-between border-b border-app-line/50 px-3">
+					<div className="flex items-center gap-2">
+						<span className="text-sm font-medium text-ink">Cortex</span>
+						{channelId && (
+							<span className="rounded-full bg-app-box px-2 py-0.5 text-tiny text-ink-faint">
+								{channelId.length > 20
+									? `${channelId.slice(0, 20)}...`
+									: channelId}
+							</span>
 						)}
 					</div>
-				))}
+					<div className="flex items-center gap-0.5">
+						<Button
+							onClick={newThread}
+							variant="ghost"
+							size="icon"
+							disabled={isStreaming}
+							className="h-7 w-7"
+							title="New thread"
+						>
+							<HugeiconsIcon icon={PlusSignIcon} className="h-3.5 w-3.5" />
+						</Button>
+						{onClose && (
+							<Button
+								onClick={onClose}
+								variant="ghost"
+								size="icon"
+								className="h-7 w-7"
+								title="Close"
+							>
+								<HugeiconsIcon icon={Cancel01Icon} className="h-3.5 w-3.5" />
+							</Button>
+						)}
+					</div>
+				</div>
+			)}
+
+			{/* Messages */}
+			<div className="min-h-0 flex-1 overflow-y-auto">
+				<div className="flex flex-col gap-5 p-3 pb-4">
+					{messages.map((message) => (
+						<div key={message.id}>
+							{message.role === "user" ? (
+								<div className="flex justify-end">
+									<div className="max-w-[85%] rounded-2xl rounded-br-md bg-app-hover/30 px-3 py-2">
+										<p className="text-sm text-ink">{message.content}</p>
+									</div>
+								</div>
+							) : (
+								<div className="flex flex-col gap-2">
+									{message.tool_calls && message.tool_calls.length > 0 && (
+										<div className="flex flex-col gap-1.5">
+											{message.tool_calls.map((call) => (
+												<ToolCall key={call.id} pair={toToolCallPair(call)} />
+											))}
+										</div>
+									)}
+									{message.content && (
+										<div className="text-sm text-ink-dull">
+											<Markdown>{message.content}</Markdown>
+										</div>
+									)}
+								</div>
+							)}
+						</div>
+					))}
 
 					{/* Streaming state */}
 					{isStreaming && (
 						<div>
 							<ToolActivityIndicator activity={toolActivity} />
-							{!toolActivity.some((t) => t.status === "running") && <ThinkingIndicator />}
+							{!toolActivity.some((t) => t.status === "running") && (
+								<ThinkingIndicator />
+							)}
 						</div>
 					)}
 
