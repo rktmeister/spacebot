@@ -82,8 +82,10 @@ const SAFE_ENV_VARS: &[&str] = &["USER", "LANG", "TERM"];
 /// Environment variable names that are set by the hardened sandbox defaults and
 /// must not be overridden via `passthrough_env`. Allowing user config to replace
 /// PATH would drop `tools/bin` precedence; replacing HOME/TMPDIR would break the
-/// deterministic sandbox-local paths.
-const RESERVED_ENV_VARS: &[&str] = &["PATH", "HOME", "TMPDIR"];
+/// deterministic sandbox-local paths. CI and DEBIAN_FRONTEND suppress interactive
+/// prompts from npm, apt-get, and similar tools that would hang under stdin-less
+/// execution.
+const RESERVED_ENV_VARS: &[&str] = &["PATH", "HOME", "TMPDIR", "CI", "DEBIAN_FRONTEND"];
 
 /// Env vars that enable library injection or alter runtime loading behavior.
 /// Defense-in-depth: even if the tool-level blocklist is bypassed, the sandbox
@@ -559,6 +561,14 @@ impl Sandbox {
             .arg(self.workspace.to_string_lossy().into_owned());
         cmd.arg("--setenv").arg("TMPDIR").arg("/tmp");
 
+        // 12a. Suppress interactive prompts. CI=true prevents npm/npx/yarn
+        // from prompting; DEBIAN_FRONTEND=noninteractive prevents apt-get.
+        // Shell tool runs without stdin, so interactive prompts always hang.
+        cmd.arg("--setenv").arg("CI").arg("true");
+        cmd.arg("--setenv")
+            .arg("DEBIAN_FRONTEND")
+            .arg("noninteractive");
+
         // 13. Re-inject safe environment variables for basic process operation
         for var_name in SAFE_ENV_VARS {
             if let Ok(value) = std::env::var(var_name) {
@@ -653,6 +663,8 @@ impl Sandbox {
         cmd.env("PATH", path_env);
         cmd.env("HOME", &self.workspace);
         cmd.env("TMPDIR", "/tmp");
+        cmd.env("CI", "true");
+        cmd.env("DEBIAN_FRONTEND", "noninteractive");
         for var_name in SAFE_ENV_VARS {
             if let Ok(value) = std::env::var(var_name) {
                 cmd.env(var_name, value);
@@ -722,6 +734,8 @@ impl Sandbox {
         cmd.env("PATH", path_env);
         cmd.env("HOME", home_dir);
         cmd.env("TMPDIR", "/tmp");
+        cmd.env("CI", "true");
+        cmd.env("DEBIAN_FRONTEND", "noninteractive");
         for var_name in SAFE_ENV_VARS {
             if let Ok(value) = std::env::var(var_name) {
                 cmd.env(var_name, value);
