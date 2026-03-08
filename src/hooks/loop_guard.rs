@@ -168,9 +168,12 @@ impl LoopGuard {
         let is_same_as_last = self.last_call_hash.as_ref() == Some(&call_hash);
         if !is_same_as_last {
             self.call_counts.clear();
-            // Also reset per-hash warnings so the model gets fresh warnings
-            // if it starts a new loop with this tool later.
-            self.warnings_emitted.clear();
+            // Reset per-hash warnings so the model gets fresh warnings if it
+            // starts a new loop with this tool later. Retain ping-pong warning
+            // counters so the max_warnings_per_call escalation still works for
+            // alternating patterns detected across tool switches.
+            self.warnings_emitted
+                .retain(|key, _| key.starts_with("pingpong_"));
         }
         self.last_call_hash = Some(call_hash.clone());
 
@@ -325,11 +328,13 @@ impl LoopGuard {
         None
     }
 
-    /// Returns true if either tool is an observation tool. Observation tools
-    /// (like `browser_snapshot`) naturally alternate with action tools as part
-    /// of normal workflow and should not be flagged as ping-pong.
+    /// Returns true if exactly one tool is an observation tool. Observation
+    /// tools (like `browser_snapshot`) naturally alternate with action tools
+    /// as part of normal workflow (snapshot→click) and should not be flagged
+    /// as ping-pong. Two observation tools alternating (snapshot↔tab_list)
+    /// is still suspicious and should be caught.
     fn involves_observation_tool(tool_a: &str, tool_b: &str) -> bool {
-        OBSERVATION_TOOLS.contains(&tool_a) || OBSERVATION_TOOLS.contains(&tool_b)
+        OBSERVATION_TOOLS.contains(&tool_a) ^ OBSERVATION_TOOLS.contains(&tool_b)
     }
 
     fn count_ping_pong_repeats(&self) -> u32 {

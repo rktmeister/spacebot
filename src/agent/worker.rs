@@ -904,8 +904,8 @@ const DEDUP_TOOL_RESULTS: &[&str] = &["browser_snapshot", "browser_tab_list"];
 /// browser-heavy workflows where `browser_snapshot` returns large ARIA trees
 /// on every call.
 ///
-/// The full results are still preserved in the transcript (via
-/// `compacted_history` and `persist_transcript`).
+/// Note: this mutates `history` in-place, so superseded results are also
+/// replaced in the persisted transcript.
 fn dedup_tool_results(history: &mut [rig::message::Message]) {
     // Step 1: Build a map from tool-call ID → tool name for dedup-eligible tools.
     // We need this because ToolResult only has call_id, not the tool name.
@@ -928,22 +928,24 @@ fn dedup_tool_results(history: &mut [rig::message::Message]) {
         return;
     }
 
-    // Step 2: Find the last (most recent) result index for each tool name.
-    let mut last_result_index: HashMap<&str, usize> = HashMap::new();
+    // Step 2: Find the last (most recent) result position for each tool name.
+    // Tracked as (message_index, item_index) since Rig can pack multiple
+    // ToolResult entries into a single User message.
+    let mut last_result_position: HashMap<&str, (usize, usize)> = HashMap::new();
     for (message_index, message) in history.iter().enumerate() {
         if let rig::message::Message::User { content } = message {
-            for item in content.iter() {
+            for (item_index, item) in content.iter().enumerate() {
                 if let rig::message::UserContent::ToolResult(tr) = item {
                     if let Some(call_id) = &tr.call_id
                         && let Some(tool_name) = call_id_to_tool.get(call_id)
                     {
-                        last_result_index.insert(
+                        last_result_position.insert(
                             // Safe: tool_name came from DEDUP_TOOL_RESULTS which is 'static
                             DEDUP_TOOL_RESULTS
                                 .iter()
                                 .find(|&&name| name == tool_name)
                                 .expect("tool name came from DEDUP_TOOL_RESULTS"),
-                            message_index,
+                            (message_index, item_index),
                         );
                     }
                 }
@@ -955,14 +957,14 @@ fn dedup_tool_results(history: &mut [rig::message::Message]) {
     let mut replaced = 0usize;
     for (message_index, message) in history.iter_mut().enumerate() {
         if let rig::message::Message::User { content } = message {
-            for item in content.iter_mut() {
+            for (item_index, item) in content.iter_mut().enumerate() {
                 if let rig::message::UserContent::ToolResult(tr) = item {
                     if let Some(call_id) = &tr.call_id
                         && let Some(tool_name) = call_id_to_tool.get(call_id)
                     {
-                        let is_last = last_result_index
+                        let is_last = last_result_position
                             .get(tool_name.as_str())
-                            .is_some_and(|&last| last == message_index);
+                            .is_some_and(|&last| last == (message_index, item_index));
 
                         if !is_last {
                             tr.content = rig::OneOrMany::one(
