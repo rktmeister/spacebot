@@ -432,6 +432,7 @@ impl Tool for DetachedSpawnWorkerTool {
             self.logs_dir.clone(),
         );
 
+        let (worker, _input_tx) = worker;
         let worker_id = worker.id;
 
         // Emit WorkerStarted event so the UI can track it.
