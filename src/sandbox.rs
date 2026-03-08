@@ -1,4 +1,4 @@
-//! OS-level filesystem containment for shell and exec tool subprocesses.
+//! OS-level filesystem containment for shell tool subprocesses.
 //!
 //! Replaces string-based command filtering with kernel-enforced boundaries.
 //! On Linux, uses bubblewrap (bwrap) for mount namespace isolation.
@@ -82,14 +82,42 @@ const SAFE_ENV_VARS: &[&str] = &["USER", "LANG", "TERM"];
 /// Environment variable names that are set by the hardened sandbox defaults and
 /// must not be overridden via `passthrough_env`. Allowing user config to replace
 /// PATH would drop `tools/bin` precedence; replacing HOME/TMPDIR would break the
-/// deterministic sandbox-local paths.
-const RESERVED_ENV_VARS: &[&str] = &["PATH", "HOME", "TMPDIR"];
+/// deterministic sandbox-local paths. CI and DEBIAN_FRONTEND suppress interactive
+/// prompts from npm, apt-get, and similar tools that would hang under stdin-less
+/// execution.
+const RESERVED_ENV_VARS: &[&str] = &["PATH", "HOME", "TMPDIR", "CI", "DEBIAN_FRONTEND"];
+
+/// Env vars that enable library injection or alter runtime loading behavior.
+/// Defense-in-depth: even if the tool-level blocklist is bypassed, the sandbox
+/// layer will silently drop these from per-command env vars.
+const DANGEROUS_ENV_VARS: &[&str] = &[
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "NODE_OPTIONS",
+    "RUBYOPT",
+    "PERL5OPT",
+    "PERL5LIB",
+    "BASH_ENV",
+    "ENV",
+];
 
 /// Returns true if the variable name is reserved (set by hardened defaults) or
 /// is in the safe-vars list, and therefore must not be overridden by
-/// `passthrough_env`.
+/// `passthrough_env` or per-command env vars.
 fn is_reserved_env_var(name: &str) -> bool {
     RESERVED_ENV_VARS.contains(&name) || SAFE_ENV_VARS.contains(&name)
+}
+
+/// Returns true if the variable name enables library injection or alters
+/// runtime loading behavior.
+fn is_dangerous_env_var(name: &str) -> bool {
+    DANGEROUS_ENV_VARS
+        .iter()
+        .any(|blocked| name.eq_ignore_ascii_case(blocked))
 }
 
 /// Linux host paths exposed read-only inside bubblewrap sandboxes.
@@ -250,7 +278,7 @@ impl Sandbox {
     /// Check whether a canonical path falls within the workspace or any
     /// allowed writable path (user-configured or project-injected).
     ///
-    /// Used by shell/exec/file tools to relax the workspace boundary when
+    /// Used by shell/file tools to relax the workspace boundary when
     /// project paths are registered.
     pub fn is_path_allowed(&self, canonical: &Path) -> bool {
         let workspace_canonical = self
@@ -278,7 +306,7 @@ impl Sandbox {
         self.mode_enabled() && !matches!(self.backend, SandboxBackend::None)
     }
 
-    /// Read-allowlisted filesystem paths exposed to shell/exec subprocesses when
+    /// Read-allowlisted filesystem paths exposed to shell subprocesses when
     /// containment is active.
     pub fn prompt_read_allowlist(&self) -> Vec<String> {
         if !self.containment_active() {
@@ -333,7 +361,7 @@ impl Sandbox {
         paths
     }
 
-    /// Write-allowlisted filesystem paths exposed to shell/exec subprocesses when
+    /// Write-allowlisted filesystem paths exposed to shell subprocesses when
     /// containment is active.
     pub fn prompt_write_allowlist(&self) -> Vec<String> {
         if !self.containment_active() {
@@ -371,9 +399,20 @@ impl Sandbox {
     /// sandbox-exec depending on the detected backend. The caller still needs
     /// to set stdout/stderr/timeout after this call.
     ///
+    /// `command_env` contains per-command environment variables set by the tool
+    /// caller (e.g. shell tool `env` parameter). These are injected via
+    /// `--setenv` for bubblewrap or `.env()` for sandbox-exec/passthrough, so
+    /// they correctly reach the inner sandboxed process regardless of backend.
+    ///
     /// Reads the current `SandboxMode` from the shared `ArcSwap<SandboxConfig>`
     /// on every call, so changes via the API take effect immediately.
-    pub fn wrap(&self, program: &str, args: &[&str], working_dir: &Path) -> Command {
+    pub fn wrap(
+        &self,
+        program: &str,
+        args: &[&str],
+        working_dir: &Path,
+        command_env: &HashMap<String, String>,
+    ) -> Command {
         let config = self.config.load();
 
         // Prepend tools/bin to PATH for all commands
@@ -400,6 +439,7 @@ impl Sandbox {
                 &path_env,
                 &config,
                 &tool_secrets,
+                command_env,
             );
         }
 
@@ -412,6 +452,7 @@ impl Sandbox {
                 &path_env,
                 &config,
                 &tool_secrets,
+                command_env,
             ),
             SandboxBackend::SandboxExec => self.wrap_sandbox_exec(
                 program,
@@ -420,6 +461,7 @@ impl Sandbox {
                 &path_env,
                 &config,
                 &tool_secrets,
+                command_env,
             ),
             SandboxBackend::None => self.wrap_passthrough(
                 program,
@@ -428,6 +470,7 @@ impl Sandbox {
                 &path_env,
                 &config,
                 &tool_secrets,
+                command_env,
             ),
         }
     }
@@ -443,6 +486,7 @@ impl Sandbox {
         path_env: &str,
         config: &SandboxConfig,
         tool_secrets: &HashMap<String, String>,
+        command_env: &HashMap<String, String>,
     ) -> Command {
         let mut cmd = Command::new("bwrap");
 
@@ -517,6 +561,14 @@ impl Sandbox {
             .arg(self.workspace.to_string_lossy().into_owned());
         cmd.arg("--setenv").arg("TMPDIR").arg("/tmp");
 
+        // 12a. Suppress interactive prompts. CI=true prevents npm/npx/yarn
+        // from prompting; DEBIAN_FRONTEND=noninteractive prevents apt-get.
+        // Shell tool runs without stdin, so interactive prompts always hang.
+        cmd.arg("--setenv").arg("CI").arg("true");
+        cmd.arg("--setenv")
+            .arg("DEBIAN_FRONTEND")
+            .arg("noninteractive");
+
         // 13. Re-inject safe environment variables for basic process operation
         for var_name in SAFE_ENV_VARS {
             if let Ok(value) = std::env::var(var_name) {
@@ -547,7 +599,21 @@ impl Sandbox {
             }
         }
 
-        // 15. Worker keyring isolation (Linux) — give the child a fresh empty
+        // 15. Per-command env vars from tool caller (e.g. shell tool `env`).
+        // Injected via --setenv so they reach the inner sandboxed process.
+        for (name, value) in command_env {
+            if is_reserved_env_var(name) {
+                tracing::debug!(%name, "skipping reserved per-command env var");
+                continue;
+            }
+            if is_dangerous_env_var(name) {
+                tracing::warn!(%name, "dropping dangerous per-command env var");
+                continue;
+            }
+            cmd.arg("--setenv").arg(name).arg(value);
+        }
+
+        // 16. Worker keyring isolation (Linux) — give the child a fresh empty
         // session keyring so it cannot access the parent's keyring (which holds
         // the master key for secret store encryption).
         #[cfg(target_os = "linux")]
@@ -560,7 +626,7 @@ impl Sandbox {
             }
         }
 
-        // 16. The actual command
+        // 17. The actual command
         cmd.arg("--").arg(program);
         for arg in args {
             cmd.arg(arg);
@@ -570,6 +636,7 @@ impl Sandbox {
     }
 
     /// macOS: wrap with sandbox-exec and a generated SBPL profile.
+    #[allow(clippy::too_many_arguments)]
     fn wrap_sandbox_exec(
         &self,
         program: &str,
@@ -578,6 +645,7 @@ impl Sandbox {
         path_env: &str,
         config: &SandboxConfig,
         tool_secrets: &HashMap<String, String>,
+        command_env: &HashMap<String, String>,
     ) -> Command {
         let profile = self.generate_sbpl_profile(config);
 
@@ -595,6 +663,8 @@ impl Sandbox {
         cmd.env("PATH", path_env);
         cmd.env("HOME", &self.workspace);
         cmd.env("TMPDIR", "/tmp");
+        cmd.env("CI", "true");
+        cmd.env("DEBIAN_FRONTEND", "noninteractive");
         for var_name in SAFE_ENV_VARS {
             if let Ok(value) = std::env::var(var_name) {
                 cmd.env(var_name, value);
@@ -617,6 +687,18 @@ impl Sandbox {
                 cmd.env(var_name, value);
             }
         }
+        // Per-command env vars from tool caller.
+        for (name, value) in command_env {
+            if is_reserved_env_var(name) {
+                tracing::debug!(%name, "skipping reserved per-command env var");
+                continue;
+            }
+            if is_dangerous_env_var(name) {
+                tracing::warn!(%name, "dropping dangerous per-command env var");
+                continue;
+            }
+            cmd.env(name, value);
+        }
 
         cmd
     }
@@ -625,6 +707,7 @@ impl Sandbox {
     ///
     /// Still applies environment sanitization — workers never inherit the full
     /// parent environment regardless of sandbox state.
+    #[allow(clippy::too_many_arguments)]
     fn wrap_passthrough(
         &self,
         program: &str,
@@ -633,6 +716,7 @@ impl Sandbox {
         path_env: &str,
         config: &SandboxConfig,
         tool_secrets: &HashMap<String, String>,
+        command_env: &HashMap<String, String>,
     ) -> Command {
         let mut cmd = Command::new(program);
         for arg in args {
@@ -650,6 +734,8 @@ impl Sandbox {
         cmd.env("PATH", path_env);
         cmd.env("HOME", home_dir);
         cmd.env("TMPDIR", "/tmp");
+        cmd.env("CI", "true");
+        cmd.env("DEBIAN_FRONTEND", "noninteractive");
         for var_name in SAFE_ENV_VARS {
             if let Ok(value) = std::env::var(var_name) {
                 cmd.env(var_name, value);
@@ -671,6 +757,18 @@ impl Sandbox {
             if let Ok(value) = std::env::var(var_name) {
                 cmd.env(var_name, value);
             }
+        }
+        // Per-command env vars from tool caller.
+        for (name, value) in command_env {
+            if is_reserved_env_var(name) {
+                tracing::debug!(%name, "skipping reserved per-command env var");
+                continue;
+            }
+            if is_dangerous_env_var(name) {
+                tracing::warn!(%name, "dropping dangerous per-command env var");
+                continue;
+            }
+            cmd.env(name, value);
         }
 
         // Worker keyring isolation (Linux) — give the child a fresh empty

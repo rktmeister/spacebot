@@ -36,7 +36,7 @@ const SECTIONS: {
 	{ id: "memory", label: "Memory Persistence", group: "config", description: "Auto-save interval", detail: "Spawns a silent background branch at regular intervals to recall existing memories and save new ones from the recent conversation. Runs without blocking the channel." },
 	{ id: "browser", label: "Browser", group: "config", description: "Chrome automation", detail: "Controls browser automation tools available to workers. When enabled, workers can navigate web pages, take screenshots, and interact with sites. JavaScript evaluation is a separate permission." },
 	{ id: "channel", label: "Channel Behavior", group: "config", description: "Reply behavior", detail: "Listen-only mode suppresses unsolicited replies in busy channels. The agent still responds to slash commands, @mentions, and replies to its own messages." },
-	{ id: "sandbox", label: "Sandbox", group: "config", description: "Process containment", detail: "OS-level filesystem containment for shell and exec tool subprocesses. When enabled, worker processes run inside a kernel-enforced sandbox (bubblewrap on Linux, sandbox-exec on macOS) with an allowlist-only filesystem — only system paths, the workspace, and explicitly configured extra paths are accessible." },
+	{ id: "sandbox", label: "Sandbox", group: "config", description: "Process containment", detail: "OS-level filesystem containment for shell tool subprocesses. When enabled, worker processes run inside a kernel-enforced sandbox (bubblewrap on Linux, sandbox-exec on macOS) with an allowlist-only filesystem — only system paths, the workspace, and explicitly configured extra paths are accessible." },
 	{ id: "projects", label: "Projects", group: "config", description: "Workspace management", detail: "Controls how the agent manages project workspaces, git repos, and worktrees. Use worktrees for parallel feature branches, auto-discover to scan for repos on project creation, and set a disk usage warning threshold." },
 ];
 
@@ -1016,7 +1016,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 					<div className="grid gap-4">
 						<div className="flex flex-col gap-1.5">
 							<label className="text-sm font-medium text-ink">Mode</label>
-							<p className="text-tiny text-ink-faint">Kernel-enforced filesystem containment for shell and exec subprocesses.</p>
+							<p className="text-tiny text-ink-faint">Kernel-enforced filesystem containment for shell subprocesses.</p>
 							<Select
 								value={localValues.mode as string}
 								onValueChange={(v) => handleChange("mode", v)}
