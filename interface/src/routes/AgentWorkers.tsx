@@ -8,9 +8,9 @@ import {
 	type WorkerRunInfo,
 	type WorkerDetailResponse,
 	type TranscriptStep,
-	type ActionContent,
 	type OpenCodePart,
 } from "@/api/client";
+import {ToolCall, pairTranscriptSteps, openCodePartToPair} from "@/components/ToolCall";
 import {Badge} from "@/ui/Badge";
 import {formatTimeAgo, formatDuration} from "@/lib/format";
 import {LiveDuration} from "@/components/LiveDuration";
@@ -408,9 +408,13 @@ function WorkerDetail({
 		setActiveTab(hasOpenCodeEmbed ? "opencode" : "transcript");
 	}, [detail.id, hasOpenCodeEmbed]);
 
-	// Use persisted transcript if available, otherwise fall back to live SSE transcript.
-	// Strip the final action step if it duplicates the result text shown above.
-	const rawTranscript = detail.transcript ?? (isLive ? liveTranscript : null);
+	// For live workers, prefer the SSE-accumulated transcript when it has content
+	// (it's the most up-to-date). Fall back to detail.transcript which may come
+	// from the DB or the server-side live cache (survives page refreshes).
+	// For completed workers, always use the persisted DB transcript.
+	const rawTranscript = isLive
+		? (liveTranscript && liveTranscript.length > 0 ? liveTranscript : detail.transcript ?? null)
+		: detail.transcript ?? null;
 	const transcript = useMemo(() => {
 		if (!rawTranscript || !detail.result) return rawTranscript;
 		const last = rawTranscript[rawTranscript.length - 1];
@@ -575,22 +579,22 @@ function WorkerDetail({
 								{isLive && !isIdle ? "Live Transcript" : "Transcript"}
 							</h3>
 							<div className="flex flex-col gap-3">
-								{transcript.map((step, index) => (
+								{pairTranscriptSteps(transcript).map((item, index) => (
 									<motion.div
-										key={`${step.type}-${index}`}
+										key={item.kind === "tool" ? item.pair.id : `text-${index}`}
 										initial={{opacity: 0, y: 6}}
 										animate={{opacity: 1, y: 0}}
 										transition={{duration: 0.2, ease: "easeOut"}}
 									>
-										<TranscriptStepView step={step} />
+										{item.kind === "text" ? (
+											<div className="text-xs text-ink">
+												<Markdown>{item.text}</Markdown>
+											</div>
+										) : (
+											<ToolCall pair={item.pair} />
+										)}
 									</motion.div>
 								))}
-								{isRunning && currentTool && (
-									<div className="flex items-center gap-2 py-2 text-tiny text-accent">
-										<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-										Running {currentTool}...
-									</div>
-								)}
 								{isIdle && (
 									<div className="flex items-center gap-2 py-2 text-tiny text-blue-500">
 										Waiting for follow-up input...
@@ -1026,20 +1030,6 @@ function TaskText({text}: {text: string}) {
 	);
 }
 
-function TranscriptStepView({step}: {step: TranscriptStep}) {
-	if (step.type === "action") {
-		return (
-			<div className="flex flex-col gap-1.5">
-				{step.content.map((content, index) => (
-					<ActionContentView key={index} content={content} />
-				))}
-			</div>
-		);
-	}
-
-	return <ToolResultView step={step} />;
-}
-
 function CancelWorkerButton({
 	channelId,
 	workerId,
@@ -1066,82 +1056,7 @@ function CancelWorkerButton({
 	);
 }
 
-function ActionContentView({content}: {content: ActionContent}) {
-	if (content.type === "text") {
-		return (
-			<div className="text-xs text-ink">
-				<Markdown>{content.text}</Markdown>
-			</div>
-		);
-	}
 
-	return <ToolCallView content={content} />;
-}
-
-function ToolCallView({
-	content,
-}: {
-	content: Extract<ActionContent, {type: "tool_call"}>;
-}) {
-	const [expanded, setExpanded] = useState(false);
-
-	return (
-		<div className="rounded-md border border-app-line/50 bg-app-darkBox/30">
-			<button
-				onClick={() => setExpanded(!expanded)}
-				className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs"
-			>
-				<span className="text-accent">&#9656;</span>
-				<span className="font-medium text-ink-dull">{content.name}</span>
-				{!expanded && (
-					<span className="flex-1 truncate text-ink-faint">
-						{content.args.slice(0, 80)}
-					</span>
-				)}
-			</button>
-			{expanded && (
-				<pre className="max-h-60 overflow-auto border-t border-app-line/30 px-3 py-2 font-mono text-tiny text-ink-dull">
-					{content.args}
-				</pre>
-			)}
-		</div>
-	);
-}
-
-function ToolResultView({
-	step,
-}: {
-	step: Extract<TranscriptStep, {type: "tool_result"}>;
-}) {
-	const [expanded, setExpanded] = useState(false);
-	const isLong = step.text.length > 300;
-	const displayText =
-		isLong && !expanded ? step.text.slice(0, 300) + "..." : step.text;
-
-	return (
-		<div className="rounded-md border border-app-line/30 bg-app-darkerBox/50">
-			<div className="flex items-center gap-2 px-3 py-1.5">
-				<span className="text-tiny text-emerald-500">&#10003;</span>
-				{step.name && (
-					<span className="text-tiny font-medium text-ink-faint">
-						{step.name}
-					</span>
-				)}
-			</div>
-			<pre className="max-h-80 overflow-auto whitespace-pre-wrap px-3 pb-2 font-mono text-tiny text-ink-dull">
-				{displayText}
-			</pre>
-			{isLong && (
-				<button
-					onClick={() => setExpanded(!expanded)}
-					className="w-full border-t border-app-line/20 px-3 py-1 text-center text-tiny text-ink-faint hover:text-ink-dull"
-				>
-					{expanded ? "Collapse" : "Show full output"}
-				</button>
-			)}
-		</div>
-	);
-}
 
 // -- OpenCode-native part renderers --
 
@@ -1154,7 +1069,7 @@ function OpenCodePartView({part}: {part: OpenCodePart}) {
 				</div>
 			);
 		case "tool":
-			return <OpenCodeToolPartView part={part} />;
+			return <ToolCall pair={openCodePartToPair(part)} />;
 		case "step_start":
 			return (
 				<div className="flex items-center gap-2 border-t border-app-line/20 pt-3">
@@ -1178,93 +1093,4 @@ function OpenCodePartView({part}: {part: OpenCodePart}) {
 	}
 }
 
-function OpenCodeToolPartView({
-	part,
-}: {
-	part: Extract<OpenCodePart, {type: "tool"}>;
-}) {
-	const [expanded, setExpanded] = useState(false);
-	const isRunning = part.status === "running";
-	const isCompleted = part.status === "completed";
-	const isError = part.status === "error";
 
-	const statusIcon = isCompleted
-		? "\u2713"
-		: isError
-			? "\u2717"
-			: isRunning
-				? "\u25B6"
-				: "\u25CB";
-
-	const statusColor = isCompleted
-		? "text-emerald-500"
-		: isError
-			? "text-red-400"
-			: isRunning
-				? "text-accent"
-				: "text-ink-faint";
-
-	const title =
-		(part.status === "running" || part.status === "completed")
-			? (part as any).title
-			: undefined;
-
-	const input =
-		(part.status === "running" || part.status === "completed")
-			? (part as any).input
-			: undefined;
-
-	const output = part.status === "completed" ? (part as any).output : undefined;
-	const error = part.status === "error" ? (part as any).error : undefined;
-
-	return (
-		<div className="rounded-md border border-app-line/50 bg-app-darkBox/30">
-			<button
-				onClick={() => setExpanded(!expanded)}
-				className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs"
-			>
-				<span className={cx(statusColor, isRunning ? "animate-pulse" : "")}>
-					{statusIcon}
-				</span>
-				<span className="font-medium text-ink-dull">{part.tool}</span>
-				{title && (
-					<span className="flex-1 truncate text-ink-faint">{title}</span>
-				)}
-				{!title && !expanded && input && (
-					<span className="flex-1 truncate text-ink-faint">
-						{input.slice(0, 80)}
-					</span>
-				)}
-				{isRunning && (
-					<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-				)}
-			</button>
-			{expanded && (
-				<div className="border-t border-app-line/30">
-					{input && (
-						<div className="border-b border-app-line/20 px-3 py-2">
-							<p className="mb-1 text-tiny font-medium text-ink-faint">Input</p>
-							<pre className="max-h-40 overflow-auto font-mono text-tiny text-ink-dull">
-								{input}
-							</pre>
-						</div>
-					)}
-					{output && (
-						<div className="px-3 py-2">
-							<p className="mb-1 text-tiny font-medium text-ink-faint">Output</p>
-							<pre className="max-h-60 overflow-auto whitespace-pre-wrap font-mono text-tiny text-ink-dull">
-								{output.length > 500 ? output.slice(0, 500) + "..." : output}
-							</pre>
-						</div>
-					)}
-					{error && (
-						<div className="px-3 py-2">
-							<p className="mb-1 text-tiny font-medium text-red-400">Error</p>
-							<pre className="font-mono text-tiny text-red-300">{error}</pre>
-						</div>
-					)}
-				</div>
-			)}
-		</div>
-	);
-}

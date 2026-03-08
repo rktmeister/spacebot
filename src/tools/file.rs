@@ -1,4 +1,8 @@
-//! File tool for reading/writing/listing files (task workers only).
+//! File tools for reading, writing, editing, and listing files (task workers only).
+//!
+//! Provides a suite of separate tools (`file_read`, `file_write`, `file_edit`,
+//! `file_list`) backed by a shared `FileContext` that handles sandbox-aware path
+//! validation. This mirrors the flat-tool pattern used by the browser tools.
 
 use crate::sandbox::Sandbox;
 use rig::completion::ToolDefinition;
@@ -8,20 +12,19 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Tool for file operations with sandbox-aware path validation.
-///
-/// When sandbox mode is enabled, file access is restricted to the workspace
-/// boundary. When sandbox is disabled, any path accessible to the process is
-/// allowed (relative paths are still resolved against the workspace root).
+// Shared context
+
+/// Shared context cloned into each file tool. Holds workspace root and sandbox
+/// for path validation, mirroring how `BrowserContext` is shared across browser
+/// tools.
 #[derive(Debug, Clone)]
-pub struct FileTool {
+pub(crate) struct FileContext {
     workspace: PathBuf,
     sandbox: Arc<Sandbox>,
 }
 
-impl FileTool {
-    /// Create a new file tool with sandbox-aware path validation.
-    pub fn new(workspace: PathBuf, sandbox: Arc<Sandbox>) -> Self {
+impl FileContext {
+    fn new(workspace: PathBuf, sandbox: Arc<Sandbox>) -> Self {
         Self { workspace, sandbox }
     }
 
@@ -86,6 +89,27 @@ impl FileTool {
 
         Ok(canonical)
     }
+
+    /// Check whether writing to a path is blocked by identity file protection.
+    /// Only applies when sandbox is enabled.
+    fn check_identity_protection(&self, path: &Path) -> Result<(), FileError> {
+        if !self.sandbox.mode_enabled() {
+            return Ok(());
+        }
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        const PROTECTED_FILES: &[&str] = &["SOUL.md", "IDENTITY.md", "USER.md"];
+        if PROTECTED_FILES
+            .iter()
+            .any(|f| file_name.eq_ignore_ascii_case(f))
+        {
+            return Err(FileError(
+                "ACCESS DENIED: Identity files are protected and cannot be modified \
+                 through file operations. Use the identity management API instead."
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Canonicalize as much of the path as possible. For paths where the final
@@ -118,30 +142,16 @@ fn best_effort_canonicalize(path: &Path) -> PathBuf {
     result
 }
 
-/// Error type for file tool.
+// Error type
+
+/// Error type for file tools.
 #[derive(Debug, thiserror::Error)]
 #[error("File operation failed: {0}")]
 pub struct FileError(String);
 
-/// Arguments for file tool.
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct FileArgs {
-    /// The operation to perform.
-    pub operation: String,
-    /// The file or directory path.
-    pub path: String,
-    /// Content to write (required for write operation).
-    pub content: Option<String>,
-    /// Whether to create parent directories if they don't exist (for write operations).
-    #[serde(default = "default_create_dirs")]
-    pub create_dirs: bool,
-}
+// Shared output types
 
-fn default_create_dirs() -> bool {
-    true
-}
-
-/// Output from file tool.
+/// Output from file tools.
 #[derive(Debug, Serialize)]
 pub struct FileOutput {
     /// Whether the operation succeeded.
@@ -151,10 +161,13 @@ pub struct FileOutput {
     /// The file/directory path.
     pub path: String,
     /// File content (for read operations).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     /// Directory entries (for list operations).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entries: Option<Vec<FileEntryOutput>>,
     /// Error message if operation failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -169,128 +182,357 @@ pub struct FileEntryOutput {
     pub size: u64,
 }
 
-impl Tool for FileTool {
-    const NAME: &'static str = "file";
+// Tool: file_read
+
+#[derive(Debug, Clone)]
+pub struct FileReadTool {
+    context: FileContext,
+}
+
+/// Arguments for file_read.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FileReadArgs {
+    /// The file path. Relative paths are resolved from the workspace root.
+    pub path: String,
+    /// Line number to start reading from (1-indexed). Omit to start from the beginning.
+    pub offset: Option<usize>,
+    /// Maximum number of lines to return. Omit to read the entire file.
+    pub limit: Option<usize>,
+}
+
+impl Tool for FileReadTool {
+    const NAME: &'static str = "file_read";
 
     type Error = FileError;
-    type Args = FileArgs;
+    type Args = FileReadArgs;
     type Output = FileOutput;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: crate::prompts::text::get("tools/file").to_string(),
+            description: crate::prompts::text::get("tools/file_read").to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "operation": {
-                        "type": "string",
-                        "enum": ["read", "write", "list"],
-                        "description": "The file operation to perform"
-                    },
                     "path": {
                         "type": "string",
-                        "description": "The file or directory path. Relative paths are resolved from the workspace root."
+                        "description": "The file path to read. Relative paths are resolved from the workspace root."
                     },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write to the file (required for write operation)"
+                    "offset": {
+                        "type": "integer",
+                        "description": "Line number to start reading from (1-indexed). Omit to start from the beginning."
                     },
-                    "create_dirs": {
-                        "type": "boolean",
-                        "default": true,
-                        "description": "For write operations: create parent directories if they don't exist"
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to return. Omit to read the entire file (up to size limit)."
                     }
                 },
-                "required": ["operation", "path"]
+                "required": ["path"]
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = self.resolve_path(&args.path)?;
+        let path = self.context.resolve_path(&args.path)?;
 
-        match args.operation.as_str() {
-            "read" => do_file_read(&path).await,
-            "write" => {
-                // When sandbox is enabled, identity files must go through the
-                // dedicated identity API to keep the update flow consistent.
-                // When sandbox is disabled, the user has opted into full access.
-                if self.sandbox.mode_enabled() {
-                    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    const PROTECTED_FILES: &[&str] = &["SOUL.md", "IDENTITY.md", "USER.md"];
-                    if PROTECTED_FILES
-                        .iter()
-                        .any(|f| file_name.eq_ignore_ascii_case(f))
-                    {
-                        return Err(FileError(
-                            "ACCESS DENIED: Identity files are protected and cannot be modified \
-                             through file operations. Use the identity management API instead."
-                                .to_string(),
-                        ));
-                    }
-                }
+        let raw = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|error| FileError(format!("Failed to read file: {error}")))?;
 
-                let content = args.content.ok_or_else(|| {
-                    FileError("Content is required for write operation".to_string())
-                })?;
-                do_file_write(&path, content, args.create_dirs).await
+        // Apply line-based offset/limit if requested
+        let content = if args.offset.is_some() || args.limit.is_some() {
+            let lines: Vec<&str> = raw.lines().collect();
+            let total_lines = lines.len();
+
+            // offset is 1-indexed; default to line 1
+            let start = args.offset.unwrap_or(1).saturating_sub(1).min(total_lines);
+            let end = if let Some(limit) = args.limit {
+                (start + limit).min(total_lines)
+            } else {
+                total_lines
+            };
+
+            let selected: Vec<String> = lines[start..end]
+                .iter()
+                .enumerate()
+                .map(|(i, line)| format!("{}: {}", start + i + 1, line))
+                .collect();
+
+            let mut result = selected.join("\n");
+            if end < total_lines {
+                result.push_str(&format!(
+                    "\n\n[showing lines {}-{} of {total_lines}. Use offset={} to see more]",
+                    start + 1,
+                    end,
+                    end + 1
+                ));
             }
-            "list" => do_file_list(&path).await,
-            _ => Err(FileError(format!("Unknown operation: {}", args.operation))),
+            result
+        } else {
+            crate::tools::truncate_output(&raw, crate::tools::MAX_TOOL_OUTPUT_BYTES)
+        };
+
+        Ok(FileOutput {
+            success: true,
+            operation: "read".to_string(),
+            path: path.to_string_lossy().to_string(),
+            content: Some(content),
+            entries: None,
+            error: None,
+        })
+    }
+}
+
+// Tool: file_write
+
+#[derive(Debug, Clone)]
+pub struct FileWriteTool {
+    context: FileContext,
+}
+
+/// Arguments for file_write.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FileWriteArgs {
+    /// The file path to write. Relative paths are resolved from the workspace root.
+    pub path: String,
+    /// The content to write to the file.
+    pub content: String,
+    /// Whether to create parent directories if they don't exist. Defaults to true.
+    #[serde(default = "default_create_dirs")]
+    pub create_dirs: bool,
+}
+
+fn default_create_dirs() -> bool {
+    true
+}
+
+impl Tool for FileWriteTool {
+    const NAME: &'static str = "file_write";
+
+    type Error = FileError;
+    type Args = FileWriteArgs;
+    type Output = FileOutput;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: crate::prompts::text::get("tools/file_write").to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The file path to write. Relative paths are resolved from the workspace root."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to write to the file."
+                    },
+                    "create_dirs": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Create parent directories if they don't exist."
+                    }
+                },
+                "required": ["path", "content"]
+            }),
         }
     }
-}
 
-async fn do_file_read(path: &Path) -> Result<FileOutput, FileError> {
-    let raw = tokio::fs::read_to_string(path)
-        .await
-        .map_err(|e| FileError(format!("Failed to read file: {e}")))?;
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let path = self.context.resolve_path(&args.path)?;
+        self.context.check_identity_protection(&path)?;
 
-    let content = crate::tools::truncate_output(&raw, crate::tools::MAX_TOOL_OUTPUT_BYTES);
+        // Ensure parent directory exists if requested
+        if args.create_dirs
+            && let Some(parent) = path.parent()
+        {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| FileError(format!("Failed to create directory: {error}")))?;
+        }
 
-    Ok(FileOutput {
-        success: true,
-        operation: "read".to_string(),
-        path: path.to_string_lossy().to_string(),
-        content: Some(content),
-        entries: None,
-        error: None,
-    })
-}
-
-async fn do_file_write(
-    path: &Path,
-    content: String,
-    create_dirs: bool,
-) -> Result<FileOutput, FileError> {
-    // Ensure parent directory exists if requested
-    if create_dirs && let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
+        tokio::fs::write(&path, &args.content)
             .await
-            .map_err(|e| FileError(format!("Failed to create directory: {e}")))?;
+            .map_err(|error| FileError(format!("Failed to write file: {error}")))?;
+
+        Ok(FileOutput {
+            success: true,
+            operation: "write".to_string(),
+            path: path.to_string_lossy().to_string(),
+            content: None,
+            entries: None,
+            error: None,
+        })
+    }
+}
+
+// Tool: file_edit
+
+#[derive(Debug, Clone)]
+pub struct FileEditTool {
+    context: FileContext,
+}
+
+/// Arguments for file_edit.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FileEditArgs {
+    /// The file path to edit. Relative paths are resolved from the workspace root.
+    pub path: String,
+    /// The exact text to find in the file.
+    pub old_string: String,
+    /// The replacement text.
+    pub new_string: String,
+    /// Replace all occurrences instead of just the first. Defaults to false.
+    #[serde(default)]
+    pub replace_all: bool,
+}
+
+impl Tool for FileEditTool {
+    const NAME: &'static str = "file_edit";
+
+    type Error = FileError;
+    type Args = FileEditArgs;
+    type Output = FileOutput;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: crate::prompts::text::get("tools/file_edit").to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The file path to edit. Relative paths are resolved from the workspace root."
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "The exact text to find in the file."
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "The replacement text."
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Replace all occurrences instead of just the first."
+                    }
+                },
+                "required": ["path", "old_string", "new_string"]
+            }),
+        }
     }
 
-    tokio::fs::write(path, content)
-        .await
-        .map_err(|e| FileError(format!("Failed to write file: {e}")))?;
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let path = self.context.resolve_path(&args.path)?;
+        self.context.check_identity_protection(&path)?;
 
-    Ok(FileOutput {
-        success: true,
-        operation: "write".to_string(),
-        path: path.to_string_lossy().to_string(),
-        content: None,
-        entries: None,
-        error: None,
-    })
+        let original = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|error| FileError(format!("Failed to read file: {error}")))?;
+
+        // Count occurrences to provide useful feedback
+        let match_count = original.matches(&args.old_string).count();
+
+        if match_count == 0 {
+            return Err(FileError(format!(
+                "old_string not found in {}. Make sure the text matches exactly, \
+                 including whitespace and indentation. Use file_read to verify \
+                 the current file contents.",
+                args.path
+            )));
+        }
+
+        if !args.replace_all && match_count > 1 {
+            return Err(FileError(format!(
+                "Found {match_count} matches for old_string in {}. Provide more \
+                 surrounding context in old_string to identify a unique match, \
+                 or set replace_all to true to replace every occurrence.",
+                args.path
+            )));
+        }
+
+        let updated = if args.replace_all {
+            original.replace(&args.old_string, &args.new_string)
+        } else {
+            original.replacen(&args.old_string, &args.new_string, 1)
+        };
+
+        tokio::fs::write(&path, &updated)
+            .await
+            .map_err(|error| FileError(format!("Failed to write file: {error}")))?;
+
+        let replacements = if args.replace_all { match_count } else { 1 };
+
+        Ok(FileOutput {
+            success: true,
+            operation: "edit".to_string(),
+            path: path.to_string_lossy().to_string(),
+            content: Some(format!(
+                "Replaced {replacements} occurrence{} in {}",
+                if replacements != 1 { "s" } else { "" },
+                args.path
+            )),
+            entries: None,
+            error: None,
+        })
+    }
 }
+
+// Tool: file_list
+
+#[derive(Debug, Clone)]
+pub struct FileListTool {
+    context: FileContext,
+}
+
+/// Arguments for file_list.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FileListArgs {
+    /// The directory path to list. Relative paths are resolved from the workspace root.
+    pub path: String,
+}
+
+impl Tool for FileListTool {
+    const NAME: &'static str = "file_list";
+
+    type Error = FileError;
+    type Args = FileListArgs;
+    type Output = FileOutput;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: crate::prompts::text::get("tools/file_list").to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The directory path to list. Relative paths are resolved from the workspace root."
+                    }
+                },
+                "required": ["path"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let path = self.context.resolve_path(&args.path)?;
+        do_file_list(&path).await
+    }
+}
+
+// Internal helpers
 
 async fn do_file_list(path: &Path) -> Result<FileOutput, FileError> {
     let mut entries = Vec::new();
 
     let mut reader = tokio::fs::read_dir(path)
         .await
-        .map_err(|e| FileError(format!("Failed to read directory: {e}")))?;
+        .map_err(|error| FileError(format!("Failed to read directory: {error}")))?;
 
     let max_entries = crate::tools::MAX_DIR_ENTRIES;
     let mut total_count = 0usize;
@@ -298,7 +540,7 @@ async fn do_file_list(path: &Path) -> Result<FileOutput, FileError> {
     while let Some(entry) = reader
         .next_entry()
         .await
-        .map_err(|e| FileError(format!("Failed to read entry: {e}")))?
+        .map_err(|error| FileError(format!("Failed to read entry: {error}")))?
     {
         total_count += 1;
 
@@ -306,7 +548,7 @@ async fn do_file_list(path: &Path) -> Result<FileOutput, FileError> {
             let metadata = entry
                 .metadata()
                 .await
-                .map_err(|e| FileError(format!("Failed to read metadata: {e}")))?;
+                .map_err(|error| FileError(format!("Failed to read metadata: {error}")))?;
 
             let entry_type = if metadata.is_file() {
                 "file".to_string()
@@ -356,6 +598,32 @@ async fn do_file_list(path: &Path) -> Result<FileOutput, FileError> {
     })
 }
 
+// Tool registration helper
+
+/// Register all file tools on a `ToolServer`. The tools share a single
+/// `FileContext` for path validation and sandbox enforcement.
+pub fn register_file_tools(
+    server: rig::tool::server::ToolServer,
+    workspace: PathBuf,
+    sandbox: Arc<Sandbox>,
+) -> rig::tool::server::ToolServer {
+    let context = FileContext::new(workspace, sandbox);
+
+    server
+        .tool(FileReadTool {
+            context: context.clone(),
+        })
+        .tool(FileWriteTool {
+            context: context.clone(),
+        })
+        .tool(FileEditTool {
+            context: context.clone(),
+        })
+        .tool(FileListTool { context })
+}
+
+// Legacy types (used by system-internal callers)
+
 /// File entry metadata (legacy).
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -372,34 +640,41 @@ pub enum FileType {
     Other,
 }
 
-/// System-internal file operations that bypass workspace containment.
-/// These are used by the system itself (not LLM-facing) and operate on
-/// arbitrary paths.
+/// System-internal file read that bypasses workspace containment.
+/// Used by the system itself (not LLM-facing) and operates on arbitrary paths.
 pub async fn file_read(path: impl AsRef<Path>) -> crate::error::Result<String> {
-    do_file_read(path.as_ref())
+    let raw = tokio::fs::read_to_string(path.as_ref())
         .await
-        .map(|output| output.content.unwrap_or_default())
-        .map_err(|e| crate::error::AgentError::Other(e.into()).into())
+        .map_err(|error| {
+            crate::error::AgentError::Other(anyhow::anyhow!("Failed to read file: {error}"))
+        })?;
+
+    let content = crate::tools::truncate_output(&raw, crate::tools::MAX_TOOL_OUTPUT_BYTES);
+    Ok(content)
 }
 
+/// System-internal file write that bypasses workspace containment.
 pub async fn file_write(
     path: impl AsRef<Path>,
     content: impl AsRef<[u8]>,
 ) -> crate::error::Result<()> {
-    do_file_write(
-        path.as_ref(),
-        String::from_utf8_lossy(content.as_ref()).to_string(),
-        true,
-    )
-    .await
-    .map(|_| ())
-    .map_err(|e| crate::error::AgentError::Other(e.into()).into())
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            crate::error::AgentError::Other(anyhow::anyhow!("Failed to create directory: {error}"))
+        })?;
+    }
+    tokio::fs::write(path, content).await.map_err(|error| {
+        crate::error::AgentError::Other(anyhow::anyhow!("Failed to write file: {error}"))
+    })?;
+    Ok(())
 }
 
+/// System-internal directory list that bypasses workspace containment.
 pub async fn file_list(path: impl AsRef<Path>) -> crate::error::Result<Vec<FileEntry>> {
     let output = do_file_list(path.as_ref())
         .await
-        .map_err(|e| crate::error::AgentError::Other(e.into()))?;
+        .map_err(|error| crate::error::AgentError::Other(error.into()))?;
 
     let entries = output.entries.ok_or_else(|| {
         crate::error::AgentError::Other(anyhow::anyhow!("No entries in list result"))
@@ -407,17 +682,19 @@ pub async fn file_list(path: impl AsRef<Path>) -> crate::error::Result<Vec<FileE
 
     Ok(entries
         .into_iter()
-        .map(|e| FileEntry {
-            name: e.name,
-            file_type: match e.entry_type.as_str() {
+        .map(|entry| FileEntry {
+            name: entry.name,
+            file_type: match entry.entry_type.as_str() {
                 "file" => FileType::File,
                 "directory" => FileType::Directory,
                 _ => FileType::Other,
             },
-            size: e.size,
+            size: entry.size,
         })
         .collect())
 }
+
+// Tests
 
 #[cfg(test)]
 mod tests {
@@ -434,6 +711,11 @@ mod tests {
         Arc::new(Sandbox::new_for_test(config, workspace.to_path_buf()))
     }
 
+    fn make_context(mode: SandboxMode, workspace: &Path) -> FileContext {
+        let sandbox = create_sandbox(mode, workspace);
+        FileContext::new(workspace.to_path_buf(), sandbox)
+    }
+
     #[tokio::test]
     async fn sandbox_enabled_rejects_read_outside_workspace() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -445,15 +727,16 @@ mod tests {
         let file = outside.join("secret.txt");
         fs::write(&file, "secret data").expect("failed to write file");
 
-        let sandbox = create_sandbox(SandboxMode::Enabled, &workspace);
-        let tool = FileTool::new(workspace, sandbox);
+        let context = make_context(SandboxMode::Enabled, &workspace);
+        let tool = FileReadTool {
+            context: context.clone(),
+        };
 
         let result = tool
-            .call(FileArgs {
-                operation: "read".to_string(),
+            .call(FileReadArgs {
                 path: file.to_string_lossy().into_owned(),
-                content: None,
-                create_dirs: false,
+                offset: None,
+                limit: None,
             })
             .await;
 
@@ -474,15 +757,14 @@ mod tests {
         let file = outside.join("report.txt");
         fs::write(&file, "public data").expect("failed to write file");
 
-        let sandbox = create_sandbox(SandboxMode::Disabled, &workspace);
-        let tool = FileTool::new(workspace, sandbox);
+        let context = make_context(SandboxMode::Disabled, &workspace);
+        let tool = FileReadTool { context };
 
         let result = tool
-            .call(FileArgs {
-                operation: "read".to_string(),
+            .call(FileReadArgs {
                 path: file.to_string_lossy().into_owned(),
-                content: None,
-                create_dirs: false,
+                offset: None,
+                limit: None,
             })
             .await
             .expect("should succeed when sandbox is disabled");
@@ -501,14 +783,13 @@ mod tests {
 
         let file = outside.join("output.txt");
 
-        let sandbox = create_sandbox(SandboxMode::Disabled, &workspace);
-        let tool = FileTool::new(workspace, sandbox);
+        let context = make_context(SandboxMode::Disabled, &workspace);
+        let tool = FileWriteTool { context };
 
         let result = tool
-            .call(FileArgs {
-                operation: "write".to_string(),
+            .call(FileWriteArgs {
                 path: file.to_string_lossy().into_owned(),
-                content: Some("written outside workspace".to_string()),
+                content: "written outside workspace".to_string(),
                 create_dirs: false,
             })
             .await
@@ -525,14 +806,15 @@ mod tests {
         let workspace = temp_dir.path().join("workspace");
         fs::create_dir_all(&workspace).expect("failed to create workspace");
 
-        let sandbox = create_sandbox(SandboxMode::Enabled, &workspace);
-        let tool = FileTool::new(workspace.clone(), sandbox);
+        let context = make_context(SandboxMode::Enabled, &workspace);
+        let tool = FileWriteTool {
+            context: context.clone(),
+        };
 
         let result = tool
-            .call(FileArgs {
-                operation: "write".to_string(),
+            .call(FileWriteArgs {
                 path: workspace.join("SOUL.md").to_string_lossy().into_owned(),
-                content: Some("overwritten".to_string()),
+                content: "overwritten".to_string(),
                 create_dirs: false,
             })
             .await;
@@ -552,14 +834,13 @@ mod tests {
         let workspace = temp_dir.path().join("workspace");
         fs::create_dir_all(&workspace).expect("failed to create workspace");
 
-        let sandbox = create_sandbox(SandboxMode::Disabled, &workspace);
-        let tool = FileTool::new(workspace.clone(), sandbox);
+        let context = make_context(SandboxMode::Disabled, &workspace);
+        let tool = FileWriteTool { context };
 
         let result = tool
-            .call(FileArgs {
-                operation: "write".to_string(),
+            .call(FileWriteArgs {
                 path: workspace.join("IDENTITY.md").to_string_lossy().into_owned(),
-                content: Some("new identity".to_string()),
+                content: "new identity".to_string(),
                 create_dirs: false,
             })
             .await
@@ -569,5 +850,178 @@ mod tests {
         let written =
             fs::read_to_string(workspace.join("IDENTITY.md")).expect("failed to read file");
         assert_eq!(written, "new identity");
+    }
+
+    #[tokio::test]
+    async fn file_edit_replaces_single_occurrence() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+
+        let file = workspace.join("test.txt");
+        fs::write(&file, "hello world").expect("failed to write file");
+
+        let context = make_context(SandboxMode::Disabled, &workspace);
+        let tool = FileEditTool { context };
+
+        let result = tool
+            .call(FileEditArgs {
+                path: file.to_string_lossy().into_owned(),
+                old_string: "hello".to_string(),
+                new_string: "goodbye".to_string(),
+                replace_all: false,
+            })
+            .await
+            .expect("edit should succeed");
+
+        assert!(result.success);
+        let content = fs::read_to_string(&file).expect("failed to read file");
+        assert_eq!(content, "goodbye world");
+    }
+
+    #[tokio::test]
+    async fn file_edit_rejects_ambiguous_match() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+
+        let file = workspace.join("test.txt");
+        fs::write(&file, "aaa bbb aaa").expect("failed to write file");
+
+        let context = make_context(SandboxMode::Disabled, &workspace);
+        let tool = FileEditTool { context };
+
+        let result = tool
+            .call(FileEditArgs {
+                path: file.to_string_lossy().into_owned(),
+                old_string: "aaa".to_string(),
+                new_string: "ccc".to_string(),
+                replace_all: false,
+            })
+            .await;
+
+        let error = result
+            .expect_err("should reject ambiguous match")
+            .to_string();
+        assert!(
+            error.contains("Found 2 matches"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_edit_replace_all() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+
+        let file = workspace.join("test.txt");
+        fs::write(&file, "aaa bbb aaa").expect("failed to write file");
+
+        let context = make_context(SandboxMode::Disabled, &workspace);
+        let tool = FileEditTool { context };
+
+        let result = tool
+            .call(FileEditArgs {
+                path: file.to_string_lossy().into_owned(),
+                old_string: "aaa".to_string(),
+                new_string: "ccc".to_string(),
+                replace_all: true,
+            })
+            .await
+            .expect("replace_all should succeed");
+
+        assert!(result.success);
+        let content = fs::read_to_string(&file).expect("failed to read file");
+        assert_eq!(content, "ccc bbb ccc");
+    }
+
+    #[tokio::test]
+    async fn file_edit_not_found() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+
+        let file = workspace.join("test.txt");
+        fs::write(&file, "hello world").expect("failed to write file");
+
+        let context = make_context(SandboxMode::Disabled, &workspace);
+        let tool = FileEditTool { context };
+
+        let result = tool
+            .call(FileEditArgs {
+                path: file.to_string_lossy().into_owned(),
+                old_string: "nonexistent".to_string(),
+                new_string: "replacement".to_string(),
+                replace_all: false,
+            })
+            .await;
+
+        let error = result.expect_err("should fail when not found").to_string();
+        assert!(
+            error.contains("old_string not found"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_edit_blocks_identity_file() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+        fs::write(workspace.join("SOUL.md"), "original").expect("failed to write file");
+
+        let context = make_context(SandboxMode::Enabled, &workspace);
+        let tool = FileEditTool { context };
+
+        let result = tool
+            .call(FileEditArgs {
+                path: workspace.join("SOUL.md").to_string_lossy().into_owned(),
+                old_string: "original".to_string(),
+                new_string: "hacked".to_string(),
+                replace_all: false,
+            })
+            .await;
+
+        let error = result
+            .expect_err("should block identity file edit")
+            .to_string();
+        assert!(
+            error.contains("Identity files are protected"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_read_with_offset_and_limit() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("failed to create workspace");
+
+        let file = workspace.join("lines.txt");
+        fs::write(&file, "line1\nline2\nline3\nline4\nline5").expect("failed to write file");
+
+        let context = make_context(SandboxMode::Disabled, &workspace);
+        let tool = FileReadTool { context };
+
+        let result = tool
+            .call(FileReadArgs {
+                path: file.to_string_lossy().into_owned(),
+                offset: Some(2),
+                limit: Some(2),
+            })
+            .await
+            .expect("read with offset should succeed");
+
+        assert!(result.success);
+        let content = result.content.unwrap();
+        assert!(content.contains("2: line2"), "should contain line 2");
+        assert!(content.contains("3: line3"), "should contain line 3");
+        assert!(!content.contains("line1"), "should not contain line 1");
+        assert!(!content.contains("line4"), "should not contain line 4");
+        assert!(
+            content.contains("showing lines 2-3 of 5"),
+            "should have continuation notice"
+        );
     }
 }

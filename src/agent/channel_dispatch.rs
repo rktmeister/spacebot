@@ -419,7 +419,6 @@ pub async fn spawn_worker_from_state(
         "worker.run",
         worker_id = %worker_id,
         channel_id = %state.channel_id,
-        task = %task,
     );
     let secrets_store = state.deps.runtime_config.secrets.load().as_ref().clone();
     let handle = spawn_worker_task(
@@ -550,7 +549,6 @@ pub async fn spawn_opencode_worker_from_state(
         "worker.run",
         worker_id = %worker_id,
         channel_id = %state.channel_id,
-        task = %task,
         worker_type = "opencode",
     );
     let sqlite_pool = state.deps.sqlite_pool.clone();
@@ -802,7 +800,6 @@ pub async fn resume_idle_worker_into_state(
                 "worker.resume",
                 worker_id = %worker_id,
                 channel_id = %state.channel_id,
-                task = %idle_worker.task,
                 worker_type = "opencode",
             );
             let sqlite_pool = state.deps.sqlite_pool.clone();
@@ -926,7 +923,6 @@ pub async fn resume_idle_worker_into_state(
                 "worker.resume",
                 worker_id = %worker_id,
                 channel_id = %state.channel_id,
-                task = %idle_worker.task,
             );
             let secrets_store = state.deps.runtime_config.secrets.load().as_ref().clone();
             let handle = spawn_worker_task(
