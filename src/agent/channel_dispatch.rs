@@ -318,9 +318,13 @@ async fn spawn_branch(
 }
 
 /// Check whether the channel has capacity for another worker.
+///
+/// Uses `worker_handles` as the source of truth for active workers, since
+/// `active_workers` (the `HashMap<WorkerId, Worker>`) is never populated —
+/// `Worker` is consumed by `.run()` inside `spawn_worker_task`.
 async fn check_worker_limit(state: &ChannelState) -> std::result::Result<(), AgentError> {
     let max_workers = **state.deps.runtime_config.max_concurrent_workers.load();
-    let active_worker_count = state.active_workers.read().await.len();
+    let active_worker_count = state.worker_handles.read().await.len();
     reserve_worker_slot_local(active_worker_count, &state.channel_id, max_workers)
 }
 

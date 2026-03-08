@@ -153,6 +153,28 @@ impl Tool for RouteTool {
                     });
                 }
                 drop(injections);
+
+                // Worker is running but has no injection channel (e.g. OpenCode
+                // workers only support interactive follow-ups, not mid-flight
+                // injection). Return a structured result so the LLM knows to
+                // wait rather than falling through to "not found".
+                let has_input = self
+                    .state
+                    .worker_inputs
+                    .read()
+                    .await
+                    .contains_key(&worker_id);
+                if has_input {
+                    return Ok(RouteOutput {
+                        routed: false,
+                        worker_id,
+                        message: format!(
+                            "Worker {worker_id} is currently running and does not support \
+                             mid-flight context injection. Wait for it to finish or become \
+                             idle before sending follow-up input."
+                        ),
+                    });
+                }
             }
             // Worker not found in status block.
             None => {}
