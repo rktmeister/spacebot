@@ -133,6 +133,19 @@ impl Scheduler {
 
     /// Register and start a cron job from config.
     pub async fn register(&self, config: CronConfig) -> Result<()> {
+        self.register_with_anchor(config, None).await
+    }
+
+    /// Register and start a cron job, optionally anchoring interval-based jobs
+    /// to their last execution time. When `last_executed_at` is provided,
+    /// interval jobs compute their first sleep from that timestamp instead of
+    /// falling back to epoch-aligned delays, preventing skipped or duplicate
+    /// firings after a restart.
+    pub async fn register_with_anchor(
+        &self,
+        config: CronConfig,
+        last_executed_at: Option<&str>,
+    ) -> Result<()> {
         let delivery_target = parse_delivery_target(&config.delivery_target).ok_or_else(|| {
             crate::error::Error::Other(anyhow::anyhow!(
                 "invalid delivery target '{}': expected format 'adapter:target'",
@@ -160,7 +173,24 @@ impl Scheduler {
         }
 
         if config.enabled {
-            self.start_timer(&config.id).await;
+            let anchor = last_executed_at.and_then(|ts| {
+                chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S")
+                    .ok()
+                    .map(|naive| naive.and_utc())
+                    .or_else(|| {
+                        chrono::DateTime::parse_from_rfc3339(ts)
+                            .ok()
+                            .map(|dt| dt.to_utc())
+                    })
+            });
+            if anchor.is_none() && last_executed_at.is_some() {
+                tracing::warn!(
+                    cron_id = %config.id,
+                    ?last_executed_at,
+                    "failed to parse last_executed_at; falling back to epoch-aligned interval delay"
+                );
+            }
+            self.start_timer(&config.id, anchor).await;
         }
 
         tracing::info!(
@@ -168,6 +198,7 @@ impl Scheduler {
             interval_secs = config.interval_secs,
             cron_expr = ?config.cron_expr,
             run_once = config.run_once,
+            ?last_executed_at,
             "cron job registered"
         );
         Ok(())
@@ -177,7 +208,11 @@ impl Scheduler {
     ///
     /// Idempotent: if a timer is already running for this job, it is aborted before
     /// starting a new one. This prevents timer leaks when a job is re-registered via API.
-    async fn start_timer(&self, job_id: &str) {
+    ///
+    /// When `anchor` is provided, interval-based jobs use it to compute the first
+    /// sleep duration from the last known execution, preventing skipped or duplicate
+    /// firings after a restart.
+    async fn start_timer(&self, job_id: &str, anchor: Option<chrono::DateTime<chrono::Utc>>) {
         let job_id_for_map = job_id.to_string();
         let job_id = job_id.to_string();
         let jobs = self.jobs.clone();
@@ -239,7 +274,7 @@ impl Scheduler {
                     let interval_secs = job.interval_secs;
                     let delay = if interval_first_tick {
                         interval_first_tick = false;
-                        interval_initial_delay(interval_secs)
+                        anchored_initial_delay(interval_secs, anchor)
                     } else {
                         Duration::from_secs(interval_secs)
                     };
@@ -247,6 +282,7 @@ impl Scheduler {
                         cron_id = %job_id,
                         interval_secs,
                         sleep_secs = delay.as_secs(),
+                        anchored = anchor.is_some(),
                         "interval cron next fire computed"
                     );
                     delay
@@ -500,7 +536,7 @@ impl Scheduler {
                 );
             }
 
-            self.start_timer(job_id).await;
+            self.start_timer(job_id, None).await;
             tracing::info!(cron_id = %job_id, "cron job cold-re-enabled and timer started");
             return Ok(());
         }
@@ -521,7 +557,7 @@ impl Scheduler {
         };
 
         if enabled && !was_enabled {
-            self.start_timer(job_id).await;
+            self.start_timer(job_id, None).await;
             tracing::info!(cron_id = %job_id, "cron job enabled and timer started");
         }
 
@@ -611,13 +647,47 @@ fn normalize_cron_expr(cron_expr: Option<String>) -> Result<Option<String>> {
         )));
     }
 
-    Schedule::from_str(trimmed).map_err(|error| {
+    // The `cron` crate uses 7-field expressions (sec min hour dom month dow year).
+    // Users write standard 5-field cron (min hour dom month dow). Convert by
+    // prepending "0" for seconds and appending "*" for year.
+    let expanded = format!("0 {trimmed} *");
+
+    Schedule::from_str(&expanded).map_err(|error| {
         crate::error::Error::Other(anyhow::anyhow!(
             "invalid cron expression '{trimmed}': {error}"
         ))
     })?;
 
+    // Store the original 5-field form — it's what users and the UI expect.
     Ok(Some(trimmed.to_string()))
+}
+
+/// Compute the initial delay for an interval-based cron job, anchored to its
+/// last execution time when available.
+///
+/// With an anchor:
+///   - `elapsed = now - last_run`
+///   - If `elapsed >= interval`, fire after a short 2s jitter (avoid thundering herd on restart).
+///   - Otherwise, sleep for `interval - elapsed` (the remainder).
+///
+/// Without an anchor (first-ever run, or no execution history), falls back to
+/// `interval_initial_delay` which aligns to clean epoch-based clock boundaries.
+fn anchored_initial_delay(
+    interval_secs: u64,
+    anchor: Option<chrono::DateTime<chrono::Utc>>,
+) -> Duration {
+    if let Some(last_run) = anchor {
+        let now = chrono::Utc::now();
+        let elapsed = (now - last_run).num_seconds().max(0) as u64;
+        if elapsed >= interval_secs {
+            // Overdue — fire soon with a small jitter to avoid thundering herd
+            Duration::from_secs(2)
+        } else {
+            Duration::from_secs(interval_secs - elapsed)
+        }
+    } else {
+        interval_initial_delay(interval_secs)
+    }
 }
 
 fn interval_initial_delay(interval_secs: u64) -> Duration {
@@ -635,6 +705,18 @@ fn interval_initial_delay(interval_secs: u64) -> Duration {
         Duration::from_secs(secs_until)
     } else {
         Duration::from_secs(interval_secs)
+    }
+}
+
+/// Expand a 5-field standard cron expression to the 7-field format required by
+/// the `cron` crate: `sec min hour dom month dow year`. If the expression
+/// already has 6+ fields, return it as-is.
+fn expand_cron_expr(expr: &str) -> String {
+    let field_count = expr.split_whitespace().count();
+    if field_count == 5 {
+        format!("0 {expr} *")
+    } else {
+        expr.to_string()
     }
 }
 
@@ -662,7 +744,9 @@ fn next_fire_duration(
     cron_id: &str,
     cron_expr: &str,
 ) -> Option<(Duration, chrono::DateTime<chrono::Utc>, String)> {
-    let schedule = match Schedule::from_str(cron_expr) {
+    // Expand 5-field standard cron to 7-field for the `cron` crate.
+    let expanded = expand_cron_expr(cron_expr);
+    let schedule = match Schedule::from_str(&expanded) {
         Ok(schedule) => schedule,
         Err(error) => {
             tracing::warn!(cron_id = %cron_id, cron_expr, %error, "invalid cron expression");

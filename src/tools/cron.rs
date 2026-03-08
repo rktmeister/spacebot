@@ -133,7 +133,7 @@ impl Tool for CronTool {
                     },
                     "interval_secs": {
                         "type": "integer",
-                        "description": "For 'create': seconds between runs (e.g. 3600 = hourly, 86400 = daily)."
+                        "description": "DEPRECATED — legacy fallback only. Use `cron_expr` instead. Interval scheduling drifts and does not align to wall-clock times."
                     },
                     "delivery_target": {
                         "type": "string",
@@ -235,7 +235,10 @@ impl CronTool {
                     "'cron_expr' must have exactly 5 fields (got {field_count}): '{expr}'"
                 )));
             }
-            cron::Schedule::from_str(expr)
+            // The `cron` crate uses 7-field expressions (sec min hour dom month dow year).
+            // Users write standard 5-field cron (min hour dom month dow). Expand before parsing.
+            let expanded = format!("0 {expr} *");
+            cron::Schedule::from_str(&expanded)
                 .map_err(|error| CronError(format!("invalid 'cron_expr' '{expr}': {error}")))?;
         }
 
