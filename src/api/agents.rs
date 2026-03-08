@@ -104,6 +104,7 @@ pub(super) struct AgentProfileResponse {
 pub(super) struct IdentityResponse {
     soul: Option<String>,
     identity: Option<String>,
+    role: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +117,7 @@ pub(super) struct IdentityUpdateRequest {
     agent_id: String,
     soul: Option<String>,
     identity: Option<String>,
+    role: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -660,13 +662,13 @@ pub async fn create_agent_internal(
     let (event_tx, memory_event_tx) = crate::create_process_event_buses();
     let arc_agent_id: crate::AgentId = std::sync::Arc::from(agent_id.as_str());
 
-    crate::identity::scaffold_identity_files(&agent_config.workspace)
+    crate::identity::scaffold_identity_files(&agent_config.identity_dir)
         .await
         .map_err(|error| {
             tracing::error!(%error, agent_id = %agent_id, "failed to scaffold identity files");
             format!("failed to scaffold identity files: {error}")
         })?;
-    let identity = crate::identity::Identity::load(&agent_config.workspace).await;
+    let identity = crate::identity::Identity::load(&agent_config.identity_dir).await;
 
     let skills =
         crate::skills::SkillSet::load(&instance_dir.join("skills"), &agent_config.skills_dir())
@@ -897,6 +899,12 @@ pub async fn create_agent_internal(
         state
             .agent_workspaces
             .store(std::sync::Arc::new(workspaces));
+
+        let mut identity_dirs = (**state.agent_identity_dirs.load()).clone();
+        identity_dirs.insert(agent_id.clone(), agent_config.identity_dir.clone());
+        state
+            .agent_identity_dirs
+            .store(std::sync::Arc::new(identity_dirs));
 
         let mut configs = (**state.runtime_configs.load()).clone();
         configs.insert(agent_id.clone(), runtime_config);
@@ -1140,6 +1148,12 @@ pub(super) async fn delete_agent(
         state
             .agent_workspaces
             .store(std::sync::Arc::new(workspaces));
+
+        let mut identity_dirs = (**state.agent_identity_dirs.load()).clone();
+        identity_dirs.remove(&agent_id);
+        state
+            .agent_identity_dirs
+            .store(std::sync::Arc::new(identity_dirs));
 
         let mut configs = (**state.runtime_configs.load()).clone();
         configs.remove(&agent_id);
@@ -1468,21 +1482,22 @@ pub(super) async fn get_agent_profile(
     Ok(Json(AgentProfileResponse { profile }))
 }
 
-/// Get identity files (SOUL.md, IDENTITY.md) for an agent.
+/// Get identity files (SOUL.md, IDENTITY.md, ROLE.md) for an agent.
 pub(super) async fn get_identity(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<IdentityQuery>,
 ) -> Result<Json<IdentityResponse>, StatusCode> {
-    let workspaces = state.agent_workspaces.load();
-    let workspace = workspaces
+    let identity_dirs = state.agent_identity_dirs.load();
+    let identity_dir = identity_dirs
         .get(&query.agent_id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let identity = crate::identity::Identity::load(workspace).await;
+    let identity = crate::identity::Identity::load(identity_dir).await;
 
     Ok(Json(IdentityResponse {
         soul: identity.soul,
         identity: identity.identity,
+        role: identity.role,
     }))
 }
 
@@ -1492,13 +1507,13 @@ pub(super) async fn update_identity(
     State(state): State<Arc<ApiState>>,
     axum::Json(request): axum::Json<IdentityUpdateRequest>,
 ) -> Result<Json<IdentityResponse>, StatusCode> {
-    let workspaces = state.agent_workspaces.load();
-    let workspace = workspaces
+    let identity_dirs = state.agent_identity_dirs.load();
+    let identity_dir = identity_dirs
         .get(&request.agent_id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
     if let Some(soul) = &request.soul {
-        tokio::fs::write(workspace.join("SOUL.md"), soul)
+        tokio::fs::write(identity_dir.join("SOUL.md"), soul)
             .await
             .map_err(|error| {
                 tracing::warn!(%error, "failed to write SOUL.md");
@@ -1507,7 +1522,7 @@ pub(super) async fn update_identity(
     }
 
     if let Some(identity) = &request.identity {
-        tokio::fs::write(workspace.join("IDENTITY.md"), identity)
+        tokio::fs::write(identity_dir.join("IDENTITY.md"), identity)
             .await
             .map_err(|error| {
                 tracing::warn!(%error, "failed to write IDENTITY.md");
@@ -1515,11 +1530,21 @@ pub(super) async fn update_identity(
             })?;
     }
 
-    let updated = crate::identity::Identity::load(workspace).await;
+    if let Some(role) = &request.role {
+        tokio::fs::write(identity_dir.join("ROLE.md"), role)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to write ROLE.md");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+    }
+
+    let updated = crate::identity::Identity::load(identity_dir).await;
 
     Ok(Json(IdentityResponse {
         soul: updated.soul,
         identity: updated.identity,
+        role: updated.role,
     }))
 }
 

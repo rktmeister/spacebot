@@ -105,9 +105,9 @@ impl Tool for FactoryUpdateIdentityTool {
             ));
         }
 
-        // Validate agent exists and find workspace
-        let workspaces = self.state.agent_workspaces.load();
-        let workspace = workspaces
+        // Validate agent exists and find identity directory (agent root)
+        let identity_dirs = self.state.agent_identity_dirs.load();
+        let identity_dir = identity_dirs
             .get(&agent_id)
             .ok_or_else(|| FactoryUpdateIdentityError(format!("agent '{agent_id}' not found")))?;
 
@@ -146,7 +146,7 @@ impl Tool for FactoryUpdateIdentityTool {
 
         for (filename, content) in &updates {
             if let Some(content) = content {
-                let path = workspace.join(filename);
+                let path = identity_dir.join(filename);
                 tokio::fs::write(&path, content).await.map_err(|error| {
                     FactoryUpdateIdentityError(format!("failed to write {filename}: {error}"))
                 })?;
@@ -156,7 +156,7 @@ impl Tool for FactoryUpdateIdentityTool {
 
         // Reload identity into runtime config so the agent picks up changes
         // immediately without requiring a restart.
-        let identity = crate::identity::Identity::load(workspace).await;
+        let identity = crate::identity::Identity::load(identity_dir).await;
         if let Some(runtime_config) = self.state.runtime_configs.load().get(&agent_id) {
             runtime_config.identity.store(Arc::new(identity));
         } else {

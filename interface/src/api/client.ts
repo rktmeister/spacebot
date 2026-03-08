@@ -551,13 +551,14 @@ export type CortexChatSSEEvent =
 export interface IdentityFiles {
 	soul: string | null;
 	identity: string | null;
-	user: string | null;
+	role: string | null;
 }
 
 export interface IdentityUpdateRequest {
 	agent_id: string;
 	soul?: string | null;
 	identity?: string | null;
+	role?: string | null;
 }
 
 // -- Agent Config Types --

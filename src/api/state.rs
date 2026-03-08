@@ -60,8 +60,11 @@ pub struct ApiState {
     pub channel_states: RwLock<HashMap<String, ChannelState>>,
     /// Per-agent cortex chat sessions.
     pub cortex_chat_sessions: arc_swap::ArcSwap<HashMap<String, Arc<CortexChatSession>>>,
-    /// Per-agent workspace paths for identity file access.
+    /// Per-agent workspace paths for file tool access.
     pub agent_workspaces: arc_swap::ArcSwap<HashMap<String, PathBuf>>,
+    /// Per-agent identity directories (agent root). Identity files live here,
+    /// outside the workspace sandbox boundary.
+    pub agent_identity_dirs: arc_swap::ArcSwap<HashMap<String, PathBuf>>,
     /// Path to the instance config.toml file.
     pub config_path: RwLock<PathBuf>,
     /// Guards read-modify-write cycles on config.toml to prevent concurrent
@@ -282,6 +285,7 @@ impl ApiState {
             channel_states: RwLock::new(HashMap::new()),
             cortex_chat_sessions: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             agent_workspaces: arc_swap::ArcSwap::from_pointee(HashMap::new()),
+            agent_identity_dirs: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             config_path: RwLock::new(PathBuf::new()),
             config_write_mutex: tokio::sync::Mutex::new(()),
             cron_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
@@ -676,6 +680,11 @@ impl ApiState {
     /// Set the workspace paths for all agents.
     pub fn set_agent_workspaces(&self, workspaces: HashMap<String, PathBuf>) {
         self.agent_workspaces.store(Arc::new(workspaces));
+    }
+
+    /// Set the identity directory paths for all agents.
+    pub fn set_agent_identity_dirs(&self, dirs: HashMap<String, PathBuf>) {
+        self.agent_identity_dirs.store(Arc::new(dirs));
     }
 
     /// Set the config.toml path.

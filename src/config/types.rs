@@ -1091,6 +1091,9 @@ pub struct ResolvedAgentConfig {
     pub display_name: Option<String>,
     pub role: Option<String>,
     pub workspace: PathBuf,
+    /// Agent root directory (parent of workspace). Identity files (SOUL.md,
+    /// IDENTITY.md, ROLE.md) live here — outside the workspace sandbox.
+    pub identity_dir: PathBuf,
     pub data_dir: PathBuf,
     pub archives_dir: PathBuf,
     pub routing: RoutingConfig,
@@ -1174,6 +1177,7 @@ impl AgentConfig {
                 .workspace
                 .clone()
                 .unwrap_or_else(|| agent_root.join("workspace")),
+            identity_dir: agent_root.clone(),
             data_dir: agent_root.join("data"),
             archives_dir: agent_root.join("archives"),
             routing: self

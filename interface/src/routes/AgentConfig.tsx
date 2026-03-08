@@ -15,7 +15,7 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 		|| id.includes("sonnet-4-6") || id.includes("sonnet-4.6");
 }
 
-type SectionId = "general" | "soul" | "identity" | "user" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "channel" | "sandbox" | "projects";
+type SectionId = "general" | "soul" | "identity" | "role" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "channel" | "sandbox" | "projects";
 
 const SECTIONS: {
 	id: SectionId;
@@ -27,6 +27,7 @@ const SECTIONS: {
 	{ id: "general", label: "General", group: "general", description: "Agent metadata", detail: "The agent's display name and role. The display name is shown in the UI and messaging platforms. The role describes the agent's purpose (e.g. Research Assistant, Code Reviewer)." },
 	{ id: "soul", label: "Soul", group: "identity", description: "SOUL.md", detail: "Defines the agent's personality, values, communication style, and behavioral boundaries. This is the core of who the agent is." },
 	{ id: "identity", label: "Identity", group: "identity", description: "IDENTITY.md", detail: "The agent's name, nature, and purpose. How it introduces itself and what it understands its role to be." },
+	{ id: "role", label: "Role", group: "identity", description: "ROLE.md", detail: "The agent's responsibilities, scope, expected outcomes, and escalation rules. Defines what the agent does and doesn't do." },
 	{ id: "routing", label: "Model Routing", group: "config", description: "Which models each process uses", detail: "Controls which LLM model is used for each process type. Channels handle user-facing conversation, branches do thinking, workers execute tasks, the compactor summarizes context, cortex observes system state, and voice transcribes audio attachments before the channel turn." },
 	{ id: "tuning", label: "Tuning", group: "config", description: "Turn limits, context window, branches", detail: "Core limits that control how much work the agent does per message. Max turns caps LLM iterations per channel message. Context window sets the token budget. Branch limits control parallel thinking." },
 	{ id: "compaction", label: "Compaction", group: "config", description: "Context compaction thresholds", detail: "Thresholds that trigger context summarization as the conversation grows. Background kicks in early, aggressive compresses harder, and emergency truncates without LLM involvement. All values are fractions of the context window." },
@@ -43,11 +44,11 @@ interface AgentConfigProps {
 	agentId: string;
 }
 
-const isIdentityField = (id: SectionId): id is "soul" | "identity" => {
-	return id === "soul" || id === "identity";
+const isIdentityField = (id: SectionId): id is "soul" | "identity" | "role" => {
+	return id === "soul" || id === "identity" || id === "role";
 };
 
-const getIdentityField = (data: { soul: string | null; identity: string | null; user: string | null }, field: SectionId): string | null => {
+const getIdentityField = (data: { soul: string | null; identity: string | null; role: string | null }, field: SectionId): string | null => {
 	if (isIdentityField(field)) {
 		return data[field];
 	}
@@ -109,7 +110,7 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 	});
 
 	const identityMutation = useMutation({
-		mutationFn: (update: { field: "soul" | "identity"; content: string }) =>
+		mutationFn: (update: { field: "soul" | "identity" | "role"; content: string }) =>
 			api.updateIdentity({
 				agent_id: agentId,
 				[update.field]: update.content,
@@ -219,7 +220,7 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 					<div className="flex flex-col gap-0.5 px-2">
 					{SECTIONS.filter((s) => s.group === "identity").map((section) => {
 						const isActive = activeSection === section.id;
-						const hasContent = !!getIdentityField(identityQuery.data ?? { soul: null, identity: null, user: null }, section.id)?.trim();
+						const hasContent = !!getIdentityField(identityQuery.data ?? { soul: null, identity: null, role: null }, section.id)?.trim();
 						return (
 							<SettingSidebarButton
 								key={section.id}
@@ -273,7 +274,7 @@ export function AgentConfig({ agentId }: AgentConfigProps) {
 				key={active.id}
 				label={active.label}
 				description={active.description}
-				content={getIdentityField(identityQuery.data ?? { soul: null, identity: null, user: null }, active.id)}
+				content={getIdentityField(identityQuery.data ?? { soul: null, identity: null, role: null }, active.id)}
 				onDirtyChange={setDirty}
 				saveHandlerRef={saveHandlerRef}
 				onSave={(content) => {

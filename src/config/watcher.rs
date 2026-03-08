@@ -19,6 +19,7 @@ pub fn spawn_file_watcher(
     agents: Vec<(
         String,
         PathBuf,
+        PathBuf,
         Arc<RuntimeConfig>,
         Arc<crate::mcp::McpManager>,
     )>,
@@ -77,19 +78,21 @@ pub fn spawn_file_watcher(
             tracing::warn!(%error, path = %instance_skills_dir.display(), "failed to watch instance skills dir");
         }
 
-        // Watch per-agent workspace directories (skills, identity)
-        for (_, workspace, _, _) in &agents {
+        // Watch per-agent directories
+        for (_, workspace, identity_dir, _, _) in &agents {
+            // Watch workspace/skills for skill file changes
             {
                 let path = workspace.join("skills");
                 if path.is_dir()
                     && let Err(error) = watcher.watch(&path, RecursiveMode::Recursive)
                 {
-                    tracing::warn!(%error, path = %path.display(), "failed to watch agent dir");
+                    tracing::warn!(%error, path = %path.display(), "failed to watch agent skills dir");
                 }
             }
-            // Identity files are in the workspace root
-            if let Err(error) = watcher.watch(workspace, RecursiveMode::NonRecursive) {
-                tracing::warn!(%error, path = %workspace.display(), "failed to watch workspace");
+            // Watch the agent root (identity_dir) for SOUL.md/IDENTITY.md/ROLE.md changes.
+            // Identity files live outside the workspace, in the agent root directory.
+            if let Err(error) = watcher.watch(identity_dir, RecursiveMode::NonRecursive) {
+                tracing::warn!(%error, path = %identity_dir.display(), "failed to watch identity dir");
             }
         }
 
@@ -525,7 +528,7 @@ pub fn spawn_file_watcher(
             }
 
             // Apply reloads to each agent's RuntimeConfig
-            for (agent_id, workspace, runtime_config, mcp_manager) in &agents {
+            for (agent_id, workspace, identity_dir, runtime_config, mcp_manager) in &agents {
                 if let Some(config) = &new_config {
                     let rt = tokio::runtime::Handle::current();
                     rt.block_on(runtime_config.reload_config(config, agent_id, mcp_manager));
@@ -533,7 +536,7 @@ pub fn spawn_file_watcher(
 
                 if identity_changed {
                     let rt = tokio::runtime::Handle::current();
-                    let identity = rt.block_on(crate::identity::Identity::load(workspace));
+                    let identity = rt.block_on(crate::identity::Identity::load(identity_dir));
                     runtime_config.reload_identity(identity);
                 }
 

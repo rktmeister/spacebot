@@ -2330,6 +2330,7 @@ async fn initialize_agents(
     watcher_agents: &mut Vec<(
         String,
         std::path::PathBuf,
+        std::path::PathBuf,
         Arc<spacebot::config::RuntimeConfig>,
         Arc<spacebot::mcp::McpManager>,
     )>,
@@ -2470,8 +2471,10 @@ async fn initialize_agents(
         let mcp_manager = Arc::new(spacebot::mcp::McpManager::new(agent_config.mcp.clone()));
         mcp_manager.connect_all().await;
 
-        // Scaffold identity templates if missing, then load
-        spacebot::identity::scaffold_identity_files(&agent_config.workspace)
+        // Scaffold identity templates if missing, then load.
+        // Identity files live in the agent root (identity_dir), outside the
+        // workspace sandbox boundary.
+        spacebot::identity::scaffold_identity_files(&agent_config.identity_dir)
             .await
             .with_context(|| {
                 format!(
@@ -2479,7 +2482,7 @@ async fn initialize_agents(
                     agent_config.id
                 )
             })?;
-        let identity = spacebot::identity::Identity::load(&agent_config.workspace).await;
+        let identity = spacebot::identity::Identity::load(&agent_config.identity_dir).await;
 
         // Load skills (instance-level, then workspace overrides)
         let skills =
@@ -2516,6 +2519,7 @@ async fn initialize_agents(
         watcher_agents.push((
             agent_config.id.clone(),
             agent_config.workspace.clone(),
+            agent_config.identity_dir.clone(),
             runtime_config.clone(),
             mcp_manager.clone(),
         ));
@@ -2620,6 +2624,7 @@ async fn initialize_agents(
         let mut task_stores = std::collections::HashMap::new();
         let mut project_stores = std::collections::HashMap::new();
         let mut agent_workspaces = std::collections::HashMap::new();
+        let mut agent_identity_dirs = std::collections::HashMap::new();
         let mut runtime_configs = std::collections::HashMap::new();
         let mut sandboxes = std::collections::HashMap::new();
         for (agent_id, agent) in agents.iter() {
@@ -2631,6 +2636,7 @@ async fn initialize_agents(
             task_stores.insert(agent_id.to_string(), agent.deps.task_store.clone());
             project_stores.insert(agent_id.to_string(), agent.deps.project_store.clone());
             agent_workspaces.insert(agent_id.to_string(), agent.config.workspace.clone());
+            agent_identity_dirs.insert(agent_id.to_string(), agent.config.identity_dir.clone());
             runtime_configs.insert(agent_id.to_string(), agent.deps.runtime_config.clone());
             sandboxes.insert(agent_id.to_string(), agent.deps.sandbox.clone());
             agent_configs.push(spacebot::api::AgentInfo {
@@ -2652,6 +2658,7 @@ async fn initialize_agents(
         api_state.set_project_stores(project_stores);
         api_state.set_runtime_configs(runtime_configs);
         api_state.set_agent_workspaces(agent_workspaces);
+        api_state.set_agent_identity_dirs(agent_identity_dirs);
         api_state.set_sandboxes(sandboxes);
         // Wire the instance-level secrets store into the API state.
         if let Some(store) = &bootstrapped_store {

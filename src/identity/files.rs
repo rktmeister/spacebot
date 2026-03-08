@@ -1,5 +1,10 @@
 //! Identity file loading: SOUL.md, IDENTITY.md, ROLE.md.
 //!
+//! Identity files live in the **agent root** directory (one level above the
+//! workspace), which places them outside the sandbox boundary. This means
+//! worker file tools cannot read or write them — all identity mutations must
+//! go through the identity management API or factory tools.
+//!
 //! USER.md is deprecated — human context now lives on the org graph via
 //! `HumanDef.description` and is inherited by linked agents automatically.
 
@@ -15,12 +20,16 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Load identity files from an agent's workspace directory.
-    pub async fn load(workspace: &Path) -> Self {
+    /// Load identity files from the agent root directory.
+    ///
+    /// Identity files live at `instance_dir/agents/{id}/` — one level above
+    /// the workspace — so they are outside the sandbox boundary and
+    /// inaccessible to worker file tools.
+    pub async fn load(identity_dir: &Path) -> Self {
         Self {
-            soul: load_optional_file(&workspace.join("SOUL.md")).await,
-            identity: load_optional_file(&workspace.join("IDENTITY.md")).await,
-            role: load_optional_file(&workspace.join("ROLE.md")).await,
+            soul: load_optional_file(&identity_dir.join("SOUL.md")).await,
+            identity: load_optional_file(&identity_dir.join("IDENTITY.md")).await,
+            role: load_optional_file(&identity_dir.join("ROLE.md")).await,
         }
     }
 
@@ -58,14 +67,31 @@ const DEFAULT_IDENTITY_FILES: &[(&str, &str)] = &[
         "IDENTITY.md",
         "<!-- Define this agent's identity: name, nature, purpose. -->\n",
     ),
+    (
+        "ROLE.md",
+        "<!-- Define this agent's role: responsibilities, scope, and expected outcomes. -->\n",
+    ),
 ];
 
-/// Write template identity files into an agent's workspace if they don't already exist.
+/// Write template identity files into the agent root if they don't already exist.
+///
+/// Identity files live in the agent root directory (one level above the
+/// workspace), outside the sandbox boundary.
 ///
 /// Only writes files that are missing — existing files are left untouched.
-pub async fn scaffold_identity_files(workspace: &Path) -> crate::error::Result<()> {
+pub async fn scaffold_identity_files(identity_dir: &Path) -> crate::error::Result<()> {
+    // Ensure the identity directory exists (it should, but be safe).
+    tokio::fs::create_dir_all(identity_dir)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create identity directory: {}",
+                identity_dir.display()
+            )
+        })?;
+
     for (filename, content) in DEFAULT_IDENTITY_FILES {
-        let target = workspace.join(filename);
+        let target = identity_dir.join(filename);
         if !target.exists() {
             tokio::fs::write(&target, content).await.with_context(|| {
                 format!("failed to write identity template: {}", target.display())

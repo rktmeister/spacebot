@@ -218,10 +218,10 @@ impl Tool for FactoryCreateAgentTool {
         // Files are written best-effort: partial failures are reported but don't
         // abort the entire creation (the agent is already running with scaffold
         // identity files from create_agent_internal).
-        let workspaces = self.state.agent_workspaces.load();
-        let workspace = workspaces.get(&agent_id).ok_or_else(|| {
+        let identity_dirs = self.state.agent_identity_dirs.load();
+        let identity_dir = identity_dirs.get(&agent_id).ok_or_else(|| {
             FactoryCreateAgentError(format!(
-                "agent '{agent_id}' created but workspace not found in state"
+                "agent '{agent_id}' created but identity dir not found in state"
             ))
         })?;
 
@@ -231,7 +231,7 @@ impl Tool for FactoryCreateAgentTool {
             ("IDENTITY.md", args.identity_content.as_str()),
             ("ROLE.md", args.role_content.as_str()),
         ] {
-            let path = workspace.join(filename);
+            let path = identity_dir.join(filename);
             if let Err(error) = tokio::fs::write(&path, content).await {
                 let message = format!("failed to write {filename}: {error}");
                 tracing::error!(agent_id = %agent_id, %error, filename, "identity file write failed");
@@ -241,7 +241,7 @@ impl Tool for FactoryCreateAgentTool {
 
         // Step 3: Reload identity into the runtime config so the agent picks
         // up the custom content immediately.
-        let identity = crate::identity::Identity::load(workspace).await;
+        let identity = crate::identity::Identity::load(identity_dir).await;
         if let Some(runtime_config) = self.state.runtime_configs.load().get(&agent_id) {
             runtime_config.identity.store(Arc::new(identity));
         } else {
