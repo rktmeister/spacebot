@@ -856,6 +856,7 @@ pub async fn create_agent_internal(
         runtime_config.workspace_dir.clone(),
         sandbox.clone(),
         runtime_config.clone(),
+        state.clone(),
     );
     // Add factory tools to the cortex chat tool server
     if let Err(error) =

@@ -842,7 +842,7 @@ impl Config {
                 display_name: None,
                 role: None,
                 bio: None,
-                description: None,
+                description: load_human_md(&instance_dir.join("humans").join("admin")),
                 discord_id: None,
                 telegram_id: None,
                 slack_id: None,
@@ -2205,30 +2205,35 @@ impl Config {
             })
             .collect();
 
+        let humans_dir = instance_dir.join("humans");
         let mut humans: Vec<HumanDef> = toml
             .humans
             .into_iter()
-            .map(|h| HumanDef {
-                id: h.id,
-                display_name: h.display_name,
-                role: h.role,
-                bio: h.bio,
-                description: h.description,
-                discord_id: h.discord_id,
-                telegram_id: h.telegram_id,
-                slack_id: h.slack_id,
-                email: h.email,
+            .map(|h| {
+                let description = load_human_md(&humans_dir.join(&h.id));
+                HumanDef {
+                    id: h.id,
+                    display_name: h.display_name,
+                    role: h.role,
+                    bio: h.bio,
+                    description,
+                    discord_id: h.discord_id,
+                    telegram_id: h.telegram_id,
+                    slack_id: h.slack_id,
+                    email: h.email,
+                }
             })
             .collect();
 
         // Default admin human if none defined
         if humans.is_empty() {
+            let description = load_human_md(&humans_dir.join("admin"));
             humans.push(HumanDef {
                 id: "admin".into(),
                 display_name: None,
                 role: None,
                 bio: None,
-                description: None,
+                description,
                 discord_id: None,
                 telegram_id: None,
                 slack_id: None,
@@ -2236,7 +2241,7 @@ impl Config {
             });
 
             // Link the default admin to the default agent so the agent sees
-            // the human's description in its system prompt automatically.
+            // the human's context in its system prompt automatically.
             if links.is_empty()
                 && let Some(default_agent) = agents.iter().find(|a| a.default)
             {
@@ -2263,5 +2268,15 @@ impl Config {
             metrics,
             telemetry,
         })
+    }
+}
+
+/// Load `HUMAN.md` from a human's directory, returning `None` if the file
+/// doesn't exist or is empty/whitespace.
+fn load_human_md(human_dir: &std::path::Path) -> Option<String> {
+    let path = human_dir.join("HUMAN.md");
+    match std::fs::read_to_string(&path) {
+        Ok(content) if !content.trim().is_empty() => Some(content),
+        _ => None,
     }
 }

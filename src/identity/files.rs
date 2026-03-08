@@ -6,7 +6,8 @@
 //! go through the identity management API or factory tools.
 //!
 //! USER.md is deprecated — human context now lives on the org graph via
-//! `HumanDef.description` and is inherited by linked agents automatically.
+//! `HUMAN.md` files in `instance_dir/humans/{id}/` and is inherited by
+//! linked agents automatically.
 
 use anyhow::Context as _;
 use std::path::Path;

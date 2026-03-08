@@ -625,7 +625,7 @@ pub struct LinkedAgent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// Rich context about the human — background, preferences, communication
-    /// style, etc. Sourced from `HumanDef.description`. Only set for humans.
+    /// style, etc. Loaded from `HUMAN.md` on disk. Only set for humans.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }

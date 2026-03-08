@@ -104,7 +104,8 @@ pub struct HumanDef {
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bio: Option<String>,
-    /// Rich long-form context about this person — replaces per-agent USER.md.
+    /// Rich long-form context about this person, loaded from HUMAN.md on disk.
+    /// Not stored in config.toml — lives at `instance_dir/humans/{id}/HUMAN.md`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Platform user IDs for correlating inbound messages to this human.

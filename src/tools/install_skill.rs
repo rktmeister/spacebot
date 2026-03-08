@@ -4,6 +4,7 @@
 //! using this tool. Skills are installed to the agent's workspace skills directory
 //! and become immediately available to workers.
 
+use crate::api::ApiState;
 use crate::config::RuntimeConfig;
 use crate::skills::SkillSet;
 use rig::completion::ToolDefinition;
@@ -13,14 +14,25 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Tool for installing skills from the skills.sh registry.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InstallSkillTool {
     runtime_config: Arc<RuntimeConfig>,
+    /// Shared application state for resolving other agents' runtime configs.
+    state: Arc<ApiState>,
+}
+
+impl std::fmt::Debug for InstallSkillTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstallSkillTool").finish_non_exhaustive()
+    }
 }
 
 impl InstallSkillTool {
-    pub fn new(runtime_config: Arc<RuntimeConfig>) -> Self {
-        Self { runtime_config }
+    pub fn new(runtime_config: Arc<RuntimeConfig>, state: Arc<ApiState>) -> Self {
+        Self {
+            runtime_config,
+            state,
+        }
     }
 }
 
@@ -35,6 +47,10 @@ pub struct InstallSkillArgs {
     /// GitHub source to install from, in `owner/repo` or `owner/repo/skill-name` format.
     /// Use the `source` field from `skills_search` results.
     pub source: String,
+    /// Target agent ID. If omitted, installs to the current agent.
+    /// Use this when installing skills for a different agent (e.g. a newly created one).
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 /// Output from install_skill tool.
@@ -63,6 +79,10 @@ impl Tool for InstallSkillTool {
                     "source": {
                         "type": "string",
                         "description": "GitHub source in owner/repo or owner/repo/skill-name format. Use the `source` field from skills_search results."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Target agent ID. Omit to install on the current agent. Set when installing skills for a different agent."
                     }
                 },
                 "required": ["source"]
@@ -80,7 +100,18 @@ impl Tool for InstallSkillTool {
             });
         }
 
-        let target_dir = self.runtime_config.workspace_dir.join("skills");
+        // Resolve the target agent's RuntimeConfig.
+        let target_config = if let Some(ref agent_id) = args.agent_id {
+            let configs = self.state.runtime_configs.load();
+            configs
+                .get(agent_id)
+                .cloned()
+                .ok_or_else(|| InstallSkillError(format!("agent '{agent_id}' not found")))?
+        } else {
+            self.runtime_config.clone()
+        };
+
+        let target_dir = target_config.workspace_dir.join("skills");
 
         let installed = crate::skills::install_from_github(source, &target_dir)
             .await
@@ -97,14 +128,18 @@ impl Tool for InstallSkillTool {
         }
 
         // Reload skills into RuntimeConfig so they're immediately available.
-        let instance_skills_dir = self.runtime_config.instance_dir.join("skills");
+        let instance_skills_dir = target_config.instance_dir.join("skills");
         let skills = SkillSet::load(&instance_skills_dir, &target_dir).await;
-        self.runtime_config.reload_skills(skills);
+        target_config.reload_skills(skills);
 
+        let agent_label = args.agent_id.as_deref().unwrap_or("current agent");
         let names = installed.join(", ");
         Ok(InstallSkillOutput {
             success: true,
-            message: format!("Installed {} skill(s): {names}", installed.len()),
+            message: format!(
+                "Installed {} skill(s) for {agent_label}: {names}",
+                installed.len()
+            ),
             installed,
         })
     }

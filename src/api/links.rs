@@ -670,6 +670,52 @@ pub async fn list_humans(State(state): State<Arc<ApiState>>) -> impl IntoRespons
     Json(serde_json::json!({ "humans": &**humans }))
 }
 
+/// Ensure the TOML document has `[[humans]]` entries matching the in-memory state.
+///
+/// When the auto-created "admin" human (or any human bootstrapped at startup)
+/// exists only in memory and not in config.toml, API writes that create a fresh
+/// `[[humans]]` array will silently drop those entries. This function
+/// materializes the in-memory humans into the document when the section is missing.
+fn ensure_humans_in_doc(doc: &mut toml_edit::DocumentMut, humans: &[crate::config::HumanDef]) {
+    let has_humans = doc
+        .get("humans")
+        .and_then(|h| h.as_array_of_tables())
+        .is_some_and(|arr| !arr.is_empty());
+
+    if has_humans || humans.is_empty() {
+        return;
+    }
+
+    let mut humans_array = toml_edit::ArrayOfTables::new();
+    for human in humans {
+        let mut table = toml_edit::Table::new();
+        table["id"] = toml_edit::value(human.id.as_str());
+        if let Some(ref display_name) = human.display_name {
+            table["display_name"] = toml_edit::value(display_name.as_str());
+        }
+        if let Some(ref role) = human.role {
+            table["role"] = toml_edit::value(role.as_str());
+        }
+        if let Some(ref bio) = human.bio {
+            table["bio"] = toml_edit::value(bio.as_str());
+        }
+        if let Some(ref discord_id) = human.discord_id {
+            table["discord_id"] = toml_edit::value(discord_id.as_str());
+        }
+        if let Some(ref telegram_id) = human.telegram_id {
+            table["telegram_id"] = toml_edit::value(telegram_id.as_str());
+        }
+        if let Some(ref slack_id) = human.slack_id {
+            table["slack_id"] = toml_edit::value(slack_id.as_str());
+        }
+        if let Some(ref email) = human.email {
+            table["email"] = toml_edit::value(email.as_str());
+        }
+        humans_array.push(table);
+    }
+    doc["humans"] = toml_edit::Item::ArrayOfTables(humans_array);
+}
+
 /// Create an org-level human.
 pub async fn create_human(
     State(state): State<Arc<ApiState>>,
@@ -703,6 +749,8 @@ pub async fn create_human(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    ensure_humans_in_doc(&mut doc, &existing);
+
     if doc.get("humans").is_none() {
         doc["humans"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
     }
@@ -726,11 +774,6 @@ pub async fn create_human(
         && !bio.is_empty()
     {
         table["bio"] = toml_edit::value(bio.as_str());
-    }
-    if let Some(description) = &request.description
-        && !description.is_empty()
-    {
-        table["description"] = toml_edit::value(description.as_str());
     }
     if let Some(discord_id) = &request.discord_id
         && !discord_id.is_empty()
@@ -761,12 +804,32 @@ pub async fn create_human(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    // Write HUMAN.md to the human's directory on disk.
+    let instance_dir = (**state.instance_dir.load()).clone();
+    let human_dir = instance_dir.join("humans").join(&id);
+    tokio::fs::create_dir_all(&human_dir)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, human_id = %id, "failed to create human directory");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let description = request.description.clone().filter(|s| !s.is_empty());
+    if let Some(ref content) = description {
+        let md_path = human_dir.join("HUMAN.md");
+        tokio::fs::write(&md_path, content.as_bytes())
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, human_id = %id, "failed to write HUMAN.md");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+    }
+
     let new_human = crate::config::HumanDef {
         id: id.clone(),
         display_name: request.display_name.clone().filter(|s| !s.is_empty()),
         role: request.role.clone().filter(|s| !s.is_empty()),
         bio: request.bio.clone().filter(|s| !s.is_empty()),
-        description: request.description.clone().filter(|s| !s.is_empty()),
+        description,
         discord_id: request.discord_id.clone().filter(|s| !s.is_empty()),
         telegram_id: request.telegram_id.clone().filter(|s| !s.is_empty()),
         slack_id: request.slack_id.clone().filter(|s| !s.is_empty()),
@@ -866,6 +929,8 @@ pub async fn update_human(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    ensure_humans_in_doc(&mut doc, &existing);
+
     if let Some(humans_array) = doc
         .get_mut("humans")
         .and_then(|h| h.as_array_of_tables_mut())
@@ -887,11 +952,6 @@ pub async fn update_human(
                     table["bio"] = toml_edit::value(bio.as_str());
                 } else if request.bio.is_some() {
                     table.remove("bio");
-                }
-                if let Some(description) = &updated.description {
-                    table["description"] = toml_edit::value(description.as_str());
-                } else if request.description.is_some() {
-                    table.remove("description");
                 }
                 if let Some(discord_id) = &updated.discord_id {
                     table["discord_id"] = toml_edit::value(discord_id.as_str());
@@ -925,6 +985,30 @@ pub async fn update_human(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    // Write or remove HUMAN.md on disk.
+    if request.description.is_some() {
+        let instance_dir = (**state.instance_dir.load()).clone();
+        let human_dir = instance_dir.join("humans").join(&human_id);
+        tokio::fs::create_dir_all(&human_dir)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, human_id = %human_id, "failed to create human directory");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        let md_path = human_dir.join("HUMAN.md");
+        if let Some(ref content) = updated.description {
+            tokio::fs::write(&md_path, content.as_bytes())
+                .await
+                .map_err(|error| {
+                    tracing::warn!(%error, human_id = %human_id, "failed to write HUMAN.md");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+        } else {
+            // Empty string clears the file
+            let _ = tokio::fs::remove_file(&md_path).await;
+        }
+    }
+
     let mut humans = (**existing).clone();
     humans[index] = updated.clone();
     state.set_agent_humans(humans);
@@ -955,6 +1039,9 @@ pub async fn delete_human(
         tracing::warn!(%error, "failed to parse config.toml");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+
+    // Materialize in-memory humans if the section is missing from disk.
+    ensure_humans_in_doc(&mut doc, &existing);
 
     // Remove the human entry
     if let Some(humans_array) = doc
@@ -1015,6 +1102,13 @@ pub async fn delete_human(
         .cloned()
         .collect();
     state.set_agent_links(links);
+
+    // Clean up the human's directory on disk (HUMAN.md etc).
+    let instance_dir = (**state.instance_dir.load()).clone();
+    let human_dir = instance_dir.join("humans").join(&human_id);
+    if human_dir.exists() {
+        let _ = tokio::fs::remove_dir_all(&human_dir).await;
+    }
 
     tracing::info!(id = %human_id, "human deleted via API");
 

@@ -613,6 +613,7 @@ pub fn create_cortex_chat_tool_server(
     workspace: PathBuf,
     sandbox: Arc<Sandbox>,
     runtime_config: Arc<RuntimeConfig>,
+    api_state: Arc<crate::api::ApiState>,
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(memory_save_with_events(
@@ -629,7 +630,7 @@ pub fn create_cortex_chat_tool_server(
             runtime_config.clone(),
         ))
         .tool(SkillsSearchTool::new(runtime_config.clone()))
-        .tool(InstallSkillTool::new(runtime_config.clone()))
+        .tool(InstallSkillTool::new(runtime_config.clone(), api_state))
         .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
         .tool(TaskCreateTool::new(
             task_store.clone(),

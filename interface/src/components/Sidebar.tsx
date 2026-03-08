@@ -125,6 +125,14 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 		refetchInterval: 10_000,
 	});
 
+	const { data: providersData } = useQuery({
+		queryKey: ["providers"],
+		queryFn: api.providers,
+		staleTime: 10_000,
+	});
+
+	const hasProvider = providersData?.has_any ?? false;
+
 	const agents = agentsData?.agents ?? [];
 	const channels = channelsData?.channels ?? [];
 	
@@ -254,13 +262,15 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 					})}
 					</SortableContext>
 				</DndContext>
-				<button
-					onClick={() => setCreateOpen(true)}
-					className="flex h-8 w-8 items-center justify-center rounded-md text-sidebar-inkFaint hover:bg-sidebar-selected/50 hover:text-sidebar-inkDull"
-					title="New Agent"
-				>
-					+
-				</button>
+				{hasProvider && (
+					<button
+						onClick={() => setCreateOpen(true)}
+						className="flex h-8 w-8 items-center justify-center rounded-md text-sidebar-inkFaint hover:bg-sidebar-selected/50 hover:text-sidebar-inkDull"
+						title="New Agent"
+					>
+						+
+					</button>
+				)}
 				</div>
 			) : (
 				<>
@@ -326,14 +336,16 @@ export function Sidebar({ liveStates, collapsed, onToggle }: SidebarProps) {
 								</SortableContext>
 							</DndContext>
 						)}
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={() => setCreateOpen(true)}
-						className="mx-2 mt-1 w-auto justify-center border-dashed border-sidebar-line text-sidebar-inkFaint hover:border-sidebar-inkFaint hover:text-sidebar-inkDull"
-					>
-						+ New Agent
-					</Button>
+					{hasProvider && (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setCreateOpen(true)}
+							className="mx-2 mt-1 w-auto justify-center border-dashed border-sidebar-line text-sidebar-inkFaint hover:border-sidebar-inkFaint hover:text-sidebar-inkDull"
+						>
+							+ New Agent
+						</Button>
+					)}
 					</div>
 				</>
 			)}
