@@ -913,12 +913,12 @@ fn dedup_tool_results(history: &mut [rig::message::Message]) {
     for message in history.iter() {
         if let rig::message::Message::Assistant { content, .. } = message {
             for item in content.iter() {
-                if let rig::message::AssistantContent::ToolCall(tc) = item {
-                    if DEDUP_TOOL_RESULTS.contains(&tc.function.name.as_str()) {
-                        // Rig uses call_id when present, falls back to id.
-                        let effective_id = tc.call_id.as_ref().unwrap_or(&tc.id);
-                        call_id_to_tool.insert(effective_id.clone(), tc.function.name.clone());
-                    }
+                if let rig::message::AssistantContent::ToolCall(tc) = item
+                    && DEDUP_TOOL_RESULTS.contains(&tc.function.name.as_str())
+                {
+                    // Rig uses call_id when present, falls back to id.
+                    let effective_id = tc.call_id.as_ref().unwrap_or(&tc.id);
+                    call_id_to_tool.insert(effective_id.clone(), tc.function.name.clone());
                 }
             }
         }
@@ -935,19 +935,18 @@ fn dedup_tool_results(history: &mut [rig::message::Message]) {
     for (message_index, message) in history.iter().enumerate() {
         if let rig::message::Message::User { content } = message {
             for (item_index, item) in content.iter().enumerate() {
-                if let rig::message::UserContent::ToolResult(tr) = item {
-                    if let Some(call_id) = &tr.call_id
-                        && let Some(tool_name) = call_id_to_tool.get(call_id)
-                    {
-                        last_result_position.insert(
-                            // Safe: tool_name came from DEDUP_TOOL_RESULTS which is 'static
-                            DEDUP_TOOL_RESULTS
-                                .iter()
-                                .find(|&&name| name == tool_name)
-                                .expect("tool name came from DEDUP_TOOL_RESULTS"),
-                            (message_index, item_index),
-                        );
-                    }
+                if let rig::message::UserContent::ToolResult(tr) = item
+                    && let Some(call_id) = &tr.call_id
+                    && let Some(tool_name) = call_id_to_tool.get(call_id)
+                {
+                    last_result_position.insert(
+                        // Safe: tool_name came from DEDUP_TOOL_RESULTS which is 'static
+                        DEDUP_TOOL_RESULTS
+                            .iter()
+                            .find(|&&name| name == tool_name)
+                            .expect("tool name came from DEDUP_TOOL_RESULTS"),
+                        (message_index, item_index),
+                    );
                 }
             }
         }
@@ -958,23 +957,21 @@ fn dedup_tool_results(history: &mut [rig::message::Message]) {
     for (message_index, message) in history.iter_mut().enumerate() {
         if let rig::message::Message::User { content } = message {
             for (item_index, item) in content.iter_mut().enumerate() {
-                if let rig::message::UserContent::ToolResult(tr) = item {
-                    if let Some(call_id) = &tr.call_id
-                        && let Some(tool_name) = call_id_to_tool.get(call_id)
-                    {
-                        let is_last = last_result_position
-                            .get(tool_name.as_str())
-                            .is_some_and(|&last| last == (message_index, item_index));
+                if let rig::message::UserContent::ToolResult(tr) = item
+                    && let Some(call_id) = &tr.call_id
+                    && let Some(tool_name) = call_id_to_tool.get(call_id)
+                {
+                    let is_last = last_result_position
+                        .get(tool_name.as_str())
+                        .is_some_and(|&last| last == (message_index, item_index));
 
-                        if !is_last {
-                            tr.content = rig::OneOrMany::one(
-                                rig::message::ToolResultContent::text(format!(
-                                    "[{tool_name} output superseded by a more recent call — \
-                                     see latest {tool_name} result below]"
-                                )),
-                            );
-                            replaced += 1;
-                        }
+                    if !is_last {
+                        tr.content =
+                            rig::OneOrMany::one(rig::message::ToolResultContent::text(format!(
+                                "[{tool_name} output superseded by a more recent call — \
+                                 see latest {tool_name} result below]"
+                            )));
+                        replaced += 1;
                     }
                 }
             }
