@@ -85,11 +85,37 @@ const SAFE_ENV_VARS: &[&str] = &["USER", "LANG", "TERM"];
 /// deterministic sandbox-local paths.
 const RESERVED_ENV_VARS: &[&str] = &["PATH", "HOME", "TMPDIR"];
 
+/// Env vars that enable library injection or alter runtime loading behavior.
+/// Defense-in-depth: even if the tool-level blocklist is bypassed, the sandbox
+/// layer will silently drop these from per-command env vars.
+const DANGEROUS_ENV_VARS: &[&str] = &[
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "NODE_OPTIONS",
+    "RUBYOPT",
+    "PERL5OPT",
+    "PERL5LIB",
+    "BASH_ENV",
+    "ENV",
+];
+
 /// Returns true if the variable name is reserved (set by hardened defaults) or
 /// is in the safe-vars list, and therefore must not be overridden by
-/// `passthrough_env`.
+/// `passthrough_env` or per-command env vars.
 fn is_reserved_env_var(name: &str) -> bool {
     RESERVED_ENV_VARS.contains(&name) || SAFE_ENV_VARS.contains(&name)
+}
+
+/// Returns true if the variable name enables library injection or alters
+/// runtime loading behavior.
+fn is_dangerous_env_var(name: &str) -> bool {
+    DANGEROUS_ENV_VARS
+        .iter()
+        .any(|blocked| name.eq_ignore_ascii_case(blocked))
 }
 
 /// Linux host paths exposed read-only inside bubblewrap sandboxes.
@@ -371,9 +397,20 @@ impl Sandbox {
     /// sandbox-exec depending on the detected backend. The caller still needs
     /// to set stdout/stderr/timeout after this call.
     ///
+    /// `command_env` contains per-command environment variables set by the tool
+    /// caller (e.g. shell tool `env` parameter). These are injected via
+    /// `--setenv` for bubblewrap or `.env()` for sandbox-exec/passthrough, so
+    /// they correctly reach the inner sandboxed process regardless of backend.
+    ///
     /// Reads the current `SandboxMode` from the shared `ArcSwap<SandboxConfig>`
     /// on every call, so changes via the API take effect immediately.
-    pub fn wrap(&self, program: &str, args: &[&str], working_dir: &Path) -> Command {
+    pub fn wrap(
+        &self,
+        program: &str,
+        args: &[&str],
+        working_dir: &Path,
+        command_env: &HashMap<String, String>,
+    ) -> Command {
         let config = self.config.load();
 
         // Prepend tools/bin to PATH for all commands
@@ -400,6 +437,7 @@ impl Sandbox {
                 &path_env,
                 &config,
                 &tool_secrets,
+                command_env,
             );
         }
 
@@ -412,6 +450,7 @@ impl Sandbox {
                 &path_env,
                 &config,
                 &tool_secrets,
+                command_env,
             ),
             SandboxBackend::SandboxExec => self.wrap_sandbox_exec(
                 program,
@@ -420,6 +459,7 @@ impl Sandbox {
                 &path_env,
                 &config,
                 &tool_secrets,
+                command_env,
             ),
             SandboxBackend::None => self.wrap_passthrough(
                 program,
@@ -428,6 +468,7 @@ impl Sandbox {
                 &path_env,
                 &config,
                 &tool_secrets,
+                command_env,
             ),
         }
     }
@@ -443,6 +484,7 @@ impl Sandbox {
         path_env: &str,
         config: &SandboxConfig,
         tool_secrets: &HashMap<String, String>,
+        command_env: &HashMap<String, String>,
     ) -> Command {
         let mut cmd = Command::new("bwrap");
 
@@ -547,7 +589,21 @@ impl Sandbox {
             }
         }
 
-        // 15. Worker keyring isolation (Linux) — give the child a fresh empty
+        // 15. Per-command env vars from tool caller (e.g. shell tool `env`).
+        // Injected via --setenv so they reach the inner sandboxed process.
+        for (name, value) in command_env {
+            if is_reserved_env_var(name) {
+                tracing::debug!(%name, "skipping reserved per-command env var");
+                continue;
+            }
+            if is_dangerous_env_var(name) {
+                tracing::warn!(%name, "dropping dangerous per-command env var");
+                continue;
+            }
+            cmd.arg("--setenv").arg(name).arg(value);
+        }
+
+        // 16. Worker keyring isolation (Linux) — give the child a fresh empty
         // session keyring so it cannot access the parent's keyring (which holds
         // the master key for secret store encryption).
         #[cfg(target_os = "linux")]
@@ -560,7 +616,7 @@ impl Sandbox {
             }
         }
 
-        // 16. The actual command
+        // 17. The actual command
         cmd.arg("--").arg(program);
         for arg in args {
             cmd.arg(arg);
@@ -570,6 +626,7 @@ impl Sandbox {
     }
 
     /// macOS: wrap with sandbox-exec and a generated SBPL profile.
+    #[allow(clippy::too_many_arguments)]
     fn wrap_sandbox_exec(
         &self,
         program: &str,
@@ -578,6 +635,7 @@ impl Sandbox {
         path_env: &str,
         config: &SandboxConfig,
         tool_secrets: &HashMap<String, String>,
+        command_env: &HashMap<String, String>,
     ) -> Command {
         let profile = self.generate_sbpl_profile(config);
 
@@ -617,6 +675,18 @@ impl Sandbox {
                 cmd.env(var_name, value);
             }
         }
+        // Per-command env vars from tool caller.
+        for (name, value) in command_env {
+            if is_reserved_env_var(name) {
+                tracing::debug!(%name, "skipping reserved per-command env var");
+                continue;
+            }
+            if is_dangerous_env_var(name) {
+                tracing::warn!(%name, "dropping dangerous per-command env var");
+                continue;
+            }
+            cmd.env(name, value);
+        }
 
         cmd
     }
@@ -625,6 +695,7 @@ impl Sandbox {
     ///
     /// Still applies environment sanitization — workers never inherit the full
     /// parent environment regardless of sandbox state.
+    #[allow(clippy::too_many_arguments)]
     fn wrap_passthrough(
         &self,
         program: &str,
@@ -633,6 +704,7 @@ impl Sandbox {
         path_env: &str,
         config: &SandboxConfig,
         tool_secrets: &HashMap<String, String>,
+        command_env: &HashMap<String, String>,
     ) -> Command {
         let mut cmd = Command::new(program);
         for arg in args {
@@ -671,6 +743,18 @@ impl Sandbox {
             if let Ok(value) = std::env::var(var_name) {
                 cmd.env(var_name, value);
             }
+        }
+        // Per-command env vars from tool caller.
+        for (name, value) in command_env {
+            if is_reserved_env_var(name) {
+                tracing::debug!(%name, "skipping reserved per-command env var");
+                continue;
+            }
+            if is_dangerous_env_var(name) {
+                tracing::warn!(%name, "dropping dangerous per-command env var");
+                continue;
+            }
+            cmd.env(name, value);
         }
 
         // Worker keyring isolation (Linux) — give the child a fresh empty

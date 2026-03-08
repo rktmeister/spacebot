@@ -504,6 +504,50 @@ const toolRenderers: Record<string, ToolRenderer> = {
 		},
 	},
 
+	// Legacy exec tool — kept for rendering old transcripts. The exec tool was
+	// merged into shell; new transcripts will only have "shell" calls. This
+	// renderer maps exec's structured args (program + args array) into the
+	// same display format as shell.
+	exec: {
+		summary(pair) {
+			const program = pair.args?.program;
+			const cmdArgs = pair.args?.args;
+			if (!program) return null;
+			const parts = [String(program)];
+			if (Array.isArray(cmdArgs)) {
+				for (const arg of cmdArgs) parts.push(String(arg));
+			}
+			const full = parts.join(" ");
+			if (pair.result && typeof pair.result.exit_code === "number") {
+				const code = pair.result.exit_code;
+				const cmdStr = truncate(full, 50);
+				return code === 0 ? cmdStr : `${cmdStr} (exit ${code})`;
+			}
+			return truncate(full, 60);
+		},
+		argsView(pair) {
+			const program = pair.args?.program;
+			if (!program) return null;
+			const parts = [String(program)];
+			const cmdArgs = pair.args?.args;
+			if (Array.isArray(cmdArgs)) {
+				for (const arg of cmdArgs) parts.push(String(arg));
+			}
+			return (
+				<div className="border-b border-app-line/20 px-3 py-2">
+					<pre className="max-h-40 overflow-auto font-mono text-tiny text-ink-dull">
+						<span className="select-none text-ink-faint">$ </span>
+						{parts.join(" ")}
+					</pre>
+				</div>
+			);
+		},
+		resultView(pair) {
+			if (!pair.resultRaw) return null;
+			return <ShellResultView pair={pair} />;
+		},
+	},
+
 	set_status: {
 		summary(pair) {
 			const kind = pair.args?.kind;

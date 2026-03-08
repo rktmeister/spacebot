@@ -180,6 +180,35 @@ impl Tool for ShellTool {
             self.workspace.clone()
         };
 
+        // Validate env var names: reject empty, containing '=' (delimiter in
+        // env blocks), or containing '\0' (terminates C strings / breaks --setenv).
+        for env_var in &args.env {
+            if env_var.key.is_empty() {
+                return Err(ShellError {
+                    message: "Environment variable name cannot be empty.".to_string(),
+                    exit_code: -1,
+                });
+            }
+            if env_var.key.contains('=') {
+                return Err(ShellError {
+                    message: format!(
+                        "Environment variable name '{}' cannot contain '='.",
+                        env_var.key
+                    ),
+                    exit_code: -1,
+                });
+            }
+            if env_var.key.contains('\0') || env_var.value.contains('\0') {
+                return Err(ShellError {
+                    message: format!(
+                        "Environment variable '{}' cannot contain null bytes.",
+                        env_var.key
+                    ),
+                    exit_code: -1,
+                });
+            }
+        }
+
         // Block env vars that enable library injection or alter runtime
         // loading behavior — these allow arbitrary code execution regardless
         // of filesystem sandbox state.
@@ -198,18 +227,22 @@ impl Tool for ShellTool {
             }
         }
 
+        // Build per-command env map for sandbox-aware injection. The sandbox
+        // injects these via --setenv (bubblewrap) or .env() (other backends),
+        // so they always reach the inner sandboxed process.
+        let command_env: std::collections::HashMap<String, String> = args
+            .env
+            .into_iter()
+            .map(|var| (var.key, var.value))
+            .collect();
+
         let mut cmd = if cfg!(target_os = "windows") {
             self.sandbox
-                .wrap("cmd", &["/C", &args.command], &working_dir)
+                .wrap("cmd", &["/C", &args.command], &working_dir, &command_env)
         } else {
             self.sandbox
-                .wrap("sh", &["-c", &args.command], &working_dir)
+                .wrap("sh", &["-c", &args.command], &working_dir, &command_env)
         };
-
-        // Apply user-specified env vars after sandbox wrapping
-        for env_var in args.env {
-            cmd.env(env_var.key, env_var.value);
-        }
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 

@@ -660,6 +660,152 @@ mod tests {
         assert!(args.env.is_empty());
     }
 
+    #[tokio::test]
+    async fn shell_rejects_empty_env_var_name() {
+        let config = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            crate::sandbox::SandboxConfig::default(),
+        ));
+        let workspace = std::env::temp_dir();
+        let sandbox = std::sync::Arc::new(crate::sandbox::Sandbox::new_for_test(
+            config,
+            workspace.clone(),
+        ));
+        let tool = shell::ShellTool::new(workspace, sandbox);
+        let args = shell::ShellArgs {
+            command: "echo hi".into(),
+            working_dir: None,
+            env: vec![shell::EnvVar {
+                key: "".into(),
+                value: "val".into(),
+            }],
+            timeout_seconds: 5,
+        };
+        let result = rig::tool::Tool::call(&tool, args).await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("cannot be empty"),
+            "should reject empty env var name"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_env_var_name_with_equals() {
+        let config = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            crate::sandbox::SandboxConfig::default(),
+        ));
+        let workspace = std::env::temp_dir();
+        let sandbox = std::sync::Arc::new(crate::sandbox::Sandbox::new_for_test(
+            config,
+            workspace.clone(),
+        ));
+        let tool = shell::ShellTool::new(workspace, sandbox);
+        let args = shell::ShellArgs {
+            command: "echo hi".into(),
+            working_dir: None,
+            env: vec![shell::EnvVar {
+                key: "FOO=BAR".into(),
+                value: "val".into(),
+            }],
+            timeout_seconds: 5,
+        };
+        let result = rig::tool::Tool::call(&tool, args).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot contain '='"),
+            "should reject env var name containing ="
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_env_var_with_null_bytes() {
+        let config = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            crate::sandbox::SandboxConfig::default(),
+        ));
+        let workspace = std::env::temp_dir();
+        let sandbox = std::sync::Arc::new(crate::sandbox::Sandbox::new_for_test(
+            config,
+            workspace.clone(),
+        ));
+        let tool = shell::ShellTool::new(workspace, sandbox);
+        let args = shell::ShellArgs {
+            command: "echo hi".into(),
+            working_dir: None,
+            env: vec![shell::EnvVar {
+                key: "FOO\0BAR".into(),
+                value: "val".into(),
+            }],
+            timeout_seconds: 5,
+        };
+        let result = rig::tool::Tool::call(&tool, args).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot contain null"),
+            "should reject env var with null bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_dangerous_env_var() {
+        let config = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            crate::sandbox::SandboxConfig::default(),
+        ));
+        let workspace = std::env::temp_dir();
+        let sandbox = std::sync::Arc::new(crate::sandbox::Sandbox::new_for_test(
+            config,
+            workspace.clone(),
+        ));
+        let tool = shell::ShellTool::new(workspace, sandbox);
+        let args = shell::ShellArgs {
+            command: "echo hi".into(),
+            working_dir: None,
+            env: vec![shell::EnvVar {
+                key: "LD_PRELOAD".into(),
+                value: "/evil.so".into(),
+            }],
+            timeout_seconds: 5,
+        };
+        let result = rig::tool::Tool::call(&tool, args).await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("code injection"),
+            "should reject dangerous env var"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_rejects_dangerous_env_var_case_insensitive() {
+        let config = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            crate::sandbox::SandboxConfig::default(),
+        ));
+        let workspace = std::env::temp_dir();
+        let sandbox = std::sync::Arc::new(crate::sandbox::Sandbox::new_for_test(
+            config,
+            workspace.clone(),
+        ));
+        let tool = shell::ShellTool::new(workspace, sandbox);
+        let args = shell::ShellArgs {
+            command: "echo hi".into(),
+            working_dir: None,
+            env: vec![shell::EnvVar {
+                key: "ld_preload".into(),
+                value: "/evil.so".into(),
+            }],
+            timeout_seconds: 5,
+        };
+        let result = rig::tool::Tool::call(&tool, args).await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("code injection"),
+            "should reject dangerous env var regardless of case"
+        );
+    }
+
     #[test]
     fn blocks_json_bracket_and_tool_syntax_output() {
         assert!(should_block_user_visible_text("{\"content\":\"hello\"}"));
