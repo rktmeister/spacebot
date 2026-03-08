@@ -39,7 +39,7 @@ pub struct SpawnWorkerArgs {
     /// suggested skills are flagged as recommended for this task.
     #[serde(default)]
     pub suggested_skills: Vec<String>,
-    /// Worker type: "builtin" (default) runs a Rig agent loop with shell/file/exec
+    /// Worker type: "builtin" (default) runs a Rig agent loop with shell/file
     /// tools. "opencode" spawns an OpenCode subprocess with full coding agent
     /// capabilities. Use "opencode" for complex coding tasks that benefit from
     /// codebase exploration and context management.
@@ -87,7 +87,7 @@ impl Tool for SpawnWorkerTool {
         let web_search_enabled = rc.brave_search_key.load().is_some();
         let opencode_enabled = rc.opencode.load().enabled;
 
-        let mut tools_list = vec!["shell", "file", "exec"];
+        let mut tools_list = vec!["shell", "file_read", "file_write", "file_edit", "file_list"];
         if browser_enabled {
             tools_list.push("browser");
         }

@@ -146,6 +146,13 @@ export interface OpenCodePartUpdatedEvent {
 	part: OpenCodePart;
 }
 
+export interface WorkerTextEvent {
+	type: "worker_text";
+	agent_id: string;
+	worker_id: string;
+	text: string;
+}
+
 export type ApiEvent =
 	| InboundMessageEvent
 	| OutboundMessageEvent
@@ -159,7 +166,8 @@ export type ApiEvent =
 	| BranchCompletedEvent
 	| ToolStartedEvent
 	| ToolCompletedEvent
-	| OpenCodePartUpdatedEvent;
+	| OpenCodePartUpdatedEvent
+	| WorkerTextEvent;
 
 async function fetchJson<T>(path: string): Promise<T> {
 	const response = await fetch(`${API_BASE}${path}`);
@@ -305,6 +313,7 @@ export interface AgentsResponse {
 export interface CronJobInfo {
 	id: string;
 	prompt: string;
+	cron_expr: string | null;
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
@@ -756,11 +765,13 @@ export interface AgentConfigUpdateRequest {
 export interface CronJobWithStats {
 	id: string;
 	prompt: string;
+	cron_expr: string | null;
 	interval_secs: number;
 	delivery_target: string;
 	enabled: boolean;
 	run_once: boolean;
 	active_hours: [number, number] | null;
+	timeout_secs: number | null;
 	success_count: number;
 	failure_count: number;
 	last_executed_at: string | null;
@@ -775,6 +786,7 @@ export interface CronExecutionEntry {
 
 export interface CronListResponse {
 	jobs: CronJobWithStats[];
+	timezone: string;
 }
 
 export interface CronExecutionsResponse {
@@ -789,12 +801,14 @@ export interface CronActionResponse {
 export interface CreateCronRequest {
 	id: string;
 	prompt: string;
-	interval_secs: number;
+	cron_expr?: string;
+	interval_secs?: number;
 	delivery_target: string;
 	active_start_hour?: number;
 	active_end_hour?: number;
 	enabled: boolean;
 	run_once: boolean;
+	timeout_secs?: number;
 }
 
 export interface CronExecutionsParams {
@@ -958,6 +972,26 @@ export interface RegistrySearchResponse {
 	skills: RegistrySkill[];
 	query: string;
 	count: number;
+}
+
+export interface SkillContentResponse {
+	name: string;
+	description: string;
+	content: string;
+	file_path: string;
+	base_dir: string;
+	source: string;
+	source_repo?: string;
+}
+
+export interface UploadSkillResponse {
+	installed: string[];
+}
+
+export interface RegistrySkillContentResponse {
+	source: string;
+	skill_id: string;
+	content: string | null;
 }
 
 // -- Task Types --
@@ -2006,6 +2040,26 @@ export const api = {
 		return response.json() as Promise<RemoveSkillResponse>;
 	},
 
+	getSkillContent: (agentId: string, name: string) =>
+		fetchJson<SkillContentResponse>(
+			`/agents/skills/content?agent_id=${encodeURIComponent(agentId)}&name=${encodeURIComponent(name)}`,
+		),
+
+	uploadSkillFiles: async (agentId: string, files: File[]) => {
+		const form = new FormData();
+		for (const file of files) {
+			form.append("file", file);
+		}
+		const response = await fetch(
+			`${API_BASE}/agents/skills/upload?agent_id=${encodeURIComponent(agentId)}`,
+			{ method: "POST", body: form },
+		);
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<UploadSkillResponse>;
+	},
+
 	// Skills Registry API (skills.sh proxy)
 	registryBrowse: (view: RegistryView = "all-time", page = 0) =>
 		fetchJson<RegistryBrowseResponse>(
@@ -2015,6 +2069,11 @@ export const api = {
 	registrySearch: (query: string, limit = 50) =>
 		fetchJson<RegistrySearchResponse>(
 			`/skills/registry/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+		),
+
+	registrySkillContent: (source: string, skillId: string) =>
+		fetchJson<RegistrySkillContentResponse>(
+			`/skills/registry/content?source=${encodeURIComponent(source)}&skill_id=${encodeURIComponent(skillId)}`,
 		),
 
 	// Agent Links & Topology API

@@ -1,7 +1,7 @@
 //! Cortex chat: persistent admin conversation with the cortex.
 //!
 //! One session per agent. The admin talks to the cortex interactively,
-//! with the full toolset (memory, shell, file, exec, browser, web search).
+//! with the full toolset (memory, shell, file, browser, web search).
 //! When opened on a channel page, the channel's recent history is injected
 //! into the system prompt as context.
 

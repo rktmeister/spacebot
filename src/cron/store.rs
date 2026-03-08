@@ -4,6 +4,7 @@ use crate::cron::scheduler::CronConfig;
 use crate::error::Result;
 use anyhow::Context as _;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 
 /// Cron job store for persistence.
 #[derive(Debug)]
@@ -249,6 +250,35 @@ impl CronStore {
             .collect();
 
         Ok(entries)
+    }
+
+    /// Get the most recent execution timestamp for each cron job.
+    ///
+    /// Returns a map of `cron_id -> last_executed_at` (UTC timestamp string).
+    /// Used by the scheduler to anchor interval-based jobs to their last run
+    /// time after a restart, avoiding skipped or duplicate firings.
+    pub async fn last_execution_times(&self) -> Result<HashMap<String, String>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT cron_id, MAX(executed_at) as last_executed_at
+            FROM cron_executions
+            GROUP BY cron_id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to load last execution times")?;
+
+        let mut map = HashMap::new();
+        for row in rows {
+            let cron_id: String = row.try_get("cron_id")?;
+            let last: Option<String> = row.try_get("last_executed_at")?;
+            if let Some(last) = last {
+                map.insert(cron_id, last);
+            }
+        }
+
+        Ok(map)
     }
 
     /// Get execution stats for a cron job (success count, failure count, last execution).

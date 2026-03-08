@@ -147,8 +147,18 @@ fn lookup(lang: &str, key: &str) -> &'static str {
             include_str!("../../prompts/en/tools/set_status_description.md.j2")
         }
         ("en", "tools/shell") => include_str!("../../prompts/en/tools/shell_description.md.j2"),
-        ("en", "tools/file") => include_str!("../../prompts/en/tools/file_description.md.j2"),
-        ("en", "tools/exec") => include_str!("../../prompts/en/tools/exec_description.md.j2"),
+        ("en", "tools/file_read") => {
+            include_str!("../../prompts/en/tools/file_read_description.md.j2")
+        }
+        ("en", "tools/file_write") => {
+            include_str!("../../prompts/en/tools/file_write_description.md.j2")
+        }
+        ("en", "tools/file_edit") => {
+            include_str!("../../prompts/en/tools/file_edit_description.md.j2")
+        }
+        ("en", "tools/file_list") => {
+            include_str!("../../prompts/en/tools/file_list_description.md.j2")
+        }
         ("en", "tools/browser") => include_str!("../../prompts/en/tools/browser_description.md.j2"),
         ("en", "tools/web_search") => {
             include_str!("../../prompts/en/tools/web_search_description.md.j2")

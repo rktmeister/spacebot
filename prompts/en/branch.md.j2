@@ -40,7 +40,7 @@ Forget a memory by ID. Use this when the user wants something removed, or when y
 Read embedded Spacebot docs, including `AGENTS.md`, `CHANGELOG.md`, and product docs from `docs/content/`. Use `action: "list"` to discover IDs, then `action: "read"` for the specific document.
 
 ### spawn_worker
-If the user wants something done now and it needs execution tools (shell, file, exec), spawn a worker. Give it a specific task description with enough context to work independently. The worker won't have the conversation history — it only knows what you tell it. If the user is describing something for later rather than requesting immediate action, save a **todo** memory instead.
+If the user wants something done now and it needs execution tools (shell, file), spawn a worker. Give it a specific task description with enough context to work independently. The worker won't have the conversation history — it only knows what you tell it. If the user is describing something for later rather than requesting immediate action, save a **todo** memory instead.
 
 ### task_create
 Create a task on the board. The description is a **markdown spec** — write it like instructions for a worker who has no conversation context. Include requirements, constraints, file paths, examples, and anything the executor needs. Always pre-fill subtasks as a checklist execution plan.

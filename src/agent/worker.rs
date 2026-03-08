@@ -5,21 +5,41 @@ use crate::config::BrowserConfig;
 use crate::error::Result;
 use crate::hooks::{SpacebotHook, ToolNudgePolicy};
 use crate::llm::SpacebotModel;
-use crate::llm::routing::is_context_overflow_error;
+use crate::llm::routing::{is_context_overflow_error, is_retriable_error};
 use crate::{AgentDeps, ChannelId, ProcessId, ProcessType, WorkerId};
 use rig::agent::AgentBuilder;
 use rig::completion::CompletionModel;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 /// How many turns per segment before we check context and potentially compact.
-const TURNS_PER_SEGMENT: usize = 25;
+///
+/// Kept relatively low so compaction checks run frequently. Fast models can
+/// burn through many tool-call turns quickly, and each turn may add large
+/// tool results (browser snapshots, shell output). Checking every 15 turns
+/// instead of 25 reduces the chance of blowing past the context window
+/// within a single segment.
+const TURNS_PER_SEGMENT: usize = 15;
 
 /// Max consecutive context overflow recoveries before giving up.
-/// Prevents infinite compact-retry loops if something is fundamentally wrong.
-const MAX_OVERFLOW_RETRIES: usize = 3;
+/// Each retry dedup-strips stale tool results and force-compacts 75% of
+/// remaining messages. Two retries is enough to handle the edge case where
+/// a single message is enormous — beyond that, something is fundamentally
+/// broken (system prompt alone exceeds the context window, or the compaction
+/// floor of 4 messages is still too large).
+const MAX_OVERFLOW_RETRIES: usize = 2;
+
+/// Max consecutive transient provider error retries before giving up.
+/// Transient errors (upstream 500s, timeouts, rate limits that survived
+/// model-level retries) get a backoff-and-retry at the worker level so
+/// the worker survives temporary provider outages.
+const MAX_TRANSIENT_RETRIES: usize = 5;
+
+/// Base delay for worker-level transient error backoff (doubles each retry).
+const TRANSIENT_RETRY_BASE_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Max segments before the worker gives up and returns a partial result.
 /// Prevents unbounded worker loops when the LLM keeps hitting max_turns
@@ -302,14 +322,26 @@ impl Worker {
         let mut prompt = self.task.clone();
         let mut segments_run = 0;
         let mut overflow_retries = 0;
+        let mut transient_retries = 0;
 
-        let result = if resuming {
+        let mut result = if resuming {
             // For resumed workers, synthesize a "result" from the task
             // since the original initial result was already relayed.
             String::new()
         } else {
             loop {
                 segments_run += 1;
+
+                // Pre-prompt maintenance: dedup stale tool results and check
+                // context usage *before* each LLM call, not just at segment
+                // boundaries. Fast models can accumulate large tool results
+                // within a single segment and exceed the context window before
+                // we ever reach a checkpoint.
+                if segments_run > 1 {
+                    dedup_tool_results(&mut history);
+                    self.maybe_compact_history(&mut compacted_history, &mut history)
+                        .await;
+                }
 
                 match self
                     .hook
@@ -321,6 +353,7 @@ impl Worker {
                     }
                     Err(rig::completion::PromptError::MaxTurnsError { .. }) => {
                         overflow_retries = 0;
+                        transient_retries = 0;
 
                         if segments_run >= MAX_SEGMENTS {
                             tracing::warn!(
@@ -336,6 +369,8 @@ impl Worker {
                                 });
                         }
 
+                        self.persist_transcript(&compacted_history, &history).await;
+                        dedup_tool_results(&mut history);
                         self.maybe_compact_history(&mut compacted_history, &mut history)
                             .await;
                         prompt =
@@ -376,12 +411,50 @@ impl Worker {
                             "context overflow, compacting and retrying"
                         );
                         self.hook.send_status("compacting (overflow recovery)");
+                        dedup_tool_results(&mut history);
                         self.force_compact_history(&mut compacted_history, &mut history)
                             .await;
                         prompt = "Continue where you left off. Do not repeat completed work. \
                               Your previous attempt exceeded the context limit, so older history \
                               has been compacted."
                             .into();
+                    }
+                    Err(error) if is_retriable_error(&error.to_string()) => {
+                        transient_retries += 1;
+                        if transient_retries > MAX_TRANSIENT_RETRIES {
+                            self.state = WorkerState::Failed;
+                            self.hook.send_status("failed");
+                            self.write_failure_log(&history, &format!(
+                                "transient provider error after {MAX_TRANSIENT_RETRIES} retries: {error}"
+                            ));
+                            self.persist_transcript(&compacted_history, &history).await;
+                            tracing::error!(
+                                worker_id = %self.id,
+                                retries = MAX_TRANSIENT_RETRIES,
+                                %error,
+                                "worker transient error retries exhausted"
+                            );
+                            return Err(crate::error::AgentError::Other(error.into()).into());
+                        }
+
+                        let delay =
+                            TRANSIENT_RETRY_BASE_DELAY * 2u32.pow((transient_retries - 1) as u32);
+                        tracing::warn!(
+                            worker_id = %self.id,
+                            attempt = transient_retries,
+                            delay_secs = delay.as_secs(),
+                            %error,
+                            "transient provider error, backing off and retrying"
+                        );
+                        self.hook.send_status(format!(
+                            "provider error, retrying in {}s ({transient_retries}/{MAX_TRANSIENT_RETRIES})",
+                            delay.as_secs()
+                        ));
+                        tokio::time::sleep(delay).await;
+
+                        // Don't change the prompt — just retry with the same
+                        // state. The LLM never saw this request so there's
+                        // nothing to "continue" from.
                     }
                     Err(error) => {
                         self.state = WorkerState::Failed;
@@ -394,6 +467,34 @@ impl Worker {
                 }
             }
         };
+
+        // Safety net: if the worker produced an empty result (e.g. reasoning-only
+        // response that slipped past the nudge gate), treat it as a failure — unless
+        // the worker already signaled a meaningful outcome via set_status. A worker
+        // that signaled outcome but ran out of turns still completed its task; the
+        // outcome status text is the result.
+        if !resuming && result.trim().is_empty() {
+            if self.hook.outcome_signaled() {
+                tracing::info!(
+                    worker_id = %self.id,
+                    "worker produced empty text but outcome was signaled, treating as success"
+                );
+                // Use a synthetic result — the channel already received the
+                // outcome status via the event stream, so this is just for the
+                // worker result record.
+                result = "Task completed (outcome signaled via set_status).".to_string();
+            } else {
+                self.state = WorkerState::Failed;
+                self.hook.send_status("failed (empty result)");
+                self.write_failure_log(&history, "worker produced empty result — likely a reasoning-only exit that bypassed the outcome gate");
+                self.persist_transcript(&compacted_history, &history).await;
+                tracing::error!(worker_id = %self.id, "worker produced empty result, treating as failure");
+                return Err(crate::error::AgentError::Other(anyhow::anyhow!(
+                    "worker produced empty result without signaling a meaningful outcome"
+                ))
+                .into());
+            }
+        }
 
         // For interactive workers, enter a follow-up loop
         let mut follow_up_failure: Option<String> = None;
@@ -411,12 +512,14 @@ impl Worker {
                 self.state = WorkerState::Running;
                 self.hook.send_status("processing follow-up");
 
-                // Compact before follow-up if needed
+                // Dedup stale tool results and compact before follow-up if needed
+                dedup_tool_results(&mut history);
                 self.maybe_compact_history(&mut compacted_history, &mut history)
                     .await;
 
                 let mut follow_up_prompt = follow_up.clone();
                 let mut follow_up_overflow_retries = 0;
+                let mut follow_up_transient_retries = 0u32;
                 let follow_up_hook = self
                     .hook
                     .clone()
@@ -445,11 +548,37 @@ impl Worker {
                                 "follow-up context overflow, compacting and retrying"
                             );
                             self.hook.send_status("compacting (overflow recovery)");
+                            dedup_tool_results(&mut history);
                             self.force_compact_history(&mut compacted_history, &mut history)
                                 .await;
                             let prompt_engine = self.deps.runtime_config.prompts.load();
                             let overflow_msg = prompt_engine.render_system_worker_overflow()?;
                             follow_up_prompt = format!("{follow_up}\n\n{overflow_msg}");
+                        }
+                        Err(error) if is_retriable_error(&error.to_string()) => {
+                            follow_up_transient_retries += 1;
+                            if follow_up_transient_retries > MAX_TRANSIENT_RETRIES as u32 {
+                                let failure_reason = format!(
+                                    "follow-up transient error after {MAX_TRANSIENT_RETRIES} retries: {error}"
+                                );
+                                self.write_failure_log(&history, &failure_reason);
+                                tracing::error!(worker_id = %self.id, %error, "follow-up transient retries exhausted");
+                                break Err(failure_reason);
+                            }
+                            let delay = TRANSIENT_RETRY_BASE_DELAY
+                                * 2u32.pow(follow_up_transient_retries - 1);
+                            tracing::warn!(
+                                worker_id = %self.id,
+                                attempt = follow_up_transient_retries,
+                                delay_secs = delay.as_secs(),
+                                %error,
+                                "follow-up transient error, backing off and retrying"
+                            );
+                            self.hook.send_status(format!(
+                                "provider error, retrying in {}s ({follow_up_transient_retries}/{MAX_TRANSIENT_RETRIES})",
+                                delay.as_secs()
+                            ));
+                            tokio::time::sleep(delay).await;
                         }
                         Err(error) => {
                             let failure_reason = format!("follow-up failed: {error}");
@@ -833,6 +962,98 @@ impl Worker {
                 "worker failure log written"
             );
         }
+    }
+}
+
+/// Tool names whose results are bulky and superseded by the latest call.
+/// Only the most recent result for each tool is kept in full; older results
+/// are replaced with a short marker to save context space.
+///
+/// This runs in-place on the history before every LLM call, so the model
+/// always has the latest snapshot but doesn't waste context on stale ones.
+const DEDUP_TOOL_RESULTS: &[&str] = &["browser_snapshot", "browser_tab_list"];
+
+/// Replace all but the most recent result for each tool in `DEDUP_TOOL_RESULTS`
+/// with a short placeholder. This dramatically reduces context usage for
+/// browser-heavy workflows where `browser_snapshot` returns large ARIA trees
+/// on every call.
+///
+/// Note: this mutates `history` in-place, so superseded results are also
+/// replaced in the persisted transcript.
+fn dedup_tool_results(history: &mut [rig::message::Message]) {
+    // Step 1: Build a map from tool-call ID → tool name for dedup-eligible tools.
+    // We need this because ToolResult only has call_id, not the tool name.
+    let mut call_id_to_tool: HashMap<String, String> = HashMap::new();
+    for message in history.iter() {
+        if let rig::message::Message::Assistant { content, .. } = message {
+            for item in content.iter() {
+                if let rig::message::AssistantContent::ToolCall(tc) = item
+                    && DEDUP_TOOL_RESULTS.contains(&tc.function.name.as_str())
+                {
+                    // Rig uses call_id when present, falls back to id.
+                    let effective_id = tc.call_id.as_ref().unwrap_or(&tc.id);
+                    call_id_to_tool.insert(effective_id.clone(), tc.function.name.clone());
+                }
+            }
+        }
+    }
+
+    if call_id_to_tool.is_empty() {
+        return;
+    }
+
+    // Step 2: Find the last (most recent) result position for each tool name.
+    // Tracked as (message_index, item_index) since Rig can pack multiple
+    // ToolResult entries into a single User message.
+    let mut last_result_position: HashMap<&str, (usize, usize)> = HashMap::new();
+    for (message_index, message) in history.iter().enumerate() {
+        if let rig::message::Message::User { content } = message {
+            for (item_index, item) in content.iter().enumerate() {
+                if let rig::message::UserContent::ToolResult(tr) = item
+                    && let Some(call_id) = &tr.call_id
+                    && let Some(tool_name) = call_id_to_tool.get(call_id)
+                {
+                    last_result_position.insert(
+                        // Safe: tool_name came from DEDUP_TOOL_RESULTS which is 'static
+                        DEDUP_TOOL_RESULTS
+                            .iter()
+                            .find(|&&name| name == tool_name)
+                            .expect("tool name came from DEDUP_TOOL_RESULTS"),
+                        (message_index, item_index),
+                    );
+                }
+            }
+        }
+    }
+
+    // Step 3: Replace older results with a compact marker.
+    let mut replaced = 0usize;
+    for (message_index, message) in history.iter_mut().enumerate() {
+        if let rig::message::Message::User { content } = message {
+            for (item_index, item) in content.iter_mut().enumerate() {
+                if let rig::message::UserContent::ToolResult(tr) = item
+                    && let Some(call_id) = &tr.call_id
+                    && let Some(tool_name) = call_id_to_tool.get(call_id)
+                {
+                    let is_last = last_result_position
+                        .get(tool_name.as_str())
+                        .is_some_and(|&last| last == (message_index, item_index));
+
+                    if !is_last {
+                        tr.content =
+                            rig::OneOrMany::one(rig::message::ToolResultContent::text(format!(
+                                "[{tool_name} output superseded by a more recent call — \
+                                 see latest {tool_name} result below]"
+                            )));
+                        replaced += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if replaced > 0 {
+        tracing::debug!(replaced, "deduped stale tool results in history");
     }
 }
 
