@@ -54,7 +54,7 @@ jobs:
         env:
           SPACEBOT_SKIP_FRONTEND_BUILD: "1"
         run: |
-          cd interface && bun install --frozen-lockfile && cd ..
+          cd interface && bun install && cd ..
           ./scripts/build-opencode-embed.sh
           cd interface && bun run build
 
