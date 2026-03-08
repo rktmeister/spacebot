@@ -271,9 +271,9 @@ impl CronStore {
 
         let mut map = HashMap::new();
         for row in rows {
-            let cron_id: String = row.try_get("cron_id").unwrap_or_default();
-            let last: String = row.try_get("last_executed_at").unwrap_or_default();
-            if !cron_id.is_empty() && !last.is_empty() {
+            let cron_id: String = row.try_get("cron_id")?;
+            let last: Option<String> = row.try_get("last_executed_at")?;
+            if let Some(last) = last {
                 map.insert(cron_id, last);
             }
         }

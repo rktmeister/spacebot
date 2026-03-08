@@ -3077,7 +3077,13 @@ async fn initialize_agents(
             Ok(configs) => {
                 // Load last execution times so interval-based jobs can anchor
                 // their first tick to the previous run, surviving restarts.
-                let last_times = store.last_execution_times().await.unwrap_or_default();
+                let last_times = match store.last_execution_times().await {
+                    Ok(times) => times,
+                    Err(error) => {
+                        tracing::warn!(agent_id = %agent_id, %error, "failed to load cron last execution times");
+                        std::collections::HashMap::new()
+                    }
+                };
                 for cron_config in configs {
                     let anchor = last_times.get(&cron_config.id).map(String::as_str);
                     if let Err(error) = scheduler.register_with_anchor(cron_config, anchor).await {

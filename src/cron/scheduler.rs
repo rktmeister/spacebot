@@ -183,6 +183,13 @@ impl Scheduler {
                             .map(|dt| dt.to_utc())
                     })
             });
+            if anchor.is_none() && last_executed_at.is_some() {
+                tracing::warn!(
+                    cron_id = %config.id,
+                    ?last_executed_at,
+                    "failed to parse last_executed_at; falling back to epoch-aligned interval delay"
+                );
+            }
             self.start_timer(&config.id, anchor).await;
         }
 
