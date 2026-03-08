@@ -2134,7 +2134,7 @@ impl Config {
         };
 
         if toml.ssh.enabled && toml.ssh.port == 0 {
-            anyhow::bail!("ssh.port must be between 1 and 65535");
+            return Err(ConfigError::Invalid("ssh.port must be between 1 and 65535".into()).into());
         }
         let ssh = SshConfig {
             enabled: toml.ssh.enabled,
