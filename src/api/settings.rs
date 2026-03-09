@@ -389,21 +389,29 @@ pub(super) async fn update_global_settings(
     }
 
     // Toggle sshd after config is persisted so the state is consistent on restart.
+    // On failure, roll back the persisted flag so GET /api/settings stays accurate.
     if let Some(enabled) = request.ssh_enabled {
-        if enabled {
-            if let Err(error) = super::ssh::enable(&state).await {
-                tracing::warn!(%error, "failed to enable SSH");
-                return Ok(Json(GlobalSettingsUpdateResponse {
-                    success: false,
-                    message: format!("failed to enable SSH: {error}"),
-                    requires_restart: false,
-                }));
+        let _ssh_guard = state.ssh_mutex.lock().await;
+        let ssh_result = if enabled {
+            super::ssh::enable(&state).await
+        } else {
+            super::ssh::disable().await
+        };
+        if let Err(error) = ssh_result {
+            tracing::warn!(%error, "failed to toggle SSH, rolling back config");
+            // Roll back: re-read, restore previous value, write.
+            if let Ok(content) = tokio::fs::read_to_string(&config_path).await
+                && let Ok(mut rollback_doc) = content.parse::<toml_edit::DocumentMut>()
+            {
+                rollback_doc["ssh"]["enabled"] = toml_edit::value(!enabled);
+                let _ = tokio::fs::write(&config_path, rollback_doc.to_string()).await;
             }
-        } else if let Err(error) = super::ssh::disable().await {
-            tracing::warn!(%error, "failed to disable SSH");
             return Ok(Json(GlobalSettingsUpdateResponse {
                 success: false,
-                message: format!("failed to disable SSH: {error}"),
+                message: format!(
+                    "failed to {} SSH: {error}",
+                    if enabled { "enable" } else { "disable" }
+                ),
                 requires_restart: false,
             }));
         }
