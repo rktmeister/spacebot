@@ -9,3 +9,5 @@ Manage scheduled tasks (cron jobs). Actions: `create`, `list`, `delete`.
 **One-shot:** Set `run_once: true` for reminders or one-time tasks. The job disables itself after the first run.
 
 **Active hours:** Use `active_start_hour`/`active_end_hour` to restrict runs to a time window (e.g. business hours only).
+
+Use `action: list` when the user asks what reminders, cron jobs, or scheduled bot tasks already exist. Do not claim cron jobs cannot be listed without trying this tool first.

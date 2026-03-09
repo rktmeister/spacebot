@@ -177,7 +177,7 @@ For the best rendering:
 
 Spacebot also flattens unsupported markdown tables into Telegram-safe bullet lines instead of sending raw pipe-table text.
 
-Spacebot also applies a small Telegram-specific cleanup pass before rendering so obviously collapsed inline lists such as `by:1. ...2. ...` are split into readable list blocks.
+Spacebot also applies a small Telegram-specific cleanup pass before rendering so obviously collapsed inline lists such as `by:1. ...2. ...`, compact date/time text such as `March13,2026 at2:00 PM`, and collapsed heading/list seams such as `**Heading:**- item` are rewritten into more readable Telegram-safe text.
 
 ## Troubleshooting
 

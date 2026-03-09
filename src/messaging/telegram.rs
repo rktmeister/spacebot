@@ -1033,6 +1033,12 @@ fn normalize_telegram_markdown(markdown: &str) -> String {
     static INLINE_UNORDERED_LIST_AFTER_EMPHASIS_CLOSE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?P<close>\*\*|__|~~)(?P<marker>[-*•])[ \t]+").expect("hardcoded regex")
     });
+    static PUNCTUATION_BEFORE_EMPHASIZED_HEADING_AND_LIST: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?P<prefix>[:.!?])(?P<gap>[ \t]*)(?P<heading>(?:\*\*|__).+?(?:\*\*|__))(?P<marker>\d+\.|[-*•])[ \t]+",
+        )
+        .expect("hardcoded regex")
+    });
     static SENTENCE_SPACING: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?P<punctuation>[.!?])(?P<word>[A-Z][A-Za-z']*)").expect("hardcoded regex")
     });
@@ -1053,6 +1059,10 @@ fn normalize_telegram_markdown(markdown: &str) -> String {
             r"\b(?P<word>at|by|for|from|in|last|next|on|since|today|tomorrow|yesterday)(?P<number>\d)",
         )
         .expect("hardcoded regex")
+    });
+    static THE_ORDINAL_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b(?P<word>the)(?P<ordinal>\d{1,2}(?:st|nd|rd|th)\b)")
+            .expect("hardcoded regex")
     });
 
     let mut normalized = String::with_capacity(markdown.len() + markdown.len() / 8);
@@ -1093,6 +1103,9 @@ fn normalize_telegram_markdown(markdown: &str) -> String {
         line = PREPOSITION_NUMBER_SPACING
             .replace_all(&line, "$word $number")
             .into_owned();
+        line = THE_ORDINAL_SPACING
+            .replace_all(&line, "$word $ordinal")
+            .into_owned();
         line = INLINE_ORDERED_LIST_AFTER_PUNCTUATION
             .replace_all(&line, "$prefix\n\n$marker ")
             .into_owned();
@@ -1104,6 +1117,9 @@ fn normalize_telegram_markdown(markdown: &str) -> String {
             .into_owned();
         line = INLINE_UNORDERED_LIST_AFTER_WORD
             .replace_all(&line, "$before\n$marker $next")
+            .into_owned();
+        line = PUNCTUATION_BEFORE_EMPHASIZED_HEADING_AND_LIST
+            .replace_all(&line, "$prefix\n\n$heading\n$marker ")
             .into_owned();
         line = INLINE_ORDERED_LIST_AFTER_EMPHASIS_CLOSE
             .replace_all(&line, "$close\n$marker ")
@@ -1924,6 +1940,13 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_ordinal_spacing() {
+        let input = "The only pending item is scheduled for Wednesday the11th.";
+        let expected = "The only pending item is scheduled for Wednesday the 11th.";
+        assert_eq!(normalize_telegram_markdown(input), expected);
+    }
+
+    #[test]
     fn table_rows_flatten_to_bullets() {
         let input = "| Scenario | Effect |\n| --- | --- |\n| Abrupt war end | Spike to 108-110 |\n| Prolonged conflict | Sustained 106-112 |";
         let expected =
@@ -1942,6 +1965,14 @@ mod tests {
     fn normalizes_collapsed_bullet_list_after_bold_heading() {
         let input = "**Safe-Haven Flows**- USD strengthens\n- Treasuries rally";
         let expected = "<b>Safe-Haven Flows</b>\n\n• USD strengthens\n• Treasuries rally";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_emphasized_heading_and_list_after_punctuation() {
+        let input = "Here's what I found:**What I Found:**- First point\n- Second point";
+        let expected =
+            "Here's what I found:\n\n<b>What I Found:</b>\n\n• First point\n• Second point";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
