@@ -1254,10 +1254,19 @@ impl Messaging for SlackAdapter {
                 } else {
                     "unknown".to_string()
                 };
+                let timestamp = msg
+                    .origin
+                    .ts
+                    .0
+                    .split('.')
+                    .next()
+                    .and_then(|secs| secs.parse::<i64>().ok())
+                    .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0));
                 HistoryMessage {
                     author,
                     content: msg.content.text.clone().unwrap_or_default(),
                     is_bot,
+                    timestamp,
                 }
             })
             .collect();

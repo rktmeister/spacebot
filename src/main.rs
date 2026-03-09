@@ -1907,7 +1907,7 @@ async fn run(
 
                     let channel_id: spacebot::ChannelId = Arc::from(conversation_id.as_str());
 
-                    let (channel, channel_tx) = spacebot::agent::channel::Channel::new(
+                    let (mut channel, channel_tx) = spacebot::agent::channel::Channel::new(
                         channel_id,
                         agent.deps.clone(),
                         response_tx,
@@ -1933,7 +1933,10 @@ async fn run(
                         channel.state.clone(),
                     ).await;
 
-                    // Backfill recent message history from the platform
+                    // Backfill recent message history from the platform.
+                    // The transcript is injected into the system prompt (not chat
+                    // history) so the LLM treats it as read-only system context
+                    // rather than actionable user messages.
                     let backfill_count = agent.config.history_backfill_count();
                     if backfill_count > 0 {
                         match messaging_manager.fetch_history(&message, backfill_count).await {
@@ -1941,22 +1944,23 @@ async fn run(
                                 let mut transcript = String::new();
                                 for entry in &history_messages {
                                     let label = if entry.is_bot { "(you)" } else { &entry.author };
-                                    transcript.push_str(&format!("{}: {}\n", label, entry.content));
+                                    let timestamp = entry
+                                        .timestamp
+                                        .map(|ts| format!(" [{}]", ts.format("%Y-%m-%d %H:%M:%S UTC")))
+                                        .unwrap_or_default();
+                                    transcript.push_str(
+                                        &format!("{label}{timestamp}: {}\n", entry.content),
+                                    );
                                 }
 
-                                let prompt_engine = agent.deps.runtime_config.prompts.load();
-                                let backfill_text = prompt_engine
-                                    .render_system_history_backfill(transcript.trim_end())
-                                    .unwrap_or(transcript);
-
-                                let mut history = channel.state.history.write().await;
-                                history.push(rig::message::Message::from(backfill_text));
-                                drop(history);
+                                channel.set_backfill_transcript(
+                                    transcript.trim_end().to_string(),
+                                );
 
                                 tracing::info!(
                                     conversation_id = %conversation_id,
                                     message_count = history_messages.len(),
-                                    "backfilled channel history"
+                                    "backfilled channel history into system prompt"
                                 );
                             }
                             Err(error) => {
