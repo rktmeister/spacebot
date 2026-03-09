@@ -833,7 +833,8 @@ where
         // For skip, terminating is critical: without it the model receives the tool
         // result and almost always generates narration like "The skip was successful"
         // which either leaks to the user (retrigger path) or wastes tokens.
-        if self.process_type == ProcessType::Channel
+        if !is_tool_error
+            && self.process_type == ProcessType::Channel
             && (tool_name == "reply" || tool_name == "skip")
         {
             return HookAction::Terminate {
