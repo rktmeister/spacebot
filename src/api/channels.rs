@@ -385,9 +385,9 @@ pub(super) struct PromptInspectQuery {
 }
 
 /// Render the full prompt that the LLM would see on the next turn for a
-/// given channel. Returns the system prompt and conversation history
-/// exactly as they would be assembled — useful for debugging prompt
-/// construction, status block content, and context window usage.
+/// given channel. Returns the rendered system prompt and conversation
+/// history — useful for debugging prompt construction, coalescing,
+/// status block content, and context window usage.
 pub(super) async fn inspect_prompt(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<PromptInspectQuery>,
@@ -397,11 +397,19 @@ pub(super) async fn inspect_prompt(
         states.get(&query.channel_id).cloned()
     };
 
-    let channel_state = channel_state.ok_or(StatusCode::NOT_FOUND)?;
+    let channel_state = match channel_state {
+        Some(cs) => cs,
+        None => {
+            return Ok(Json(serde_json::json!({
+                "error": "channel_not_active",
+                "message": "Channel is not currently active in memory. Send a new message to activate this channel.",
+            })));
+        }
+    };
     let rc = &channel_state.deps.runtime_config;
     let prompt_engine = rc.prompts.load();
 
-    // ── Identity + memory bulletin ──
+    // ── Gather all dynamic sections ──
     let identity_context = rc.identity.load().render();
     let memory_bulletin = rc.memory_bulletin.load();
     let skills = rc.skills.load();
@@ -409,7 +417,6 @@ pub(super) async fn inspect_prompt(
         .render_channel_prompt(&prompt_engine)
         .unwrap_or_default();
 
-    // ── Worker capabilities ──
     let browser_enabled = rc.browser_config.load().enabled;
     let web_search_enabled = rc.brave_search_key.load().is_some();
     let opencode_enabled = rc.opencode.load().enabled;
@@ -423,7 +430,6 @@ pub(super) async fn inspect_prompt(
         )
         .unwrap_or_default();
 
-    // ── Status block with system info ──
     let system_info = crate::agent::status::SystemInfo::from_runtime_config(
         rc.as_ref(),
         &channel_state.deps.sandbox,
@@ -435,7 +441,6 @@ pub(super) async fn inspect_prompt(
         status.render_full(&current_time_line, &system_info)
     };
 
-    // ── Conversation context (from DB channel metadata) ──
     let conversation_context = match channel_state.channel_store.get(&query.channel_id).await {
         Ok(Some(info)) => {
             let server_name = info
@@ -459,9 +464,12 @@ pub(super) async fn inspect_prompt(
 
     let sandbox_enabled = channel_state.deps.sandbox.containment_active();
 
+    // ── Render the full system prompt ──
+    // This is a best-effort reconstruction from the API layer. It lacks
+    // available_channels, org_context, adapter_prompt, and project_context
+    // (those require Channel methods not available from ChannelState).
+    // Captured snapshots store the exact prompt the model received.
     let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
-
-    // ── Render system prompt ──
     let system_prompt = prompt_engine
         .render_channel_prompt_with_links(
             empty_to_none(identity_context),
@@ -470,32 +478,175 @@ pub(super) async fn inspect_prompt(
             worker_capabilities,
             conversation_context,
             empty_to_none(status_text),
-            None, // coalesce_hint — only relevant during batched dispatch
-            None, // available_channels — requires messaging manager context
+            None, // coalesce_hint
+            None, // available_channels — not available from API layer
             sandbox_enabled,
-            None, // org_context — requires link resolution
-            None, // adapter_prompt — requires adapter context
-            None, // project_context — requires project store queries
+            None, // org_context — not available from API layer
+            None, // adapter_prompt — not available from API layer
+            None, // project_context — not available from API layer
         )
-        .map_err(|error| {
-            tracing::warn!(%error, "failed to render channel prompt for inspect");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .unwrap_or_default();
+
+    let total_chars = system_prompt.len();
 
     // ── History ──
     let history = channel_state.history.read().await;
     let history_json = serde_json::to_value(&*history).unwrap_or(serde_json::Value::Null);
 
+    // ── Capture toggle state ──
+    let capture_enabled = rc
+        .settings
+        .load()
+        .as_ref()
+        .as_ref()
+        .map(|s| s.prompt_capture_enabled(&query.channel_id))
+        .unwrap_or(false);
+
     // ── Build response ──
     let response = serde_json::json!({
         "channel_id": query.channel_id,
         "system_prompt": system_prompt,
-        "system_prompt_chars": system_prompt.len(),
+        "total_chars": total_chars,
         "history_length": history.len(),
         "history": history_json,
+        "capture_enabled": capture_enabled,
     });
 
     Ok(Json(response))
+}
+
+// ── Prompt Capture Toggle ──────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(super) struct PromptCaptureBody {
+    channel_id: String,
+    enabled: bool,
+}
+
+/// Enable or disable prompt capture for a specific channel.
+pub(super) async fn set_prompt_capture(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<PromptCaptureBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Find the agent's runtime config that owns this channel.
+    let runtime_config = {
+        let configs = state.runtime_configs.load();
+        let channel_state = state.channel_states.read().await;
+        channel_state
+            .get(&body.channel_id)
+            .map(|cs| cs.deps.runtime_config.clone())
+            .or_else(|| {
+                // Fall back to first agent config if channel not active
+                configs.values().next().cloned()
+            })
+    };
+
+    let rc = runtime_config.ok_or(StatusCode::NOT_FOUND)?;
+    let settings = rc.settings.load();
+    let settings = settings.as_ref().as_ref().ok_or_else(|| {
+        tracing::warn!("no settings store available for prompt capture toggle");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    settings
+        .set_prompt_capture(&body.channel_id, body.enabled)
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to set prompt capture");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "channel_id": body.channel_id,
+        "capture_enabled": body.enabled,
+    })))
+}
+
+// ── Prompt Snapshot History ────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(super) struct SnapshotListQuery {
+    channel_id: String,
+    #[serde(default = "default_snapshot_limit")]
+    limit: usize,
+}
+
+fn default_snapshot_limit() -> usize {
+    50
+}
+
+/// List prompt snapshots for a channel (newest first).
+pub(super) async fn list_prompt_snapshots(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<SnapshotListQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let snapshot_store = find_snapshot_store(&state, &query.channel_id).await?;
+
+    let summaries = snapshot_store
+        .list(&query.channel_id, query.limit)
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to list prompt snapshots");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "channel_id": query.channel_id,
+        "snapshots": summaries,
+    })))
+}
+
+#[derive(Deserialize)]
+pub(super) struct SnapshotGetQuery {
+    channel_id: String,
+    timestamp_ms: i64,
+}
+
+/// Retrieve a specific prompt snapshot.
+pub(super) async fn get_prompt_snapshot(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<SnapshotGetQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let snapshot_store = find_snapshot_store(&state, &query.channel_id).await?;
+
+    let snapshot = snapshot_store
+        .get(&query.channel_id, query.timestamp_ms)
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to get prompt snapshot");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    match snapshot {
+        Some(snapshot) => Ok(Json(serde_json::to_value(&snapshot).unwrap_or_default())),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/// Find the prompt snapshot store for a channel.
+async fn find_snapshot_store(
+    state: &ApiState,
+    channel_id: &str,
+) -> Result<Arc<crate::agent::prompt_snapshot::PromptSnapshotStore>, StatusCode> {
+    // Try to find via active channel state first.
+    let channel_state = {
+        let states = state.channel_states.read().await;
+        states.get(channel_id).cloned()
+    };
+
+    if let Some(cs) = channel_state
+        && let Some(store) = cs.prompt_snapshot_store.as_ref()
+    {
+        return Ok(store.clone());
+    }
+
+    // Fall back to runtime configs.
+    let configs = state.runtime_configs.load();
+    for rc in configs.values() {
+        let store = rc.prompt_snapshots.load();
+        if let Some(store) = store.as_ref().as_ref() {
+            return Ok(store.clone());
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
 }
 
 #[cfg(test)]

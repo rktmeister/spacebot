@@ -856,6 +856,7 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
         event_rx,
         context.screenshot_dir.clone(),
         context.logs_dir.clone(),
+        None, // cron channels don't capture prompt snapshots
     );
 
     // Spawn the channel's event loop
