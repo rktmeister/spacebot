@@ -175,6 +175,8 @@ For the best rendering:
 - prefer flat bullet lists or short `Label: value` lines over tables or dense prose
 - avoid raw HTML, markdown heading markers, tables, and deeply nested markdown structures
 
+Spacebot also flattens unsupported markdown tables into Telegram-safe bullet lines instead of sending raw pipe-table text.
+
 Spacebot also applies a small Telegram-specific cleanup pass before rendering so obviously collapsed inline lists such as `by:1. ...2. ...` are split into readable list blocks.
 
 ## Troubleshooting

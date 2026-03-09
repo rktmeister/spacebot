@@ -1027,6 +1027,12 @@ fn normalize_telegram_markdown(markdown: &str) -> String {
         Regex::new(r"(?P<before>[A-Za-z0-9)\]])(?P<marker>[-*•])[ \t]+(?P<next>\*\*|__|`|[A-Z])")
             .expect("hardcoded regex")
     });
+    static INLINE_ORDERED_LIST_AFTER_EMPHASIS_CLOSE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<close>\*\*|__|~~)(?P<marker>\d+\.)[ \t]+").expect("hardcoded regex")
+    });
+    static INLINE_UNORDERED_LIST_AFTER_EMPHASIS_CLOSE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<close>\*\*|__|~~)(?P<marker>[-*•])[ \t]+").expect("hardcoded regex")
+    });
     static SENTENCE_SPACING: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?P<punctuation>[.!?])(?P<word>[A-Z][A-Za-z']*)").expect("hardcoded regex")
     });
@@ -1099,6 +1105,12 @@ fn normalize_telegram_markdown(markdown: &str) -> String {
         line = INLINE_UNORDERED_LIST_AFTER_WORD
             .replace_all(&line, "$before\n$marker $next")
             .into_owned();
+        line = INLINE_ORDERED_LIST_AFTER_EMPHASIS_CLOSE
+            .replace_all(&line, "$close\n$marker ")
+            .into_owned();
+        line = INLINE_UNORDERED_LIST_AFTER_EMPHASIS_CLOSE
+            .replace_all(&line, "$close\n$marker ")
+            .into_owned();
 
         normalized.push_str(&line);
         normalized.push_str(newline);
@@ -1136,12 +1148,56 @@ impl ListContext {
     }
 }
 
+#[derive(Debug, Default)]
+struct TableState {
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+    current_row: Vec<String>,
+    current_cell: Option<String>,
+    in_header: bool,
+}
+
+impl TableState {
+    fn start_row(&mut self) {
+        self.current_row.clear();
+    }
+
+    fn start_cell(&mut self) {
+        self.current_cell = Some(String::new());
+    }
+
+    fn push_cell_text(&mut self, text: &str) {
+        if let Some(cell) = self.current_cell.as_mut() {
+            cell.push_str(text);
+        }
+    }
+
+    fn finish_cell(&mut self) {
+        let cell = self.current_cell.take().unwrap_or_default();
+        self.current_row.push(normalize_table_cell(&cell));
+    }
+
+    fn finish_row(&mut self) {
+        if self.current_row.is_empty() {
+            return;
+        }
+
+        let row = std::mem::take(&mut self.current_row);
+        if self.in_header {
+            self.headers = row;
+        } else if row.iter().any(|cell| !cell.is_empty()) {
+            self.rows.push(row);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct TelegramHtmlRenderer {
     output: String,
     list_stack: Vec<ListContext>,
     list_item_depth: usize,
     blockquote_depth: usize,
+    table_state: Option<TableState>,
 }
 
 impl TelegramHtmlRenderer {
@@ -1151,11 +1207,13 @@ impl TelegramHtmlRenderer {
             list_stack: Vec::new(),
             list_item_depth: 0,
             blockquote_depth: 0,
+            table_state: None,
         }
     }
 
     fn render(markdown: &str) -> String {
         let mut options = Options::empty();
+        options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_STRIKETHROUGH);
         options.insert(Options::ENABLE_TASKLISTS);
 
@@ -1177,14 +1235,25 @@ impl TelegramHtmlRenderer {
             Event::Start(tag) => self.start_tag(tag),
             Event::End(tag) => self.end_tag(tag),
             Event::Text(text) | Event::Html(text) => {
+                if self.push_table_text(text.as_ref()) {
+                    return;
+                }
                 self.output.push_str(&escape_html(text.as_ref()));
             }
             Event::Code(text) => {
+                if self.push_table_text(text.as_ref()) {
+                    return;
+                }
                 self.output.push_str("<code>");
                 self.output.push_str(&escape_html(text.as_ref()));
                 self.output.push_str("</code>");
             }
-            Event::SoftBreak | Event::HardBreak => self.output.push('\n'),
+            Event::SoftBreak | Event::HardBreak => {
+                if self.push_table_text(" ") {
+                    return;
+                }
+                self.output.push('\n');
+            }
             Event::Rule => {
                 if self.in_list_item() {
                     self.ensure_line_break();
@@ -1195,9 +1264,15 @@ impl TelegramHtmlRenderer {
                 self.close_block();
             }
             Event::TaskListMarker(checked) => {
+                if self.push_table_text(if checked { "[x] " } else { "[ ] " }) {
+                    return;
+                }
                 self.output.push_str(if checked { "[x] " } else { "[ ] " });
             }
             Event::FootnoteReference(reference) => {
+                if self.push_table_footnote(reference.as_ref()) {
+                    return;
+                }
                 self.output.push('[');
                 self.output.push_str(&escape_html(reference.as_ref()));
                 self.output.push(']');
@@ -1206,6 +1281,10 @@ impl TelegramHtmlRenderer {
     }
 
     fn start_tag(&mut self, tag: Tag<'_>) {
+        if self.handle_table_start_tag(&tag) {
+            return;
+        }
+
         match tag {
             Tag::Paragraph if !self.in_list_item() && self.blockquote_depth == 0 => {
                 self.ensure_blank_line();
@@ -1278,6 +1357,10 @@ impl TelegramHtmlRenderer {
     }
 
     fn end_tag(&mut self, tag: Tag<'_>) {
+        if self.handle_table_end_tag(&tag) {
+            return;
+        }
+
         match tag {
             Tag::Paragraph => self.close_block(),
             Tag::Heading(..) => {
@@ -1334,6 +1417,118 @@ impl TelegramHtmlRenderer {
 
     fn in_list_item(&self) -> bool {
         self.list_item_depth > 0
+    }
+
+    fn in_table(&self) -> bool {
+        self.table_state.is_some()
+    }
+
+    fn push_table_text(&mut self, text: &str) -> bool {
+        if let Some(table_state) = self.table_state.as_mut() {
+            table_state.push_cell_text(text);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn push_table_footnote(&mut self, reference: &str) -> bool {
+        if let Some(table_state) = self.table_state.as_mut() {
+            table_state.push_cell_text("[");
+            table_state.push_cell_text(reference);
+            table_state.push_cell_text("]");
+            true
+        } else {
+            false
+        }
+    }
+
+    fn handle_table_start_tag(&mut self, tag: &Tag<'_>) -> bool {
+        match tag {
+            Tag::Table(_) => {
+                self.ensure_blank_line();
+                self.table_state = Some(TableState::default());
+                true
+            }
+            Tag::TableHead => {
+                if let Some(table_state) = self.table_state.as_mut() {
+                    table_state.in_header = true;
+                    table_state.start_row();
+                    true
+                } else {
+                    false
+                }
+            }
+            Tag::TableRow => {
+                if let Some(table_state) = self.table_state.as_mut() {
+                    table_state.start_row();
+                    true
+                } else {
+                    false
+                }
+            }
+            Tag::TableCell => {
+                if let Some(table_state) = self.table_state.as_mut() {
+                    table_state.start_cell();
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => self.in_table(),
+        }
+    }
+
+    fn handle_table_end_tag(&mut self, tag: &Tag<'_>) -> bool {
+        match tag {
+            Tag::TableCell => {
+                if let Some(table_state) = self.table_state.as_mut() {
+                    table_state.finish_cell();
+                    true
+                } else {
+                    false
+                }
+            }
+            Tag::TableRow => {
+                if let Some(table_state) = self.table_state.as_mut() {
+                    table_state.finish_row();
+                    true
+                } else {
+                    false
+                }
+            }
+            Tag::TableHead => {
+                if let Some(table_state) = self.table_state.as_mut() {
+                    table_state.finish_row();
+                    table_state.in_header = false;
+                    true
+                } else {
+                    false
+                }
+            }
+            Tag::Table(_) => {
+                if let Some(table_state) = self.table_state.take() {
+                    self.render_table(table_state);
+                    self.ensure_blank_line();
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => self.in_table(),
+        }
+    }
+
+    fn render_table(&mut self, table_state: TableState) {
+        let rendered_rows = render_table_rows(&table_state.headers, &table_state.rows);
+        if rendered_rows.is_empty() {
+            return;
+        }
+
+        if !self.output.is_empty() && !self.output.ends_with('\n') {
+            self.output.push_str("\n\n");
+        }
+        self.output.push_str(&rendered_rows.join("\n"));
     }
 
     fn close_block(&mut self) {
@@ -1395,6 +1590,50 @@ fn code_block_language<'a>(kind: &'a CodeBlockKind<'a>) -> Option<&'a str> {
             .map(str::trim)
             .filter(|value| !value.is_empty()),
     }
+}
+
+fn normalize_table_cell(cell: &str) -> String {
+    cell.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn render_table_rows(headers: &[String], rows: &[Vec<String>]) -> Vec<String> {
+    let mut rendered_rows = Vec::new();
+
+    for row in rows {
+        let non_empty_cells: Vec<&str> = row
+            .iter()
+            .map(String::as_str)
+            .filter(|cell| !cell.is_empty())
+            .collect();
+        if non_empty_cells.is_empty() {
+            continue;
+        }
+
+        if headers.len() == 2 && row.len() >= 2 && !row[0].is_empty() && !row[1].is_empty() {
+            rendered_rows.push(format!("• {}: {}", row[0], row[1]));
+            continue;
+        }
+
+        let labeled_cells: Vec<String> = headers
+            .iter()
+            .zip(row.iter())
+            .filter_map(|(header, cell)| {
+                if header.is_empty() || cell.is_empty() {
+                    None
+                } else {
+                    Some(format!("{header}: {cell}"))
+                }
+            })
+            .collect();
+
+        if !labeled_cells.is_empty() {
+            rendered_rows.push(format!("• {}", labeled_cells.join("; ")));
+        } else {
+            rendered_rows.push(format!("• {}", non_empty_cells.join(" | ")));
+        }
+    }
+
+    rendered_rows
 }
 
 /// Convert markdown to Telegram-compatible HTML.
@@ -1682,6 +1921,28 @@ mod tests {
         let input = "The update was posted today (April9,2026) at7:45 PM. You'll need to review it within the last30 days.";
         let expected = "The update was posted today (April 9, 2026) at 7:45 PM. You'll need to review it within the last 30 days.";
         assert_eq!(normalize_telegram_markdown(input), expected);
+    }
+
+    #[test]
+    fn table_rows_flatten_to_bullets() {
+        let input = "| Scenario | Effect |\n| --- | --- |\n| Abrupt war end | Spike to 108-110 |\n| Prolonged conflict | Sustained 106-112 |";
+        let expected =
+            "• Abrupt war end: Spike to 108-110\n• Prolonged conflict: Sustained 106-112";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn multi_column_table_rows_flatten_to_label_value_bullets() {
+        let input = "| Region | Impact | Risk |\n| --- | --- | --- |\n| Singapore | Growth slows | Medium |";
+        let expected = "• Region: Singapore; Impact: Growth slows; Risk: Medium";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_collapsed_bullet_list_after_bold_heading() {
+        let input = "**Safe-Haven Flows**- USD strengthens\n- Treasuries rally";
+        let expected = "<b>Safe-Haven Flows</b>\n\n• USD strengthens\n• Treasuries rally";
+        assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
     #[test]
