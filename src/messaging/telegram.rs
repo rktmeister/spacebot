@@ -862,14 +862,24 @@ fn build_metadata(
     // Matches the pattern used by Discord/Slack/Twitch adapters.
     let mut mentions_or_replies_to_bot = false;
 
-    // Check text-based @mention (Telegram sends mentions as entities)
+    // Check text-based @mention in message text/caption.
+    // Uses a word-boundary check so "@spacebot" doesn't match "@spacebot_extra".
     if let Some(bot_username) = bot_username {
         let bot_lower = bot_username.to_lowercase();
         if let Some(text) = extract_text(message) {
             let text_lower = text.to_lowercase();
             let mention = format!("@{bot_lower}");
-            if text_lower.contains(&mention) {
-                mentions_or_replies_to_bot = true;
+            // Telegram usernames can contain [a-z0-9_], so ensure the character
+            // after the mention (if any) is not a valid username character.
+            if let Some(start) = text_lower.find(&mention) {
+                let after = start + mention.len();
+                let is_boundary = text_lower
+                    .as_bytes()
+                    .get(after)
+                    .is_none_or(|&ch| !ch.is_ascii_alphanumeric() && ch != b'_');
+                if is_boundary {
+                    mentions_or_replies_to_bot = true;
+                }
             }
         }
     }

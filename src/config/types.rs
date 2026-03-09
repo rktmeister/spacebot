@@ -1539,8 +1539,21 @@ impl Binding {
         }
 
         // DMs are inherently directed at the bot — always pass.
-        let is_dm =
-            message.source == "discord" && !message.metadata.contains_key("discord_guild_id");
+        let is_dm = match message.source.as_str() {
+            "discord" => message
+                .metadata
+                .get("discord_guild_id")
+                .and_then(|v| v.as_u64())
+                .is_none(),
+            "telegram" => {
+                message
+                    .metadata
+                    .get("telegram_chat_type")
+                    .and_then(|v| v.as_str())
+                    == Some("private")
+            }
+            _ => false,
+        };
         if is_dm {
             return true;
         }
