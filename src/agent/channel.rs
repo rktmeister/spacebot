@@ -2531,6 +2531,8 @@ impl Channel {
                         .with_label_values(&[metrics_agent_id, metrics_channel_type])
                         .inc();
                     tracing::debug!(channel_id = %self.id, "channel turn completed via reply tool");
+                } else if reason == "skip" {
+                    tracing::debug!(channel_id = %self.id, "channel turn skipped via tool");
                 } else {
                     tracing::info!(channel_id = %self.id, %reason, "channel turn cancelled");
                 }
