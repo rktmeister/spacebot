@@ -371,6 +371,7 @@ async fn dump_worker_context() {
             Vec::new(),
             &[],
             browser_config.persist_session,
+            None,
         )
         .expect("failed to render worker prompt");
     print_section("WORKER SYSTEM PROMPT", &worker_prompt);
@@ -546,6 +547,7 @@ async fn dump_all_contexts() {
             Vec::new(),
             &[],
             browser_config.persist_session,
+            None,
         )
         .expect("failed to render worker prompt");
     let brave_search_key = (**rc.brave_search_key.load()).clone();

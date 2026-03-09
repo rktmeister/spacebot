@@ -13,7 +13,7 @@ use crate::agent::channel_prompt::{
 };
 use crate::agent::compactor::Compactor;
 use crate::agent::process_control::ControlActionResult;
-use crate::agent::status::StatusBlock;
+use crate::agent::status::{StatusBlock, SystemInfo};
 use crate::agent::worker::Worker;
 use crate::conversation::{ChannelStore, ConversationLogger, ProcessRunLogger};
 use crate::error::{AgentError, Result};
@@ -1453,9 +1453,10 @@ impl Channel {
 
         let temporal_context = TemporalContext::from_runtime(rc.as_ref());
         let current_time_line = temporal_context.current_time_line();
+        let system_info = self.build_system_info().await;
         let status_text = {
             let status = self.state.status_block.read().await;
-            status.render_with_time_context(Some(&current_time_line))
+            status.render_full(&current_time_line, &system_info)
         };
 
         // Render coalesce hint
@@ -2066,6 +2067,24 @@ impl Channel {
         }
     }
 
+    /// Build a snapshot of the system configuration for status block injection.
+    async fn build_system_info(&self) -> SystemInfo {
+        let rc = &self.deps.runtime_config;
+        let mut info = SystemInfo::from_runtime_config(rc, &self.deps.sandbox);
+
+        // Add async-only fields that the base constructor can't populate
+        let cron_job_count = {
+            let scheduler_guard = rc.cron_scheduler.load();
+            match scheduler_guard.as_ref() {
+                Some(scheduler) => Some(scheduler.job_count().await),
+                None => None,
+            }
+        };
+        info.cron_job_count = cron_job_count;
+
+        info
+    }
+
     /// Assemble the full system prompt using the PromptEngine.
     async fn build_system_prompt(&self) -> crate::error::Result<String> {
         let rc = &self.deps.runtime_config;
@@ -2090,9 +2109,10 @@ impl Channel {
 
         let temporal_context = TemporalContext::from_runtime(rc.as_ref());
         let current_time_line = temporal_context.current_time_line();
+        let system_info = self.build_system_info().await;
         let status_text = {
             let status = self.state.status_block.read().await;
-            status.render_with_time_context(Some(&current_time_line))
+            status.render_full(&current_time_line, &system_info)
         };
 
         let available_channels = self.build_available_channels().await;
@@ -2961,8 +2981,9 @@ impl Channel {
     pub async fn get_status(&self) -> String {
         let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
         let current_time_line = temporal_context.current_time_line();
+        let system_info = self.build_system_info().await;
         let status = self.state.status_block.read().await;
-        status.render_with_time_context(Some(&current_time_line))
+        status.render_full(&current_time_line, &system_info)
     }
 
     /// Check if a memory persistence branch should be spawned based on message count.

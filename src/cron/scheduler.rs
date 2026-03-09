@@ -473,6 +473,11 @@ impl Scheduler {
         jobs.contains_key(job_id)
     }
 
+    /// Return the number of registered cron jobs.
+    pub async fn job_count(&self) -> usize {
+        self.jobs.read().await.len()
+    }
+
     /// Trigger a cron job immediately, outside the timer loop.
     pub async fn trigger_now(&self, job_id: &str) -> Result<()> {
         let job = {

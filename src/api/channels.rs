@@ -377,6 +377,127 @@ pub(super) async fn cancel_process(
     }
 }
 
+// ── Prompt Inspect ──────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(super) struct PromptInspectQuery {
+    channel_id: String,
+}
+
+/// Render the full prompt that the LLM would see on the next turn for a
+/// given channel. Returns the system prompt and conversation history
+/// exactly as they would be assembled — useful for debugging prompt
+/// construction, status block content, and context window usage.
+pub(super) async fn inspect_prompt(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<PromptInspectQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let channel_state = {
+        let states = state.channel_states.read().await;
+        states.get(&query.channel_id).cloned()
+    };
+
+    let channel_state = channel_state.ok_or(StatusCode::NOT_FOUND)?;
+    let rc = &channel_state.deps.runtime_config;
+    let prompt_engine = rc.prompts.load();
+
+    // ── Identity + memory bulletin ──
+    let identity_context = rc.identity.load().render();
+    let memory_bulletin = rc.memory_bulletin.load();
+    let skills = rc.skills.load();
+    let skills_prompt = skills
+        .render_channel_prompt(&prompt_engine)
+        .unwrap_or_default();
+
+    // ── Worker capabilities ──
+    let browser_enabled = rc.browser_config.load().enabled;
+    let web_search_enabled = rc.brave_search_key.load().is_some();
+    let opencode_enabled = rc.opencode.load().enabled;
+    let mcp_tool_names = channel_state.deps.mcp_manager.get_tool_names().await;
+    let worker_capabilities = prompt_engine
+        .render_worker_capabilities(
+            browser_enabled,
+            web_search_enabled,
+            opencode_enabled,
+            &mcp_tool_names,
+        )
+        .unwrap_or_default();
+
+    // ── Status block with system info ──
+    let system_info = crate::agent::status::SystemInfo::from_runtime_config(
+        rc.as_ref(),
+        &channel_state.deps.sandbox,
+    );
+    let temporal_context = crate::agent::channel_prompt::TemporalContext::from_runtime(rc.as_ref());
+    let current_time_line = temporal_context.current_time_line();
+    let status_text = {
+        let status = channel_state.status_block.read().await;
+        status.render_full(&current_time_line, &system_info)
+    };
+
+    // ── Conversation context (from DB channel metadata) ──
+    let conversation_context = match channel_state.channel_store.get(&query.channel_id).await {
+        Ok(Some(info)) => {
+            let server_name = info
+                .platform_meta
+                .as_ref()
+                .and_then(|meta| {
+                    meta.get("discord_guild_name")
+                        .or_else(|| meta.get("slack_workspace_id"))
+                })
+                .and_then(|v| v.as_str());
+            prompt_engine
+                .render_conversation_context(
+                    &info.platform,
+                    server_name,
+                    info.display_name.as_deref(),
+                )
+                .ok()
+        }
+        _ => None,
+    };
+
+    let sandbox_enabled = channel_state.deps.sandbox.containment_active();
+
+    let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
+
+    // ── Render system prompt ──
+    let system_prompt = prompt_engine
+        .render_channel_prompt_with_links(
+            empty_to_none(identity_context),
+            empty_to_none(memory_bulletin.to_string()),
+            empty_to_none(skills_prompt),
+            worker_capabilities,
+            conversation_context,
+            empty_to_none(status_text),
+            None, // coalesce_hint — only relevant during batched dispatch
+            None, // available_channels — requires messaging manager context
+            sandbox_enabled,
+            None, // org_context — requires link resolution
+            None, // adapter_prompt — requires adapter context
+            None, // project_context — requires project store queries
+        )
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to render channel prompt for inspect");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // ── History ──
+    let history = channel_state.history.read().await;
+    let history_json = serde_json::to_value(&*history).unwrap_or(serde_json::Value::Null);
+
+    // ── Build response ──
+    let response = serde_json::json!({
+        "channel_id": query.channel_id,
+        "system_prompt": system_prompt,
+        "system_prompt_chars": system_prompt.len(),
+        "history_length": history.len(),
+        "history": history_json,
+    });
+
+    Ok(Json(response))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
