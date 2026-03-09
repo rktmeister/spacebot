@@ -7,6 +7,7 @@ use crate::{Attachment, InboundMessage, MessageContent, OutboundResponse, Status
 
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 use regex::Regex;
 use teloxide::payloads::setters::*;
 use teloxide::requests::{Request, Requester};
@@ -993,26 +994,16 @@ fn should_retry_plain_caption(error: &RequestError) -> bool {
 
 // -- Markdown-to-Telegram-HTML formatting --
 
-static BOLD_ITALIC_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\*\*\*(.+?)\*\*\*").expect("hardcoded regex"));
-static BOLD_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\*\*(.+?)\*\*").expect("hardcoded regex"));
-static BOLD_UNDERSCORE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"__(.+?)__").expect("hardcoded regex"));
-static ITALIC_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\*(.+?)\*").expect("hardcoded regex"));
-static ITALIC_UNDERSCORE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"_(.+?)_").expect("hardcoded regex"));
-static STRIKETHROUGH_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"~~(.+?)~~").expect("hardcoded regex"));
-static LINK_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("hardcoded regex"));
-
 /// Escape characters that have special meaning in Telegram's HTML parse mode.
 fn escape_html(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+/// Escape characters that are unsafe in HTML attributes.
+fn escape_html_attribute(text: &str) -> String {
+    escape_html(text).replace('"', "&quot;")
 }
 
 /// Strip HTML tags and unescape entities, producing plain text for fallback.
@@ -1026,139 +1017,293 @@ fn strip_html_tags(html: &str) -> String {
         .replace("&gt;", ">")
 }
 
+#[derive(Debug, Clone)]
+enum ListContext {
+    Unordered { has_items: bool },
+    Ordered { next_index: u64, has_items: bool },
+}
+
+impl ListContext {
+    fn mark_item_started(&mut self) -> bool {
+        match self {
+            Self::Unordered { has_items } | Self::Ordered { has_items, .. } => {
+                let had_items = *has_items;
+                *has_items = true;
+                had_items
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TelegramHtmlRenderer {
+    output: String,
+    list_stack: Vec<ListContext>,
+    list_item_depth: usize,
+    blockquote_depth: usize,
+}
+
+impl TelegramHtmlRenderer {
+    fn new(capacity: usize) -> Self {
+        Self {
+            output: String::with_capacity(capacity),
+            list_stack: Vec::new(),
+            list_item_depth: 0,
+            blockquote_depth: 0,
+        }
+    }
+
+    fn render(markdown: &str) -> String {
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_STRIKETHROUGH);
+        options.insert(Options::ENABLE_TASKLISTS);
+
+        let parser = Parser::new_ext(markdown, options);
+        let mut renderer = Self::new(markdown.len());
+        for event in parser {
+            renderer.push_event(event);
+        }
+        renderer.finish()
+    }
+
+    fn finish(mut self) -> String {
+        self.trim_trailing_newlines_to(0);
+        self.output
+    }
+
+    fn push_event(&mut self, event: Event<'_>) {
+        match event {
+            Event::Start(tag) => self.start_tag(tag),
+            Event::End(tag) => self.end_tag(tag),
+            Event::Text(text) | Event::Html(text) => {
+                self.output.push_str(&escape_html(text.as_ref()));
+            }
+            Event::Code(text) => {
+                self.output.push_str("<code>");
+                self.output.push_str(&escape_html(text.as_ref()));
+                self.output.push_str("</code>");
+            }
+            Event::SoftBreak | Event::HardBreak => self.output.push('\n'),
+            Event::Rule => {
+                if self.in_list_item() {
+                    self.ensure_line_break();
+                } else {
+                    self.ensure_blank_line();
+                }
+                self.output.push_str("──────────");
+                self.close_block();
+            }
+            Event::TaskListMarker(checked) => {
+                self.output.push_str(if checked { "[x] " } else { "[ ] " });
+            }
+            Event::FootnoteReference(reference) => {
+                self.output.push('[');
+                self.output.push_str(&escape_html(reference.as_ref()));
+                self.output.push(']');
+            }
+        }
+    }
+
+    fn start_tag(&mut self, tag: Tag<'_>) {
+        match tag {
+            Tag::Paragraph => {
+                if !self.in_list_item() && self.blockquote_depth == 0 {
+                    self.ensure_blank_line();
+                }
+            }
+            Tag::Heading(..) => {
+                self.ensure_blank_line();
+                self.output.push_str("<b>");
+            }
+            Tag::BlockQuote => {
+                self.ensure_blank_line();
+                self.output.push_str("<blockquote>");
+                self.blockquote_depth += 1;
+            }
+            Tag::CodeBlock(kind) => {
+                if self.in_list_item() {
+                    self.ensure_line_break();
+                } else {
+                    self.ensure_blank_line();
+                }
+
+                if let Some(language) = code_block_language(&kind) {
+                    self.output.push_str("<pre><code class=\"language-");
+                    self.output.push_str(&escape_html_attribute(language));
+                    self.output.push_str("\">");
+                } else {
+                    self.output.push_str("<pre>");
+                }
+            }
+            Tag::List(start) => {
+                if self.in_list_item() {
+                    self.ensure_line_break();
+                } else {
+                    self.ensure_blank_line();
+                }
+
+                let list = match start {
+                    Some(next_index) => ListContext::Ordered {
+                        next_index: next_index.max(1),
+                        has_items: false,
+                    },
+                    None => ListContext::Unordered { has_items: false },
+                };
+                self.list_stack.push(list);
+            }
+            Tag::Item => {
+                let had_items = self
+                    .list_stack
+                    .last_mut()
+                    .map(ListContext::mark_item_started)
+                    .unwrap_or(false);
+                self.trim_trailing_newlines_to(if had_items { 1 } else { 2 });
+                if !self.output.is_empty() && !self.output.ends_with('\n') {
+                    self.output.push('\n');
+                }
+                self.list_item_depth += 1;
+                self.push_list_item_prefix();
+            }
+            Tag::Emphasis => self.output.push_str("<i>"),
+            Tag::Strong => self.output.push_str("<b>"),
+            Tag::Strikethrough => self.output.push_str("<s>"),
+            Tag::Link(_, destination, _) | Tag::Image(_, destination, _) => {
+                self.output.push_str("<a href=\"");
+                self.output
+                    .push_str(&escape_html_attribute(destination.as_ref()));
+                self.output.push_str("\">");
+            }
+            _ => {}
+        }
+    }
+
+    fn end_tag(&mut self, tag: Tag<'_>) {
+        match tag {
+            Tag::Paragraph => self.close_block(),
+            Tag::Heading(..) => {
+                self.output.push_str("</b>");
+                self.ensure_blank_line();
+            }
+            Tag::BlockQuote => {
+                self.trim_trailing_newlines_to(0);
+                self.output.push_str("</blockquote>");
+                self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
+                self.ensure_blank_line();
+            }
+            Tag::CodeBlock(kind) => {
+                if code_block_language(&kind).is_some() {
+                    self.output.push_str("</code></pre>");
+                } else {
+                    self.output.push_str("</pre>");
+                }
+                self.close_block();
+            }
+            Tag::List(_) => {
+                self.trim_trailing_newlines_to(if self.in_list_item() { 1 } else { 0 });
+                self.list_stack.pop();
+                if !self.in_list_item() {
+                    self.ensure_blank_line();
+                }
+            }
+            Tag::Item => {
+                self.trim_trailing_newlines_to(0);
+                self.output.push('\n');
+                self.list_item_depth = self.list_item_depth.saturating_sub(1);
+            }
+            Tag::Emphasis => self.output.push_str("</i>"),
+            Tag::Strong => self.output.push_str("</b>"),
+            Tag::Strikethrough => self.output.push_str("</s>"),
+            Tag::Link(..) | Tag::Image(..) => self.output.push_str("</a>"),
+            _ => {}
+        }
+    }
+
+    fn push_list_item_prefix(&mut self) {
+        let indent = "  ".repeat(self.list_stack.len().saturating_sub(1));
+        self.output.push_str(&indent);
+
+        match self.list_stack.last_mut() {
+            Some(ListContext::Ordered { next_index, .. }) => {
+                let current = *next_index;
+                *next_index += 1;
+                self.output.push_str(&format!("{current}. "));
+            }
+            Some(ListContext::Unordered { .. }) | None => self.output.push_str("• "),
+        }
+    }
+
+    fn in_list_item(&self) -> bool {
+        self.list_item_depth > 0
+    }
+
+    fn close_block(&mut self) {
+        if self.in_list_item() {
+            self.ensure_line_break();
+        } else {
+            self.ensure_blank_line();
+        }
+    }
+
+    fn ensure_line_break(&mut self) {
+        if self.output.is_empty() || self.output.ends_with('\n') {
+            return;
+        }
+        self.output.push('\n');
+    }
+
+    fn ensure_blank_line(&mut self) {
+        if self.output.is_empty() {
+            return;
+        }
+
+        let trailing_newlines = self
+            .output
+            .chars()
+            .rev()
+            .take_while(|character| *character == '\n')
+            .count();
+        if trailing_newlines == 0 {
+            self.output.push_str("\n\n");
+        } else if trailing_newlines == 1 {
+            self.output.push('\n');
+        }
+    }
+
+    fn trim_trailing_newlines_to(&mut self, max_newlines: usize) {
+        let trailing_newlines = self
+            .output
+            .chars()
+            .rev()
+            .take_while(|character| *character == '\n')
+            .count();
+        if trailing_newlines <= max_newlines {
+            return;
+        }
+
+        for _ in 0..(trailing_newlines - max_newlines) {
+            self.output.pop();
+        }
+    }
+}
+
+fn code_block_language<'a>(kind: &'a CodeBlockKind<'a>) -> Option<&'a str> {
+    match kind {
+        CodeBlockKind::Indented => None,
+        CodeBlockKind::Fenced(language) => language
+            .split_whitespace()
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    }
+}
+
 /// Convert markdown to Telegram-compatible HTML.
 ///
-/// Handles fenced code blocks, inline code, bold, italic, strikethrough,
-/// links, headers (rendered as bold), and blockquotes.
+/// Telegram only supports a narrow HTML subset, so markdown is parsed into
+/// structure first and then rendered into supported tags plus plain-text list
+/// markers and spacing.
 fn markdown_to_telegram_html(markdown: &str) -> String {
-    let mut result = String::with_capacity(markdown.len());
-    let mut in_code_block = false;
-    let mut code_language = String::new();
-    let mut code_lines: Vec<&str> = Vec::new();
-    let mut blockquote_lines: Vec<String> = Vec::new();
-
-    for line in markdown.lines() {
-        if let Some(rest) = line.strip_prefix("```") {
-            flush_blockquote(&mut result, &mut blockquote_lines);
-
-            if in_code_block {
-                let content = escape_html(&code_lines.join("\n"));
-                if code_language.is_empty() {
-                    result.push_str("<pre>");
-                    result.push_str(&content);
-                    result.push_str("</pre>\n");
-                } else {
-                    result.push_str("<pre><code class=\"language-");
-                    result.push_str(&code_language);
-                    result.push_str("\">");
-                    result.push_str(&content);
-                    result.push_str("</code></pre>\n");
-                }
-                in_code_block = false;
-                code_language.clear();
-                code_lines.clear();
-            } else {
-                in_code_block = true;
-                code_language = rest.trim().to_string();
-            }
-            continue;
-        }
-
-        if in_code_block {
-            code_lines.push(line);
-            continue;
-        }
-
-        if let Some(quote_text) = line.strip_prefix("> ") {
-            blockquote_lines.push(format_inline(quote_text));
-            continue;
-        } else if line == ">" {
-            blockquote_lines.push(String::new());
-            continue;
-        }
-
-        flush_blockquote(&mut result, &mut blockquote_lines);
-
-        if let Some(header_text) = line
-            .strip_prefix("### ")
-            .or_else(|| line.strip_prefix("## "))
-            .or_else(|| line.strip_prefix("# "))
-        {
-            result.push_str("<b>");
-            result.push_str(&format_inline(header_text));
-            result.push_str("</b>\n");
-            continue;
-        }
-
-        result.push_str(&format_inline(line));
-        result.push('\n');
-    }
-
-    if in_code_block {
-        result.push_str("<pre>");
-        result.push_str(&escape_html(&code_lines.join("\n")));
-        result.push_str("</pre>\n");
-    }
-
-    flush_blockquote(&mut result, &mut blockquote_lines);
-
-    while result.ends_with('\n') {
-        result.pop();
-    }
-
-    result
-}
-
-/// Append buffered blockquote lines to the result and clear the buffer.
-fn flush_blockquote(result: &mut String, lines: &mut Vec<String>) {
-    if lines.is_empty() {
-        return;
-    }
-    result.push_str("<blockquote>");
-    result.push_str(&lines.join("\n"));
-    result.push_str("</blockquote>\n");
-    lines.clear();
-}
-
-/// Convert inline markdown elements to HTML within a single line.
-///
-/// Splits on backticks to isolate inline code spans, then converts bold,
-/// italic, strikethrough and links in the remaining text. Content inside
-/// backticks is HTML-escaped but not processed for markdown.
-fn format_inline(line: &str) -> String {
-    let segments: Vec<&str> = line.split('`').collect();
-    let mut result = String::new();
-
-    for (index, segment) in segments.iter().enumerate() {
-        if index % 2 == 1 && index < segments.len() - 1 {
-            result.push_str("<code>");
-            result.push_str(&escape_html(segment));
-            result.push_str("</code>");
-        } else if index % 2 == 0 {
-            result.push_str(&format_markdown_spans(&escape_html(segment)));
-        } else {
-            // Unmatched trailing backtick — treat as literal
-            result.push('`');
-            result.push_str(&format_markdown_spans(&escape_html(segment)));
-        }
-    }
-
-    result
-}
-
-/// Replace markdown span markers with HTML tags in already-escaped text.
-///
-/// Bold-italic (`***`) is processed first, then bold (`**`), then italic
-/// (`*`) so longer patterns are consumed before shorter ones.
-fn format_markdown_spans(text: &str) -> String {
-    let text = BOLD_ITALIC_PATTERN.replace_all(text, "<b><i>$1</i></b>");
-    let text = BOLD_PATTERN.replace_all(&text, "<b>$1</b>");
-    let text = BOLD_UNDERSCORE_PATTERN.replace_all(&text, "<b>$1</b>");
-    let text = ITALIC_PATTERN.replace_all(&text, "<i>$1</i>");
-    let text = ITALIC_UNDERSCORE_PATTERN.replace_all(&text, "<i>$1</i>");
-    let text = STRIKETHROUGH_PATTERN.replace_all(&text, "<s>$1</s>");
-    let text = LINK_PATTERN.replace_all(&text, r#"<a href="$2">$1</a>"#);
-    text.into_owned()
+    TelegramHtmlRenderer::render(markdown)
 }
 
 /// Send a plain text Telegram message for formatting fallback paths.
@@ -1330,6 +1475,13 @@ mod tests {
     }
 
     #[test]
+    fn blockquote_then_list_keeps_structure() {
+        let input = "> Summary\n\n- Memory store: none\n- Inbox: clear";
+        let expected = "<blockquote>Summary</blockquote>\n\n• Memory store: none\n• Inbox: clear";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
     fn html_entities_escaped_in_text() {
         assert_eq!(
             markdown_to_telegram_html("x < y & a > b"),
@@ -1361,9 +1513,9 @@ mod tests {
     }
 
     #[test]
-    fn unclosed_code_block_handled() {
+    fn unclosed_code_block_runs_to_eof() {
         let input = "```python\nprint('hi')";
-        let expected = "<pre>print('hi')</pre>";
+        let expected = "<pre><code class=\"language-python\">print('hi')</code></pre>";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
@@ -1376,9 +1528,37 @@ mod tests {
     }
 
     #[test]
-    fn list_items_pass_through() {
+    fn unordered_lists_render_as_bullets() {
         let input = "- item one\n- item two\n- item three";
-        let expected = "- item one\n- item two\n- item three";
+        let expected = "• item one\n• item two\n• item three";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn ordered_lists_preserve_numbers() {
+        let input = "1. first\n2. second\n3. third";
+        let expected = "1. first\n2. second\n3. third";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn task_lists_render_as_checkboxes() {
+        let input = "- [x] done\n- [ ] next";
+        let expected = "• [x] done\n• [ ] next";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn nested_lists_indent_children() {
+        let input = "- parent\n  - child";
+        let expected = "• parent\n  • child";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn raw_html_is_escaped() {
+        let input = "<b>not actually bold</b>";
+        let expected = "&lt;b&gt;not actually bold&lt;/b&gt;";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 

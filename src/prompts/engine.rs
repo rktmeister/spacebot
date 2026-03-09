@@ -484,9 +484,11 @@ impl PromptEngine {
 
     /// Render optional adapter-specific channel guidance.
     pub fn render_channel_adapter_prompt(&self, adapter: &str) -> Option<String> {
-        let template_name = match adapter {
+        let platform = adapter.split(':').next().unwrap_or(adapter);
+        let template_name = match platform {
             "email" => "adapters/email",
             "cron" => "adapters/cron",
+            "telegram" => "adapters/telegram",
             _ => return None,
         };
 

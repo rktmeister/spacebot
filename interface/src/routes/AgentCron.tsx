@@ -75,7 +75,7 @@ function defaultFormData(): CronFormData {
 }
 
 function jobToFormData(job: CronJobWithStats): CronFormData {
-	const interval = secondsToInterval(job.interval_secs);
+	const interval = secondsToInterval(job.interval_secs ?? 3600);
 	return {
 		id: job.id,
 		prompt: job.prompt,

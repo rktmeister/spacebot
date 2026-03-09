@@ -820,7 +820,7 @@ export interface CronJobWithStats {
 	id: string;
 	prompt: string;
 	cron_expr: string | null;
-	interval_secs: number;
+	interval_secs: number | null;
 	delivery_target: string;
 	enabled: boolean;
 	run_once: boolean;

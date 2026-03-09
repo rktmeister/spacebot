@@ -79,7 +79,7 @@ struct CronJobWithStats {
     id: String,
     prompt: String,
     cron_expr: Option<String>,
-    interval_secs: u64,
+    interval_secs: Option<u64>,
     delivery_target: String,
     enabled: bool,
     run_once: bool,
@@ -130,12 +130,17 @@ pub(super) async fn list_cron_jobs(
             .get_execution_stats(&config.id)
             .await
             .unwrap_or_default();
+        let interval_secs = if config.cron_expr.is_some() {
+            None
+        } else {
+            Some(config.interval_secs)
+        };
 
         jobs.push(CronJobWithStats {
             id: config.id,
             prompt: config.prompt,
+            interval_secs,
             cron_expr: config.cron_expr,
-            interval_secs: config.interval_secs,
             delivery_target: config.delivery_target,
             enabled: config.enabled,
             run_once: config.run_once,

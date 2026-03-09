@@ -74,6 +74,7 @@ cron = "0.12"
 
 # Regular expressions (for leak detection)
 regex = "1.11"
+pulldown-cmark = { version = "0.9", default-features = false }
 
 # Async utilities
 futures = "0.3"

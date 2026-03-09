@@ -157,6 +157,22 @@ Each agent has its own memory, identity, and conversation history.
 </Tab>
 </Tabs>
 
+## Formatting
+
+Spacebot sends Telegram replies using Telegram's HTML parse mode, not full GitHub-flavored Markdown. The reliable subset is:
+
+- bold / italic / underline / strikethrough
+- inline code and fenced code blocks
+- links
+- blockquotes
+
+For the best rendering:
+
+- use short headings and blank lines between sections
+- put a blank line before bullet lists
+- prefer flat bullet lists over tables or dense prose
+- avoid raw HTML, tables, and deeply nested markdown structures
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

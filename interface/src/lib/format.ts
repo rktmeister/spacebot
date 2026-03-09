@@ -27,8 +27,9 @@ export function formatDuration(seconds: number): string {
 	return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-export function formatCronSchedule(cronExpr: string | null, intervalSecs: number): string {
+export function formatCronSchedule(cronExpr: string | null, intervalSecs: number | null): string {
 	if (cronExpr) return cronExpr;
+	if (intervalSecs == null) return "custom";
 	if (intervalSecs % 86400 === 0) return `every ${intervalSecs / 86400}d`;
 	if (intervalSecs % 3600 === 0) return `every ${intervalSecs / 3600}h`;
 	if (intervalSecs % 60 === 0) return `every ${intervalSecs / 60}m`;

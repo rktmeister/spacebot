@@ -3431,6 +3431,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "getopts"
+version = "0.2.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe4fbac503b8d1f88e6676011885f34b7174f46e59956bba534ba83abded4df"
+dependencies = [
+ "unicode-width",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6798,6 +6807,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57206b407293d2bcd3af849ce869d52068623f19e1b5ff8e8778e3309439682b"
 dependencies = [
  "bitflags 2.10.0",
+ "getopts",
  "memchr",
  "unicase",
 ]
@@ -8451,6 +8461,7 @@ dependencies = [
  "pdf-extract",
  "pin-project",
  "prometheus",
+ "pulldown-cmark",
  "rand 0.9.2",
  "redb",
  "regex",
