@@ -111,6 +111,21 @@ Examples:
 
 Use specific filters (`from`, `subject`, `query`, `since_days`) to avoid broad mailbox scans.
 
+## Calendar invites (`.ics`)
+
+Spacebot now extracts meeting details from inbound calendar invite attachments without broadly enabling arbitrary attachment execution.
+
+- Only calendar invite attachments are parsed (`.ics`, `text/calendar`).
+- Invite metadata is added to the email body context so the agent can read back exact meeting times.
+- Times are normalized into both the invite's local timezone and UTC when the timezone is present.
+- The raw invite file is kept as an attachment reference for later recall when attachment saving is enabled.
+
+This is intentionally narrow:
+
+- Spacebot does not execute email attachments.
+- Non-calendar email attachments are still treated as filenames/metadata only.
+- Calendar invites are not turned into reminders automatically. The agent can create a cron reminder after it sees the parsed meeting time, but that remains an explicit action.
+
 ## Thread behavior
 
 Spacebot keeps one conversation per email thread. It uses `References`, `In-Reply-To`, and `Message-ID` headers to map replies back to the correct conversation.

@@ -79,6 +79,10 @@ async fn download_attachment_bytes(
     http: &reqwest::Client,
     attachment: &crate::Attachment,
 ) -> std::result::Result<Vec<u8>, String> {
+    if attachment.url.starts_with("data:") {
+        return decode_data_url(&attachment.url);
+    }
+
     if attachment.auth_header.is_some() {
         download_attachment_bytes_with_auth(attachment).await
     } else {
@@ -95,6 +99,28 @@ async fn download_attachment_bytes(
             .await
             .map(|b| b.to_vec())
             .map_err(|e| e.to_string())
+    }
+}
+
+fn decode_data_url(url: &str) -> std::result::Result<Vec<u8>, String> {
+    let Some(without_scheme) = url.strip_prefix("data:") else {
+        return Err("invalid data URL".to_string());
+    };
+    let Some((metadata, payload)) = without_scheme.split_once(',') else {
+        return Err("data URL is missing a payload delimiter".to_string());
+    };
+
+    if metadata
+        .split(';')
+        .any(|segment| segment.eq_ignore_ascii_case("base64"))
+    {
+        use base64::Engine as _;
+
+        base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .map_err(|error| format!("invalid base64 data URL payload: {error}"))
+    } else {
+        Ok(urlencoding::decode_binary(payload.as_bytes()).into_owned())
     }
 }
 
@@ -796,4 +822,16 @@ async fn filename_taken(pool: &sqlx::SqlitePool, saved_dir: &Path, filename: &st
 
     // Also check filesystem in case of orphaned files
     saved_dir.join(filename).exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_data_url;
+
+    #[test]
+    fn decode_data_url_supports_base64_payloads() {
+        let bytes = decode_data_url("data:application/ics;base64,QkVHSU46VkNBTEVOREFS")
+            .expect("valid data URL");
+        assert_eq!(bytes, b"BEGIN:VCALENDAR");
+    }
 }

@@ -19,6 +19,7 @@ const IMAGE_MIME_PREFIXES: &[&str] = &["image/jpeg", "image/png", "image/gif", "
 /// Text-based MIME types supported for inline re-loading.
 const TEXT_MIME_PREFIXES: &[&str] = &[
     "text/",
+    "application/ics",
     "application/json",
     "application/xml",
     "application/javascript",

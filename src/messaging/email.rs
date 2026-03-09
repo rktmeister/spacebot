@@ -5,13 +5,15 @@ use crate::messaging::traits::{HistoryMessage, InboundStream, Messaging};
 use crate::{InboundMessage, MessageContent, OutboundResponse};
 
 use anyhow::Context as _;
-use chrono::{Duration as ChronoDuration, TimeZone as _, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, NaiveDateTime, TimeZone as _, Utc};
+use chrono_tz::Tz;
 use lettre::message::header::ContentType;
 use lettre::message::{Attachment as EmailAttachment, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use mailparse::{DispositionType, MailAddr, MailHeaderMap};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::net::ToSocketAddrs;
@@ -90,6 +92,7 @@ struct EmailPollConfig {
     poll_interval: Duration,
     allowed_senders: Vec<String>,
     max_body_bytes: usize,
+    max_attachment_bytes: usize,
     runtime_key: String,
 }
 
@@ -121,6 +124,45 @@ pub struct EmailSearchHit {
     pub message_id: Option<String>,
     pub body: String,
     pub attachment_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct EmailCalendarEvent {
+    summary: Option<String>,
+    organizer: Option<String>,
+    location: Option<String>,
+    start_local: Option<String>,
+    end_local: Option<String>,
+    start_utc: Option<String>,
+    end_utc: Option<String>,
+    timezone: Option<String>,
+    uid: Option<String>,
+    recurrence_rule: Option<String>,
+    all_day: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CalendarAttachmentExtraction {
+    attachment: Option<crate::Attachment>,
+    events: Vec<EmailCalendarEvent>,
+    warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ExtractedEmailContent {
+    body_text: String,
+    attachment_names: Vec<String>,
+    calendar_attachments: Vec<crate::Attachment>,
+    calendar_events: Vec<EmailCalendarEvent>,
+    calendar_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedCalendarDateTime {
+    local: String,
+    utc: Option<DateTime<Utc>>,
+    timezone: Option<String>,
+    all_day: bool,
 }
 
 /// Email adapter state.
@@ -257,6 +299,7 @@ impl EmailAdapter {
             poll_interval: self.poll_interval,
             allowed_senders: self.allowed_senders.clone(),
             max_body_bytes: self.max_body_bytes,
+            max_attachment_bytes: self.max_attachment_bytes,
             runtime_key: self.runtime_key.clone(),
         }
     }
@@ -936,12 +979,9 @@ fn parse_inbound_email(
     let account_key = sanitize_account_key(&config.from_address);
     let conversation_id = format!("email:{account_key}:{thread_key}");
 
-    let (mut body_text, attachment_names) =
-        extract_text_and_attachments(&parsed, config.max_body_bytes);
-    if !attachment_names.is_empty() {
-        body_text.push_str("\n\nAttachments: ");
-        body_text.push_str(&attachment_names.join(", "));
-    }
+    let extracted =
+        extract_text_and_attachments(&parsed, config.max_body_bytes, config.max_attachment_bytes);
+    let body_text = extracted.body_text.clone();
 
     let timestamp = headers
         .get_first_value("Date")
@@ -1011,6 +1051,21 @@ fn parse_inbound_email(
         |name| format!("{name} <{sender_email}>"),
     );
 
+    let content = if extracted.calendar_attachments.is_empty() {
+        MessageContent::Text(body_text)
+    } else {
+        MessageContent::Media {
+            text: Some(body_text),
+            attachments: extracted.calendar_attachments,
+        }
+    };
+
+    if !extracted.calendar_events.is_empty() {
+        if let Ok(value) = serde_json::to_value(&extracted.calendar_events) {
+            metadata.insert("email_calendar_events".into(), value);
+        }
+    }
+
     Ok(Some(InboundMessage {
         id: message_id,
         source: "email".into(),
@@ -1018,7 +1073,7 @@ fn parse_inbound_email(
         conversation_id,
         sender_id: sender_email,
         agent_id: None,
-        content: MessageContent::Text(body_text),
+        content,
         timestamp,
         metadata,
         formatted_author: Some(formatted_author),
@@ -1161,7 +1216,12 @@ fn fetch_history_from_imap(
                         || sender_email.eq_ignore_ascii_case(&config.smtp_username);
 
                     let author = sender_name.unwrap_or(sender_email);
-                    let (body, _) = extract_text_and_attachments(&parsed, config.max_body_bytes);
+                    let body = extract_text_and_attachments(
+                        &parsed,
+                        config.max_body_bytes,
+                        config.max_attachment_bytes,
+                    )
+                    .body_text;
 
                     let timestamp = headers
                         .get_first_value("Date")
@@ -1209,6 +1269,7 @@ pub fn search_mailbox(
         poll_interval: Duration::from_secs(config.poll_interval_secs.max(5)),
         allowed_senders: config.allowed_senders.clone(),
         max_body_bytes: config.max_body_bytes.max(1024),
+        max_attachment_bytes: config.max_attachment_bytes.max(1024),
         runtime_key: "email".to_string(),
     })?;
 
@@ -1289,8 +1350,11 @@ pub fn search_mailbox(
                     .as_deref()
                     .and_then(|value| mailparse::dateparse(value).ok())
                     .unwrap_or(i64::MIN);
-                let (body, attachment_names) =
-                    extract_text_and_attachments(&parsed, max_body_bytes);
+                let extracted = extract_text_and_attachments(
+                    &parsed,
+                    max_body_bytes,
+                    config.max_attachment_bytes,
+                );
 
                 ranked_results.push((
                     sort_timestamp,
@@ -1301,8 +1365,8 @@ pub fn search_mailbox(
                         subject,
                         date,
                         message_id,
-                        body,
-                        attachment_names,
+                        body: extracted.body_text,
+                        attachment_names: extracted.attachment_names,
                     },
                 ));
             }
@@ -1497,16 +1561,18 @@ fn parse_mailbox(value: &str) -> anyhow::Result<Mailbox> {
 fn extract_text_and_attachments(
     parsed: &mailparse::ParsedMail<'_>,
     max_body_bytes: usize,
-) -> (String, Vec<String>) {
+    max_attachment_bytes: usize,
+) -> ExtractedEmailContent {
     let mut plain_text_parts = Vec::new();
     let mut html_parts = Vec::new();
-    let mut attachment_names = Vec::new();
+    let mut extracted = ExtractedEmailContent::default();
 
     collect_parts(
         parsed,
         &mut plain_text_parts,
         &mut html_parts,
-        &mut attachment_names,
+        &mut extracted,
+        max_attachment_bytes,
     );
 
     let mut body_text = if !plain_text_parts.is_empty() {
@@ -1522,6 +1588,21 @@ fn extract_text_and_attachments(
         body_text = "(No message body)".to_string();
     }
 
+    let calendar_section =
+        format_calendar_invite_section(&extracted.calendar_events, &extracted.calendar_warnings);
+    if !calendar_section.is_empty() {
+        body_text.push_str("\n\n");
+        body_text.push_str(&calendar_section);
+    }
+
+    extracted.attachment_names.sort();
+    extracted.attachment_names.dedup();
+
+    if !extracted.attachment_names.is_empty() {
+        body_text.push_str("\n\nAttachments: ");
+        body_text.push_str(&extracted.attachment_names.join(", "));
+    }
+
     if body_text.len() > max_body_bytes {
         body_text = format!(
             "{}\n\n[Message truncated due to size limit]",
@@ -1529,17 +1610,16 @@ fn extract_text_and_attachments(
         );
     }
 
-    attachment_names.sort();
-    attachment_names.dedup();
-
-    (body_text, attachment_names)
+    extracted.body_text = body_text;
+    extracted
 }
 
 fn collect_parts(
     part: &mailparse::ParsedMail<'_>,
     plain_text_parts: &mut Vec<String>,
     html_parts: &mut Vec<String>,
-    attachment_names: &mut Vec<String>,
+    extracted: &mut ExtractedEmailContent,
+    max_attachment_bytes: usize,
 ) {
     if part.subparts.is_empty() {
         let disposition = part.get_content_disposition();
@@ -1551,11 +1631,22 @@ fn collect_parts(
         let is_attachment =
             matches!(disposition.disposition, DispositionType::Attachment) || filename.is_some();
 
-        if let Some(filename) = filename {
-            attachment_names.push(filename);
+        if let Some(filename) = &filename {
+            extracted.attachment_names.push(filename.clone());
         }
 
         if is_attachment {
+            if let Some(calendar_attachment) =
+                extract_calendar_attachment(part, filename.as_deref(), max_attachment_bytes)
+            {
+                if let Some(attachment) = calendar_attachment.attachment {
+                    extracted.calendar_attachments.push(attachment);
+                }
+                extracted.calendar_events.extend(calendar_attachment.events);
+                if let Some(warning) = calendar_attachment.warning {
+                    extracted.calendar_warnings.push(warning);
+                }
+            }
             return;
         }
 
@@ -1576,8 +1667,377 @@ fn collect_parts(
     }
 
     for subpart in &part.subparts {
-        collect_parts(subpart, plain_text_parts, html_parts, attachment_names);
+        collect_parts(
+            subpart,
+            plain_text_parts,
+            html_parts,
+            extracted,
+            max_attachment_bytes,
+        );
     }
+}
+
+fn extract_calendar_attachment(
+    part: &mailparse::ParsedMail<'_>,
+    filename: Option<&str>,
+    max_attachment_bytes: usize,
+) -> Option<CalendarAttachmentExtraction> {
+    let mime_type = part.ctype.mimetype.to_ascii_lowercase();
+    if !is_calendar_attachment(&mime_type, filename) {
+        return None;
+    }
+
+    let filename = filename
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("invite.ics")
+        .to_string();
+
+    let bytes = match part.get_body_raw() {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Some(CalendarAttachmentExtraction {
+                attachment: None,
+                events: Vec::new(),
+                warning: Some(format!(
+                    "Calendar invite attachment '{filename}' could not be read: {error}"
+                )),
+            });
+        }
+    };
+
+    if bytes.len() > max_attachment_bytes {
+        return Some(CalendarAttachmentExtraction {
+            attachment: None,
+            events: Vec::new(),
+            warning: Some(format!(
+                "Calendar invite attachment '{filename}' was skipped because it exceeds the configured attachment size limit ({} bytes).",
+                bytes.len()
+            )),
+        });
+    }
+
+    let attachment = build_embedded_attachment(&filename, &mime_type, bytes.clone());
+    let calendar_text = String::from_utf8_lossy(&bytes);
+    let events = parse_ical_events(&calendar_text);
+    let warning = if events.is_empty() {
+        Some(format!(
+            "Calendar invite attachment '{filename}' was saved but no VEVENT entries could be parsed."
+        ))
+    } else {
+        None
+    };
+
+    Some(CalendarAttachmentExtraction {
+        attachment: Some(attachment),
+        events,
+        warning,
+    })
+}
+
+fn build_embedded_attachment(filename: &str, mime_type: &str, bytes: Vec<u8>) -> crate::Attachment {
+    use base64::Engine as _;
+
+    let stored_mime_type = if is_calendar_attachment(mime_type, Some(filename)) {
+        "application/ics"
+    } else {
+        mime_type
+    };
+    let size_bytes = bytes.len() as u64;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    crate::Attachment {
+        filename: filename.to_string(),
+        mime_type: stored_mime_type.to_string(),
+        url: format!("data:{stored_mime_type};base64,{encoded}"),
+        size_bytes: Some(size_bytes),
+        auth_header: None,
+    }
+}
+
+fn is_calendar_attachment(mime_type: &str, filename: Option<&str>) -> bool {
+    if mime_type == "text/calendar" || mime_type == "application/ics" {
+        return true;
+    }
+
+    filename
+        .map(str::trim)
+        .map(|name| name.to_ascii_lowercase().ends_with(".ics"))
+        .unwrap_or(false)
+}
+
+fn format_calendar_invite_section(events: &[EmailCalendarEvent], warnings: &[String]) -> String {
+    let mut lines = Vec::new();
+
+    if !events.is_empty() {
+        lines.push("Calendar invite details:".to_string());
+        for event in events {
+            let title = event
+                .summary
+                .clone()
+                .unwrap_or_else(|| "Untitled event".to_string());
+            let mut parts = vec![title];
+
+            if event.all_day {
+                parts.push("all-day".to_string());
+            }
+            if let Some(start_local) = &event.start_local {
+                let mut start = format!("starts {start_local}");
+                if let Some(timezone) = &event.timezone {
+                    start.push(' ');
+                    start.push_str(timezone);
+                }
+                parts.push(start);
+            }
+            if let Some(start_utc) = &event.start_utc
+                && event.timezone.as_deref() != Some("UTC")
+            {
+                parts.push(format!("UTC {start_utc}"));
+            }
+            if let Some(end_local) = &event.end_local {
+                let mut end = format!("ends {end_local}");
+                if let Some(timezone) = &event.timezone {
+                    end.push(' ');
+                    end.push_str(timezone);
+                }
+                parts.push(end);
+            }
+            if let Some(location) = &event.location {
+                parts.push(format!("location {location}"));
+            }
+            if let Some(organizer) = &event.organizer {
+                parts.push(format!("organizer {organizer}"));
+            }
+            if event.recurrence_rule.is_some() {
+                parts.push("recurring".to_string());
+            }
+
+            lines.push(format!("- {}", parts.join(" | ")));
+        }
+    }
+
+    for warning in warnings {
+        lines.push(format!("- {warning}"));
+    }
+
+    lines.join("\n")
+}
+
+fn parse_ical_events(content: &str) -> Vec<EmailCalendarEvent> {
+    let lines = unfold_ical_lines(content);
+    let mut events = Vec::new();
+    let mut current_event: Option<EmailCalendarEventBuilder> = None;
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("BEGIN:VEVENT") {
+            current_event = Some(EmailCalendarEventBuilder::default());
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("END:VEVENT") {
+            if let Some(builder) = current_event.take()
+                && let Some(event) = builder.build()
+            {
+                events.push(event);
+            }
+            continue;
+        }
+
+        let Some(builder) = current_event.as_mut() else {
+            continue;
+        };
+        let Some((name, params, value)) = parse_ical_property(trimmed) else {
+            continue;
+        };
+
+        match name.as_str() {
+            "SUMMARY" => builder.summary = Some(unescape_ical_text(&value)),
+            "LOCATION" => builder.location = Some(unescape_ical_text(&value)),
+            "UID" => builder.uid = Some(value.trim().to_string()),
+            "RRULE" => builder.recurrence_rule = Some(value.trim().to_string()),
+            "ORGANIZER" => builder.organizer = Some(format_organizer(&params, &value)),
+            "DTSTART" => builder.start = parse_ical_datetime_value(&value, &params),
+            "DTEND" => builder.end = parse_ical_datetime_value(&value, &params),
+            _ => {}
+        }
+    }
+
+    events
+}
+
+#[derive(Debug, Default)]
+struct EmailCalendarEventBuilder {
+    summary: Option<String>,
+    organizer: Option<String>,
+    location: Option<String>,
+    start: Option<ParsedCalendarDateTime>,
+    end: Option<ParsedCalendarDateTime>,
+    uid: Option<String>,
+    recurrence_rule: Option<String>,
+}
+
+impl EmailCalendarEventBuilder {
+    fn build(self) -> Option<EmailCalendarEvent> {
+        let start = self.start?;
+        let end = self.end.clone();
+
+        Some(EmailCalendarEvent {
+            summary: self.summary,
+            organizer: self.organizer,
+            location: self.location,
+            start_local: Some(start.local),
+            end_local: end.as_ref().map(|value| value.local.clone()),
+            start_utc: start.utc.map(format_utc_timestamp),
+            end_utc: end.and_then(|value| value.utc).map(format_utc_timestamp),
+            timezone: start.timezone,
+            uid: self.uid,
+            recurrence_rule: self.recurrence_rule,
+            all_day: start.all_day,
+        })
+    }
+}
+
+fn unfold_ical_lines(content: &str) -> Vec<String> {
+    let mut unfolded: Vec<String> = Vec::new();
+
+    for raw_line in content.replace("\r\n", "\n").replace('\r', "\n").lines() {
+        if matches!(raw_line.chars().next(), Some(' ' | '\t'))
+            && let Some(previous) = unfolded.last_mut()
+        {
+            previous.push_str(raw_line.trim_start_matches([' ', '\t']));
+        } else {
+            unfolded.push(raw_line.to_string());
+        }
+    }
+
+    unfolded
+}
+
+fn parse_ical_property(line: &str) -> Option<(String, HashMap<String, String>, String)> {
+    let (left, value) = line.split_once(':')?;
+    let mut segments = left.split(';');
+    let name = segments.next()?.trim().to_ascii_uppercase();
+    let mut params = HashMap::new();
+    for segment in segments {
+        let Some((key, value)) = segment.split_once('=') else {
+            continue;
+        };
+        params.insert(
+            key.trim().to_ascii_uppercase(),
+            value.trim().trim_matches('"').to_string(),
+        );
+    }
+    Some((name, params, value.trim().to_string()))
+}
+
+fn parse_ical_datetime_value(
+    value: &str,
+    params: &HashMap<String, String>,
+) -> Option<ParsedCalendarDateTime> {
+    let trimmed = value.trim();
+    let is_all_day = params
+        .get("VALUE")
+        .map(|value| value.eq_ignore_ascii_case("DATE"))
+        .unwrap_or(false)
+        || trimmed.len() == 8;
+
+    if is_all_day {
+        let date = NaiveDate::parse_from_str(trimmed, "%Y%m%d").ok()?;
+        return Some(ParsedCalendarDateTime {
+            local: date.format("%Y-%m-%d").to_string(),
+            utc: None,
+            timezone: params.get("TZID").cloned(),
+            all_day: true,
+        });
+    }
+
+    if let Some(zulu_value) = trimmed.strip_suffix('Z') {
+        let naive = parse_ical_naive_datetime(zulu_value)?;
+        let utc = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
+        return Some(ParsedCalendarDateTime {
+            local: utc.format("%Y-%m-%d %H:%M:%S").to_string(),
+            utc: Some(utc),
+            timezone: Some("UTC".to_string()),
+            all_day: false,
+        });
+    }
+
+    let naive = parse_ical_naive_datetime(trimmed)?;
+    if let Some(timezone_name) = params
+        .get("TZID")
+        .and_then(|value| normalize_ical_timezone(value))
+    {
+        if let Ok(timezone) = timezone_name.parse::<Tz>() {
+            let local = timezone.from_local_datetime(&naive).single()?;
+            return Some(ParsedCalendarDateTime {
+                local: local.format("%Y-%m-%d %H:%M:%S").to_string(),
+                utc: Some(local.with_timezone(&Utc)),
+                timezone: Some(timezone_name),
+                all_day: false,
+            });
+        }
+    }
+
+    Some(ParsedCalendarDateTime {
+        local: naive.format("%Y-%m-%d %H:%M:%S").to_string(),
+        utc: None,
+        timezone: None,
+        all_day: false,
+    })
+}
+
+fn parse_ical_naive_datetime(value: &str) -> Option<NaiveDateTime> {
+    NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S")
+        .ok()
+        .or_else(|| NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M").ok())
+}
+
+fn normalize_ical_timezone(value: &str) -> Option<String> {
+    let trimmed = value.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.parse::<Tz>().is_ok() {
+        return Some(trimmed.to_string());
+    }
+
+    for (index, _) in trimmed.match_indices('/') {
+        let suffix = &trimmed[index + 1..];
+        if suffix.parse::<Tz>().is_ok() {
+            return Some(suffix.to_string());
+        }
+    }
+
+    None
+}
+
+fn format_organizer(params: &HashMap<String, String>, value: &str) -> String {
+    let address = value
+        .trim()
+        .strip_prefix("MAILTO:")
+        .or_else(|| value.trim().strip_prefix("mailto:"))
+        .unwrap_or(value.trim())
+        .to_string();
+
+    if let Some(name) = params.get("CN").map(|value| unescape_ical_text(value))
+        && !name.is_empty()
+    {
+        return format!("{name} <{address}>");
+    }
+
+    address
+}
+
+fn unescape_ical_text(value: &str) -> String {
+    value
+        .replace("\\\\", "\\")
+        .replace("\\n", "\n")
+        .replace("\\N", "\n")
+        .replace("\\,", ",")
+        .replace("\\;", ";")
+}
+
+fn format_utc_timestamp(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 fn html_to_text(html: &str) -> String {
@@ -1754,10 +2214,66 @@ struct EmailReplyContext {
 #[cfg(test)]
 mod tests {
     use super::{
-        EmailSearchHit, EmailSearchQuery, build_imap_search_criterion, derive_thread_key,
-        extract_message_ids, is_local_mail_host, normalize_email_target, normalize_reply_subject,
-        normalize_search_folders, parse_primary_mailbox, sort_and_limit_search_hits,
+        EmailPollConfig, EmailSearchHit, EmailSearchQuery, build_imap_search_criterion,
+        derive_thread_key, extract_message_ids, extract_text_and_attachments, is_local_mail_host,
+        normalize_email_target, normalize_reply_subject, normalize_search_folders,
+        parse_inbound_email, parse_primary_mailbox, sort_and_limit_search_hits,
     };
+    use crate::MessageContent;
+    use std::time::Duration;
+
+    fn test_poll_config() -> EmailPollConfig {
+        EmailPollConfig {
+            imap_host: "imap.example.com".to_string(),
+            imap_port: 993,
+            imap_username: "bot@example.com".to_string(),
+            imap_password: "secret".to_string(),
+            imap_use_tls: true,
+            from_address: "bot@example.com".to_string(),
+            smtp_username: "bot@example.com".to_string(),
+            folders: vec!["INBOX".to_string()],
+            poll_interval: Duration::from_secs(30),
+            allowed_senders: Vec::new(),
+            max_body_bytes: 20_000,
+            max_attachment_bytes: 20_000,
+            runtime_key: "email".to_string(),
+        }
+    }
+
+    fn invite_email_fixture() -> String {
+        [
+            "From: Alice Example <alice@example.com>",
+            "To: bot@example.com",
+            "Subject: Team Sync",
+            "Date: Tue, 10 Mar 2026 08:00:00 -0400",
+            "Message-ID: <invite@example.com>",
+            "MIME-Version: 1.0",
+            "Content-Type: multipart/mixed; boundary=\"spacebot-boundary\"",
+            "",
+            "--spacebot-boundary",
+            "Content-Type: text/plain; charset=\"utf-8\"",
+            "",
+            "Please join the meeting.",
+            "--spacebot-boundary",
+            "Content-Type: text/calendar; method=REQUEST; charset=\"utf-8\"; name=\"invite.ics\"",
+            "Content-Disposition: attachment; filename=\"invite.ics\"",
+            "",
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "BEGIN:VEVENT",
+            "UID:invite-123",
+            "SUMMARY:Team Sync",
+            "DTSTART;TZID=America/New_York:20260310T090000",
+            "DTEND;TZID=America/New_York:20260310T093000",
+            "LOCATION:Zoom",
+            "ORGANIZER;CN=Alice Example:MAILTO:alice@example.com",
+            "END:VEVENT",
+            "END:VCALENDAR",
+            "--spacebot-boundary--",
+            "",
+        ]
+        .join("\r\n")
+    }
 
     #[test]
     fn parse_primary_mailbox_parses_display_name() {
@@ -1915,5 +2431,63 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].subject, "newest");
         assert_eq!(results[1].subject, "middle");
+    }
+
+    #[test]
+    fn extract_text_and_attachments_summarizes_calendar_invites() {
+        let raw = invite_email_fixture();
+        let parsed = mailparse::parse_mail(raw.as_bytes()).expect("fixture should parse");
+
+        let extracted = extract_text_and_attachments(&parsed, 20_000, 20_000);
+
+        assert_eq!(extracted.attachment_names, vec!["invite.ics".to_string()]);
+        assert_eq!(extracted.calendar_attachments.len(), 1);
+        assert_eq!(
+            extracted.calendar_attachments[0].mime_type,
+            "application/ics"
+        );
+        assert_eq!(extracted.calendar_events.len(), 1);
+        assert!(extracted.body_text.contains("Calendar invite details:"));
+        assert!(extracted.body_text.contains("Team Sync"));
+        assert!(
+            extracted
+                .body_text
+                .contains("starts 2026-03-10 09:00:00 America/New_York")
+        );
+        assert!(extracted.body_text.contains("UTC 2026-03-10 13:00:00"));
+        assert!(extracted.body_text.contains("Attachments: invite.ics"));
+    }
+
+    #[test]
+    fn inbound_email_with_calendar_attachment_uses_media_content() {
+        let raw = invite_email_fixture();
+        let config = test_poll_config();
+
+        let message = parse_inbound_email(raw.as_bytes(), "INBOX", 42, &config)
+            .expect("inbound email should parse")
+            .expect("fixture should produce a message");
+
+        match message.content {
+            MessageContent::Media { text, attachments } => {
+                assert_eq!(attachments.len(), 1);
+                assert_eq!(attachments[0].filename, "invite.ics");
+                assert_eq!(attachments[0].mime_type, "application/ics");
+                let text = text.expect("calendar email should retain body text");
+                assert!(text.contains("Calendar invite details:"));
+                assert!(text.contains("Team Sync"));
+            }
+            other => panic!("expected media content, got {other:?}"),
+        }
+
+        let events = message
+            .metadata
+            .get("email_calendar_events")
+            .and_then(|value| value.as_array())
+            .expect("calendar metadata should be present");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("start_utc").and_then(|value| value.as_str()),
+            Some("2026-03-10 13:00:00")
+        );
     }
 }
