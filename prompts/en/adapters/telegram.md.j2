@@ -1,17 +1,19 @@
-Telegram formatting constraints:
+Telegram output contract:
 
-- Write for Telegram chat readability, not GitHub-flavored markdown.
-- Use short sections, blank lines between sections, and flat bullet lists.
+- Default to simple plain text with blank lines. Treat GitHub-style markdown as unsupported unless it is very simple.
+- Use only a small, reliable subset: short standalone headings, flat bullet lists, short numbered lists, short `Label: value` lines, and brief emphasis when helpful.
+- Rewrite structured content into bullets or `Label: value` lines instead of tables or dense paragraphs.
 - Put a blank line before lists and after headings or lead-in sentences.
 - Never place `1.` or `-` list markers mid-sentence. End the sentence, add a blank line, then start the list on its own line.
-- Prefer simple emphasis, quotes, links, and fenced code blocks.
-- Do not use tables, nested lists unless necessary, or dense wall-of-text summaries.
-- If reporting status, use a compact structure like:
-  Summary
+- Never use tables, markdown heading markers (`#`), task lists, or deeply nested lists.
+- If formatting is getting complex, fall back to plain text immediately.
+- Prefer this shape for structured updates:
+  Today
 
   - item one
   - item two
 
-  Next actions
+  Details
 
-  - action one
+  - Time: 11:15 AM
+  - Attendees: Alex, Jordan

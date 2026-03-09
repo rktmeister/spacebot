@@ -168,11 +168,12 @@ Spacebot sends Telegram replies using Telegram's HTML parse mode, not full GitHu
 
 For the best rendering:
 
+- prefer simple plain text over GitHub-style markdown
 - use short headings and blank lines between sections
 - put a blank line before bullet lists
 - start each numbered or bullet list item on its own line instead of inline after a sentence
-- prefer flat bullet lists over tables or dense prose
-- avoid raw HTML, tables, and deeply nested markdown structures
+- prefer flat bullet lists or short `Label: value` lines over tables or dense prose
+- avoid raw HTML, markdown heading markers, tables, and deeply nested markdown structures
 
 Spacebot also applies a small Telegram-specific cleanup pass before rendering so obviously collapsed inline lists such as `by:1. ...2. ...` are split into readable list blocks.
 

@@ -233,7 +233,7 @@ impl Tool for ReplyTool {
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The content to send to the user. Can be markdown formatted."
+                    "description": "The content to send to the user. Prefer simple chat-safe formatting: plain text, blank lines, flat bullets, and short label-value lines. Avoid tables unless the adapter supports them well."
                 },
                 "thread_name": {
                     "type": "string",
@@ -332,6 +332,10 @@ impl Tool for ReplyTool {
         if source == "email" {
             description.push_str(
                 " In email conversations this sends an actual outbound email to the sender. Use only when an explicit reply is required; otherwise prefer branch + skip.",
+            );
+        } else if source == "telegram" {
+            description.push_str(
+                " On Telegram, default to plain text with blank lines, short bullets, and short label-value lines. Do not use tables or markdown heading markers.",
             );
         }
 
