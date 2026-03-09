@@ -1006,6 +1006,107 @@ fn escape_html_attribute(text: &str) -> String {
     escape_html(text).replace('"', "&quot;")
 }
 
+/// Normalize common prose and list-spacing issues before markdown parsing so
+/// Telegram still renders readable structure when the model emits inline lists.
+fn normalize_telegram_markdown(markdown: &str) -> String {
+    static INLINE_ORDERED_LIST_AFTER_PUNCTUATION: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<prefix>[:.!?])(?P<gap>[ \t]*)(?P<marker>\d+\.)[ \t]+")
+            .expect("hardcoded regex")
+    });
+    static INLINE_UNORDERED_LIST_AFTER_PUNCTUATION: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<prefix>[:.!?])(?P<gap>[ \t]*)(?P<marker>[-*•])[ \t]+")
+            .expect("hardcoded regex")
+    });
+    static INLINE_ORDERED_LIST_AFTER_WORD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?P<before>[A-Za-z0-9)\]])(?P<marker>[2-9]\d*\.)[ \t]+(?P<next>\*\*|__|`|[A-Z])",
+        )
+        .expect("hardcoded regex")
+    });
+    static INLINE_UNORDERED_LIST_AFTER_WORD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<before>[A-Za-z0-9)\]])(?P<marker>[-*•])[ \t]+(?P<next>\*\*|__|`|[A-Z])")
+            .expect("hardcoded regex")
+    });
+    static SENTENCE_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<punctuation>[.!?])(?P<word>[A-Z][A-Za-z']*)").expect("hardcoded regex")
+    });
+    static MONTH_DAY_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"\b(?P<month>January|February|March|April|May|June|July|August|September|October|November|December)(?P<day>\d{1,2}\b)",
+        )
+        .expect("hardcoded regex")
+    });
+    static LETTER_COMMA_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<prefix>[A-Za-z]),(?P<suffix>[A-Za-z0-9])").expect("hardcoded regex")
+    });
+    static DAY_YEAR_COMMA_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<day>\b\d{1,2}),(?P<year>\d{4}\b)").expect("hardcoded regex")
+    });
+    static PREPOSITION_NUMBER_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"\b(?P<word>at|by|for|from|in|last|next|on|since|today|tomorrow|yesterday)(?P<number>\d)",
+        )
+        .expect("hardcoded regex")
+    });
+
+    let mut normalized = String::with_capacity(markdown.len() + markdown.len() / 8);
+    let mut in_fenced_code_block = false;
+
+    for segment in markdown.split_inclusive('\n') {
+        let (line, newline) = match segment.strip_suffix('\n') {
+            Some(line) => (line, "\n"),
+            None => (segment, ""),
+        };
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with("```") {
+            normalized.push_str(line);
+            normalized.push_str(newline);
+            in_fenced_code_block = !in_fenced_code_block;
+            continue;
+        }
+
+        if in_fenced_code_block {
+            normalized.push_str(line);
+            normalized.push_str(newline);
+            continue;
+        }
+
+        let mut line = SENTENCE_SPACING
+            .replace_all(line, "$punctuation $word")
+            .into_owned();
+        line = MONTH_DAY_SPACING
+            .replace_all(&line, "$month $day")
+            .into_owned();
+        line = LETTER_COMMA_SPACING
+            .replace_all(&line, "$prefix, $suffix")
+            .into_owned();
+        line = DAY_YEAR_COMMA_SPACING
+            .replace_all(&line, "$day, $year")
+            .into_owned();
+        line = PREPOSITION_NUMBER_SPACING
+            .replace_all(&line, "$word $number")
+            .into_owned();
+        line = INLINE_ORDERED_LIST_AFTER_PUNCTUATION
+            .replace_all(&line, "$prefix\n\n$marker ")
+            .into_owned();
+        line = INLINE_UNORDERED_LIST_AFTER_PUNCTUATION
+            .replace_all(&line, "$prefix\n\n$marker ")
+            .into_owned();
+        line = INLINE_ORDERED_LIST_AFTER_WORD
+            .replace_all(&line, "$before\n$marker $next")
+            .into_owned();
+        line = INLINE_UNORDERED_LIST_AFTER_WORD
+            .replace_all(&line, "$before\n$marker $next")
+            .into_owned();
+
+        normalized.push_str(&line);
+        normalized.push_str(newline);
+    }
+
+    normalized
+}
+
 /// Strip HTML tags and unescape entities, producing plain text for fallback.
 fn strip_html_tags(html: &str) -> String {
     static TAG_PATTERN: LazyLock<Regex> =
@@ -1106,11 +1207,10 @@ impl TelegramHtmlRenderer {
 
     fn start_tag(&mut self, tag: Tag<'_>) {
         match tag {
-            Tag::Paragraph => {
-                if !self.in_list_item() && self.blockquote_depth == 0 {
-                    self.ensure_blank_line();
-                }
+            Tag::Paragraph if !self.in_list_item() && self.blockquote_depth == 0 => {
+                self.ensure_blank_line();
             }
+            Tag::Paragraph => {}
             Tag::Heading(..) => {
                 self.ensure_blank_line();
                 self.output.push_str("<b>");
@@ -1303,7 +1403,7 @@ fn code_block_language<'a>(kind: &'a CodeBlockKind<'a>) -> Option<&'a str> {
 /// structure first and then rendered into supported tags plus plain-text list
 /// markers and spacing.
 fn markdown_to_telegram_html(markdown: &str) -> String {
-    TelegramHtmlRenderer::render(markdown)
+    TelegramHtmlRenderer::render(&normalize_telegram_markdown(markdown))
 }
 
 /// Send a plain text Telegram message for formatting fallback paths.
@@ -1406,7 +1506,7 @@ mod tests {
     fn bold_and_italic_nested() {
         assert_eq!(
             markdown_to_telegram_html("***both***"),
-            "<b><i>both</i></b>"
+            "<i><b>both</b></i>"
         );
     }
 
@@ -1421,21 +1521,21 @@ mod tests {
     #[test]
     fn code_block_with_language() {
         let input = "```rust\nfn main() {}\n```";
-        let expected = "<pre><code class=\"language-rust\">fn main() {}</code></pre>";
+        let expected = "<pre><code class=\"language-rust\">fn main() {}\n</code></pre>";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
     #[test]
     fn code_block_without_language() {
         let input = "```\nhello world\n```";
-        let expected = "<pre>hello world</pre>";
+        let expected = "<pre>hello world\n</pre>";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
     #[test]
     fn code_block_escapes_html() {
         let input = "```\n<script>alert(1)</script>\n```";
-        let expected = "<pre>&lt;script&gt;alert(1)&lt;/script&gt;</pre>";
+        let expected = "<pre>&lt;script&gt;alert(1)&lt;/script&gt;\n</pre>";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
@@ -1560,6 +1660,28 @@ mod tests {
         let input = "<b>not actually bold</b>";
         let expected = "&lt;b&gt;not actually bold&lt;/b&gt;";
         assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_collapsed_numbered_lists() {
+        let input = "To finish setup, do this:1. **Open the control panel** to confirm the current state2. **Copy the access token** into the dashboard3. **Check your local notes** for the next follow-up";
+        let expected = "To finish setup, do this:\n\n1. <b>Open the control panel</b> to confirm the current state\n2. <b>Copy the access token</b> into the dashboard\n3. <b>Check your local notes</b> for the next follow-up";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_collapsed_bullet_lists() {
+        let input =
+            "A few possibilities:- The email might be in spam/junk folder- It could be in archive";
+        let expected = "A few possibilities:\n\n• The email might be in spam/junk folder\n• It could be in archive";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_common_prose_spacing() {
+        let input = "The update was posted today (April9,2026) at7:45 PM. You'll need to review it within the last30 days.";
+        let expected = "The update was posted today (April 9, 2026) at 7:45 PM. You'll need to review it within the last 30 days.";
+        assert_eq!(normalize_telegram_markdown(input), expected);
     }
 
     #[test]

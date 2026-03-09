@@ -1613,10 +1613,8 @@ fn stream_from_completion_response(
 
         for content in choice_items {
             match content {
-                AssistantContent::Text(text) => {
-                    if !text.text.is_empty() {
-                        yield Ok(RawStreamingChoice::Message(text.text));
-                    }
+                AssistantContent::Text(text) if !text.text.is_empty() => {
+                    yield Ok(RawStreamingChoice::Message(text.text));
                 }
                 AssistantContent::ToolCall(tool_call) => {
                     yield Ok(RawStreamingChoice::ToolCall(RawStreamingToolCall {
@@ -1684,10 +1682,8 @@ fn completion_choice_to_streaming_choices(
 
     for content in choice.iter() {
         match content {
-            AssistantContent::Text(text) => {
-                if !text.text.is_empty() {
-                    events.push(RawStreamingChoice::Message(text.text.clone()));
-                }
+            AssistantContent::Text(text) if !text.text.is_empty() => {
+                events.push(RawStreamingChoice::Message(text.text.clone()));
             }
             AssistantContent::ToolCall(tool_call) => {
                 events.push(RawStreamingChoice::ToolCall(RawStreamingToolCall {
@@ -2493,10 +2489,8 @@ fn parse_openai_reasoning_fallback(message: &serde_json::Value) -> Option<String
 
 fn collect_openai_text_content(value: &serde_json::Value, text_parts: &mut Vec<String>) {
     match value {
-        serde_json::Value::String(text) => {
-            if !text.trim().is_empty() {
-                text_parts.push(text.to_string());
-            }
+        serde_json::Value::String(text) if !text.trim().is_empty() => {
+            text_parts.push(text.to_string());
         }
         serde_json::Value::Array(items) => {
             for item in items {
