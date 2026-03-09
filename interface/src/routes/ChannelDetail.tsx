@@ -384,6 +384,7 @@ export function ChannelDetail({ agentId, channelId, channel, liveState, onLoadMo
 						)}
 						<div className="flex overflow-hidden rounded-md border border-app-line bg-app-darkBox">
 							<Button
+								aria-label="Inspect prompt"
 								onClick={() => setInspectOpen(true)}
 								variant="ghost"
 								size="icon"

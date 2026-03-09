@@ -4,7 +4,6 @@ import {
 	api,
 	type PromptInspectResponse,
 	type PromptSnapshotSummary,
-	type PromptSnapshot,
 } from "@/api/client";
 import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, Toggle } from "@/ui";
 

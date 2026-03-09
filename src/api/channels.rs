@@ -487,11 +487,14 @@ pub(super) async fn inspect_prompt(
         )
         .unwrap_or_default();
 
-    let total_chars = system_prompt.len();
+    let total_chars = system_prompt.chars().count();
 
     // ── History ──
     let history = channel_state.history.read().await;
-    let history_json = serde_json::to_value(&*history).unwrap_or(serde_json::Value::Null);
+    let history_json = serde_json::to_value(&*history).map_err(|error| {
+        tracing::warn!(%error, "failed to serialize channel history for inspect");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     // ── Capture toggle state ──
     let capture_enabled = rc

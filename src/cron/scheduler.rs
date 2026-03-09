@@ -473,9 +473,14 @@ impl Scheduler {
         jobs.contains_key(job_id)
     }
 
-    /// Return the number of registered cron jobs.
+    /// Return the number of enabled (active) cron jobs.
     pub async fn job_count(&self) -> usize {
-        self.jobs.read().await.len()
+        self.jobs
+            .read()
+            .await
+            .values()
+            .filter(|job| job.enabled)
+            .count()
     }
 
     /// Trigger a cron job immediately, outside the timer loop.

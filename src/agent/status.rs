@@ -122,6 +122,7 @@ impl SystemInfo {
         let mut output = String::from("## System\n");
         output.push_str(&format!("Time: {current_time_line}\n"));
         output.push_str(&format!("Model: {}\n", self.worker_model));
+        output.push_str(&format!("Context: {} tokens\n", self.context_window));
         output
     }
 }

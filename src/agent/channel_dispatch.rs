@@ -97,6 +97,21 @@ pub(crate) fn map_worker_completion_result(
     (result_text, notify, success)
 }
 
+/// Build the worker status text (time + system info) used in worker system prompts.
+///
+/// Centralises the `SystemInfo` + `TemporalContext` assembly so every worker
+/// spawn/resume path produces identical status context.
+fn build_worker_status_text(
+    runtime_config: &crate::config::RuntimeConfig,
+    sandbox: &crate::sandbox::Sandbox,
+) -> Option<String> {
+    let system_info =
+        crate::agent::status::SystemInfo::from_runtime_config(runtime_config, sandbox);
+    let temporal_context = TemporalContext::from_runtime(runtime_config);
+    let current_time_line = temporal_context.current_time_line();
+    Some(system_info.render_for_worker(&current_time_line))
+}
+
 /// Spawn a branch from a ChannelState. Used by the BranchTool.
 pub async fn spawn_branch_from_state(
     state: &ChannelState,
@@ -415,12 +430,7 @@ async fn spawn_worker_inner(
     let rc = &state.deps.runtime_config;
     let prompt_engine = rc.prompts.load();
 
-    // Build worker status text (time + system config) for the system prompt.
-    let system_info =
-        crate::agent::status::SystemInfo::from_runtime_config(rc.as_ref(), &state.deps.sandbox);
-    let temporal_context = TemporalContext::from_runtime(rc.as_ref());
-    let current_time_line = temporal_context.current_time_line();
-    let worker_status_text = Some(system_info.render_for_worker(&current_time_line));
+    let worker_status_text = build_worker_status_text(rc.as_ref(), &state.deps.sandbox);
 
     let sandbox_enabled = state.deps.sandbox.mode_enabled();
     let sandbox_containment_active = state.deps.sandbox.containment_active();
@@ -614,6 +624,10 @@ async fn spawn_opencode_worker_inner(
 
     let oc_secrets_store = state.deps.runtime_config.secrets.load().as_ref().clone();
 
+    // Build temporal/status context so OpenCode workers get the same system
+    // info (time, model, context window) as builtin workers.
+    let worker_status_text = build_worker_status_text(rc.as_ref(), &state.deps.sandbox);
+
     let worker = if interactive {
         let (worker, input_tx) = crate::opencode::OpenCodeWorker::new_interactive(
             Some(state.channel_id.clone()),
@@ -629,6 +643,10 @@ async fn spawn_opencode_worker_inner(
             .write()
             .await
             .insert(worker_id, input_tx);
+        let worker = match worker_status_text {
+            Some(ref prompt) => worker.with_system_prompt(prompt),
+            None => worker,
+        };
         let worker = match &oc_secrets_store {
             Some(store) => worker.with_secrets_store(store.clone()),
             None => worker,
@@ -643,6 +661,10 @@ async fn spawn_opencode_worker_inner(
             server_pool,
             state.deps.event_tx.clone(),
         );
+        let worker = match worker_status_text {
+            Some(ref prompt) => worker.with_system_prompt(prompt),
+            None => worker,
+        };
         let worker = match &oc_secrets_store {
             Some(store) => worker.with_secrets_store(store.clone()),
             None => worker,
@@ -987,14 +1009,7 @@ pub async fn resume_idle_worker_into_state(
             let rc = &state.deps.runtime_config;
             let prompt_engine = rc.prompts.load();
 
-            // Build worker status text for system prompt
-            let system_info = crate::agent::status::SystemInfo::from_runtime_config(
-                rc.as_ref(),
-                &state.deps.sandbox,
-            );
-            let temporal_context = TemporalContext::from_runtime(rc.as_ref());
-            let current_time_line = temporal_context.current_time_line();
-            let worker_status_text = Some(system_info.render_for_worker(&current_time_line));
+            let worker_status_text = build_worker_status_text(rc.as_ref(), &state.deps.sandbox);
 
             let sandbox_enabled = state.deps.sandbox.mode_enabled();
             let sandbox_containment_active = state.deps.sandbox.containment_active();

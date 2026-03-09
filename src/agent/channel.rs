@@ -2073,12 +2073,12 @@ impl Channel {
 
     /// Build a snapshot of the system configuration for status block injection.
     async fn build_system_info(&self) -> SystemInfo {
-        let rc = &self.deps.runtime_config;
-        let mut info = SystemInfo::from_runtime_config(rc, &self.deps.sandbox);
+        let runtime_config = &self.deps.runtime_config;
+        let mut info = SystemInfo::from_runtime_config(runtime_config, &self.deps.sandbox);
 
         // Add async-only fields that the base constructor can't populate
         let cron_job_count = {
-            let scheduler_guard = rc.cron_scheduler.load();
+            let scheduler_guard = runtime_config.cron_scheduler.load();
             match scheduler_guard.as_ref() {
                 Some(scheduler) => Some(scheduler.job_count().await),
                 None => None,
@@ -3056,9 +3056,19 @@ impl Channel {
         }
 
         // 3. Serialize history and build the snapshot.
-        let history_json = serde_json::to_value(history).unwrap_or(serde_json::Value::Null);
+        let history_json = match serde_json::to_value(history) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(
+                    channel_id = %self.id,
+                    %error,
+                    "failed to serialize prompt history; skipping snapshot capture"
+                );
+                return;
+            }
+        };
         let history_length = history.len();
-        let system_prompt_chars = system_prompt.len();
+        let system_prompt_chars = system_prompt.chars().count();
 
         let snapshot = crate::agent::prompt_snapshot::PromptSnapshot {
             channel_id: self.id.to_string(),

@@ -2459,17 +2459,22 @@ async fn initialize_agents(
             })?,
         );
 
-        // Per-agent prompt snapshot store (separate redb, easy to delete)
+        // Per-agent prompt snapshot store (separate redb, easy to delete).
+        // Non-fatal: a corrupt/unwritable DB disables snapshotting for this agent.
         let snapshot_path = agent_config.data_dir.join("prompt_snapshots.redb");
-        let prompt_snapshot_store = Arc::new(
-            spacebot::agent::prompt_snapshot::PromptSnapshotStore::new(&snapshot_path)
-                .with_context(|| {
-                    format!(
-                        "failed to initialize prompt snapshot store for agent '{}'",
-                        agent_config.id
-                    )
-                })?,
-        );
+        let prompt_snapshot_store =
+            match spacebot::agent::prompt_snapshot::PromptSnapshotStore::new(&snapshot_path) {
+                Ok(store) => Some(Arc::new(store)),
+                Err(error) => {
+                    tracing::warn!(
+                        agent_id = %agent_config.id,
+                        path = %snapshot_path.display(),
+                        %error,
+                        "failed to initialize prompt snapshot store; prompt snapshots disabled"
+                    );
+                    None
+                }
+            };
 
         // Per-agent memory system
         let memory_store =
@@ -2537,7 +2542,7 @@ async fn initialize_agents(
         runtime_config.set_settings(settings_store.clone(), explicit_listen_only);
         runtime_config
             .prompt_snapshots
-            .store(Arc::new(Some(prompt_snapshot_store.clone())));
+            .store(Arc::new(prompt_snapshot_store.clone()));
         if let Err(error) = settings_store.set_worker_log_mode(config.defaults.worker_log_mode) {
             tracing::warn!(%error, agent = %agent_config.id, "failed to set worker_log_mode from config");
         }
