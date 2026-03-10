@@ -359,6 +359,11 @@ impl PromptEngine {
         self.render_static("fragments/system/memory_persistence")
     }
 
+    /// Retry nudge sent to a memory-persistence branch that missed its terminal completion call.
+    pub fn render_system_memory_persistence_contract_retry(&self) -> Result<String> {
+        self.render_static("fragments/system/memory_persistence_contract_retry")
+    }
+
     /// Render the profile synthesis prompt with identity and bulletin context.
     pub fn render_system_profile_synthesis(
         &self,

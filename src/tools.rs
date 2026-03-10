@@ -182,9 +182,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub enum BranchToolProfile {
-    #[default]
     Default,
     MemoryPersistence {
         contract_state: Arc<MemoryPersistenceContractState>,

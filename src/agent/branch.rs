@@ -175,7 +175,12 @@ impl Branch {
                         attempt = memory_contract_retries,
                         "memory persistence branch missing terminal completion outcome, retrying"
                     );
-                    current_prompt = SpacebotHook::MEMORY_PERSISTENCE_CONTRACT_PROMPT.to_string();
+                    let prompt_engine = self.deps.runtime_config.prompts.load();
+                    current_prompt = prompt_engine
+                        .render_system_memory_persistence_contract_retry()
+                        .unwrap_or_else(|_| {
+                            SpacebotHook::MEMORY_PERSISTENCE_CONTRACT_PROMPT.to_string()
+                        });
                 }
                 Err(rig::completion::PromptError::PromptCancelled { reason, .. }) => {
                     if enforce_memory_contract {
