@@ -116,7 +116,6 @@ fn build_worker_status_text(
 #[derive(Debug, Clone)]
 struct BranchSpawnOptions {
     profile: BranchToolProfile,
-    memory_persistence_contract: Option<Arc<MemoryPersistenceContractState>>,
 }
 
 /// Spawn a branch from a ChannelState. Used by the BranchTool.
@@ -143,7 +142,6 @@ pub async fn spawn_branch_from_state(
         "branch",
         BranchSpawnOptions {
             profile: BranchToolProfile::Default,
-            memory_persistence_contract: None,
         },
     )
     .await
@@ -176,10 +174,7 @@ pub(crate) async fn spawn_memory_persistence_branch(
         "persisting memories...",
         "memory_persistence_branch",
         BranchSpawnOptions {
-            profile: BranchToolProfile::MemoryPersistence {
-                contract_state: contract_state.clone(),
-            },
-            memory_persistence_contract: Some(contract_state),
+            profile: BranchToolProfile::MemoryPersistence { contract_state },
         },
     )
     .await
@@ -236,10 +231,11 @@ async fn spawn_branch(
     dispatch_type: &'static str,
     branch_options: BranchSpawnOptions,
 ) -> std::result::Result<BranchId, AgentError> {
-    let BranchSpawnOptions {
-        profile,
-        memory_persistence_contract,
-    } = branch_options;
+    let BranchSpawnOptions { profile } = branch_options;
+    let memory_persistence_contract = match &profile {
+        BranchToolProfile::MemoryPersistence { contract_state } => Some(contract_state.clone()),
+        BranchToolProfile::Default => None,
+    };
 
     let max_branches = **state.deps.runtime_config.max_concurrent_branches.load();
     {

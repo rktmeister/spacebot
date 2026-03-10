@@ -47,7 +47,11 @@ impl MemoryPersistenceContractState {
     }
 
     pub fn has_terminal_outcome(&self) -> bool {
-        self.terminal_outcome().is_some()
+        self.terminal_outcome
+            .lock()
+            .ok()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false)
     }
 }
 

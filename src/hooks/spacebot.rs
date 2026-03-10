@@ -604,19 +604,6 @@ impl SpacebotHook {
             .any(|content| matches!(content, rig::message::AssistantContent::ToolCall(_)))
     }
 
-    fn parse_successful_memory_save_id(result: &str) -> Option<String> {
-        let parsed = serde_json::from_str::<serde_json::Value>(result).ok()?;
-        if parsed.get("success").and_then(|value| value.as_bool()) != Some(true) {
-            return None;
-        }
-        parsed
-            .get("memory_id")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|memory_id| !memory_id.is_empty())
-            .map(ToOwned::to_owned)
-    }
-
     fn parse_memory_persistence_terminal_outcome(
         result: &str,
     ) -> Option<MemoryPersistenceTerminalOutcome> {
@@ -931,16 +918,12 @@ where
 
         let is_tool_error = result.starts_with("Toolset error:");
 
-        if !is_tool_error && let Some(contract_state) = &self.memory_persistence_contract {
-            if tool_name == "memory_save" {
-                if let Some(memory_id) = Self::parse_successful_memory_save_id(result) {
-                    contract_state.record_saved_memory_id(memory_id);
-                }
-            } else if tool_name == "memory_persistence_complete"
-                && let Some(outcome) = Self::parse_memory_persistence_terminal_outcome(result)
-            {
-                contract_state.set_terminal_outcome(outcome);
-            }
+        if !is_tool_error
+            && tool_name == "memory_persistence_complete"
+            && let Some(contract_state) = &self.memory_persistence_contract
+            && let Some(outcome) = Self::parse_memory_persistence_terminal_outcome(result)
+        {
+            contract_state.set_terminal_outcome(outcome);
         }
 
         // A successful tool call proves the worker is still productive.
