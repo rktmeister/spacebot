@@ -309,6 +309,18 @@ impl Tool for MemorySaveTool {
         {
             Ok(emb) => emb,
             Err(embed_err) => {
+                if let Err(assoc_err) = self
+                    .memory_search
+                    .store()
+                    .delete_associations_for_memory(&memory.id)
+                    .await
+                {
+                    tracing::error!(
+                        memory_id = %memory.id,
+                        error = %assoc_err,
+                        "compensating association delete failed after embedding generation error"
+                    );
+                }
                 if let Err(del_err) = self.memory_search.store().delete(&memory.id).await {
                     tracing::error!(
                         memory_id = %memory.id,
@@ -334,6 +346,18 @@ impl Tool for MemorySaveTool {
                 }
             }
             Err(embed_err) => {
+                if let Err(assoc_err) = self
+                    .memory_search
+                    .store()
+                    .delete_associations_for_memory(&memory.id)
+                    .await
+                {
+                    tracing::error!(
+                        memory_id = %memory.id,
+                        error = %assoc_err,
+                        "compensating association delete failed after embedding store error"
+                    );
+                }
                 if let Err(del_err) = self.memory_search.store().delete(&memory.id).await {
                     tracing::error!(
                         memory_id = %memory.id,
