@@ -4,11 +4,12 @@
 //! background processes: `spawn_branch_from_state`, `spawn_worker_from_state`,
 //! and `spawn_opencode_worker_from_state`.
 
-use crate::agent::branch::Branch;
+use crate::agent::branch::{Branch, BranchExecutionConfig};
 use crate::agent::channel::ChannelState;
 use crate::agent::channel_prompt::TemporalContext;
 use crate::agent::worker::Worker;
 use crate::error::{AgentError, Error as SpacebotError};
+use crate::tools::{BranchToolProfile, MemoryPersistenceContractState};
 use crate::{AgentDeps, BranchId, ChannelId, ProcessEvent, WorkerId};
 use futures::FutureExt as _;
 use std::sync::Arc;
@@ -112,6 +113,12 @@ fn build_worker_status_text(
     Some(system_info.render_for_worker(&current_time_line))
 }
 
+#[derive(Debug, Clone)]
+struct BranchSpawnOptions {
+    profile: BranchToolProfile,
+    memory_persistence_contract: Option<Arc<MemoryPersistenceContractState>>,
+}
+
 /// Spawn a branch from a ChannelState. Used by the BranchTool.
 pub async fn spawn_branch_from_state(
     state: &ChannelState,
@@ -134,6 +141,10 @@ pub async fn spawn_branch_from_state(
         &system_prompt,
         &description,
         "branch",
+        BranchSpawnOptions {
+            profile: BranchToolProfile::Default,
+            memory_persistence_contract: None,
+        },
     )
     .await
 }
@@ -147,6 +158,8 @@ pub(crate) async fn spawn_memory_persistence_branch(
     state: &ChannelState,
     deps: &AgentDeps,
 ) -> std::result::Result<BranchId, AgentError> {
+    let contract_state = Arc::new(MemoryPersistenceContractState::default());
+
     let prompt_engine = deps.runtime_config.prompts.load();
     let system_prompt = prompt_engine
         .render_static("memory_persistence")
@@ -162,6 +175,12 @@ pub(crate) async fn spawn_memory_persistence_branch(
         &system_prompt,
         "persisting memories...",
         "memory_persistence_branch",
+        BranchSpawnOptions {
+            profile: BranchToolProfile::MemoryPersistence {
+                contract_state: contract_state.clone(),
+            },
+            memory_persistence_contract: Some(contract_state),
+        },
     )
     .await
 }
@@ -215,7 +234,13 @@ async fn spawn_branch(
     system_prompt: &str,
     status_label: &str,
     dispatch_type: &'static str,
+    branch_options: BranchSpawnOptions,
 ) -> std::result::Result<BranchId, AgentError> {
+    let BranchSpawnOptions {
+        profile,
+        memory_persistence_contract,
+    } = branch_options;
+
     let max_branches = **state.deps.runtime_config.max_concurrent_branches.load();
     {
         let branches = state.active_branches.read().await;
@@ -243,6 +268,7 @@ async fn spawn_branch(
         state.conversation_logger.clone(),
         state.channel_store.clone(),
         crate::conversation::ProcessRunLogger::new(state.deps.sqlite_pool.clone()),
+        profile,
     );
     let branch_max_turns = **state.deps.runtime_config.branch_max_turns.load();
 
@@ -253,7 +279,10 @@ async fn spawn_branch(
         system_prompt,
         history,
         tool_server,
-        branch_max_turns,
+        BranchExecutionConfig {
+            max_turns: branch_max_turns,
+            memory_persistence_contract,
+        },
     );
 
     let branch_id = branch.id;

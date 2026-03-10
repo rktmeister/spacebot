@@ -19,6 +19,7 @@ const MAX_MEMORY_CONTENT_BYTES: usize = 50_000;
 pub struct MemorySaveTool {
     memory_search: Arc<MemorySearch>,
     event_context: Option<MemorySaveEventContext>,
+    contract_state: Option<Arc<super::memory_persistence_complete::MemoryPersistenceContractState>>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +34,7 @@ impl MemorySaveTool {
         Self {
             memory_search,
             event_context: None,
+            contract_state: None,
         }
     }
 
@@ -46,6 +48,14 @@ impl MemorySaveTool {
             agent_id,
             memory_event_tx,
         });
+        self
+    }
+
+    pub fn with_contract_state(
+        mut self,
+        contract_state: Arc<super::memory_persistence_complete::MemoryPersistenceContractState>,
+    ) -> Self {
+        self.contract_state = Some(contract_state);
         self
     }
 }
@@ -351,6 +361,10 @@ impl Tool for MemorySaveTool {
                 .memory_updates_total
                 .with_label_values(&[agent_label, "save"])
                 .inc();
+        }
+
+        if let Some(contract_state) = &self.contract_state {
+            contract_state.record_saved_memory_id(memory.id.clone());
         }
 
         Ok(MemorySaveOutput {

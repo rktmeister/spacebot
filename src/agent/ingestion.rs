@@ -494,6 +494,7 @@ async fn process_chunk(
         conversation_logger,
         channel_store,
         crate::conversation::ProcessRunLogger::new(deps.sqlite_pool.clone()),
+        crate::tools::BranchToolProfile::Default,
     );
 
     let agent = AgentBuilder::new(model)
