@@ -1461,11 +1461,16 @@ fn convert_messages_to_openai_responses(messages: &OneOrMany<Message>) -> Vec<se
                         AssistantContent::ToolCall(tool_call) => {
                             let arguments = serde_json::to_string(&tool_call.function.arguments)
                                 .unwrap_or_else(|_| "{}".to_string());
+                            let call_id = tool_call
+                                .call_id
+                                .as_deref()
+                                .filter(|call_id| !call_id.is_empty())
+                                .unwrap_or(&tool_call.id);
                             result.push(serde_json::json!({
                                 "type": "function_call",
                                 "name": tool_call.function.name,
                                 "arguments": arguments,
-                                "call_id": tool_call.id,
+                                "call_id": call_id,
                             }));
                         }
                         _ => {}
@@ -3143,6 +3148,28 @@ mod tests {
         let converted = convert_messages_to_openai_responses(&messages);
         assert_eq!(converted.len(), 1);
         assert_eq!(converted[0]["type"], "function_call_output");
+        assert_eq!(converted[0]["call_id"], "stable-call-id");
+    }
+
+    #[test]
+    fn convert_messages_to_openai_responses_function_call_prefers_call_id_over_id() {
+        let messages = OneOrMany::one(Message::Assistant {
+            content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+                id: "legacy-id".to_string(),
+                call_id: Some("stable-call-id".to_string()),
+                function: ToolFunction {
+                    name: "reply".to_string(),
+                    arguments: serde_json::json!({"content": "ok"}),
+                },
+                signature: None,
+                additional_params: None,
+            })),
+            id: None,
+        });
+
+        let converted = convert_messages_to_openai_responses(&messages);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0]["type"], "function_call");
         assert_eq!(converted[0]["call_id"], "stable-call-id");
     }
 
