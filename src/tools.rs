@@ -40,6 +40,7 @@ pub mod file;
 pub mod install_skill;
 pub mod mcp;
 pub mod memory_delete;
+pub mod memory_persistence_complete;
 pub mod memory_recall;
 pub mod memory_save;
 pub mod project_manage;
@@ -98,6 +99,11 @@ pub use install_skill::{
 pub use mcp::{McpToolAdapter, McpToolError, McpToolOutput};
 pub use memory_delete::{
     MemoryDeleteArgs, MemoryDeleteError, MemoryDeleteOutput, MemoryDeleteTool,
+};
+pub use memory_persistence_complete::{
+    MemoryPersistenceCompleteArgs, MemoryPersistenceCompleteError, MemoryPersistenceCompleteOutput,
+    MemoryPersistenceCompleteTool, MemoryPersistenceContractState,
+    MemoryPersistenceTerminalOutcome,
 };
 pub use memory_recall::{
     MemoryOutput, MemoryRecallArgs, MemoryRecallError, MemoryRecallOutput, MemoryRecallTool,
@@ -175,6 +181,14 @@ use rig::tool::server::{ToolServer, ToolServerHandle};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
+
+#[derive(Debug, Clone)]
+pub enum BranchToolProfile {
+    Default,
+    MemoryPersistence {
+        contract_state: Arc<MemoryPersistenceContractState>,
+    },
+}
 
 /// Deserialize a `u64` that may arrive as either a JSON number or a JSON string.
 ///
@@ -494,13 +508,19 @@ pub fn create_branch_tool_server(
     conversation_logger: crate::conversation::history::ConversationLogger,
     channel_store: crate::conversation::ChannelStore,
     run_logger: crate::conversation::history::ProcessRunLogger,
+    profile: BranchToolProfile,
 ) -> ToolServerHandle {
+    let mut memory_save = memory_save_with_events(
+        memory_search.clone(),
+        agent_id.clone(),
+        memory_event_tx.clone(),
+    );
+    if let BranchToolProfile::MemoryPersistence { contract_state } = &profile {
+        memory_save = memory_save.with_contract_state(contract_state.clone());
+    }
+
     let mut server = ToolServer::new()
-        .tool(memory_save_with_events(
-            memory_search.clone(),
-            agent_id.clone(),
-            memory_event_tx.clone(),
-        ))
+        .tool(memory_save)
         .tool(MemoryRecallTool::new(memory_search.clone()))
         .tool(MemoryDeleteTool::new(memory_search))
         .tool(ChannelRecallTool::new(conversation_logger, channel_store))
@@ -514,6 +534,10 @@ pub fn create_branch_tool_server(
         ))
         .tool(TaskListTool::new(task_store.clone(), agent_id.to_string()))
         .tool(TaskUpdateTool::for_branch(task_store, agent_id.clone()));
+
+    if let BranchToolProfile::MemoryPersistence { contract_state } = profile {
+        server = server.tool(MemoryPersistenceCompleteTool::new(contract_state));
+    }
 
     if let Some(state) = state {
         server = server.tool(SpawnWorkerTool::new(state));
