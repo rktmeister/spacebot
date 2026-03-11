@@ -1051,78 +1051,6 @@ fn escape_html_attribute(text: &str) -> String {
 /// Normalize common prose and list-spacing issues before markdown parsing so
 /// Telegram still renders readable structure when the model emits inline lists.
 fn normalize_telegram_markdown(markdown: &str) -> String {
-    static INLINE_ORDERED_LIST_AFTER_PUNCTUATION: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<prefix>[:.!?])(?P<gap>[ \t]*)(?P<marker>\d+\.)[ \t]+")
-            .expect("hardcoded regex")
-    });
-    static INLINE_UNORDERED_LIST_AFTER_PUNCTUATION: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<prefix>[:.!?])(?P<gap>[ \t]*)(?P<marker>[-*•])[ \t]+")
-            .expect("hardcoded regex")
-    });
-    static INLINE_ORDERED_LIST_AFTER_WORD: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?P<before>[A-Za-z0-9)\]])(?P<marker>[2-9]\d*\.)[ \t]+(?P<next>\*\*|__|`|[A-Z])",
-        )
-        .expect("hardcoded regex")
-    });
-    static INLINE_UNORDERED_LIST_AFTER_WORD: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<before>[A-Za-z0-9)\]])(?P<marker>[-*•])[ \t]+(?P<next>\*\*|__|`|[A-Z])")
-            .expect("hardcoded regex")
-    });
-    static INLINE_ORDERED_LIST_AFTER_EMPHASIS_CLOSE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<close>\*\*|__|~~)(?P<marker>\d+\.)[ \t]+").expect("hardcoded regex")
-    });
-    static INLINE_UNORDERED_LIST_AFTER_EMPHASIS_CLOSE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<close>\*\*|__|~~)(?P<marker>[-*•])[ \t]+").expect("hardcoded regex")
-    });
-    static PUNCTUATION_BEFORE_EMPHASIZED_HEADING_AND_LIST: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?P<prefix>[:.!?])(?P<gap>[ \t]*)(?P<heading>(?:\*\*|__).+?(?:\*\*|__))(?P<marker>\d+\.|[-*•])[ \t]+",
-        )
-        .expect("hardcoded regex")
-    });
-    static SENTENCE_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<punctuation>[.!?])(?P<word>[A-Z][A-Za-z']*)").expect("hardcoded regex")
-    });
-    static MONTH_DAY_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"\b(?P<month>January|February|March|April|May|June|July|August|September|October|November|December)(?P<day>\d{1,2}\b)",
-        )
-        .expect("hardcoded regex")
-    });
-    static LETTER_COMMA_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<prefix>[A-Za-z]),(?P<suffix>[A-Za-z0-9])").expect("hardcoded regex")
-    });
-    static DAY_YEAR_COMMA_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<day>\b\d{1,2}),(?P<year>\d{4}\b)").expect("hardcoded regex")
-    });
-    static PREPOSITION_NUMBER_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"\b(?P<word>at|by|for|from|in|last|next|on|since|today|tomorrow|yesterday)(?P<number>\d)",
-        )
-        .expect("hardcoded regex")
-    });
-    static THE_ORDINAL_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\b(?P<word>the)(?P<ordinal>\d{1,2}(?:st|nd|rd|th)\b)")
-            .expect("hardcoded regex")
-    });
-    static LOWERCASE_WORD_NUMBER_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<word>\b[a-z]{3,})(?P<number>\d{1,2}(?:[–-]\d{1,2})?\b)")
-            .expect("hardcoded regex")
-    });
-    static GLUED_SENTENCE_STARTER_AFTER_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?P<before>[A-Za-z0-9\)\]])(?P<word>The|This|That|These|Those|She|He|They|We|You|It|However|Instead|Meanwhile|Also)\b",
-        )
-        .expect("hardcoded regex")
-    });
-    static GLUED_SECTION_LABEL_AFTER_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?P<before>[A-Za-z0-9\)\]])(?P<label>(?:[A-Z][A-Za-z]+|[A-Z]{2,})(?: [A-Za-z][A-Za-z'/-]+){0,2}:)",
-        )
-        .expect("hardcoded regex")
-    });
-
     let mut normalized = String::with_capacity(markdown.len() + markdown.len() / 8);
     let mut in_fenced_code_block = false;
 
@@ -1146,60 +1074,448 @@ fn normalize_telegram_markdown(markdown: &str) -> String {
             continue;
         }
 
-        let mut line = SENTENCE_SPACING
-            .replace_all(line, "$punctuation $word")
-            .into_owned();
-        line = MONTH_DAY_SPACING
-            .replace_all(&line, "$month $day")
-            .into_owned();
-        line = LETTER_COMMA_SPACING
-            .replace_all(&line, "$prefix, $suffix")
-            .into_owned();
-        line = DAY_YEAR_COMMA_SPACING
-            .replace_all(&line, "$day, $year")
-            .into_owned();
-        line = PREPOSITION_NUMBER_SPACING
-            .replace_all(&line, "$word $number")
-            .into_owned();
-        line = THE_ORDINAL_SPACING
-            .replace_all(&line, "$word $ordinal")
-            .into_owned();
-        line = LOWERCASE_WORD_NUMBER_SPACING
-            .replace_all(&line, "$word $number")
-            .into_owned();
-        line = GLUED_SENTENCE_STARTER_AFTER_TOKEN
-            .replace_all(&line, "$before $word")
-            .into_owned();
-        line = GLUED_SECTION_LABEL_AFTER_TOKEN
-            .replace_all(&line, "$before\n\n$label")
-            .into_owned();
-        line = INLINE_ORDERED_LIST_AFTER_PUNCTUATION
-            .replace_all(&line, "$prefix\n\n$marker ")
-            .into_owned();
-        line = INLINE_UNORDERED_LIST_AFTER_PUNCTUATION
-            .replace_all(&line, "$prefix\n\n$marker ")
-            .into_owned();
-        line = INLINE_ORDERED_LIST_AFTER_WORD
-            .replace_all(&line, "$before\n$marker $next")
-            .into_owned();
-        line = INLINE_UNORDERED_LIST_AFTER_WORD
-            .replace_all(&line, "$before\n$marker $next")
-            .into_owned();
-        line = PUNCTUATION_BEFORE_EMPHASIZED_HEADING_AND_LIST
-            .replace_all(&line, "$prefix\n\n$heading\n$marker ")
-            .into_owned();
-        line = INLINE_ORDERED_LIST_AFTER_EMPHASIS_CLOSE
-            .replace_all(&line, "$close\n$marker ")
-            .into_owned();
-        line = INLINE_UNORDERED_LIST_AFTER_EMPHASIS_CLOSE
-            .replace_all(&line, "$close\n$marker ")
-            .into_owned();
+        let line = normalize_markdown_line_outside_inline_code(line);
 
         normalized.push_str(&line);
         normalized.push_str(newline);
     }
 
     normalized
+}
+
+/// Apply prose and boundary repairs only to the non-code portions of a single
+/// markdown line so inline code spans remain byte-for-byte intact.
+fn normalize_markdown_line_outside_inline_code(line: &str) -> String {
+    let mut normalized = String::with_capacity(line.len() + line.len() / 8);
+    let mut index = 0;
+
+    while index < line.len() {
+        let Some(backtick_offset) = line[index..].find('`') else {
+            let trailing_segment = &line[index..];
+            if normalized.ends_with('`') {
+                normalized.push_str(&normalize_plain_segment_after_inline_code(trailing_segment));
+            } else {
+                normalized.push_str(&normalize_plain_markdown_line(trailing_segment));
+            }
+            break;
+        };
+
+        let backtick_start = index + backtick_offset;
+        let plain_segment = &line[index..backtick_start];
+        if normalized.ends_with('`') {
+            normalized.push_str(&normalize_plain_segment_after_inline_code(plain_segment));
+        } else {
+            normalized.push_str(&normalize_plain_markdown_line(plain_segment));
+        }
+
+        let delimiter_len = count_leading_backticks(&line[backtick_start..]);
+        let delimiter = &line[backtick_start..backtick_start + delimiter_len];
+        normalized.push_str(delimiter);
+
+        let code_start = backtick_start + delimiter_len;
+        let Some(code_end) = find_matching_backtick_delimiter(line, code_start, delimiter_len)
+        else {
+            normalized.push_str(&line[code_start..]);
+            break;
+        };
+
+        normalized.push_str(&line[code_start..code_end]);
+        normalized.push_str(delimiter);
+        index = code_end + delimiter_len;
+    }
+
+    normalized
+}
+
+fn count_leading_backticks(text: &str) -> usize {
+    text.chars()
+        .take_while(|character| *character == '`')
+        .count()
+}
+
+fn find_matching_backtick_delimiter(
+    line: &str,
+    search_start: usize,
+    delimiter_len: usize,
+) -> Option<usize> {
+    let mut search_index = search_start;
+
+    while search_index < line.len() {
+        let offset = line[search_index..].find('`')?;
+        let candidate_start = search_index + offset;
+        let candidate_len = count_leading_backticks(&line[candidate_start..]);
+        if candidate_len == delimiter_len {
+            return Some(candidate_start);
+        }
+        search_index = candidate_start + candidate_len;
+    }
+
+    None
+}
+
+fn normalize_plain_markdown_line(line: &str) -> String {
+    let mut line = normalize_token_boundaries(line);
+    line = normalize_prose_spacing(&line);
+    line = normalize_inline_list_boundaries(&line);
+    line = normalize_emphasized_heading_boundaries(&line);
+    line = normalize_list_item_tail_boundaries(&line);
+    line
+}
+
+/// Repair boundaries that occur immediately after an inline code span before
+/// the following plain-text segment is normalized normally.
+fn normalize_plain_segment_after_inline_code(segment: &str) -> String {
+    static LEADING_SECTION_LABEL: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?P<label>(?:[A-Z][A-Za-z]+|[A-Z]{2,})(?: [A-Za-z][A-Za-z'/-]+){0,2}:)")
+            .expect("hardcoded regex")
+    });
+    static LEADING_TITLECASE_WORD: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^(?P<word>[A-Z][a-z][A-Za-z']+)").expect("hardcoded regex"));
+
+    let mut segment = LEADING_SECTION_LABEL
+        .replace(segment, "\n\n$label")
+        .into_owned();
+    segment = LEADING_TITLECASE_WORD
+        .replace(&segment, " $word")
+        .into_owned();
+    normalize_plain_markdown_line(&segment)
+}
+
+/// Repair compact prose spacing such as `March12`, `at8:00`, `The3`, and
+/// `questions13-15` without touching all-caps model/version tokens.
+fn normalize_prose_spacing(line: &str) -> String {
+    static SENTENCE_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<punctuation>[.!?])(?P<word>[A-Z][A-Za-z']*)").expect("hardcoded regex")
+    });
+    static MONTH_DAY_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"\b(?P<month>January|February|March|April|May|June|July|August|September|October|November|December)(?P<day>\d{1,2}\b)",
+        )
+        .expect("hardcoded regex")
+    });
+    static LETTER_COMMA_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<prefix>[A-Za-z]),(?P<suffix>[A-Za-z0-9])").expect("hardcoded regex")
+    });
+    static DAY_YEAR_COMMA_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<day>\b\d{1,2}),(?P<year>\d{4}\b)").expect("hardcoded regex")
+    });
+    static DAY_TIME_COMMA_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<day>\b\d{1,2}),(?P<time>\d{1,2}:\d{2}\b)").expect("hardcoded regex")
+    });
+    static PREPOSITION_NUMBER_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"\b(?P<word>at|by|for|from|in|last|next|on|since|today|tomorrow|yesterday)(?P<number>\d)",
+        )
+        .expect("hardcoded regex")
+    });
+    static THE_ORDINAL_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b(?P<word>the)(?P<ordinal>\d{1,2}(?:st|nd|rd|th)\b)")
+            .expect("hardcoded regex")
+    });
+    static WORD_NUMBER_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?P<word>\b(?:[A-Z][a-z]{2,}|[a-z]{3,}))(?P<number>\d{1,2}(?::\d{2})?(?:[–-]\d{1,2})?)(?P<after>[^0-9A-Za-z.]|$)",
+        )
+        .expect("hardcoded regex")
+    });
+
+    let mut line = SENTENCE_SPACING
+        .replace_all(line, "$punctuation $word")
+        .into_owned();
+    line = MONTH_DAY_SPACING
+        .replace_all(&line, "$month $day")
+        .into_owned();
+    line = LETTER_COMMA_SPACING
+        .replace_all(&line, "$prefix, $suffix")
+        .into_owned();
+    line = DAY_YEAR_COMMA_SPACING
+        .replace_all(&line, "$day, $year")
+        .into_owned();
+    line = DAY_TIME_COMMA_SPACING
+        .replace_all(&line, "$day, $time")
+        .into_owned();
+    line = PREPOSITION_NUMBER_SPACING
+        .replace_all(&line, "$word $number")
+        .into_owned();
+    line = THE_ORDINAL_SPACING
+        .replace_all(&line, "$word $ordinal")
+        .into_owned();
+    WORD_NUMBER_SPACING
+        .replace_all(&line, "$word $number$after")
+        .into_owned()
+}
+
+/// Repair missing boundaries between a completed token and the next sentence or
+/// section label, while keeping the fixes narrow to obvious prose transitions.
+fn normalize_token_boundaries(line: &str) -> String {
+    static GLUED_URL_AND_TITLECASE_WORD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<url>https?://[^\s<>()]+[A-Za-z0-9])(?P<word>[A-Z][a-z][A-Za-z']+)\b")
+            .expect("hardcoded regex")
+    });
+    static GLUED_TITLECASE_WORD_BEFORE_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<before>[A-Za-z0-9\)\]])(?P<word>[A-Z][a-z]{2,})(?P<number>\d)")
+            .expect("hardcoded regex")
+    });
+    static GLUED_SENTENCE_STARTER_AFTER_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?P<before>[A-Za-z0-9\)\]])(?P<word>The|This|That|These|Those|She|He|They|We|You|It|However|Instead|Meanwhile|Also)\b",
+        )
+        .expect("hardcoded regex")
+    });
+    static GLUED_SECTION_LABEL_AFTER_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?P<before>[A-Za-z0-9\)\]])(?P<label>(?:[A-Z][A-Za-z]+|[A-Z]{2,})(?: [A-Za-z][A-Za-z'/-]+){0,2}:)",
+        )
+        .expect("hardcoded regex")
+    });
+
+    let mut line = GLUED_URL_AND_TITLECASE_WORD
+        .replace_all(line, "$url $word")
+        .into_owned();
+    line = GLUED_TITLECASE_WORD_BEFORE_NUMBER
+        .replace_all(&line, "$before $word$number")
+        .into_owned();
+    line = GLUED_SENTENCE_STARTER_AFTER_TOKEN
+        .replace_all(&line, "$before $word")
+        .into_owned();
+    line = GLUED_SECTION_LABEL_AFTER_TOKEN
+        .replace_all(&line, "$before\n\n$label")
+        .into_owned();
+    line
+}
+
+/// Repair compact heading boundaries such as `summary:**Heading**1.` or
+/// `summary:**Findings:**- item` before pulldown-cmark parses the markdown.
+fn normalize_emphasized_heading_boundaries(line: &str) -> String {
+    static TOKEN_BEFORE_EMPHASIZED_HEADING_WITH_LIST_AFTER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?P<before>[A-Za-z0-9\)\]])(?P<heading>(?:\*\*|__)[A-Z][^*\n]* [^*\n]*?(?:\*\*|__))(?P<after>\d+\.|[-*•])",
+        )
+        .expect("hardcoded regex")
+    });
+
+    let line = TOKEN_BEFORE_EMPHASIZED_HEADING_WITH_LIST_AFTER
+        .replace_all(line, "$before\n$heading\n$after")
+        .into_owned();
+
+    let mut normalized = String::with_capacity(line.len() + line.len() / 8);
+    let mut index = 0;
+
+    while index < line.len() {
+        if let Some((closing_start, closing_end)) = find_emphasis_span(&line, index) {
+            let span = &line[index..closing_end];
+            let inner = &line[index + 2..closing_start];
+            let previous = previous_non_whitespace_char(&normalized);
+            let following = &line[closing_end..];
+
+            if is_block_heading_candidate(inner, &normalized, previous, following) {
+                insert_heading_break_if_needed(&mut normalized, previous);
+                normalized.push_str(span);
+                if starts_compact_list_marker(following) && !normalized.ends_with('\n') {
+                    normalized.push('\n');
+                }
+            } else {
+                normalized.push_str(span);
+            }
+
+            index = closing_end;
+            continue;
+        }
+
+        let character = line[index..].chars().next().expect("valid utf-8 boundary");
+        normalized.push(character);
+        index += character.len_utf8();
+    }
+
+    normalized
+}
+
+fn find_emphasis_span(line: &str, index: usize) -> Option<(usize, usize)> {
+    let delimiter = if line[index..].starts_with("**") {
+        "**"
+    } else if line[index..].starts_with("__") {
+        "__"
+    } else {
+        return None;
+    };
+
+    // Leave triple emphasis alone; it is valid inline markdown but not a block heading.
+    if line[index..].starts_with("***") || line[index..].starts_with("___") {
+        return None;
+    }
+
+    let content_start = index + delimiter.len();
+    let close_offset = line[content_start..].find(delimiter)?;
+    let closing_start = content_start + close_offset;
+    let closing_end = closing_start + delimiter.len();
+    Some((closing_start, closing_end))
+}
+
+fn is_block_heading_candidate(
+    inner: &str,
+    prefix: &str,
+    previous: Option<char>,
+    following: &str,
+) -> bool {
+    let trimmed = inner.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let word_count = trimmed.split_whitespace().count();
+    let starts_heading_case = trimmed
+        .chars()
+        .find(|character| character.is_alphanumeric())
+        .is_some_and(|character| character.is_uppercase());
+    let looks_like_heading = trimmed.ends_with(':')
+        || trimmed.contains(" / ")
+        || (starts_heading_case && word_count >= 2);
+
+    if !looks_like_heading {
+        return false;
+    }
+
+    if ends_with_ordered_list_marker(prefix) {
+        return false;
+    }
+
+    starts_compact_list_marker(following) || matches!(previous, Some(':' | ';' | '.' | '!' | '?'))
+}
+
+fn previous_non_whitespace_char(text: &str) -> Option<char> {
+    text.chars()
+        .rev()
+        .find(|character| !character.is_whitespace())
+}
+
+fn ends_with_ordered_list_marker(text: &str) -> bool {
+    let trimmed = text.trim_end();
+    let Some(marker_end) = trimmed.rfind('.') else {
+        return false;
+    };
+    let digits = &trimmed[..marker_end];
+    let Some(last_non_digit) = digits.rfind(|character: char| !character.is_ascii_digit()) else {
+        return !digits.is_empty();
+    };
+    last_non_digit + 1 < digits.len()
+}
+
+fn insert_heading_break_if_needed(text: &mut String, previous: Option<char>) {
+    if text.is_empty() || text.ends_with("\n\n") {
+        return;
+    }
+
+    if text.ends_with('\n') {
+        text.push('\n');
+        return;
+    }
+
+    if previous.is_some() {
+        if matches!(previous, Some(':' | ';' | '.' | '!' | '?')) {
+            text.push_str("\n\n");
+        } else {
+            text.push('\n');
+        }
+    } else if previous_non_whitespace_char(text).is_some() {
+        text.push_str("\n\n");
+    }
+}
+
+fn starts_compact_list_marker(text: &str) -> bool {
+    let trimmed = text.trim_start_matches([' ', '\t']);
+
+    if trimmed.starts_with('-') || trimmed.starts_with('*') || trimmed.starts_with('•') {
+        return trimmed[1..].chars().next().is_some_and(|character| {
+            character.is_whitespace()
+                || character == '`'
+                || character == '#'
+                || character.is_ascii_alphanumeric()
+        });
+    }
+
+    let mut digit_length = 0;
+    for character in trimmed.chars() {
+        if character.is_ascii_digit() {
+            digit_length += character.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    if digit_length == 0 || !trimmed[digit_length..].starts_with('.') {
+        return false;
+    }
+
+    trimmed[digit_length + 1..]
+        .chars()
+        .next()
+        .is_some_and(|character| {
+            character.is_whitespace()
+                || character == '*'
+                || character == '_'
+                || character == '`'
+                || character == '#'
+                || character.is_ascii_alphanumeric()
+        })
+}
+
+/// Repair inline lists that were emitted mid-sentence instead of on their own
+/// lines, but keep normal punctuation and prose intact.
+fn normalize_inline_list_boundaries(line: &str) -> String {
+    static INLINE_ORDERED_LIST_AFTER_PUNCTUATION: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<prefix>[:.!?])(?P<gap>[ \t]*)(?P<marker>\d+\.)[ \t]+")
+            .expect("hardcoded regex")
+    });
+    static INLINE_UNORDERED_LIST_AFTER_PUNCTUATION: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<prefix>[:.!?])(?P<gap>[ \t]*)(?P<marker>[-*•])[ \t]+")
+            .expect("hardcoded regex")
+    });
+    static INLINE_ORDERED_LIST_AFTER_WORD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<before>[A-Za-z0-9)\]])(?P<marker>\d+\.)[ \t]+(?P<next>\*\*|__|`|[A-Z])")
+            .expect("hardcoded regex")
+    });
+    static INLINE_UNORDERED_LIST_AFTER_WORD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?P<before>[A-Za-z0-9)\]])(?P<marker>[-*•])[ \t]+(?P<next>\*\*|__|`|[A-Z])")
+            .expect("hardcoded regex")
+    });
+    static INLINE_LABEL_BULLET_WITH_SPACES: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?P<before>[a-z0-9\)\]]) (?P<marker>[-•]) (?P<label>(?:[A-Z][A-Za-z'/-]+(?: [A-Za-z][A-Za-z'/-]+){0,2}):)",
+        )
+        .expect("hardcoded regex")
+    });
+
+    let mut line = INLINE_ORDERED_LIST_AFTER_PUNCTUATION
+        .replace_all(line, "$prefix\n\n$marker ")
+        .into_owned();
+    line = INLINE_UNORDERED_LIST_AFTER_PUNCTUATION
+        .replace_all(&line, "$prefix\n\n$marker ")
+        .into_owned();
+    line = INLINE_ORDERED_LIST_AFTER_WORD
+        .replace_all(&line, "$before\n$marker $next")
+        .into_owned();
+    line = INLINE_UNORDERED_LIST_AFTER_WORD
+        .replace_all(&line, "$before\n$marker $next")
+        .into_owned();
+    line = INLINE_LABEL_BULLET_WITH_SPACES
+        .replace_all(&line, "$before\n$marker $label")
+        .into_owned();
+    line
+}
+
+/// Repair sentence starts that leak onto the end of a bullet item instead of
+/// becoming their own paragraph below the list.
+fn normalize_list_item_tail_boundaries(line: &str) -> String {
+    static BULLET_ITEM_TAIL_SENTENCE_START: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?m)(?P<item>^[-•].*?[a-z]) (?P<word>The|This|That|These|Those) (?P<number>\d)",
+        )
+        .expect("hardcoded regex")
+    });
+
+    BULLET_ITEM_TAIL_SENTENCE_START
+        .replace_all(line, "$item\n$word $number")
+        .into_owned()
 }
 
 /// Strip HTML tags and unescape entities, producing plain text for fallback.
@@ -1993,9 +2309,8 @@ mod tests {
 
     #[test]
     fn normalizes_collapsed_bullet_lists() {
-        let input =
-            "A few possibilities:- The email might be in spam/junk folder- It could be in archive";
-        let expected = "A few possibilities:\n\n• The email might be in spam/junk folder\n• It could be in archive";
+        let input = "A few possibilities:- The message might be filed in another folder- It could already be archived";
+        let expected = "A few possibilities:\n\n• The message might be filed in another folder\n• It could already be archived";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
@@ -2015,8 +2330,8 @@ mod tests {
 
     #[test]
     fn normalizes_glued_sentence_starters_after_tokens() {
-        let input = "Reference page: https://example.com/r/A1b2C3d4X9She didn't respond. Another reviewer also left notesThe item was opened today.";
-        let expected = "Reference page: https://example.com/r/A1b2C3d4X9 She didn't respond. Another reviewer also left notes The item was opened today.";
+        let input = "Reference page: https://example.com/r/A1b2C3d4X9Then the review started. Another reviewer also left notesThe item was opened today.";
+        let expected = "Reference page: https://example.com/r/A1b2C3d4X9 Then the review started. Another reviewer also left notes The item was opened today.";
         assert_eq!(normalize_telegram_markdown(input), expected);
     }
 
@@ -2029,9 +2344,48 @@ mod tests {
 
     #[test]
     fn normalizes_glued_section_labels_after_tokens() {
-        let input = "Summary: Re: Weekly rollout statusKey points:- Added the fallback path";
-        let expected = "Summary: Re: Weekly rollout status\n\nKey points:\n\n• Added the fallback path";
+        let input = "Summary: Re: Weekly rollout statusAction items:- Added the fallback path";
+        let expected =
+            "Summary: Re: Weekly rollout status\n\nAction items:\n\n• Added the fallback path";
         assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_dense_task_board_report() {
+        let input = "Here's the current summary:**Pending Review (3 items)**1. **#7: Prepare rollout checklist** (High Priority) - Status: waiting_review - Deadline: April18,2026 - Next: Needs approval to proceed2. **#5: Draft launch materials** (High Priority) - Deadline: April18-19,2026 - Next: Needs approval to begin writing3. **#1: Reconcile support backlog** (Medium Priority) - Next: Needs approval to contact ops**Completed / In Progress**- **#6: Send update note** — Partially completeThe3 pending items need approval before they can move forward.";
+        let expected = "Here's the current summary:\n\n**Pending Review (3 items)**\n1. **#7: Prepare rollout checklist** (High Priority)\n- Status: waiting_review\n- Deadline: April 18, 2026\n- Next: Needs approval to proceed\n2. **#5: Draft launch materials** (High Priority)\n- Deadline: April 18-19, 2026\n- Next: Needs approval to begin writing\n3. **#1: Reconcile support backlog** (Medium Priority)\n- Next: Needs approval to contact ops\n**Completed / In Progress**\n- **#6: Send update note** — Partially complete\nThe 3 pending items need approval before they can move forward.";
+        assert_eq!(normalize_telegram_markdown(input), expected);
+    }
+
+    #[test]
+    fn normalizes_dense_gap_report() {
+        let input = "The item was marked \"done\" but it was not actually completed. Here's the review:**Open issues:**- Item #3 shows \"done\" (marked April11,1:17 AM)- But there's no follow-up action sent- No notes reviewed- No action items documented- No next checkpoint scheduled- The subtasks under #3 all show `completed: false`Basically it was closed without the work being finished.";
+        let expected = "The item was marked \"done\" but it was not actually completed. Here's the review:\n\n**Open issues:**\n- Item #3 shows \"done\" (marked April 11, 1:17 AM)\n- But there's no follow-up action sent\n- No notes reviewed\n- No action items documented\n- No next checkpoint scheduled\n- The subtasks under #3 all show `completed: false` Basically it was closed without the work being finished.";
+        assert_eq!(normalize_telegram_markdown(input), expected);
+    }
+
+    #[test]
+    fn inline_code_spans_are_not_normalized() {
+        let input = "Keep `item13-15` and `April12` literal, but outside code April12 at8:00 AM should be readable.";
+        let expected = "Keep <code>item13-15</code> and <code>April12</code> literal, but outside code April 12 at 8:00 AM should be readable.";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn inserts_space_after_inline_code_before_titlecase_prose() {
+        let input = "The checklist entry shows `completed: false`Basically it stayed unresolved.";
+        let expected =
+            "The checklist entry shows `completed: false` Basically it stayed unresolved.";
+        assert_eq!(normalize_telegram_markdown(input), expected);
+    }
+
+    #[test]
+    fn all_caps_model_like_tokens_are_left_alone() {
+        let input =
+            "RTX3080, GPT4, and Qwen3.5 should stay compact while The3 tasks should be readable.";
+        let expected =
+            "RTX3080, GPT4, and Qwen3.5 should stay compact while The 3 tasks should be readable.";
+        assert_eq!(normalize_telegram_markdown(input), expected);
     }
 
     #[test]
@@ -2062,6 +2416,13 @@ mod tests {
         let expected =
             "Here's what I found:\n\n<b>What I Found:</b>\n\n• First point\n• Second point";
         assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn leaves_inline_bold_phrases_with_spaces_alone() {
+        let input = "This is **very important** today, but it is still part of one sentence.";
+        let expected = "This is **very important** today, but it is still part of one sentence.";
+        assert_eq!(normalize_telegram_markdown(input), expected);
     }
 
     #[test]
