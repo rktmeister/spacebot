@@ -1106,6 +1106,12 @@ fn normalize_telegram_markdown(markdown: &str) -> String {
         Regex::new(r"\b(?P<word>the)(?P<ordinal>\d{1,2}(?:st|nd|rd|th)\b)")
             .expect("hardcoded regex")
     });
+    static GLUED_SENTENCE_STARTER_AFTER_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?P<before>[A-Za-z0-9\)\]])(?P<word>The|This|That|These|Those|She|He|They|We|You|It|However|Instead|Meanwhile|Also)\b",
+        )
+        .expect("hardcoded regex")
+    });
 
     let mut normalized = String::with_capacity(markdown.len() + markdown.len() / 8);
     let mut in_fenced_code_block = false;
@@ -1147,6 +1153,9 @@ fn normalize_telegram_markdown(markdown: &str) -> String {
             .into_owned();
         line = THE_ORDINAL_SPACING
             .replace_all(&line, "$word $ordinal")
+            .into_owned();
+        line = GLUED_SENTENCE_STARTER_AFTER_TOKEN
+            .replace_all(&line, "$before $word")
             .into_owned();
         line = INLINE_ORDERED_LIST_AFTER_PUNCTUATION
             .replace_all(&line, "$prefix\n\n$marker ")
@@ -1985,6 +1994,13 @@ mod tests {
     fn normalizes_ordinal_spacing() {
         let input = "The only pending item is scheduled for Wednesday the11th.";
         let expected = "The only pending item is scheduled for Wednesday the 11th.";
+        assert_eq!(normalize_telegram_markdown(input), expected);
+    }
+
+    #[test]
+    fn normalizes_glued_sentence_starters_after_tokens() {
+        let input = "Reference page: https://example.com/r/A1b2C3d4X9She didn't respond. Another reviewer also left notesThe item was opened today.";
+        let expected = "Reference page: https://example.com/r/A1b2C3d4X9 She didn't respond. Another reviewer also left notes The item was opened today.";
         assert_eq!(normalize_telegram_markdown(input), expected);
     }
 
