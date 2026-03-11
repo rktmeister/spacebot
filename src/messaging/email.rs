@@ -1060,10 +1060,10 @@ fn parse_inbound_email(
         }
     };
 
-    if !extracted.calendar_events.is_empty() {
-        if let Ok(value) = serde_json::to_value(&extracted.calendar_events) {
-            metadata.insert("email_calendar_events".into(), value);
-        }
+    if !extracted.calendar_events.is_empty()
+        && let Ok(value) = serde_json::to_value(&extracted.calendar_events)
+    {
+        metadata.insert("email_calendar_events".into(), value);
     }
 
     Ok(Some(InboundMessage {
@@ -1966,16 +1966,15 @@ fn parse_ical_datetime_value(
     if let Some(timezone_name) = params
         .get("TZID")
         .and_then(|value| normalize_ical_timezone(value))
+        && let Ok(timezone) = timezone_name.parse::<Tz>()
     {
-        if let Ok(timezone) = timezone_name.parse::<Tz>() {
-            let local = timezone.from_local_datetime(&naive).single()?;
-            return Some(ParsedCalendarDateTime {
-                local: local.format("%Y-%m-%d %H:%M:%S").to_string(),
-                utc: Some(local.with_timezone(&Utc)),
-                timezone: Some(timezone_name),
-                all_day: false,
-            });
-        }
+        let local = timezone.from_local_datetime(&naive).single()?;
+        return Some(ParsedCalendarDateTime {
+            local: local.format("%Y-%m-%d %H:%M:%S").to_string(),
+            utc: Some(local.with_timezone(&Utc)),
+            timezone: Some(timezone_name),
+            all_day: false,
+        });
     }
 
     Some(ParsedCalendarDateTime {
