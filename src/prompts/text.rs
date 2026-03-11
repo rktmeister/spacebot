@@ -72,6 +72,7 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         ("en", "adapters/telegram") => {
             include_str!("../../prompts/en/adapters/telegram.md.j2")
         }
+        ("en", "adapters/signal") => include_str!("../../prompts/en/adapters/signal.md.j2"),
 
         // Fragment Templates
         ("en", "fragments/worker_capabilities") => {
@@ -121,10 +122,6 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         ("en", "fragments/system/tool_syntax_correction") => {
             include_str!("../../prompts/en/fragments/system/tool_syntax_correction.md.j2")
         }
-        ("en", "fragments/system/worker_time_context") => {
-            include_str!("../../prompts/en/fragments/system/worker_time_context.md.j2")
-        }
-
         // Agent Communication Fragments
         ("en", "fragments/org_context") => {
             include_str!("../../prompts/en/fragments/org_context.md.j2")
@@ -173,6 +170,9 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         }
         ("en", "tools/memory_save") => {
             include_str!("../../prompts/en/tools/memory_save_description.md.j2")
+        }
+        ("en", "tools/memory_persistence_complete") => {
+            include_str!("../../prompts/en/tools/memory_persistence_complete_description.md.j2")
         }
         ("en", "tools/memory_recall") => {
             include_str!("../../prompts/en/tools/memory_recall_description.md.j2")
@@ -272,5 +272,12 @@ mod tests {
         let prompt = lookup("en", "adapters/telegram");
         assert!(!prompt.trim().is_empty());
         assert!(prompt.contains("Telegram output contract"));
+    }
+
+    #[test]
+    fn signal_adapter_prompt_is_embedded() {
+        let prompt = lookup("en", "adapters/signal");
+        assert!(!prompt.trim().is_empty());
+        assert!(prompt.contains("Signal"));
     }
 }

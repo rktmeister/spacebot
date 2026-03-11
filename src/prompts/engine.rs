@@ -76,6 +76,14 @@ impl PromptEngine {
             crate::prompts::text::get("adapters/email"),
         )?;
         env.add_template("adapters/cron", crate::prompts::text::get("adapters/cron"))?;
+        env.add_template(
+            "adapters/telegram",
+            crate::prompts::text::get("adapters/telegram"),
+        )?;
+        env.add_template(
+            "adapters/signal",
+            crate::prompts::text::get("adapters/signal"),
+        )?;
 
         // Fragment templates
         env.add_template(
@@ -147,10 +155,6 @@ impl PromptEngine {
         env.add_template(
             "fragments/system/tool_syntax_correction",
             crate::prompts::text::get("fragments/system/tool_syntax_correction"),
-        )?;
-        env.add_template(
-            "fragments/system/worker_time_context",
-            crate::prompts::text::get("fragments/system/worker_time_context"),
         )?;
         env.add_template(
             "fragments/coalesce_hint",
@@ -262,6 +266,7 @@ impl PromptEngine {
         sandbox_write_allowlist: Vec<String>,
         tool_secret_names: &[String],
         browser_persist_session: bool,
+        status_text: Option<String>,
     ) -> Result<String> {
         self.render(
             "worker",
@@ -274,6 +279,7 @@ impl PromptEngine {
                 sandbox_write_allowlist => sandbox_write_allowlist,
                 tool_secret_names => tool_secret_names,
                 browser_persist_session => browser_persist_session,
+                status_text => status_text,
             },
         )
     }
@@ -330,21 +336,6 @@ impl PromptEngine {
         self.render_static("fragments/system/tool_syntax_correction")
     }
 
-    /// Render worker task time-context preamble.
-    pub fn render_system_worker_time_context(
-        &self,
-        current_local_datetime: &str,
-        current_utc_datetime: &str,
-    ) -> Result<String> {
-        self.render(
-            "fragments/system/worker_time_context",
-            context! {
-                current_local_datetime => current_local_datetime,
-                current_utc_datetime => current_utc_datetime,
-            },
-        )
-    }
-
     /// Convenience method for rendering truncation marker.
     pub fn render_system_truncation(&self, remove_count: usize) -> Result<String> {
         self.render(
@@ -374,6 +365,11 @@ impl PromptEngine {
     /// Convenience method for rendering memory persistence prompt.
     pub fn render_system_memory_persistence(&self) -> Result<String> {
         self.render_static("fragments/system/memory_persistence")
+    }
+
+    /// Retry nudge sent to a memory-persistence branch that missed its terminal completion call.
+    pub fn render_system_memory_persistence_contract_retry(&self) -> Result<String> {
+        self.render_static("fragments/system/memory_persistence_contract_retry")
     }
 
     /// Render the profile synthesis prompt with identity and bulletin context.
@@ -479,6 +475,7 @@ impl PromptEngine {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -489,6 +486,7 @@ impl PromptEngine {
             "email" => "adapters/email",
             "cron" => "adapters/cron",
             "telegram" => "adapters/telegram",
+            "signal" => "adapters/signal",
             _ => return None,
         };
 
@@ -586,6 +584,7 @@ impl PromptEngine {
         org_context: Option<String>,
         adapter_prompt: Option<String>,
         project_context: Option<String>,
+        backfill_transcript: Option<String>,
     ) -> Result<String> {
         self.render(
             "channel",
@@ -602,6 +601,7 @@ impl PromptEngine {
                 org_context => org_context,
                 adapter_prompt => adapter_prompt,
                 project_context => project_context,
+                backfill_transcript => backfill_transcript,
             },
         )
     }
@@ -686,3 +686,23 @@ pub struct ProjectWorktreeContext {
 
 // All templates are now loaded from the centralized text registry (src/prompts/text.rs)
 // to support multiple languages at compile time.
+
+#[cfg(test)]
+mod tests {
+    use super::PromptEngine;
+
+    #[test]
+    fn render_channel_adapter_prompt_supports_named_telegram_and_signal_adapters() {
+        let engine = PromptEngine::new("en").expect("prompt engine should build");
+
+        let telegram_prompt = engine
+            .render_channel_adapter_prompt("telegram:support")
+            .expect("telegram named adapter prompt should render");
+        assert!(telegram_prompt.contains("Telegram output contract"));
+
+        let signal_prompt = engine
+            .render_channel_adapter_prompt("signal:work")
+            .expect("signal named adapter prompt should render");
+        assert!(signal_prompt.contains("Signal"));
+    }
+}

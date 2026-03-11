@@ -1235,6 +1235,7 @@ fn fetch_history_from_imap(
                             author,
                             content: body,
                             is_bot,
+                            timestamp: Some(timestamp),
                         },
                     });
                 }
