@@ -254,9 +254,13 @@ If the name doesn't match any channel, falls back to list mode so the LLM can se
 
 Channel names are resolved from the `discord_channel_name` field stored in message metadata. The tool queries `conversation_messages` in SQLite directly — it reads persisted messages, not in-memory Rig history.
 
+Human-facing timestamps from `channel_recall` are rendered in the resolved user timezone, while explicit UTC companion fields are preserved for exact chronology.
+
 ### email_search
 
 Searches the configured email mailbox directly over IMAP with filters like sender (`from`), subject, text query, unread-only, and time window (`since_days`). Returns message metadata plus a body snippet for precise read-back in email workflows.
+
+The primary `date` field is rendered in the resolved user timezone so branches reason about "today" and "this morning" using the same wall clock the user sees. UTC is still preserved separately for exact inspection.
 
 ### set_status
 

@@ -90,6 +90,12 @@ impl TemporalContext {
     }
 
     pub(crate) fn format_timestamp(&self, timestamp: DateTime<Utc>) -> String {
+        let utc_timestamp = timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+        let display = self.format_display_timestamp(timestamp);
+        format!("{display}; UTC {utc_timestamp}")
+    }
+
+    pub(crate) fn format_display_timestamp(&self, timestamp: DateTime<Utc>) -> String {
         match &self.timezone {
             TemporalTimezone::Named {
                 timezone_name,
@@ -98,7 +104,7 @@ impl TemporalContext {
                 let local_timestamp = timestamp.with_timezone(timezone);
                 format!(
                     "{} ({}, UTC{})",
-                    local_timestamp.format("%Y-%m-%d %H:%M:%S %Z"),
+                    local_timestamp.format("%Y-%m-%d %H:%M:%S"),
                     timezone_name,
                     local_timestamp.format("%:z")
                 )
@@ -107,7 +113,7 @@ impl TemporalContext {
                 let local_timestamp = timestamp.with_timezone(&Local);
                 format!(
                     "{} (system local, UTC{})",
-                    local_timestamp.format("%Y-%m-%d %H:%M:%S %Z"),
+                    local_timestamp.format("%Y-%m-%d %H:%M:%S"),
                     local_timestamp.format("%:z")
                 )
             }
@@ -115,10 +121,6 @@ impl TemporalContext {
     }
 
     pub(crate) fn current_time_line(&self) -> String {
-        format!(
-            "{}; UTC {}",
-            self.format_timestamp(self.now_utc),
-            self.now_utc.format("%Y-%m-%d %H:%M:%S UTC")
-        )
+        self.format_timestamp(self.now_utc)
     }
 }

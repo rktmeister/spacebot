@@ -523,7 +523,11 @@ pub fn create_branch_tool_server(
         .tool(memory_save)
         .tool(MemoryRecallTool::new(memory_search.clone()))
         .tool(MemoryDeleteTool::new(memory_search))
-        .tool(ChannelRecallTool::new(conversation_logger, channel_store))
+        .tool(ChannelRecallTool::new(
+            conversation_logger,
+            channel_store,
+            runtime_config.clone(),
+        ))
         .tool(SpacebotDocsTool::new())
         .tool(EmailSearchTool::new(runtime_config))
         .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
@@ -668,7 +672,11 @@ pub fn create_cortex_chat_tool_server(
         ))
         .tool(MemoryRecallTool::new(memory_search.clone()))
         .tool(MemoryDeleteTool::new(memory_search))
-        .tool(ChannelRecallTool::new(conversation_logger, channel_store))
+        .tool(ChannelRecallTool::new(
+            conversation_logger,
+            channel_store,
+            runtime_config.clone(),
+        ))
         .tool(SpacebotDocsTool::new())
         .tool(ConfigInspectTool::new(
             agent_id.to_string(),

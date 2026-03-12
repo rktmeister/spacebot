@@ -111,6 +111,8 @@ Examples:
 
 Use specific filters (`from`, `subject`, `query`, `since_days`) to avoid broad mailbox scans.
 
+Search results keep the mailbox's underlying UTC/reference time available, but the human-facing `date` field is rendered in the agent's resolved user timezone (`agents.user_timezone` / `defaults.user_timezone`, falling back to the cron timezone or system local time).
+
 ## Calendar invites (`.ics`)
 
 Spacebot now extracts meeting details from inbound calendar invite attachments without broadly enabling arbitrary attachment execution.

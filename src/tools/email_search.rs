@@ -1,5 +1,8 @@
 //! Search email directly from IMAP for read-back and retrieval.
 
+use chrono::{DateTime, Utc};
+
+use crate::agent::channel_prompt::TemporalContext;
 use crate::config::{Config, EmailConfig, RuntimeConfig};
 use crate::messaging::email::EmailSearchQuery;
 use rig::completion::ToolDefinition;
@@ -60,6 +63,8 @@ pub struct EmailSearchResult {
     pub from: String,
     pub subject: String,
     pub date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date_utc: Option<String>,
     pub message_id: Option<String>,
     pub body_snippet: String,
     pub attachment_names: Vec<String>,
@@ -122,6 +127,7 @@ impl Tool for EmailSearchTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let temporal_context = TemporalContext::from_runtime(self.runtime_config.as_ref());
         let query = EmailSearchQuery {
             text: clean_optional(args.query),
             from: clean_optional(args.from),
@@ -146,15 +152,20 @@ impl Tool for EmailSearchTool {
 
         let results = hits
             .into_iter()
-            .map(|hit| EmailSearchResult {
-                folder: hit.folder,
-                uid: hit.uid,
-                from: hit.from,
-                subject: hit.subject,
-                date: hit.date,
-                message_id: hit.message_id,
-                body_snippet: truncate_snippet(&hit.body, 1600),
-                attachment_names: hit.attachment_names,
+            .map(|hit| {
+                let (date, date_utc) =
+                    format_email_result_date(hit.date.as_deref(), &temporal_context);
+                EmailSearchResult {
+                    folder: hit.folder,
+                    uid: hit.uid,
+                    from: hit.from,
+                    subject: hit.subject,
+                    date,
+                    date_utc,
+                    message_id: hit.message_id,
+                    body_snippet: truncate_snippet(&hit.body, 1600),
+                    attachment_names: hit.attachment_names,
+                }
             })
             .collect::<Vec<_>>();
 
@@ -232,9 +243,36 @@ fn truncate_snippet(value: &str, max_bytes: usize) -> String {
     format!("{}\n\n[snippet truncated]", &value[..end])
 }
 
+fn format_email_result_date(
+    raw_date: Option<&str>,
+    temporal_context: &TemporalContext,
+) -> (Option<String>, Option<String>) {
+    let Some(raw_date) = raw_date else {
+        return (None, None);
+    };
+
+    let Some(timestamp_utc) = parse_email_header_timestamp(raw_date) else {
+        return (Some(raw_date.to_string()), None);
+    };
+
+    (
+        Some(temporal_context.format_display_timestamp(timestamp_utc)),
+        Some(timestamp_utc.to_rfc3339()),
+    )
+}
+
+fn parse_email_header_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    let epoch_seconds = mailparse::dateparse(value).ok()?;
+    DateTime::<Utc>::from_timestamp(epoch_seconds, 0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{clean_optional, format_search_criteria};
+    use super::{
+        clean_optional, format_email_result_date, format_search_criteria,
+        parse_email_header_timestamp,
+    };
+    use crate::agent::channel_prompt::TemporalContext;
     use crate::messaging::email::EmailSearchQuery;
 
     #[test]
@@ -260,5 +298,32 @@ mod tests {
         });
 
         assert_eq!(criteria, "since_days=30; limit=10");
+    }
+
+    #[test]
+    fn parse_email_header_timestamp_reads_rfc2822_offset() {
+        let timestamp =
+            parse_email_header_timestamp("Thu, 12 Mar 2026 08:51:44 +0000").expect("timestamp");
+        assert_eq!(timestamp.to_rfc3339(), "2026-03-12T08:51:44+00:00");
+    }
+
+    #[test]
+    fn format_email_result_date_uses_runtime_timezone() {
+        let temporal_context = TemporalContext {
+            now_utc: chrono::Utc::now(),
+            timezone: TemporalContext::resolve_timezone_from_names(
+                Some("Asia/Singapore".to_string()),
+                None,
+            ),
+        };
+
+        let (date, date_utc) =
+            format_email_result_date(Some("Thu, 12 Mar 2026 08:51:44 +0000"), &temporal_context);
+
+        assert_eq!(
+            date.as_deref(),
+            Some("2026-03-12 16:51:44 (Asia/Singapore, UTC+08:00)")
+        );
+        assert_eq!(date_utc.as_deref(), Some("2026-03-12T08:51:44+00:00"));
     }
 }

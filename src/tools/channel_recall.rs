@@ -1,5 +1,9 @@
 //! Channel transcript recall tool for branches. Queries any channel including the current one.
 
+use std::sync::Arc;
+
+use crate::agent::channel_prompt::TemporalContext;
+use crate::config::RuntimeConfig;
 use crate::conversation::channels::ChannelStore;
 use crate::conversation::history::ConversationLogger;
 
@@ -16,13 +20,19 @@ const MAX_TRANSCRIPT_MESSAGES: i64 = 100;
 pub struct ChannelRecallTool {
     conversation_logger: ConversationLogger,
     channel_store: ChannelStore,
+    runtime_config: Arc<RuntimeConfig>,
 }
 
 impl ChannelRecallTool {
-    pub fn new(conversation_logger: ConversationLogger, channel_store: ChannelStore) -> Self {
+    pub fn new(
+        conversation_logger: ConversationLogger,
+        channel_store: ChannelStore,
+        runtime_config: Arc<RuntimeConfig>,
+    ) -> Self {
         Self {
             conversation_logger,
             channel_store,
+            runtime_config,
         }
     }
 }
@@ -66,6 +76,7 @@ pub struct TranscriptMessage {
     pub sender: Option<String>,
     pub content: String,
     pub timestamp: String,
+    pub timestamp_utc: String,
 }
 
 /// Output from channel recall tool.
@@ -91,6 +102,7 @@ pub struct ChannelListEntry {
     pub channel_id: String,
     pub channel_name: Option<String>,
     pub last_activity: String,
+    pub last_activity_utc: String,
 }
 
 impl Tool for ChannelRecallTool {
@@ -171,6 +183,7 @@ impl Tool for ChannelRecallTool {
             )
             .await
             .map_err(|e| ChannelRecallError(format!("Failed to load transcript: {e}")))?;
+        let temporal_context = TemporalContext::from_runtime(self.runtime_config.as_ref());
 
         let transcript: Vec<TranscriptMessage> = messages
             .iter()
@@ -199,7 +212,8 @@ impl Tool for ChannelRecallTool {
                     role: message.role.clone(),
                     sender: message.sender_name.clone(),
                     content,
-                    timestamp: message.created_at.to_rfc3339(),
+                    timestamp: temporal_context.format_display_timestamp(message.created_at),
+                    timestamp_utc: message.created_at.to_rfc3339(),
                 }
             })
             .collect();
@@ -224,13 +238,15 @@ impl ChannelRecallTool {
             .list_active()
             .await
             .map_err(|e| ChannelRecallError(format!("Failed to list channels: {e}")))?;
+        let temporal_context = TemporalContext::from_runtime(self.runtime_config.as_ref());
 
         let entries: Vec<ChannelListEntry> = channels
             .iter()
             .map(|channel| ChannelListEntry {
                 channel_id: channel.id.clone(),
                 channel_name: channel.display_name.clone(),
-                last_activity: channel.last_activity_at.to_rfc3339(),
+                last_activity: temporal_context.format_display_timestamp(channel.last_activity_at),
+                last_activity_utc: channel.last_activity_at.to_rfc3339(),
             })
             .collect();
 
@@ -271,8 +287,8 @@ fn format_transcript(
             None => "assistant",
         };
         output.push_str(&format!(
-            "**{}** ({}): {}\n\n",
-            sender, message.role, message.content
+            "**{}** ({}, {}): {}\n\n",
+            sender, message.role, message.timestamp, message.content
         ));
     }
 
