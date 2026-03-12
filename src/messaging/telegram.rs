@@ -1232,7 +1232,7 @@ fn normalize_emphasized_heading_boundaries(line: &str) -> String {
     let mut index = 0;
 
     while index < line.len() {
-        if let Some((closing_start, closing_end)) = find_emphasis_span(&line, index) {
+        if let Some((closing_start, closing_end)) = find_emphasis_span(line, index) {
             let span = &line[index..closing_end];
             let inner = &line[index + 2..closing_start];
             let previous = previous_non_whitespace_char(&normalized);
@@ -1353,8 +1353,7 @@ fn insert_heading_break_if_needed(text: &mut String, previous: Option<char>) {
 fn starts_compact_list_marker(text: &str) -> bool {
     let trimmed = text.trim_start_matches([' ', '\t']);
 
-    if trimmed.starts_with('*') {
-        let rest = &trimmed[1..];
+    if let Some(rest) = trimmed.strip_prefix('*') {
         return if rest.starts_with([' ', '\t']) {
             rest.trim_start_matches([' ', '\t'])
                 .chars()
