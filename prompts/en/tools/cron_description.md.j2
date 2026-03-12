@@ -4,7 +4,7 @@ Manage scheduled tasks (cron jobs). Actions: `create`, `list`, `delete`.
 
 **Prompts:** Write the prompt as a complete instruction the agent can execute without context. The cron channel has no conversation history — each run starts fresh. Be specific: "Check the status of PR #42 on spacedrive/spacedrive and report whether CI passed" not "check on things".
 
-**Delivery:** Results are sent to a messaging channel. The `delivery_target` defaults to the current conversation. Format: `adapter:target` (e.g. `discord:123456789`, `telegram:-1001234`, `slack:C012345`).
+**Delivery:** In normal chat, omit `delivery_target`. Cron results stay pinned to the current conversation automatically. Only set `delivery_target` when creating jobs outside a live conversation context where no default target exists.
 
 **One-shot:** Set `run_once: true` for reminders or one-time tasks. The job disables itself after the first run.
 

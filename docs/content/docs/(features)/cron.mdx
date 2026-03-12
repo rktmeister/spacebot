@@ -60,7 +60,7 @@ CREATE TABLE cron_jobs (
 | `prompt` | The instruction to execute on each run |
 | `cron_expr` | Optional strict wall-clock schedule (cron expression, e.g. `0 9 * * *`) |
 | `interval_secs` | Seconds between runs (3600 = hourly, 86400 = daily) |
-| `delivery_target` | Where to send results, format `adapter:target` (e.g. `discord:123456789`) |
+| `delivery_target` | Where to send results, format `adapter:target`. Tool-created jobs inside a live conversation pin this to the current conversation automatically. |
 | `active_start_hour` | Optional start of active window (0-23, 24h local time) |
 | `active_end_hour` | Optional end of active window (0-23, 24h local time) |
 | `enabled` | Flipped to 0 by the circuit breaker after consecutive failures |
@@ -87,9 +87,9 @@ The `delivery_target` field uses the format `adapter:target`:
 
 | Format | Meaning |
 |--------|---------|
-| `discord:123456789` | Send to Discord channel ID 123456789 |
-| `discord:987654321` | Send to a different Discord channel |
-| `webhook:some-endpoint` | Send via webhook adapter |
+| `discord:<channel_id>` | Send to a Discord channel |
+| `telegram:<chat_id>` | Send to a Telegram chat |
+| `webhook:<endpoint>` | Send via webhook adapter |
 
 The adapter name maps to a registered messaging adapter. The target string is adapter-specific — for Discord, it's a channel ID parsed to u64. Delivery goes through `MessagingManager::broadcast()`, which is the proactive (non-reply) message path.
 
@@ -140,13 +140,12 @@ A user says "check my email every day at 9am" and the channel LLM calls the `cro
   "prompt": "Check the user's email inbox and summarize any important messages.",
   "cron_expr": "0 9 * * *",
   "interval_secs": 86400,
-  "delivery_target": "discord:123456789",
   "active_start_hour": 9,
   "active_end_hour": 10
 }
 ```
 
-The tool persists to the database and registers with the running scheduler immediately — no restart needed.
+In this conversational path, the tool ignores mismatched `delivery_target` overrides and pins delivery to the current conversation target. The tool persists to the database and registers with the running scheduler immediately — no restart needed.
 
 The tool also supports `list` (show all active cron jobs) and `delete` (remove by ID).
 

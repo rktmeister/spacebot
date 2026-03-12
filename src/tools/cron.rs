@@ -36,6 +36,45 @@ impl CronTool {
         self.default_delivery_target = default_delivery_target;
         self
     }
+
+    fn resolve_delivery_target(&self, args: &CronArgs) -> Result<String, CronError> {
+        resolve_delivery_target(
+            args.delivery_target.as_deref(),
+            self.default_delivery_target.as_deref(),
+        )
+    }
+}
+
+fn resolve_delivery_target(
+    requested_delivery_target: Option<&str>,
+    default_delivery_target: Option<&str>,
+) -> Result<String, CronError> {
+    let requested_delivery_target = requested_delivery_target
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if let Some(default_delivery_target) = default_delivery_target {
+        if let Some(requested_delivery_target) = requested_delivery_target {
+            if requested_delivery_target != default_delivery_target {
+                tracing::warn!(
+                    %requested_delivery_target,
+                    %default_delivery_target,
+                    "ignoring cron delivery_target override in conversation-scoped tool call"
+                );
+            }
+        }
+
+        return Ok(default_delivery_target.to_string());
+    }
+
+    requested_delivery_target
+        .map(ToString::to_string)
+        .ok_or_else(|| {
+            CronError(
+                "'delivery_target' is required for create when no conversation default is available"
+                    .into(),
+            )
+        })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,7 +98,8 @@ pub struct CronArgs {
     /// Required for "create": interval in seconds between runs.
     #[serde(default)]
     pub interval_secs: Option<u64>,
-    /// Optional for "create": where to deliver results, in "adapter:target" format (e.g. "discord:123456789"). If omitted, defaults to the current conversation when available.
+    /// Optional for "create": where to deliver results, in "adapter:target" format.
+    /// In live conversations, omit this field; the current conversation is used automatically.
     #[serde(default)]
     pub delivery_target: Option<String>,
     /// Optional for "create": hour (0-23) when the job becomes active.
@@ -137,7 +177,7 @@ impl Tool for CronTool {
                     },
                     "delivery_target": {
                         "type": "string",
-                        "description": "For 'create': where to send results, format 'adapter:target' (e.g. 'discord:dm:123456789' for DM, 'discord:channel_id' for server). If omitted, defaults to the current conversation."
+                        "description": "For 'create': optional explicit 'adapter:target' only when no current conversation default exists. In normal chat, omit this field and delivery stays pinned to the current conversation."
                     },
                     "active_start_hour": {
                         "type": "integer",
@@ -194,19 +234,7 @@ impl CronTool {
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
         let interval_secs = args.interval_secs.unwrap_or(3600);
-        let delivery_target = args
-            .delivery_target
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.to_string())
-            .or_else(|| self.default_delivery_target.clone())
-            .ok_or_else(|| {
-                CronError(
-                    "'delivery_target' is required for create when no conversation default is available"
-                        .into(),
-                )
-            })?;
+        let delivery_target = self.resolve_delivery_target(&args)?;
 
         // Validate cron job ID: alphanumeric, hyphens, underscores only
         if id.is_empty()
@@ -253,8 +281,7 @@ impl CronTool {
         // Validate delivery_target format (must be "adapter:target")
         if !delivery_target.contains(':') {
             return Err(CronError(
-                "'delivery_target' must be in 'adapter:target' format (e.g. 'discord:123456789')"
-                    .into(),
+                "'delivery_target' must be in 'adapter:target' format".into(),
             ));
         }
 
@@ -409,5 +436,40 @@ fn format_interval(secs: u64) -> String {
         }
     } else {
         format!("every {secs} seconds")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CronError, resolve_delivery_target};
+
+    #[test]
+    fn resolve_delivery_target_prefers_current_conversation_default() {
+        let delivery_target =
+            resolve_delivery_target(Some("discord:123456789"), Some("telegram:-5179214743"))
+                .unwrap();
+
+        assert_eq!(delivery_target, "telegram:-5179214743");
+    }
+
+    #[test]
+    fn resolve_delivery_target_uses_explicit_target_without_conversation_default() {
+        let delivery_target = resolve_delivery_target(Some("telegram:-5179214743"), None).unwrap();
+
+        assert_eq!(delivery_target, "telegram:-5179214743");
+    }
+
+    #[test]
+    fn resolve_delivery_target_requires_target_without_conversation_default() {
+        let error = resolve_delivery_target(None, None).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            CronError(
+                "'delivery_target' is required for create when no conversation default is available"
+                    .into()
+            )
+            .to_string()
+        );
     }
 }
