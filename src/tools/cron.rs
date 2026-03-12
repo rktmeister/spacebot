@@ -221,6 +221,7 @@ impl Tool for CronTool {
 
 impl CronTool {
     async fn create(&self, args: CronArgs) -> Result<CronOutput, CronError> {
+        let delivery_target = self.resolve_delivery_target(&args)?;
         let id = args
             .id
             .ok_or_else(|| CronError("'id' is required for create".into()))?;
@@ -234,7 +235,6 @@ impl CronTool {
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
         let interval_secs = args.interval_secs.unwrap_or(3600);
-        let delivery_target = self.resolve_delivery_target(&args)?;
 
         // Validate cron job ID: alphanumeric, hyphens, underscores only
         if id.is_empty()
