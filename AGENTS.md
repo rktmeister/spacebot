@@ -43,6 +43,15 @@ Additional rules:
 - For changes in async/stateful paths (worker lifecycle, cancellation, retrigger, recall cache behavior), include explicit race/terminal-state reasoning in the PR summary and run targeted tests in addition to `just gate-pr`.
 - Do not push if any gate is red.
 
+## Git Diff Policy
+
+- For any content diff inspection, prefer difftastic-backed Git commands.
+- Use `git dft` instead of `git diff`, `git dshow` instead of `git show`, and `git dlog` instead of `git log -p`.
+- Use plain `git diff` only for inventory or special views such as `--stat`, `--name-only`, `--check`, `--diff-filter=U`, and `--cc`.
+- When comparing the current branch to another ref, prefer `git dft <base>..HEAD -- <path>` or `git dft <base>...HEAD`.
+- If the branch is available locally, prefer `git dft <base>...HEAD` over `gh pr diff`.
+- When resolving merge or rebase conflicts, list unmerged files with `git diff --name-only --diff-filter=U`, inspect each conflicted file with `git dft --ours -- <path>`, `git dft --theirs -- <path>`, and `git dft --base -- <path>`, and use `git diff --cc -- <path>` only when you specifically need the combined conflict patch view.
+
 ## Architecture Overview
 
 Five process types. Every LLM process is a Rig `Agent<SpacebotModel, SpacebotHook>`. They differ in system prompt, tools, history, and hooks.
