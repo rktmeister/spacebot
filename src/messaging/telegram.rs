@@ -17,6 +17,7 @@ use teloxide::types::{
 };
 use teloxide::{ApiError, Bot, RequestError};
 
+use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
@@ -1117,7 +1118,7 @@ fn normalize_plain_markdown_line(line: &str) -> String {
     let mut line = normalize_prose_spacing(line);
     line = normalize_token_boundaries(&line);
     line = normalize_inline_list_boundaries(&line);
-    line = normalize_emphasized_heading_boundaries(&line);
+    line = normalize_emphasized_block_boundaries(&line);
     line = normalize_list_item_tail_boundaries(&line);
     normalize_ordered_list_body_boundaries(&line)
 }
@@ -1225,9 +1226,9 @@ fn normalize_token_boundaries(line: &str) -> String {
     normalized
 }
 
-/// Repair compact heading boundaries such as `summary:**Heading**1.` or
-/// `summary:**Findings:**- item` before pulldown-cmark parses the markdown.
-fn normalize_emphasized_heading_boundaries(line: &str) -> String {
+/// Repair emphasized block boundaries such as `summary:**Heading**1.` or
+/// `summary:**Field:** value**Next:** value` before pulldown-cmark parses the markdown.
+fn normalize_emphasized_block_boundaries(line: &str) -> String {
     let mut normalized = String::with_capacity(line.len() + line.len() / 8);
     let mut index = 0;
 
@@ -1237,11 +1238,20 @@ fn normalize_emphasized_heading_boundaries(line: &str) -> String {
             let inner = &line[index + 2..closing_start];
             let previous = previous_non_whitespace_char(&normalized);
             let following = &line[closing_end..];
+            let following_trimmed = following.trim_start_matches([' ', '\t']);
 
-            if is_block_heading_candidate(inner, &normalized, previous, following) {
+            if is_field_label(inner) {
+                insert_field_break_if_needed(&mut normalized, previous);
+                normalized.push_str(span);
+                if starts_emphasized_block_break(following_trimmed) && !normalized.ends_with('\n') {
+                    normalized.push('\n');
+                } else if should_insert_space_after_emphasized_label(following) {
+                    normalized.push(' ');
+                }
+            } else if is_block_heading_candidate(inner, &normalized, previous, following_trimmed) {
                 insert_heading_break_if_needed(&mut normalized, previous);
                 normalized.push_str(span);
-                if starts_compact_list_marker(following) && !normalized.ends_with('\n') {
+                if starts_emphasized_block_break(following_trimmed) && !normalized.ends_with('\n') {
                     normalized.push('\n');
                 }
             } else {
@@ -1258,6 +1268,26 @@ fn normalize_emphasized_heading_boundaries(line: &str) -> String {
     }
 
     normalized
+}
+
+fn is_field_label(inner: &str) -> bool {
+    let trimmed = inner.trim();
+    let Some(label) = trimmed.strip_suffix(':').map(str::trim) else {
+        return false;
+    };
+    if label.is_empty() {
+        return false;
+    }
+
+    let word_count = label.split_whitespace().count();
+    if !(1..=4).contains(&word_count) {
+        return false;
+    }
+
+    label
+        .chars()
+        .find(|character| character.is_ascii_alphanumeric())
+        .is_some_and(|character| character.is_ascii_uppercase())
 }
 
 fn find_emphasis_span(line: &str, index: usize) -> Option<(usize, usize)> {
@@ -1350,6 +1380,18 @@ fn insert_heading_break_if_needed(text: &mut String, previous: Option<char>) {
     }
 }
 
+fn insert_field_break_if_needed(text: &mut String, previous: Option<char>) {
+    if text.is_empty() || text.ends_with('\n') {
+        return;
+    }
+
+    if matches!(previous, Some(':' | ';' | '.' | '!' | '?')) {
+        text.push_str("\n\n");
+    } else {
+        text.push('\n');
+    }
+}
+
 fn starts_compact_list_marker(text: &str) -> bool {
     let trimmed = text.trim_start_matches([' ', '\t']);
 
@@ -1388,6 +1430,32 @@ fn starts_compact_list_marker(text: &str) -> bool {
                     || character.is_ascii_alphabetic()
             })
     })
+}
+
+fn starts_emphasized_block_break(text: &str) -> bool {
+    starts_compact_list_marker(text)
+        || text.starts_with('>')
+        || text.starts_with("```")
+        || starts_emphasized_field_label(text)
+}
+
+fn starts_emphasized_field_label(text: &str) -> bool {
+    let Some((closing_start, _closing_end)) = find_emphasis_span(text, 0) else {
+        return false;
+    };
+    is_field_label(&text[2..closing_start])
+}
+
+fn should_insert_space_after_emphasized_label(following: &str) -> bool {
+    let Some(next_character) = following.chars().next() else {
+        return false;
+    };
+    if next_character.is_whitespace() {
+        return false;
+    }
+
+    let trimmed = following.trim_start_matches([' ', '\t']);
+    !starts_emphasized_block_break(trimmed)
 }
 
 fn ordered_list_marker_len(text: &str) -> Option<usize> {
@@ -2121,11 +2189,14 @@ impl TelegramEntityRenderer {
             Tag::Strong => self.open_entity(MessageEntityKind::Bold),
             Tag::Strikethrough => self.open_entity(MessageEntityKind::Strikethrough),
             Tag::Link(_, destination, _) | Tag::Image(_, destination, _) => {
-                self.open_entity(MessageEntityKind::TextLink {
-                    url: destination
-                        .parse()
-                        .expect("pulldown-cmark emitted invalid URL destination"),
-                });
+                match destination.parse() {
+                    Ok(url) => self.open_entity(MessageEntityKind::TextLink { url }),
+                    Err(error) => tracing::debug!(
+                        %destination,
+                        %error,
+                        "telegram formatter skipping unsupported link destination"
+                    ),
+                }
             }
             _ => {}
         }
@@ -2450,7 +2521,32 @@ fn utf16_len(text: &str) -> usize {
 }
 
 fn markdown_to_telegram_entities(markdown: &str) -> RenderedTelegramText {
-    TelegramEntityRenderer::render(&normalize_telegram_markdown(markdown))
+    let normalized = normalize_telegram_markdown(markdown);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        TelegramEntityRenderer::render(&normalized)
+    })) {
+        Ok(rendered) => rendered,
+        Err(payload) => {
+            tracing::error!(
+                panic = %panic_payload_summary(payload.as_ref()),
+                "telegram formatter panicked, falling back to plain text"
+            );
+            RenderedTelegramText {
+                text: normalized,
+                entities: Vec::new(),
+            }
+        }
+    }
+}
+
+fn panic_payload_summary(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
 }
 
 fn split_rendered_text(
@@ -2921,6 +3017,20 @@ mod tests {
     }
 
     #[test]
+    fn relative_link_falls_back_to_plain_text() {
+        let rendered = markdown_to_telegram_entities("[docs](docs/tasks)");
+        assert_eq!(rendered.text, "docs");
+        assert!(rendered.entities.is_empty());
+    }
+
+    #[test]
+    fn relative_image_falls_back_to_alt_text() {
+        let rendered = markdown_to_telegram_entities("![diagram](docs/diagram.png)");
+        assert_eq!(rendered.text, "diagram");
+        assert!(rendered.entities.is_empty());
+    }
+
+    #[test]
     fn strikethrough() {
         assert_eq!(markdown_to_telegram_html("~~deleted~~"), "<s>deleted</s>");
     }
@@ -3157,6 +3267,20 @@ mod tests {
         let input = "Here's what I found:**What I Found:**- First point\n- Second point";
         let expected =
             "Here's what I found:\n\n<b>What I Found:</b>\n\n• First point\n• Second point";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_emphasized_field_runs_into_label_lines() {
+        let input = "Today's update:**From:** Alex Example<alex@example.com>**Subject:** RE: Status update**Time:**8:51 AM SGT";
+        let expected = "Today's update:\n\n<b>From:</b> Alex Example&lt;alex@example.com&gt;\n<b>Subject:</b> RE: Status update\n<b>Time:</b> 8:51 AM SGT";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_emphasized_content_label_before_blockquote() {
+        let input = "**Content:**> Line one\n> Line two";
+        let expected = "<b>Content:</b>\n<blockquote>Line one\nLine two</blockquote>";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 

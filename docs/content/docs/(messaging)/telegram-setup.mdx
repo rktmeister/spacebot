@@ -178,12 +178,16 @@ For the best rendering:
 
 Spacebot flattens unsupported markdown tables into Telegram-safe bullet lines instead of sending raw pipe-table text.
 
+Malformed or relative markdown links are rendered as plain text instead of failing delivery.
+
 Spacebot also applies a Telegram-specific structural cleanup pass before rendering. The cleanup is based on token and block boundaries rather than phrase-specific fixes, so it can repair common model output seams such as:
 
 - collapsed ordered and bullet lists
 - compact word/number boundaries like `March13` or `last30`
 - glued section labels like `...SummaryAction items:`
 - heading/list seams like `**Heading:**- item`
+- emphasized field runs like `**From:** Alice**Subject:** Status`
+- label-to-quote or label-to-list seams like `**Content:**> line one`
 - ordered-list marker/body splits like `1.\n\n**Item**`
 
 Inline code spans and fenced code blocks are preserved literally while adjacent prose still gets repaired.
