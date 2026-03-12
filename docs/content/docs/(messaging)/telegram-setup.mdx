@@ -159,7 +159,7 @@ Each agent has its own memory, identity, and conversation history.
 
 ## Formatting
 
-Spacebot sends Telegram replies using Telegram's HTML parse mode, not full GitHub-flavored Markdown. The reliable subset is:
+Spacebot now renders Telegram replies using Telegram entities (`text + MessageEntity[]`), not raw GitHub-flavored Markdown. The reliable subset is still intentionally small:
 
 - bold / italic / underline / strikethrough
 - inline code and fenced code blocks
@@ -176,9 +176,17 @@ For the best rendering:
 - prefer flat bullet lists or short `Label: value` lines over tables or dense prose
 - avoid raw HTML, markdown heading markers, tables, and deeply nested markdown structures
 
-Spacebot also flattens unsupported markdown tables into Telegram-safe bullet lines instead of sending raw pipe-table text.
+Spacebot flattens unsupported markdown tables into Telegram-safe bullet lines instead of sending raw pipe-table text.
 
-Spacebot also applies a small Telegram-specific cleanup pass before rendering so obviously collapsed inline lists such as `by:1. ...2. ...`, compact date/time text such as `March13,2026 at2:00 PM`, glued sentence starters such as `...Then the review started`, glued section labels such as `...SummaryAction items:`, and collapsed heading/list seams such as `**Heading:**- item` are rewritten into more readable Telegram-safe text. Inline code spans are preserved literally while adjacent prose still gets repaired.
+Spacebot also applies a Telegram-specific structural cleanup pass before rendering. The cleanup is based on token and block boundaries rather than phrase-specific fixes, so it can repair common model output seams such as:
+
+- collapsed ordered and bullet lists
+- compact word/number boundaries like `March13` or `last30`
+- glued section labels like `...SummaryAction items:`
+- heading/list seams like `**Heading:**- item`
+- ordered-list marker/body splits like `1.\n\n**Item**`
+
+Inline code spans and fenced code blocks are preserved literally while adjacent prose still gets repaired.
 
 ## Troubleshooting
 

@@ -11,9 +11,10 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 use regex::Regex;
 use teloxide::payloads::setters::*;
 use teloxide::requests::{Request, Requester};
+use teloxide::types::MessageEntityRef;
 use teloxide::types::{
-    ChatAction, ChatId, FileId, InputFile, InputPollOption, MediaKind, MessageId, MessageKind,
-    ParseMode, ReactionType, ReplyParameters, UpdateKind, UserId,
+    ChatAction, ChatId, FileId, InputFile, InputPollOption, MediaKind, MessageEntity,
+    MessageEntityKind, MessageId, MessageKind, ReactionType, ReplyParameters, UpdateKind, UserId,
 };
 use teloxide::{ApiError, Bot, RequestError};
 
@@ -50,9 +51,6 @@ struct ActiveStream {
 
 /// Telegram's per-message character limit.
 const MAX_MESSAGE_LENGTH: usize = 4096;
-
-/// Smaller source-chunk target for markdown that expands heavily when HTML-escaped.
-const FORMATTED_SPLIT_LENGTH: usize = MAX_MESSAGE_LENGTH / 2;
 
 /// Minimum interval between streaming edits to avoid rate limits.
 const STREAM_EDIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
@@ -337,11 +335,11 @@ impl Messaging for TelegramAdapter {
                 if mime_type.starts_with("audio/") {
                     let input_file = InputFile::memory(data.clone()).file_name(filename.clone());
                     let sent = if let Some(ref caption_text) = caption {
-                        let html_caption = markdown_to_telegram_html(caption_text);
+                        let rendered_caption = markdown_to_telegram_entities(caption_text);
                         self.bot
                             .send_audio(chat_id, input_file)
-                            .caption(&html_caption)
-                            .parse_mode(ParseMode::Html)
+                            .caption(rendered_caption.text)
+                            .caption_entities(rendered_caption.entities)
                             .send()
                             .await
                     } else {
@@ -352,7 +350,7 @@ impl Messaging for TelegramAdapter {
                         if should_retry_plain_caption(&error) {
                             tracing::debug!(
                                 %error,
-                                "HTML caption parse failed, retrying telegram audio with plain caption"
+                                "entity caption send failed, retrying telegram audio with plain caption"
                             );
                             let fallback_file = InputFile::memory(data).file_name(filename);
                             let mut request = self.bot.send_audio(chat_id, fallback_file);
@@ -364,18 +362,17 @@ impl Messaging for TelegramAdapter {
                                 .await
                                 .context("failed to send telegram audio")?;
                         } else {
-                            return Err(error)
-                                .context("failed to send telegram audio with HTML caption")?;
+                            return Err(error).context("failed to send telegram audio caption")?;
                         }
                     }
                 } else {
                     let input_file = InputFile::memory(data.clone()).file_name(filename.clone());
                     let sent = if let Some(ref caption_text) = caption {
-                        let html_caption = markdown_to_telegram_html(caption_text);
+                        let rendered_caption = markdown_to_telegram_entities(caption_text);
                         self.bot
                             .send_document(chat_id, input_file)
-                            .caption(&html_caption)
-                            .parse_mode(ParseMode::Html)
+                            .caption(rendered_caption.text)
+                            .caption_entities(rendered_caption.entities)
                             .send()
                             .await
                     } else {
@@ -386,7 +383,7 @@ impl Messaging for TelegramAdapter {
                         if should_retry_plain_caption(&error) {
                             tracing::debug!(
                                 %error,
-                                "HTML caption parse failed, retrying telegram file with plain caption"
+                                "entity caption send failed, retrying telegram file with plain caption"
                             );
                             let fallback_file = InputFile::memory(data).file_name(filename);
                             let mut request = self.bot.send_document(chat_id, fallback_file);
@@ -398,8 +395,7 @@ impl Messaging for TelegramAdapter {
                                 .await
                                 .context("failed to send telegram file")?;
                         } else {
-                            return Err(error)
-                                .context("failed to send telegram file with HTML caption")?;
+                            return Err(error).context("failed to send telegram file caption")?;
                         }
                     }
                 }
@@ -459,15 +455,15 @@ impl Messaging for TelegramAdapter {
                         text
                     };
 
-                    let html = markdown_to_telegram_html(&display_text);
+                    let rendered = markdown_to_telegram_entities(&display_text);
                     if let Err(html_error) = self
                         .bot
-                        .edit_message_text(stream.chat_id, stream.message_id, &html)
-                        .parse_mode(ParseMode::Html)
+                        .edit_message_text(stream.chat_id, stream.message_id, rendered.text)
+                        .entities(rendered.entities)
                         .send()
                         .await
                     {
-                        tracing::debug!(%html_error, "HTML edit failed, retrying as plain text");
+                        tracing::debug!(%html_error, "entity edit failed, retrying as plain text");
                         if let Err(error) = self
                             .bot
                             .edit_message_text(stream.chat_id, stream.message_id, &display_text)
@@ -1001,52 +997,12 @@ async fn send_poll(bot: &Bot, chat_id: ChatId, poll: &crate::Poll) -> anyhow::Re
     Ok(())
 }
 
-/// Split a message into chunks that fit within Telegram's character limit.
-/// Tries to split at newlines, then spaces, then hard-cuts.
-fn split_message(text: &str, max_len: usize) -> Vec<String> {
-    if text.len() <= max_len {
-        return vec![text.to_string()];
-    }
-
-    let mut chunks = Vec::new();
-    let mut remaining = text;
-
-    while !remaining.is_empty() {
-        if remaining.len() <= max_len {
-            chunks.push(remaining.to_string());
-            break;
-        }
-
-        let split_at = remaining[..max_len]
-            .rfind('\n')
-            .or_else(|| remaining[..max_len].rfind(' '))
-            .unwrap_or(max_len);
-
-        chunks.push(remaining[..split_at].to_string());
-        remaining = remaining[split_at..].trim_start();
-    }
-
-    chunks
-}
-
 /// Return true when Telegram rejected rich text entities and a plain-caption retry is safe.
 fn should_retry_plain_caption(error: &RequestError) -> bool {
     matches!(error, RequestError::Api(ApiError::CantParseEntities(_)))
 }
 
-// -- Markdown-to-Telegram-HTML formatting --
-
-/// Escape characters that have special meaning in Telegram's HTML parse mode.
-fn escape_html(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-/// Escape characters that are unsafe in HTML attributes.
-fn escape_html_attribute(text: &str) -> String {
-    escape_html(text).replace('"', "&quot;")
-}
+// -- Markdown-to-Telegram formatting --
 
 /// Normalize common prose and list-spacing issues before markdown parsing so
 /// Telegram still renders readable structure when the model emits inline lists.
@@ -1154,150 +1110,120 @@ fn find_matching_backtick_delimiter(
 }
 
 fn normalize_plain_markdown_line(line: &str) -> String {
-    let mut line = normalize_token_boundaries(line);
-    line = normalize_prose_spacing(&line);
+    let mut line = normalize_prose_spacing(line);
+    line = normalize_token_boundaries(&line);
     line = normalize_inline_list_boundaries(&line);
     line = normalize_emphasized_heading_boundaries(&line);
     line = normalize_list_item_tail_boundaries(&line);
-    line
+    normalize_ordered_list_body_boundaries(&line)
 }
 
 /// Repair boundaries that occur immediately after an inline code span before
 /// the following plain-text segment is normalized normally.
 fn normalize_plain_segment_after_inline_code(segment: &str) -> String {
-    static LEADING_SECTION_LABEL: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^(?P<label>(?:[A-Z][A-Za-z]+|[A-Z]{2,})(?: [A-Za-z][A-Za-z'/-]+){0,2}:)")
-            .expect("hardcoded regex")
-    });
-    static LEADING_TITLECASE_WORD: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^(?P<word>[A-Z][a-z][A-Za-z']+)").expect("hardcoded regex"));
+    let leading_whitespace_len = segment
+        .char_indices()
+        .find_map(|(index, character)| (!matches!(character, ' ' | '\t')).then_some(index))
+        .unwrap_or(segment.len());
+    let (leading_whitespace, content) = segment.split_at(leading_whitespace_len);
 
-    let mut segment = LEADING_SECTION_LABEL
-        .replace(segment, "\n\n$label")
-        .into_owned();
-    segment = LEADING_TITLECASE_WORD
-        .replace(&segment, " $word")
-        .into_owned();
-    normalize_plain_markdown_line(&segment)
+    let mut normalized = String::with_capacity(segment.len() + segment.len() / 8);
+    normalized.push_str(leading_whitespace);
+    if leading_whitespace.is_empty() {
+        if starts_section_label(content).is_some() {
+            normalized.push_str("\n\n");
+        } else if starts_compact_list_marker(content) {
+            normalized.push('\n');
+        } else if leading_titlecase_word_len(content).is_some() {
+            normalized.push(' ');
+        }
+    }
+    normalized.push_str(content);
+    normalize_plain_markdown_line(&normalized)
 }
 
 /// Repair compact prose spacing such as `March12`, `at8:00`, `The3`, and
 /// `questions13-15` without touching all-caps model/version tokens.
 fn normalize_prose_spacing(line: &str) -> String {
-    static SENTENCE_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<punctuation>[.!?])(?P<word>[A-Z][A-Za-z']*)").expect("hardcoded regex")
-    });
-    static MONTH_DAY_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"\b(?P<month>January|February|March|April|May|June|July|August|September|October|November|December)(?P<day>\d{1,2}\b)",
-        )
-        .expect("hardcoded regex")
-    });
-    static LETTER_COMMA_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<prefix>[A-Za-z]),(?P<suffix>[A-Za-z0-9])").expect("hardcoded regex")
-    });
-    static DAY_YEAR_COMMA_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<day>\b\d{1,2}),(?P<year>\d{4}\b)").expect("hardcoded regex")
-    });
-    static DAY_TIME_COMMA_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<day>\b\d{1,2}),(?P<time>\d{1,2}:\d{2}\b)").expect("hardcoded regex")
-    });
-    static PREPOSITION_NUMBER_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"\b(?P<word>at|by|for|from|in|last|next|on|since|today|tomorrow|yesterday)(?P<number>\d)",
-        )
-        .expect("hardcoded regex")
-    });
-    static THE_ORDINAL_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\b(?P<word>the)(?P<ordinal>\d{1,2}(?:st|nd|rd|th)\b)")
-            .expect("hardcoded regex")
-    });
-    static WORD_NUMBER_SPACING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?P<word>\b(?:[A-Z][a-z]{2,}|[a-z]{3,}))(?P<number>\d{1,2}(?::\d{2})?(?:[–-]\d{1,2})?)(?P<after>[^0-9A-Za-z.]|$)",
-        )
-        .expect("hardcoded regex")
-    });
+    let mut normalized = String::with_capacity(line.len() + line.len() / 8);
 
-    let mut line = SENTENCE_SPACING
-        .replace_all(line, "$punctuation $word")
-        .into_owned();
-    line = MONTH_DAY_SPACING
-        .replace_all(&line, "$month $day")
-        .into_owned();
-    line = LETTER_COMMA_SPACING
-        .replace_all(&line, "$prefix, $suffix")
-        .into_owned();
-    line = DAY_YEAR_COMMA_SPACING
-        .replace_all(&line, "$day, $year")
-        .into_owned();
-    line = DAY_TIME_COMMA_SPACING
-        .replace_all(&line, "$day, $time")
-        .into_owned();
-    line = PREPOSITION_NUMBER_SPACING
-        .replace_all(&line, "$word $number")
-        .into_owned();
-    line = THE_ORDINAL_SPACING
-        .replace_all(&line, "$word $ordinal")
-        .into_owned();
-    WORD_NUMBER_SPACING
-        .replace_all(&line, "$word $number$after")
-        .into_owned()
+    for (byte_index, character) in line.char_indices() {
+        normalized.push(character);
+
+        let next_index = byte_index + character.len_utf8();
+        if next_index >= line.len() {
+            continue;
+        }
+
+        let next_character = line[next_index..]
+            .chars()
+            .next()
+            .expect("next character exists");
+        if next_character.is_whitespace() {
+            continue;
+        }
+
+        if should_insert_space_after_sentence_punctuation(character, next_character)
+            || should_insert_space_after_comma(line, byte_index, next_character)
+            || should_insert_space_between_word_and_number(line, byte_index, next_character)
+        {
+            normalized.push(' ');
+        }
+    }
+
+    normalized
 }
 
 /// Repair missing boundaries between a completed token and the next sentence or
 /// section label, while keeping the fixes narrow to obvious prose transitions.
 fn normalize_token_boundaries(line: &str) -> String {
-    static GLUED_URL_AND_TITLECASE_WORD: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<url>https?://[^\s<>()]+[A-Za-z0-9])(?P<word>[A-Z][a-z][A-Za-z']+)\b")
-            .expect("hardcoded regex")
-    });
-    static GLUED_TITLECASE_WORD_BEFORE_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<before>[A-Za-z0-9\)\]])(?P<word>[A-Z][a-z]{2,})(?P<number>\d)")
-            .expect("hardcoded regex")
-    });
-    static GLUED_SENTENCE_STARTER_AFTER_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?P<before>[A-Za-z0-9\)\]])(?P<word>The|This|That|These|Those|She|He|They|We|You|It|However|Instead|Meanwhile|Also)\b",
-        )
-        .expect("hardcoded regex")
-    });
-    static GLUED_SECTION_LABEL_AFTER_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?P<before>[A-Za-z0-9\)\]])(?P<label>(?:[A-Z][A-Za-z]+|[A-Z]{2,})(?: [A-Za-z][A-Za-z'/-]+){0,2}:)",
-        )
-        .expect("hardcoded regex")
-    });
+    let mut normalized = String::with_capacity(line.len() + line.len() / 8);
+    let mut index = 0;
 
-    let mut line = GLUED_URL_AND_TITLECASE_WORD
-        .replace_all(line, "$url $word")
-        .into_owned();
-    line = GLUED_TITLECASE_WORD_BEFORE_NUMBER
-        .replace_all(&line, "$before $word$number")
-        .into_owned();
-    line = GLUED_SENTENCE_STARTER_AFTER_TOKEN
-        .replace_all(&line, "$before $word")
-        .into_owned();
-    line = GLUED_SECTION_LABEL_AFTER_TOKEN
-        .replace_all(&line, "$before\n\n$label")
-        .into_owned();
-    line
+    while index < line.len() {
+        if let Some((closing_start, closing_end)) = find_emphasis_span(line, index) {
+            let span = &line[index..closing_end];
+            let inner = &line[index + 2..closing_start];
+            let previous = previous_non_whitespace_char(&normalized);
+            let following = &line[closing_end..];
+
+            if starts_compact_list_marker(following)
+                && is_block_heading_candidate(inner, &normalized, previous, following)
+            {
+                insert_heading_break_if_needed(&mut normalized, previous);
+                normalized.push_str(span);
+                if starts_compact_list_marker(following) && !normalized.ends_with('\n') {
+                    normalized.push('\n');
+                }
+            } else {
+                normalized.push_str(span);
+            }
+            index = closing_end;
+            continue;
+        }
+
+        let slice = &line[index..];
+        if should_insert_section_break(&normalized, slice) {
+            trim_trailing_horizontal_whitespace(&mut normalized);
+            insert_section_break_if_needed(&mut normalized);
+        } else if should_insert_space_before_titlecase_word(&normalized, slice) {
+            trim_trailing_horizontal_whitespace(&mut normalized);
+            if !normalized.ends_with([' ', '\n']) {
+                normalized.push(' ');
+            }
+        }
+
+        let character = slice.chars().next().expect("valid utf-8 boundary");
+        normalized.push(character);
+        index += character.len_utf8();
+    }
+
+    normalized
 }
 
 /// Repair compact heading boundaries such as `summary:**Heading**1.` or
 /// `summary:**Findings:**- item` before pulldown-cmark parses the markdown.
 fn normalize_emphasized_heading_boundaries(line: &str) -> String {
-    static TOKEN_BEFORE_EMPHASIZED_HEADING_WITH_LIST_AFTER: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?P<before>[A-Za-z0-9\)\]])(?P<heading>(?:\*\*|__)[A-Z][^*\n]* [^*\n]*?(?:\*\*|__))(?P<after>\d+\.|[-*•])",
-        )
-        .expect("hardcoded regex")
-    });
-
-    let line = TOKEN_BEFORE_EMPHASIZED_HEADING_WITH_LIST_AFTER
-        .replace_all(line, "$before\n$heading\n$after")
-        .into_owned();
-
     let mut normalized = String::with_capacity(line.len() + line.len() / 8);
     let mut index = 0;
 
@@ -1390,14 +1316,13 @@ fn previous_non_whitespace_char(text: &str) -> Option<char> {
 
 fn ends_with_ordered_list_marker(text: &str) -> bool {
     let trimmed = text.trim_end();
-    let Some(marker_end) = trimmed.rfind('.') else {
-        return false;
-    };
-    let digits = &trimmed[..marker_end];
-    let Some(last_non_digit) = digits.rfind(|character: char| !character.is_ascii_digit()) else {
-        return !digits.is_empty();
-    };
-    last_non_digit + 1 < digits.len()
+    let tail = trimmed
+        .rsplit('\n')
+        .next()
+        .unwrap_or(trimmed)
+        .trim_start_matches([' ', '\t']);
+
+    ordered_list_marker_len(tail).is_some_and(|marker_len| marker_len == tail.len())
 }
 
 fn insert_heading_break_if_needed(text: &mut String, previous: Option<char>) {
@@ -1424,17 +1349,47 @@ fn insert_heading_break_if_needed(text: &mut String, previous: Option<char>) {
 fn starts_compact_list_marker(text: &str) -> bool {
     let trimmed = text.trim_start_matches([' ', '\t']);
 
-    if trimmed.starts_with('-') || trimmed.starts_with('*') || trimmed.starts_with('•') {
+    if trimmed.starts_with('*') {
+        let rest = &trimmed[1..];
+        return if rest.starts_with([' ', '\t']) {
+            rest.trim_start_matches([' ', '\t'])
+                .chars()
+                .next()
+                .is_some_and(|character| !character.is_ascii_lowercase())
+        } else {
+            rest.chars().next().is_some_and(|character| {
+                character == '`' || character == '#' || character == '*' || character == '_'
+            })
+        };
+    }
+
+    if trimmed.starts_with('-') || trimmed.starts_with('•') {
         return trimmed[1..].chars().next().is_some_and(|character| {
             character.is_whitespace()
                 || character == '`'
                 || character == '#'
-                || character.is_ascii_alphanumeric()
+                || character.is_ascii_alphabetic()
         });
     }
 
+    ordered_list_marker_len(trimmed).is_some_and(|marker_len| {
+        trimmed[marker_len..]
+            .chars()
+            .next()
+            .is_some_and(|character| {
+                character.is_whitespace()
+                    || character == '*'
+                    || character == '_'
+                    || character == '`'
+                    || character == '#'
+                    || character.is_ascii_alphabetic()
+            })
+    })
+}
+
+fn ordered_list_marker_len(text: &str) -> Option<usize> {
     let mut digit_length = 0;
-    for character in trimmed.chars() {
+    for character in text.chars() {
         if character.is_ascii_digit() {
             digit_length += character.len_utf8();
         } else {
@@ -1442,83 +1397,469 @@ fn starts_compact_list_marker(text: &str) -> bool {
         }
     }
 
-    if digit_length == 0 || !trimmed[digit_length..].starts_with('.') {
-        return false;
+    if digit_length == 0 || !text[digit_length..].starts_with('.') {
+        return None;
     }
 
-    trimmed[digit_length + 1..]
-        .chars()
-        .next()
-        .is_some_and(|character| {
-            character.is_whitespace()
-                || character == '*'
-                || character == '_'
-                || character == '`'
-                || character == '#'
-                || character.is_ascii_alphanumeric()
-        })
+    Some(digit_length + 1)
 }
 
 /// Repair inline lists that were emitted mid-sentence instead of on their own
 /// lines, but keep normal punctuation and prose intact.
 fn normalize_inline_list_boundaries(line: &str) -> String {
-    static INLINE_ORDERED_LIST_AFTER_PUNCTUATION: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<prefix>[:.!?])(?P<gap>[ \t]*)(?P<marker>\d+\.)[ \t]+")
-            .expect("hardcoded regex")
-    });
-    static INLINE_UNORDERED_LIST_AFTER_PUNCTUATION: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<prefix>[:.!?])(?P<gap>[ \t]*)(?P<marker>[-*•])[ \t]+")
-            .expect("hardcoded regex")
-    });
-    static INLINE_ORDERED_LIST_AFTER_WORD: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<before>[A-Za-z0-9)\]])(?P<marker>\d+\.)[ \t]+(?P<next>\*\*|__|`|[A-Z])")
-            .expect("hardcoded regex")
-    });
-    static INLINE_UNORDERED_LIST_AFTER_WORD: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?P<before>[A-Za-z0-9)\]])(?P<marker>[-*•])[ \t]+(?P<next>\*\*|__|`|[A-Z])")
-            .expect("hardcoded regex")
-    });
-    static INLINE_LABEL_BULLET_WITH_SPACES: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?P<before>[a-z0-9\)\]]) (?P<marker>[-•]) (?P<label>(?:[A-Z][A-Za-z'/-]+(?: [A-Za-z][A-Za-z'/-]+){0,2}):)",
-        )
-        .expect("hardcoded regex")
-    });
+    let mut normalized = String::with_capacity(line.len() + line.len() / 8);
+    let mut index = 0;
 
-    let mut line = INLINE_ORDERED_LIST_AFTER_PUNCTUATION
-        .replace_all(line, "$prefix\n\n$marker ")
-        .into_owned();
-    line = INLINE_UNORDERED_LIST_AFTER_PUNCTUATION
-        .replace_all(&line, "$prefix\n\n$marker ")
-        .into_owned();
-    line = INLINE_ORDERED_LIST_AFTER_WORD
-        .replace_all(&line, "$before\n$marker $next")
-        .into_owned();
-    line = INLINE_UNORDERED_LIST_AFTER_WORD
-        .replace_all(&line, "$before\n$marker $next")
-        .into_owned();
-    line = INLINE_LABEL_BULLET_WITH_SPACES
-        .replace_all(&line, "$before\n$marker $label")
-        .into_owned();
-    line
+    while index < line.len() {
+        if let Some((_, closing_end)) = find_emphasis_span(line, index) {
+            normalized.push_str(&line[index..closing_end]);
+            index = closing_end;
+            continue;
+        }
+
+        let slice = &line[index..];
+        if should_insert_list_break(&normalized, slice) {
+            trim_trailing_horizontal_whitespace(&mut normalized);
+            insert_list_break_if_needed(&mut normalized);
+        }
+
+        let character = slice.chars().next().expect("valid utf-8 boundary");
+        normalized.push(character);
+        index += character.len_utf8();
+    }
+
+    normalized
 }
 
-/// Repair sentence starts that leak onto the end of a bullet item instead of
-/// becoming their own paragraph below the list.
-fn normalize_list_item_tail_boundaries(line: &str) -> String {
-    static BULLET_ITEM_TAIL_SENTENCE_START: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?m)(?P<item>^[-•].*?[a-z]) (?P<word>The|This|That|These|Those) (?P<number>\d)",
-        )
-        .expect("hardcoded regex")
-    });
-
-    BULLET_ITEM_TAIL_SENTENCE_START
-        .replace_all(line, "$item\n$word $number")
-        .into_owned()
+fn should_insert_space_after_sentence_punctuation(character: char, next_character: char) -> bool {
+    matches!(character, '.' | '!' | '?') && next_character.is_ascii_uppercase()
 }
 
-/// Strip HTML tags and unescape entities, producing plain text for fallback.
+fn should_insert_space_after_comma(line: &str, comma_index: usize, next_character: char) -> bool {
+    if !line[comma_index..].starts_with(',') {
+        return false;
+    }
+    if next_character.is_whitespace() {
+        return false;
+    }
+
+    let previous_character = line[..comma_index].chars().next_back();
+    match (previous_character, next_character) {
+        (Some(previous), next)
+            if previous.is_ascii_alphabetic() && next.is_ascii_alphanumeric() =>
+        {
+            true
+        }
+        (Some(previous), next) if previous.is_ascii_digit() && next.is_ascii_digit() => {
+            let left_digits = count_ascii_digits_backward(line, comma_index);
+            let right_digits = count_ascii_digits_forward(line, comma_index + 1);
+            left_digits <= 2 || right_digits != 3
+        }
+        (Some(previous), next) if previous.is_ascii_digit() && next.is_ascii_alphabetic() => true,
+        _ => false,
+    }
+}
+
+fn should_insert_space_between_word_and_number(
+    line: &str,
+    boundary_index: usize,
+    next_character: char,
+) -> bool {
+    if !next_character.is_ascii_digit() {
+        return false;
+    }
+
+    let character = line[boundary_index..]
+        .chars()
+        .next()
+        .expect("boundary character exists");
+    if !character.is_ascii_alphabetic() {
+        return false;
+    }
+
+    let token_start = token_start_before(line, boundary_index);
+    let token_end = token_end_after(line, boundary_index + character.len_utf8());
+    let token = &line[token_start..token_end];
+    if token.contains("://") || token.contains('/') || token.contains('@') || token.contains('#') {
+        return false;
+    }
+
+    let word = ascii_word_ending_at(line, boundary_index);
+    if word.len() < 2 || word.chars().all(|character| character.is_ascii_uppercase()) {
+        return false;
+    }
+
+    let next_slice = &line[boundary_index + character.len_utf8()..];
+    if looks_like_version_number(next_slice) {
+        return false;
+    }
+
+    true
+}
+
+fn count_ascii_digits_backward(text: &str, end: usize) -> usize {
+    text[..end]
+        .chars()
+        .rev()
+        .take_while(|character| character.is_ascii_digit())
+        .count()
+}
+
+fn count_ascii_digits_forward(text: &str, start: usize) -> usize {
+    text[start..]
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .count()
+}
+
+fn token_start_before(text: &str, boundary_index: usize) -> usize {
+    text[..boundary_index]
+        .char_indices()
+        .rev()
+        .find_map(|(index, character)| {
+            character
+                .is_whitespace()
+                .then_some(index + character.len_utf8())
+        })
+        .unwrap_or(0)
+}
+
+fn token_end_after(text: &str, boundary_index: usize) -> usize {
+    text[boundary_index..]
+        .char_indices()
+        .find_map(|(index, character)| character.is_whitespace().then_some(boundary_index + index))
+        .unwrap_or(text.len())
+}
+
+fn ascii_word_ending_at(text: &str, boundary_index: usize) -> &str {
+    let start = text[..boundary_index]
+        .char_indices()
+        .rev()
+        .find_map(|(index, character)| {
+            (!matches!(character, 'A'..='Z' | 'a'..='z' | '\'' | '-' | '/'))
+                .then_some(index + character.len_utf8())
+        })
+        .unwrap_or(0);
+    let end = boundary_index
+        + text[boundary_index..]
+            .chars()
+            .next()
+            .expect("boundary character exists")
+            .len_utf8();
+    &text[start..end]
+}
+
+fn looks_like_version_number(text: &str) -> bool {
+    let mut characters = text.chars();
+    let mut saw_digit = false;
+    while let Some(character) = characters.next() {
+        if character.is_ascii_digit() {
+            saw_digit = true;
+            continue;
+        }
+        if saw_digit && character == '.' {
+            return characters.next().is_some_and(|next| next.is_ascii_digit());
+        }
+        return false;
+    }
+    false
+}
+
+fn should_insert_section_break(output: &str, slice: &str) -> bool {
+    if output.is_empty() || output.ends_with('\n') {
+        return false;
+    }
+    if starts_section_label(slice).is_none() {
+        return false;
+    }
+
+    previous_non_whitespace_char(output).is_some_and(is_token_ending_character)
+}
+
+fn should_insert_space_before_titlecase_word(output: &str, slice: &str) -> bool {
+    if output.is_empty() || output.ends_with([' ', '\n']) || starts_section_label(slice).is_some() {
+        return false;
+    }
+    if leading_titlecase_word_len(slice).is_none() {
+        return false;
+    }
+
+    previous_non_whitespace_char(output).is_some_and(is_token_ending_character)
+}
+
+fn should_insert_list_break(output: &str, slice: &str) -> bool {
+    if output.is_empty() || output.ends_with('\n') || !starts_compact_list_marker(slice) {
+        return false;
+    }
+
+    let Some(previous_character) = previous_non_whitespace_char(output) else {
+        return false;
+    };
+
+    if ordered_list_marker_len(slice.trim_start_matches([' ', '\t'])).is_some() {
+        return is_token_ending_character(previous_character)
+            || matches!(previous_character, ':' | ';' | '.' | '!' | '?');
+    }
+
+    matches!(
+        previous_character,
+        ')' | ']' | '*' | '`' | ':' | ';' | '.' | '!' | '?'
+    ) || (is_token_ending_character(previous_character) && unordered_marker_has_explicit_gap(slice))
+}
+
+fn unordered_marker_has_explicit_gap(text: &str) -> bool {
+    let trimmed = text.trim_start_matches([' ', '\t']);
+    let rest = if let Some(rest) = trimmed.strip_prefix('-') {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix('*') {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix('•') {
+        rest
+    } else {
+        return false;
+    };
+
+    rest.chars().next().is_some_and(char::is_whitespace)
+}
+
+fn normalize_list_item_tail_boundaries(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len() + text.len() / 8);
+
+    for segment in text.split_inclusive('\n') {
+        let (line, newline) = match segment.strip_suffix('\n') {
+            Some(line) => (line, "\n"),
+            None => (segment, ""),
+        };
+
+        normalized.push_str(&normalize_single_list_item_line(line));
+        normalized.push_str(newline);
+    }
+
+    normalized
+}
+
+fn normalize_ordered_list_body_boundaries(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut normalized_lines = Vec::with_capacity(lines.len());
+    let mut index = 0;
+
+    while index < lines.len() {
+        let trimmed = lines[index].trim();
+        let is_marker_only =
+            ordered_list_marker_len(trimmed).is_some_and(|marker_len| marker_len == trimmed.len());
+        if is_marker_only {
+            let mut next_index = index + 1;
+            while next_index < lines.len() && lines[next_index].trim().is_empty() {
+                next_index += 1;
+            }
+
+            if next_index < lines.len() {
+                let next_line = lines[next_index].trim_start();
+                let next_line_is_emphasis = find_emphasis_span(next_line, 0).is_some();
+                if !next_line.is_empty()
+                    && (!starts_compact_list_marker(next_line) || next_line_is_emphasis)
+                {
+                    normalized_lines.push(format!("{trimmed} {next_line}"));
+                    index = next_index + 1;
+                    continue;
+                }
+            }
+        }
+
+        normalized_lines.push(lines[index].to_string());
+        index += 1;
+    }
+
+    normalized_lines.join("\n")
+}
+
+fn normalize_single_list_item_line(line: &str) -> String {
+    if !starts_list_item_line(line) {
+        return line.to_string();
+    }
+
+    let mut normalized = String::with_capacity(line.len() + line.len() / 8);
+    let mut index = 0;
+
+    while index < line.len() {
+        if let Some((_, closing_end)) = find_emphasis_span(line, index) {
+            normalized.push_str(&line[index..closing_end]);
+            index = closing_end;
+            continue;
+        }
+
+        let slice = &line[index..];
+        if should_split_list_tail(&normalized, slice) {
+            trim_trailing_horizontal_whitespace(&mut normalized);
+            normalized.push('\n');
+        }
+
+        let character = slice.chars().next().expect("valid utf-8 boundary");
+        normalized.push(character);
+        index += character.len_utf8();
+    }
+
+    normalized
+}
+
+fn starts_list_item_line(line: &str) -> bool {
+    let trimmed = line.trim_start_matches([' ', '\t']);
+    trimmed.starts_with('-')
+        || trimmed.starts_with('*')
+        || trimmed.starts_with('•')
+        || ordered_list_marker_len(trimmed).is_some()
+}
+
+fn should_split_list_tail(output: &str, slice: &str) -> bool {
+    if output.is_empty() || output.ends_with('\n') {
+        return false;
+    }
+    if !output.contains('—') {
+        return false;
+    }
+
+    let Some(previous_character) = previous_non_whitespace_char(output) else {
+        return false;
+    };
+    if matches!(previous_character, '.' | '!' | '?' | ':' | ';') {
+        return false;
+    }
+
+    let Some(word_len) = leading_titlecase_word_len(slice) else {
+        return false;
+    };
+    let rest = &slice[word_len..];
+    if !rest.starts_with(' ') {
+        return false;
+    }
+
+    rest.trim_start()
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+}
+
+fn insert_section_break_if_needed(text: &mut String) {
+    if text.is_empty() || text.ends_with("\n\n") {
+        return;
+    }
+    if text.ends_with('\n') {
+        text.push('\n');
+    } else {
+        text.push_str("\n\n");
+    }
+}
+
+fn insert_list_break_if_needed(text: &mut String) {
+    if text.is_empty() || text.ends_with('\n') {
+        return;
+    }
+
+    match previous_non_whitespace_char(text) {
+        Some(':' | ';' | '.' | '!' | '?') => text.push_str("\n\n"),
+        _ => text.push('\n'),
+    }
+}
+
+fn trim_trailing_horizontal_whitespace(text: &mut String) {
+    while text.ends_with([' ', '\t']) {
+        text.pop();
+    }
+}
+
+fn is_token_ending_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, ')' | ']')
+}
+
+fn leading_titlecase_word_len(text: &str) -> Option<usize> {
+    let mut characters = text.char_indices();
+    let (_, first) = characters.next()?;
+    if !first.is_ascii_uppercase() {
+        return None;
+    }
+
+    let mut end = first.len_utf8();
+    let mut saw_lowercase = false;
+    for (index, character) in characters {
+        if !is_section_word_character(character) {
+            break;
+        }
+        if character.is_ascii_lowercase() {
+            saw_lowercase = true;
+        }
+        end = index + character.len_utf8();
+    }
+
+    saw_lowercase.then_some(end)
+}
+
+fn starts_section_label(text: &str) -> Option<usize> {
+    let mut index = leading_section_label_head_len(text)?;
+    let mut words = 1;
+
+    loop {
+        let rest = &text[index..];
+        if let Some(':') = rest.chars().next() {
+            return Some(index + 1);
+        }
+        if words == 3 || !rest.starts_with(' ') {
+            return None;
+        }
+
+        index += 1;
+        index += leading_section_label_tail_len(&text[index..])?;
+        words += 1;
+    }
+}
+
+fn leading_section_label_head_len(text: &str) -> Option<usize> {
+    leading_acronym_len(text).or_else(|| leading_titlecase_word_len(text))
+}
+
+fn leading_section_label_tail_len(text: &str) -> Option<usize> {
+    let mut characters = text.char_indices();
+    let (_, first) = characters.next()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+
+    let mut end = first.len_utf8();
+    for (index, character) in characters {
+        if !is_section_word_character(character) {
+            break;
+        }
+        end = index + character.len_utf8();
+    }
+
+    Some(end)
+}
+
+fn leading_acronym_len(text: &str) -> Option<usize> {
+    let mut characters = text.char_indices();
+    let (_, first) = characters.next()?;
+    if !first.is_ascii_uppercase() {
+        return None;
+    }
+
+    let mut end = first.len_utf8();
+    let mut count = 1;
+    for (index, character) in characters {
+        if !character.is_ascii_uppercase() {
+            break;
+        }
+        count += 1;
+        end = index + character.len_utf8();
+    }
+
+    (count >= 2).then_some(end)
+}
+
+fn is_section_word_character(character: char) -> bool {
+    character.is_ascii_alphabetic() || matches!(character, '\'' | '-' | '/')
+}
+
+/// Strip HTML tags and unescape entities for formatter unit tests.
+#[cfg(test)]
 fn strip_html_tags(html: &str) -> String {
     static TAG_PATTERN: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"<[^>]+>").expect("hardcoded regex"));
@@ -1590,19 +1931,43 @@ impl TableState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RenderedTelegramText {
+    text: String,
+    entities: Vec<MessageEntity>,
+}
+
+impl RenderedTelegramText {
+    fn char_count(&self) -> usize {
+        self.text.chars().count()
+    }
+}
+
 #[derive(Debug)]
-struct TelegramHtmlRenderer {
+struct OpenEntity {
+    kind: MessageEntityKind,
+    offset: usize,
+}
+
+#[derive(Debug)]
+struct TelegramEntityRenderer {
     output: String,
+    output_utf16_len: usize,
+    entities: Vec<MessageEntity>,
+    open_entities: Vec<OpenEntity>,
     list_stack: Vec<ListContext>,
     list_item_depth: usize,
     blockquote_depth: usize,
     table_state: Option<TableState>,
 }
 
-impl TelegramHtmlRenderer {
+impl TelegramEntityRenderer {
     fn new(capacity: usize) -> Self {
         Self {
             output: String::with_capacity(capacity),
+            output_utf16_len: 0,
+            entities: Vec::new(),
+            open_entities: Vec::new(),
             list_stack: Vec::new(),
             list_item_depth: 0,
             blockquote_depth: 0,
@@ -1610,7 +1975,7 @@ impl TelegramHtmlRenderer {
         }
     }
 
-    fn render(markdown: &str) -> String {
+    fn render(markdown: &str) -> RenderedTelegramText {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -1624,9 +1989,23 @@ impl TelegramHtmlRenderer {
         renderer.finish()
     }
 
-    fn finish(mut self) -> String {
-        self.trim_trailing_newlines_to(0);
-        self.output
+    fn finish(mut self) -> RenderedTelegramText {
+        self.close_all_entities();
+        let preserve_terminal_newline = self.entities.iter().any(|entity| {
+            matches!(entity.kind, MessageEntityKind::Pre { .. })
+                && entity.offset + entity.length == self.output_utf16_len
+                && self.output.ends_with('\n')
+        });
+        self.trim_trailing_newlines_to(usize::from(preserve_terminal_newline));
+        self.entities.sort_by(|left, right| {
+            left.offset
+                .cmp(&right.offset)
+                .then(right.length.cmp(&left.length))
+        });
+        RenderedTelegramText {
+            text: self.output,
+            entities: self.entities,
+        }
     }
 
     fn push_event(&mut self, event: Event<'_>) {
@@ -1637,21 +2016,19 @@ impl TelegramHtmlRenderer {
                 if self.push_table_text(text.as_ref()) {
                     return;
                 }
-                self.output.push_str(&escape_html(text.as_ref()));
+                self.push_text(text.as_ref());
             }
             Event::Code(text) => {
                 if self.push_table_text(text.as_ref()) {
                     return;
                 }
-                self.output.push_str("<code>");
-                self.output.push_str(&escape_html(text.as_ref()));
-                self.output.push_str("</code>");
+                self.push_inline_code(text.as_ref());
             }
             Event::SoftBreak | Event::HardBreak => {
                 if self.push_table_text(" ") {
                     return;
                 }
-                self.output.push('\n');
+                self.push_text("\n");
             }
             Event::Rule => {
                 if self.in_list_item() {
@@ -1659,22 +2036,22 @@ impl TelegramHtmlRenderer {
                 } else {
                     self.ensure_blank_line();
                 }
-                self.output.push_str("──────────");
+                self.push_text("──────────");
                 self.close_block();
             }
             Event::TaskListMarker(checked) => {
                 if self.push_table_text(if checked { "[x] " } else { "[ ] " }) {
                     return;
                 }
-                self.output.push_str(if checked { "[x] " } else { "[ ] " });
+                self.push_text(if checked { "[x] " } else { "[ ] " });
             }
             Event::FootnoteReference(reference) => {
                 if self.push_table_footnote(reference.as_ref()) {
                     return;
                 }
-                self.output.push('[');
-                self.output.push_str(&escape_html(reference.as_ref()));
-                self.output.push(']');
+                self.push_text("[");
+                self.push_text(reference.as_ref());
+                self.push_text("]");
             }
         }
     }
@@ -1691,12 +2068,12 @@ impl TelegramHtmlRenderer {
             Tag::Paragraph => {}
             Tag::Heading(..) => {
                 self.ensure_blank_line();
-                self.output.push_str("<b>");
+                self.open_entity(MessageEntityKind::Bold);
             }
             Tag::BlockQuote => {
                 self.ensure_blank_line();
-                self.output.push_str("<blockquote>");
                 self.blockquote_depth += 1;
+                self.open_entity(MessageEntityKind::Blockquote);
             }
             Tag::CodeBlock(kind) => {
                 if self.in_list_item() {
@@ -1704,14 +2081,9 @@ impl TelegramHtmlRenderer {
                 } else {
                     self.ensure_blank_line();
                 }
-
-                if let Some(language) = code_block_language(&kind) {
-                    self.output.push_str("<pre><code class=\"language-");
-                    self.output.push_str(&escape_html_attribute(language));
-                    self.output.push_str("\">");
-                } else {
-                    self.output.push_str("<pre>");
-                }
+                self.open_entity(MessageEntityKind::Pre {
+                    language: code_block_language(&kind).map(str::to_owned),
+                });
             }
             Tag::List(start) => {
                 if self.in_list_item() {
@@ -1737,19 +2109,20 @@ impl TelegramHtmlRenderer {
                     .unwrap_or(false);
                 self.trim_trailing_newlines_to(if had_items { 1 } else { 2 });
                 if !self.output.is_empty() && !self.output.ends_with('\n') {
-                    self.output.push('\n');
+                    self.push_text("\n");
                 }
                 self.list_item_depth += 1;
                 self.push_list_item_prefix();
             }
-            Tag::Emphasis => self.output.push_str("<i>"),
-            Tag::Strong => self.output.push_str("<b>"),
-            Tag::Strikethrough => self.output.push_str("<s>"),
+            Tag::Emphasis => self.open_entity(MessageEntityKind::Italic),
+            Tag::Strong => self.open_entity(MessageEntityKind::Bold),
+            Tag::Strikethrough => self.open_entity(MessageEntityKind::Strikethrough),
             Tag::Link(_, destination, _) | Tag::Image(_, destination, _) => {
-                self.output.push_str("<a href=\"");
-                self.output
-                    .push_str(&escape_html_attribute(destination.as_ref()));
-                self.output.push_str("\">");
+                self.open_entity(MessageEntityKind::TextLink {
+                    url: destination
+                        .parse()
+                        .expect("pulldown-cmark emitted invalid URL destination"),
+                });
             }
             _ => {}
         }
@@ -1763,21 +2136,17 @@ impl TelegramHtmlRenderer {
         match tag {
             Tag::Paragraph => self.close_block(),
             Tag::Heading(..) => {
-                self.output.push_str("</b>");
+                self.close_entity();
                 self.ensure_blank_line();
             }
             Tag::BlockQuote => {
                 self.trim_trailing_newlines_to(0);
-                self.output.push_str("</blockquote>");
+                self.close_entity();
                 self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
                 self.ensure_blank_line();
             }
-            Tag::CodeBlock(kind) => {
-                if code_block_language(&kind).is_some() {
-                    self.output.push_str("</code></pre>");
-                } else {
-                    self.output.push_str("</pre>");
-                }
+            Tag::CodeBlock(_) => {
+                self.close_entity();
                 self.close_block();
             }
             Tag::List(_) => {
@@ -1789,28 +2158,66 @@ impl TelegramHtmlRenderer {
             }
             Tag::Item => {
                 self.trim_trailing_newlines_to(0);
-                self.output.push('\n');
+                self.push_text("\n");
                 self.list_item_depth = self.list_item_depth.saturating_sub(1);
             }
-            Tag::Emphasis => self.output.push_str("</i>"),
-            Tag::Strong => self.output.push_str("</b>"),
-            Tag::Strikethrough => self.output.push_str("</s>"),
-            Tag::Link(..) | Tag::Image(..) => self.output.push_str("</a>"),
+            Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link(..) | Tag::Image(..) => {
+                self.close_entity();
+            }
             _ => {}
         }
     }
 
+    fn push_inline_code(&mut self, text: &str) {
+        self.open_entity(MessageEntityKind::Code);
+        self.push_text(text);
+        self.close_entity();
+    }
+
+    fn open_entity(&mut self, kind: MessageEntityKind) {
+        self.open_entities.push(OpenEntity {
+            kind,
+            offset: self.output_utf16_len,
+        });
+    }
+
+    fn close_entity(&mut self) {
+        let Some(open_entity) = self.open_entities.pop() else {
+            return;
+        };
+        let length = self.output_utf16_len.saturating_sub(open_entity.offset);
+        if length == 0 {
+            return;
+        }
+        self.entities.push(MessageEntity::new(
+            open_entity.kind,
+            open_entity.offset,
+            length,
+        ));
+    }
+
+    fn close_all_entities(&mut self) {
+        while !self.open_entities.is_empty() {
+            self.close_entity();
+        }
+    }
+
+    fn push_text(&mut self, text: &str) {
+        self.output_utf16_len += utf16_len(text);
+        self.output.push_str(text);
+    }
+
     fn push_list_item_prefix(&mut self) {
         let indent = "  ".repeat(self.list_stack.len().saturating_sub(1));
-        self.output.push_str(&indent);
+        self.push_text(&indent);
 
         match self.list_stack.last_mut() {
             Some(ListContext::Ordered { next_index, .. }) => {
                 let current = *next_index;
                 *next_index += 1;
-                self.output.push_str(&format!("{current}. "));
+                self.push_text(&format!("{current}. "));
             }
-            Some(ListContext::Unordered { .. }) | None => self.output.push_str("• "),
+            Some(ListContext::Unordered { .. }) | None => self.push_text("• "),
         }
     }
 
@@ -1925,9 +2332,9 @@ impl TelegramHtmlRenderer {
         }
 
         if !self.output.is_empty() && !self.output.ends_with('\n') {
-            self.output.push_str("\n\n");
+            self.push_text("\n\n");
         }
-        self.output.push_str(&rendered_rows.join("\n"));
+        self.push_text(&rendered_rows.join("\n"));
     }
 
     fn close_block(&mut self) {
@@ -1942,7 +2349,7 @@ impl TelegramHtmlRenderer {
         if self.output.is_empty() || self.output.ends_with('\n') {
             return;
         }
-        self.output.push('\n');
+        self.push_text("\n");
     }
 
     fn ensure_blank_line(&mut self) {
@@ -1957,9 +2364,9 @@ impl TelegramHtmlRenderer {
             .take_while(|character| *character == '\n')
             .count();
         if trailing_newlines == 0 {
-            self.output.push_str("\n\n");
+            self.push_text("\n\n");
         } else if trailing_newlines == 1 {
-            self.output.push('\n');
+            self.push_text("\n");
         }
     }
 
@@ -1974,9 +2381,9 @@ impl TelegramHtmlRenderer {
             return;
         }
 
-        for _ in 0..(trailing_newlines - max_newlines) {
-            self.output.pop();
-        }
+        let new_len = self.output.trim_end_matches('\n').len() + max_newlines;
+        self.output.truncate(new_len);
+        self.output_utf16_len = utf16_len(&self.output);
     }
 }
 
@@ -2035,13 +2442,320 @@ fn render_table_rows(headers: &[String], rows: &[Vec<String>]) -> Vec<String> {
     rendered_rows
 }
 
-/// Convert markdown to Telegram-compatible HTML.
-///
-/// Telegram only supports a narrow HTML subset, so markdown is parsed into
-/// structure first and then rendered into supported tags plus plain-text list
-/// markers and spacing.
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+fn markdown_to_telegram_entities(markdown: &str) -> RenderedTelegramText {
+    TelegramEntityRenderer::render(&normalize_telegram_markdown(markdown))
+}
+
+fn split_rendered_text(
+    rendered: RenderedTelegramText,
+    max_chars: usize,
+) -> Vec<RenderedTelegramText> {
+    if rendered.char_count() <= max_chars {
+        return vec![rendered];
+    }
+
+    let mut chunks = Vec::new();
+    let mut remaining = rendered;
+
+    loop {
+        if remaining.char_count() <= max_chars {
+            chunks.push(remaining);
+            break;
+        }
+
+        let (left, right) = split_rendered_once(remaining, max_chars);
+        chunks.push(left);
+        remaining = right;
+    }
+
+    chunks
+}
+
+fn split_rendered_once(
+    rendered: RenderedTelegramText,
+    max_chars: usize,
+) -> (RenderedTelegramText, RenderedTelegramText) {
+    let hard_split = byte_index_after_n_chars(&rendered.text, max_chars);
+    let preferred_split = preferred_split_byte(&rendered.text, hard_split);
+    let safe_split = adjust_split_byte_to_entity_boundary(&rendered, preferred_split);
+    let split_byte = if safe_split == 0 {
+        hard_split
+    } else {
+        safe_split
+    };
+
+    let left_end = trim_trailing_split_whitespace(&rendered.text, split_byte);
+    let right_start = trim_leading_split_whitespace(&rendered.text, split_byte);
+
+    let left_end = if left_end == 0 { split_byte } else { left_end };
+    let right_start = if right_start >= rendered.text.len() {
+        split_byte
+    } else {
+        right_start
+    };
+
+    let left = slice_rendered_text(&rendered, 0, left_end);
+    let right = slice_rendered_text(&rendered, right_start, rendered.text.len());
+
+    if left.text.is_empty() || right.text.is_empty() {
+        (
+            slice_rendered_text(&rendered, 0, hard_split),
+            slice_rendered_text(&rendered, hard_split, rendered.text.len()),
+        )
+    } else {
+        (left, right)
+    }
+}
+
+fn byte_index_after_n_chars(text: &str, max_chars: usize) -> usize {
+    let mut count = 0;
+    for (byte_index, character) in text.char_indices() {
+        if count == max_chars {
+            return byte_index;
+        }
+        count += 1;
+        if count == max_chars {
+            return byte_index + character.len_utf8();
+        }
+    }
+    text.len()
+}
+
+fn preferred_split_byte(text: &str, hard_split: usize) -> usize {
+    text[..hard_split]
+        .rfind('\n')
+        .or_else(|| text[..hard_split].rfind(' '))
+        .unwrap_or(hard_split)
+}
+
+fn adjust_split_byte_to_entity_boundary(
+    rendered: &RenderedTelegramText,
+    split_byte: usize,
+) -> usize {
+    let parsed_entities = MessageEntityRef::parse(&rendered.text, &rendered.entities);
+    let mut adjusted = split_byte;
+
+    loop {
+        let mut next = adjusted;
+        for entity in &parsed_entities {
+            if entity.start() < adjusted && adjusted < entity.end() {
+                next = next.min(entity.start());
+            }
+        }
+
+        if next == adjusted {
+            return adjusted;
+        }
+
+        adjusted = next;
+        if adjusted == 0 {
+            return 0;
+        }
+    }
+}
+
+fn trim_trailing_split_whitespace(text: &str, split_byte: usize) -> usize {
+    let mut end = split_byte;
+    while end > 0 {
+        let Some(character) = text[..end].chars().next_back() else {
+            break;
+        };
+        if !character.is_whitespace() {
+            break;
+        }
+        end -= character.len_utf8();
+    }
+    end
+}
+
+fn trim_leading_split_whitespace(text: &str, split_byte: usize) -> usize {
+    let mut start = split_byte;
+    while start < text.len() {
+        let Some(character) = text[start..].chars().next() else {
+            break;
+        };
+        if !character.is_whitespace() {
+            break;
+        }
+        start += character.len_utf8();
+    }
+    start
+}
+
+fn slice_rendered_text(
+    rendered: &RenderedTelegramText,
+    start_byte: usize,
+    end_byte: usize,
+) -> RenderedTelegramText {
+    let text = rendered.text[start_byte..end_byte].to_string();
+    let parsed_entities = MessageEntityRef::parse(&rendered.text, &rendered.entities);
+    let mut entities = Vec::new();
+
+    for entity in parsed_entities {
+        if entity.start() < start_byte || entity.end() > end_byte {
+            continue;
+        }
+
+        let offset = utf16_len(&rendered.text[start_byte..entity.start()]);
+        let length = utf16_len(entity.text());
+        entities.push(MessageEntity::new(entity.kind().clone(), offset, length));
+    }
+
+    entities.sort_by(|left, right| {
+        left.offset
+            .cmp(&right.offset)
+            .then(right.length.cmp(&left.length))
+    });
+
+    RenderedTelegramText { text, entities }
+}
+
+/// Render entity-based Telegram output back into HTML for formatter tests.
+#[cfg(test)]
 fn markdown_to_telegram_html(markdown: &str) -> String {
-    TelegramHtmlRenderer::render(&normalize_telegram_markdown(markdown))
+    let rendered = markdown_to_telegram_entities(markdown);
+    render_entities_as_html_preview(&rendered)
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HtmlPreviewTag {
+    byte_offset: usize,
+    kind: HtmlPreviewTagKind,
+    text: String,
+    span_len: usize,
+    precedence: usize,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HtmlPreviewTagKind {
+    Start,
+    End,
+}
+
+#[cfg(test)]
+fn render_entities_as_html_preview(rendered: &RenderedTelegramText) -> String {
+    let parsed_entities = MessageEntityRef::parse(&rendered.text, &rendered.entities);
+    let mut tags = Vec::with_capacity(parsed_entities.len() * 2);
+
+    for entity in parsed_entities {
+        let (start_tag, end_tag, precedence) = html_preview_tags(entity.kind());
+        let span_len = entity.range().len();
+        tags.push(HtmlPreviewTag {
+            byte_offset: entity.start(),
+            kind: HtmlPreviewTagKind::Start,
+            text: start_tag,
+            span_len,
+            precedence,
+        });
+        tags.push(HtmlPreviewTag {
+            byte_offset: entity.end(),
+            kind: HtmlPreviewTagKind::End,
+            text: end_tag,
+            span_len,
+            precedence,
+        });
+    }
+
+    tags.sort_by(|left, right| {
+        left.byte_offset
+            .cmp(&right.byte_offset)
+            .then_with(|| match (left.kind, right.kind) {
+                (HtmlPreviewTagKind::End, HtmlPreviewTagKind::Start) => std::cmp::Ordering::Less,
+                (HtmlPreviewTagKind::Start, HtmlPreviewTagKind::End) => std::cmp::Ordering::Greater,
+                (HtmlPreviewTagKind::Start, HtmlPreviewTagKind::Start) => right
+                    .span_len
+                    .cmp(&left.span_len)
+                    .then(left.precedence.cmp(&right.precedence)),
+                (HtmlPreviewTagKind::End, HtmlPreviewTagKind::End) => left
+                    .span_len
+                    .cmp(&right.span_len)
+                    .then(right.precedence.cmp(&left.precedence)),
+            })
+            .then_with(|| left.text.cmp(&right.text))
+    });
+
+    let mut html = String::with_capacity(rendered.text.len() + tags.len() * 8);
+    let mut tag_index = 0;
+
+    for (byte_offset, character) in rendered.text.char_indices() {
+        while let Some(tag) = tags
+            .get(tag_index)
+            .filter(|tag| tag.byte_offset == byte_offset)
+        {
+            html.push_str(&tag.text);
+            tag_index += 1;
+        }
+        push_escaped_html_character(character, &mut html);
+    }
+
+    while let Some(tag) = tags.get(tag_index) {
+        html.push_str(&tag.text);
+        tag_index += 1;
+    }
+
+    html
+}
+
+#[cfg(test)]
+fn html_preview_tags(kind: &MessageEntityKind) -> (String, String, usize) {
+    match kind {
+        MessageEntityKind::Bold => ("<b>".into(), "</b>".into(), 20),
+        MessageEntityKind::Italic => ("<i>".into(), "</i>".into(), 10),
+        MessageEntityKind::Underline => ("<u>".into(), "</u>".into(), 30),
+        MessageEntityKind::Strikethrough => ("<s>".into(), "</s>".into(), 40),
+        MessageEntityKind::Spoiler => ("<tg-spoiler>".into(), "</tg-spoiler>".into(), 50),
+        MessageEntityKind::Code => ("<code>".into(), "</code>".into(), 60),
+        MessageEntityKind::Pre { language } => {
+            let start_tag = match language {
+                Some(language) => {
+                    format!(
+                        "<pre><code class=\"language-{}\">",
+                        escape_html_attribute(language)
+                    )
+                }
+                None => "<pre>".into(),
+            };
+            let end_tag = if language.is_some() {
+                "</code></pre>".into()
+            } else {
+                "</pre>".into()
+            };
+            (start_tag, end_tag, 70)
+        }
+        MessageEntityKind::TextLink { url } => (
+            format!("<a href=\"{}\">", escape_html_attribute(url.as_str())),
+            "</a>".into(),
+            80,
+        ),
+        MessageEntityKind::Blockquote | MessageEntityKind::ExpandableBlockquote => {
+            ("<blockquote>".into(), "</blockquote>".into(), 90)
+        }
+        _ => (String::new(), String::new(), 0),
+    }
+}
+
+#[cfg(test)]
+fn push_escaped_html_character(character: char, html: &mut String) {
+    match character {
+        '&' => html.push_str("&amp;"),
+        '<' => html.push_str("&lt;"),
+        '>' => html.push_str("&gt;"),
+        _ => html.push(character),
+    }
+}
+
+#[cfg(test)]
+fn escape_html_attribute(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Send a plain text Telegram message for formatting fallback paths.
@@ -2062,43 +2776,26 @@ async fn send_plain_text(
     Ok(())
 }
 
-/// Send a message with Telegram HTML formatting, splitting at the message
-/// length limit. Falls back to plain text if the API rejects the HTML.
+/// Send a message using Telegram entities, splitting at the message length
+/// limit. Falls back to plain text if Telegram rejects the entity payload.
 async fn send_formatted(
     bot: &Bot,
     chat_id: ChatId,
     text: &str,
     reply_to: Option<MessageId>,
 ) -> anyhow::Result<()> {
-    let mut pending_chunks: VecDeque<String> =
-        VecDeque::from(split_message(text, MAX_MESSAGE_LENGTH));
-    while let Some(markdown_chunk) = pending_chunks.pop_front() {
-        let html_chunk = markdown_to_telegram_html(&markdown_chunk);
-
-        if html_chunk.len() > MAX_MESSAGE_LENGTH {
-            let smaller_chunks = split_message(&markdown_chunk, FORMATTED_SPLIT_LENGTH);
-            if smaller_chunks.len() > 1 {
-                for chunk in smaller_chunks.into_iter().rev() {
-                    pending_chunks.push_front(chunk);
-                }
-                continue;
-            }
-
-            let plain_chunk = strip_html_tags(&html_chunk);
-            send_plain_text(bot, chat_id, &plain_chunk, reply_to).await?;
-            continue;
+    let rendered = markdown_to_telegram_entities(text);
+    for formatted_chunk in split_rendered_text(rendered, MAX_MESSAGE_LENGTH) {
+        let mut request = bot.send_message(chat_id, &formatted_chunk.text);
+        if !formatted_chunk.entities.is_empty() {
+            request = request.entities(formatted_chunk.entities.clone());
         }
-
-        let mut request = bot
-            .send_message(chat_id, &html_chunk)
-            .parse_mode(ParseMode::Html);
         if let Some(reply_id) = reply_to {
             request = request.reply_parameters(ReplyParameters::new(reply_id));
         }
         if let Err(error) = request.send().await {
-            tracing::debug!(%error, "HTML send failed, retrying as plain text");
-            let plain_chunk = strip_html_tags(&html_chunk);
-            send_plain_text(bot, chat_id, &plain_chunk, reply_to).await?;
+            tracing::debug!(%error, "entity send failed, retrying as plain text");
+            send_plain_text(bot, chat_id, &formatted_chunk.text, reply_to).await?;
         }
     }
     Ok(())
@@ -2113,6 +2810,41 @@ mod tests {
         assert_eq!(
             markdown_to_telegram_html("**bold text**"),
             "<b>bold text</b>"
+        );
+    }
+
+    #[test]
+    fn bold_entities_preserve_plain_text_offsets() {
+        let rendered = markdown_to_telegram_entities("**bold text**");
+        assert_eq!(rendered.text, "bold text");
+        assert_eq!(
+            rendered.entities,
+            vec![MessageEntity::bold(0, utf16_len("bold text"))]
+        );
+    }
+
+    #[test]
+    fn split_rendered_text_keeps_entities_on_safe_boundaries() {
+        let rendered = markdown_to_telegram_entities("One two **three** four");
+        let chunks = split_rendered_text(rendered, 10);
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].text, "One two");
+        assert!(chunks[0].entities.is_empty());
+        assert_eq!(chunks[1].text, "three four");
+        assert_eq!(chunks[1].entities, vec![MessageEntity::bold(0, 5)]);
+    }
+
+    #[test]
+    fn split_rendered_text_rebases_utf16_offsets() {
+        let rendered = markdown_to_telegram_entities("Prefix **🐧 alpha** suffix");
+        let chunks = split_rendered_text(rendered, 8);
+
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[1].text, "🐧 alpha");
+        assert_eq!(
+            chunks[1].entities,
+            vec![MessageEntity::bold(0, utf16_len("🐧 alpha"))]
         );
     }
 
@@ -2159,21 +2891,21 @@ mod tests {
     #[test]
     fn code_block_with_language() {
         let input = "```rust\nfn main() {}\n```";
-        let expected = "<pre><code class=\"language-rust\">fn main() {}\n</code></pre>";
+        let expected = "<pre><code class=\"language-rust\">fn main() {}</code></pre>";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
     #[test]
     fn code_block_without_language() {
         let input = "```\nhello world\n```";
-        let expected = "<pre>hello world\n</pre>";
+        let expected = "<pre>hello world</pre>";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
     #[test]
     fn code_block_escapes_html() {
         let input = "```\n<script>alert(1)</script>\n```";
-        let expected = "<pre>&lt;script&gt;alert(1)&lt;/script&gt;\n</pre>";
+        let expected = "<pre>&lt;script&gt;alert(1)&lt;/script&gt;</pre>";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
@@ -2181,7 +2913,7 @@ mod tests {
     fn link() {
         assert_eq!(
             markdown_to_telegram_html("[click](https://example.com)"),
-            r#"<a href="https://example.com">click</a>"#
+            r#"<a href="https://example.com/">click</a>"#
         );
     }
 
@@ -2298,6 +3030,13 @@ mod tests {
         let input = "<b>not actually bold</b>";
         let expected = "&lt;b&gt;not actually bold&lt;/b&gt;";
         assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn raw_html_stays_literal_in_entity_text() {
+        let rendered = markdown_to_telegram_entities("<b>not actually bold</b>");
+        assert_eq!(rendered.text, "<b>not actually bold</b>");
+        assert!(rendered.entities.is_empty());
     }
 
     #[test]
