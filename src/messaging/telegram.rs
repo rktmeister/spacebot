@@ -8,7 +8,6 @@ use crate::{Attachment, InboundMessage, MessageContent, OutboundResponse, Status
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
-use regex::Regex;
 use teloxide::payloads::setters::*;
 use teloxide::requests::{Request, Requester};
 use teloxide::types::MessageEntityRef;
@@ -19,10 +18,15 @@ use teloxide::types::{
 use teloxide::{ApiError, Bot, RequestError};
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
+
+#[cfg(test)]
+use regex::Regex;
+#[cfg(test)]
+use std::sync::LazyLock;
 
 /// Maximum number of rejected DM users to remember.
 const REJECTED_USERS_CAPACITY: usize = 50;
