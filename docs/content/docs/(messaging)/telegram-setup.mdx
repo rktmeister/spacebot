@@ -192,6 +192,8 @@ Spacebot also applies a Telegram-specific structural cleanup pass before renderi
 
 Inline code spans and fenced code blocks are preserved literally while adjacent prose still gets repaired.
 
+The cleanup is intentionally conservative around intact mixed-case identifiers, so names like `ServiceNow`, `GitHub`, and `REST APIs` are preserved instead of being rewritten into broken token splits.
+
 ### Inspecting the Telegram renderer
 
 When you need to distinguish:

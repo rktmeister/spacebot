@@ -1141,7 +1141,7 @@ fn normalize_plain_segment_after_inline_code(segment: &str) -> String {
             normalized.push_str("\n\n");
         } else if starts_compact_list_marker(content) {
             normalized.push('\n');
-        } else if leading_titlecase_word_len(content).is_some() {
+        } else if leading_sentence_starter_word_len(content).is_some() {
             normalized.push(' ');
         }
     }
@@ -1213,7 +1213,7 @@ fn normalize_token_boundaries(line: &str) -> String {
         if should_insert_section_break(&normalized, slice) {
             trim_trailing_horizontal_whitespace(&mut normalized);
             insert_section_break_if_needed(&mut normalized);
-        } else if should_insert_space_before_titlecase_word(&normalized, slice) {
+        } else if should_insert_space_before_sentence_starter(&normalized, slice) {
             trim_trailing_horizontal_whitespace(&mut normalized);
             if !normalized.ends_with([' ', '\n']) {
                 normalized.push(' ');
@@ -1685,15 +1685,20 @@ fn should_insert_section_break(output: &str, slice: &str) -> bool {
     previous_non_whitespace_char(output).is_some_and(is_token_ending_character)
 }
 
-fn should_insert_space_before_titlecase_word(output: &str, slice: &str) -> bool {
+fn should_insert_space_before_sentence_starter(output: &str, slice: &str) -> bool {
     if output.is_empty() || output.ends_with([' ', '\n']) || starts_section_label(slice).is_some() {
         return false;
     }
-    if leading_titlecase_word_len(slice).is_none() {
+    if leading_sentence_starter_word_len(slice).is_none() {
         return false;
     }
 
-    previous_non_whitespace_char(output).is_some_and(is_token_ending_character)
+    matches!(
+        previous_non_whitespace_char(output),
+        Some(character)
+            if character.is_ascii_digit()
+                || matches!(character, ')' | ']' | '>' | '/' | ':' | ';' | '.' | '!' | '?' | '`')
+    )
 }
 
 fn should_insert_list_break(output: &str, slice: &str) -> bool {
@@ -1900,6 +1905,22 @@ fn leading_titlecase_word_len(text: &str) -> Option<usize> {
     }
 
     saw_lowercase.then_some(end)
+}
+
+fn leading_sentence_starter_word_len(text: &str) -> Option<usize> {
+    let word_len = leading_titlecase_word_len(text)?;
+    let rest = &text[word_len..];
+    if rest.is_empty() {
+        return Some(word_len);
+    }
+
+    rest.chars()
+        .next()
+        .filter(|character| {
+            character.is_whitespace()
+                || matches!(character, '.' | ',' | ':' | ';' | '!' | '?' | ')' | ']')
+        })
+        .map(|_| word_len)
 }
 
 fn starts_section_label(text: &str) -> Option<usize> {
@@ -3328,9 +3349,9 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_glued_sentence_starters_after_tokens() {
-        let input = "Reference page: https://example.com/r/A1b2C3d4X9Then the review started. Another reviewer also left notesThe item was opened today.";
-        let expected = "Reference page: https://example.com/r/A1b2C3d4X9 Then the review started. Another reviewer also left notes The item was opened today.";
+    fn normalizes_glued_sentence_starters_after_non_alpha_tokens() {
+        let input = "Reference page: https://example.com/r/A1b2C3d4X9Then the review started.";
+        let expected = "Reference page: https://example.com/r/A1b2C3d4X9 Then the review started.";
         assert_eq!(normalize_telegram_markdown(input), expected);
     }
 
@@ -3436,6 +3457,12 @@ mod tests {
         let input = "This is **very important** today, but it is still part of one sentence.";
         let expected = "This is **very important** today, but it is still part of one sentence.";
         assert_eq!(normalize_telegram_markdown(input), expected);
+    }
+
+    #[test]
+    fn preserves_mixed_case_product_names_and_acronyms() {
+        let input = "The worker will research ServiceNow integrations, free GitHub tooling, and direct REST APIs.";
+        assert_eq!(normalize_telegram_markdown(input), input);
     }
 
     #[test]
