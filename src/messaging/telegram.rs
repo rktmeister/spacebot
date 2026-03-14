@@ -1171,6 +1171,7 @@ fn normalize_prose_spacing(line: &str) -> String {
         }
 
         if should_insert_space_after_sentence_punctuation(character, next_character)
+            || should_insert_space_after_label_colon(line, byte_index, next_character)
             || should_insert_space_after_comma(line, byte_index, next_character)
             || should_insert_space_between_word_and_number(line, byte_index, next_character)
         {
@@ -1401,16 +1402,12 @@ fn starts_compact_list_marker(text: &str) -> bool {
     let trimmed = text.trim_start_matches([' ', '\t']);
 
     if let Some(rest) = trimmed.strip_prefix('*') {
-        return if rest.starts_with([' ', '\t']) {
-            rest.trim_start_matches([' ', '\t'])
+        return rest.starts_with([' ', '\t'])
+            && rest
+                .trim_start_matches([' ', '\t'])
                 .chars()
                 .next()
-                .is_some_and(|character| !character.is_ascii_lowercase())
-        } else {
-            rest.chars().next().is_some_and(|character| {
-                character == '`' || character == '#' || character == '*' || character == '_'
-            })
-        };
+                .is_some_and(|character| !character.is_ascii_lowercase());
     }
 
     if trimmed.starts_with('-') || trimmed.starts_with('•') {
@@ -1607,6 +1604,24 @@ fn should_insert_space_after_sentence_punctuation(character: char, next_characte
     matches!(character, '.' | '!' | '?') && next_character.is_ascii_uppercase()
 }
 
+fn should_insert_space_after_label_colon(
+    line: &str,
+    colon_index: usize,
+    next_character: char,
+) -> bool {
+    if !line[colon_index..].starts_with(':') || next_character.is_whitespace() {
+        return false;
+    }
+    if !next_character.is_ascii_digit() {
+        return false;
+    }
+
+    line[..colon_index]
+        .chars()
+        .next_back()
+        .is_some_and(|character| character.is_ascii_alphabetic() || matches!(character, ')' | ']'))
+}
+
 fn should_insert_space_after_comma(line: &str, comma_index: usize, next_character: char) -> bool {
     if !line[comma_index..].starts_with(',') {
         return false;
@@ -1657,11 +1672,17 @@ fn should_insert_space_between_word_and_number(
     }
 
     let word = ascii_word_ending_at(line, boundary_index);
-    if word.len() < 2 || word.chars().all(|character| character.is_ascii_uppercase()) {
+    if word.chars().all(|character| character.is_ascii_uppercase()) {
         return false;
     }
 
     let next_slice = &line[boundary_index + character.len_utf8()..];
+
+    if word.len() < 2 {
+        return word.eq_ignore_ascii_case("a")
+            && next_slice.starts_with(|character: char| character.is_ascii_digit())
+            && next_slice[1..].starts_with('-');
+    }
     if looks_like_version_number(next_slice) {
         return false;
     }
@@ -3594,6 +3615,13 @@ mod tests {
     fn normalizes_lowercase_word_number_spacing() {
         let input = "See questions13–15 before launch and within the last30 days.";
         let expected = "See questions 13–15 before launch and within the last 30 days.";
+        assert_eq!(normalize_telegram_markdown(input), expected);
+    }
+
+    #[test]
+    fn normalizes_label_colons_and_single_letter_articles_before_numbers() {
+        let input = "**Recommended Approach**:5-phase roadmap with a7-day rollout plan.";
+        let expected = "**Recommended Approach**: 5-phase roadmap with a 7-day rollout plan.";
         assert_eq!(normalize_telegram_markdown(input), expected);
     }
 
