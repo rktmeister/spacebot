@@ -54,14 +54,14 @@ fn resolve_delivery_target(
         .filter(|value| !value.is_empty());
 
     if let Some(default_delivery_target) = default_delivery_target {
-        if let Some(requested_delivery_target) = requested_delivery_target {
-            if requested_delivery_target != default_delivery_target {
-                tracing::warn!(
-                    %requested_delivery_target,
-                    %default_delivery_target,
-                    "ignoring cron delivery_target override in conversation-scoped tool call"
-                );
-            }
+        if let Some(requested_delivery_target) = requested_delivery_target
+            && requested_delivery_target != default_delivery_target
+        {
+            tracing::warn!(
+                %requested_delivery_target,
+                %default_delivery_target,
+                "ignoring cron delivery_target override in conversation-scoped tool call"
+            );
         }
 
         return Ok(default_delivery_target.to_string());

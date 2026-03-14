@@ -1120,7 +1120,8 @@ fn normalize_plain_markdown_line(line: &str) -> String {
     line = normalize_inline_list_boundaries(&line);
     line = normalize_emphasized_block_boundaries(&line);
     line = normalize_list_item_tail_boundaries(&line);
-    normalize_ordered_list_body_boundaries(&line)
+    line = normalize_ordered_list_body_boundaries(&line);
+    escape_literal_angle_bracket_emails(&line)
 }
 
 /// Repair boundaries that occur immediately after an inline code span before
@@ -1456,6 +1457,42 @@ fn should_insert_space_after_emphasized_label(following: &str) -> bool {
 
     let trimmed = following.trim_start_matches([' ', '\t']);
     !starts_emphasized_block_break(trimmed)
+}
+
+fn escape_literal_angle_bracket_emails(line: &str) -> String {
+    let mut normalized = String::with_capacity(line.len());
+    let mut index = 0;
+
+    while let Some(start_offset) = line[index..].find('<') {
+        let start = index + start_offset;
+        let Some(end_offset) = line[start + 1..].find('>') else {
+            break;
+        };
+        let end = start + 1 + end_offset;
+        let candidate = &line[start + 1..end];
+
+        if looks_like_literal_email(candidate) {
+            normalized.push_str(&line[index..start]);
+            normalized.push_str("&lt;");
+            normalized.push_str(candidate);
+            normalized.push_str("&gt;");
+            index = end + 1;
+            continue;
+        }
+
+        normalized.push_str(&line[index..=start]);
+        index = start + 1;
+    }
+
+    normalized.push_str(&line[index..]);
+    normalized
+}
+
+fn looks_like_literal_email(candidate: &str) -> bool {
+    !candidate.is_empty()
+        && candidate.contains('@')
+        && !candidate.chars().any(char::is_whitespace)
+        && !candidate.contains(['<', '>'])
 }
 
 fn ordered_list_marker_len(text: &str) -> Option<usize> {
@@ -2142,7 +2179,11 @@ impl TelegramEntityRenderer {
                 self.open_entity(MessageEntityKind::Bold);
             }
             Tag::BlockQuote => {
-                self.ensure_blank_line();
+                if self.output.ends_with('\n') && self.output.trim_end_matches('\n').ends_with(':') {
+                    self.trim_trailing_newlines_to(1);
+                } else {
+                    self.ensure_blank_line();
+                }
                 self.blockquote_depth += 1;
                 self.open_entity(MessageEntityKind::Blockquote);
             }
