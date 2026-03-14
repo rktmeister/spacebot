@@ -2649,7 +2649,7 @@ fn entity_trace(entity: &MessageEntity) -> TelegramEntityTrace {
         MessageEntityKind::TextMention { .. } => ("text_mention".to_string(), None, None),
         MessageEntityKind::CustomEmoji { custom_emoji_id } => (
             "custom_emoji".to_string(),
-            Some(custom_emoji_id.clone()),
+            Some(custom_emoji_id.to_string()),
             None,
         ),
     };
