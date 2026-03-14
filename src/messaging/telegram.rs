@@ -8,6 +8,7 @@ use crate::{Attachment, InboundMessage, MessageContent, OutboundResponse, Status
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
+use serde::Serialize;
 use teloxide::payloads::setters::*;
 use teloxide::requests::{Request, Requester};
 use teloxide::types::MessageEntityRef;
@@ -2051,6 +2052,39 @@ impl RenderedTelegramText {
     }
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TelegramRenderMode {
+    Entities,
+    PlainTextFallback,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct TelegramEntityTrace {
+    pub kind: String,
+    pub offset: usize,
+    pub length: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct TelegramRenderedChunkTrace {
+    pub text: String,
+    pub entities: Vec<TelegramEntityTrace>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct TelegramRenderTrace {
+    pub input: String,
+    pub normalized: String,
+    pub mode: TelegramRenderMode,
+    pub rendered: TelegramRenderedChunkTrace,
+    pub chunks: Vec<TelegramRenderedChunkTrace>,
+}
+
 #[derive(Debug)]
 struct OpenEntity {
     kind: MessageEntityKind,
@@ -2179,7 +2213,8 @@ impl TelegramEntityRenderer {
                 self.open_entity(MessageEntityKind::Bold);
             }
             Tag::BlockQuote => {
-                if self.output.ends_with('\n') && self.output.trim_end_matches('\n').ends_with(':') {
+                if self.output.ends_with('\n') && self.output.trim_end_matches('\n').ends_with(':')
+                {
                     self.trim_trailing_newlines_to(1);
                 } else {
                     self.ensure_blank_line();
@@ -2561,22 +2596,93 @@ fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
 }
 
-fn markdown_to_telegram_entities(markdown: &str) -> RenderedTelegramText {
+fn render_markdown_to_telegram_entities(
+    markdown: &str,
+) -> (String, RenderedTelegramText, TelegramRenderMode) {
     let normalized = normalize_telegram_markdown(markdown);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         TelegramEntityRenderer::render(&normalized)
     })) {
-        Ok(rendered) => rendered,
+        Ok(rendered) => (normalized, rendered, TelegramRenderMode::Entities),
         Err(payload) => {
             tracing::error!(
                 panic = %panic_payload_summary(payload.as_ref()),
                 "telegram formatter panicked, falling back to plain text"
             );
-            RenderedTelegramText {
-                text: normalized,
+            let rendered = RenderedTelegramText {
+                text: normalized.clone(),
                 entities: Vec::new(),
-            }
+            };
+            (normalized, rendered, TelegramRenderMode::PlainTextFallback)
         }
+    }
+}
+
+fn markdown_to_telegram_entities(markdown: &str) -> RenderedTelegramText {
+    let (_, rendered, _) = render_markdown_to_telegram_entities(markdown);
+    rendered
+}
+
+fn entity_trace(entity: &MessageEntity) -> TelegramEntityTrace {
+    let (kind, url, language) = match &entity.kind {
+        MessageEntityKind::Mention => ("mention".to_string(), None, None),
+        MessageEntityKind::Hashtag => ("hashtag".to_string(), None, None),
+        MessageEntityKind::Cashtag => ("cashtag".to_string(), None, None),
+        MessageEntityKind::BotCommand => ("bot_command".to_string(), None, None),
+        MessageEntityKind::Url => ("url".to_string(), None, None),
+        MessageEntityKind::Email => ("email".to_string(), None, None),
+        MessageEntityKind::PhoneNumber => ("phone_number".to_string(), None, None),
+        MessageEntityKind::Bold => ("bold".to_string(), None, None),
+        MessageEntityKind::Blockquote => ("blockquote".to_string(), None, None),
+        MessageEntityKind::ExpandableBlockquote => {
+            ("expandable_blockquote".to_string(), None, None)
+        }
+        MessageEntityKind::Italic => ("italic".to_string(), None, None),
+        MessageEntityKind::Underline => ("underline".to_string(), None, None),
+        MessageEntityKind::Strikethrough => ("strikethrough".to_string(), None, None),
+        MessageEntityKind::Spoiler => ("spoiler".to_string(), None, None),
+        MessageEntityKind::Code => ("code".to_string(), None, None),
+        MessageEntityKind::Pre { language } => ("pre".to_string(), None, language.clone()),
+        MessageEntityKind::TextLink { url } => {
+            ("text_link".to_string(), Some(url.to_string()), None)
+        }
+        MessageEntityKind::TextMention { .. } => ("text_mention".to_string(), None, None),
+        MessageEntityKind::CustomEmoji { custom_emoji_id } => (
+            "custom_emoji".to_string(),
+            Some(custom_emoji_id.clone()),
+            None,
+        ),
+    };
+
+    TelegramEntityTrace {
+        kind,
+        offset: entity.offset,
+        length: entity.length,
+        url,
+        language,
+    }
+}
+
+fn rendered_chunk_trace(rendered: RenderedTelegramText) -> TelegramRenderedChunkTrace {
+    TelegramRenderedChunkTrace {
+        text: rendered.text,
+        entities: rendered.entities.iter().map(entity_trace).collect(),
+    }
+}
+
+pub(crate) fn render_trace(markdown: &str) -> TelegramRenderTrace {
+    let (normalized, rendered, mode) = render_markdown_to_telegram_entities(markdown);
+    let chunks = split_rendered_text(rendered.clone(), MAX_MESSAGE_LENGTH)
+        .into_iter()
+        .map(rendered_chunk_trace)
+        .collect();
+
+    TelegramRenderTrace {
+        input: markdown.to_string(),
+        normalized,
+        mode,
+        rendered: rendered_chunk_trace(rendered),
+        chunks,
     }
 }
 

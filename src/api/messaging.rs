@@ -1,4 +1,5 @@
 use super::state::ApiState;
+use crate::messaging::telegram::{TelegramRenderTrace, render_trace as render_telegram_trace};
 
 use axum::Json;
 use axum::extract::State;
@@ -115,10 +116,21 @@ pub(super) struct DeleteMessagingInstanceRequest {
     name: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(super) struct TelegramRenderTraceRequest {
+    text: String,
+}
+
 #[derive(Serialize)]
 pub(super) struct MessagingInstanceActionResponse {
     success: bool,
     message: String,
+}
+
+pub(super) async fn telegram_render_trace(
+    Json(request): Json<TelegramRenderTraceRequest>,
+) -> Json<TelegramRenderTrace> {
+    Json(render_telegram_trace(&request.text))
 }
 
 fn normalize_adapter_selector(value: Option<&str>) -> Option<String> {

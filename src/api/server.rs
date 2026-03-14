@@ -241,6 +241,10 @@ pub async fn start_http_server(
         .route("/models/refresh", post(models::refresh_models))
         .route("/messaging/status", get(messaging::messaging_status))
         .route(
+            "/messaging/telegram/render-trace",
+            post(messaging::telegram_render_trace),
+        )
+        .route(
             "/messaging/disconnect",
             post(messaging::disconnect_platform),
         )

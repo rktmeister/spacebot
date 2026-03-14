@@ -192,6 +192,35 @@ Spacebot also applies a Telegram-specific structural cleanup pass before renderi
 
 Inline code spans and fenced code blocks are preserved literally while adjacent prose still gets repaired.
 
+### Inspecting the Telegram renderer
+
+When you need to distinguish:
+
+- raw assistant text stored in `conversation_messages`
+- Telegram adapter normalization/rendering
+- the final message you saw in Telegram
+
+use the Telegram render-trace endpoint.
+
+1. Fetch the raw channel message from `/api/channels/messages`
+2. Post its `content` to `/api/messaging/telegram/render-trace`
+3. Compare:
+   - `input` — raw text before Telegram formatting
+   - `normalized` — text after Telegram-specific structural cleanup
+   - `rendered` — final Telegram text plus entities before send
+   - `chunks` — the exact split payloads Spacebot would send to Telegram
+
+Example:
+
+```bash
+curl -sS \
+  -X POST http://127.0.0.1:19898/api/messaging/telegram/render-trace \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"**From:** Alice**Subject:** Status update"}' | jq
+```
+
+This is useful when the stored message looks different from the real Telegram message. Spacebot persists the pre-render assistant text, while Telegram receives the adapter's entity-rendered output.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
