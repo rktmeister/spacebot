@@ -1480,7 +1480,6 @@ fn starts_block_followup(text: &str) -> bool {
     starts_unordered_or_ordered_list_marker(trimmed)
         || trimmed.starts_with('>')
         || trimmed.starts_with("```")
-        || starts_emphasized_field_label(trimmed)
 }
 
 fn starts_emphasized_field_label(text: &str) -> bool {
@@ -1511,7 +1510,7 @@ fn should_insert_space_after_emphasis_span(inner: &str, following: &str) -> bool
     }
 
     let trimmed = following.trim_start_matches([' ', '\t']);
-    leading_sentence_starter_word_len(trimmed).is_some()
+    starts_clause_starter(trimmed)
         && emphasis_span_is_self_contained(inner)
         && !starts_emphasized_block_break(trimmed)
 }
@@ -1953,7 +1952,7 @@ fn looks_like_compact_heading_label(inner: &str) -> bool {
 }
 
 fn starts_sentence_after_list_tail(output: &str, slice: &str) -> bool {
-    if leading_sentence_starter_word_len(slice).is_none() {
+    if !starts_clause_starter(slice) {
         return false;
     }
 
@@ -1968,6 +1967,20 @@ fn starts_sentence_after_list_tail(output: &str, slice: &str) -> bool {
     }
 
     previous_non_whitespace_char(output).is_some_and(|character| character.is_ascii_digit())
+}
+
+fn starts_clause_starter(text: &str) -> bool {
+    const CLAUSE_STARTERS: &[&str] = &[
+        "The", "This", "That", "These", "Those", "It", "Its", "They", "Their", "We", "Our", "You",
+        "Your", "I", "Both", "Another", "Then", "There", "Here",
+    ];
+
+    CLAUSE_STARTERS.iter().any(|starter| {
+        text == *starter
+            || text
+                .strip_prefix(starter)
+                .is_some_and(|rest| rest.chars().next().is_some_and(char::is_whitespace))
+    })
 }
 
 fn trailing_ascii_alpha_token(text: &str) -> Option<&str> {
@@ -3543,6 +3556,13 @@ mod tests {
         let input = "Summary:\n- implementation stepsThe worker will deliver the final document.";
         let expected =
             "Summary:\n• implementation steps\n\nThe worker will deliver the final document.";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn does_not_split_phrase_continuations_inside_list_items() {
+        let input = "Summary:\n- MID Server role and Basic Auth setup";
+        let expected = "Summary:\n• MID Server role and Basic Auth setup";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
