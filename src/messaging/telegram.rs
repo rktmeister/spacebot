@@ -1619,7 +1619,9 @@ fn should_insert_space_after_label_colon(
     line[..colon_index]
         .chars()
         .next_back()
-        .is_some_and(|character| character.is_ascii_alphabetic() || matches!(character, ')' | ']'))
+        .is_some_and(|character| {
+            character.is_ascii_alphabetic() || matches!(character, ')' | ']' | '*' | '_')
+        })
 }
 
 fn should_insert_space_after_comma(line: &str, comma_index: usize, next_character: char) -> bool {
