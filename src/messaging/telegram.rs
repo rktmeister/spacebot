@@ -1915,15 +1915,17 @@ fn classify_list_tail_boundary(output: &str, slice: &str) -> ListTailBoundaryAct
         return ListTailBoundaryAction::None;
     }
 
-    if starts_emphasized_heading_with_external_colon(slice) {
+    let has_body_text = list_item_has_body_text(output);
+
+    if has_body_text && starts_emphasized_heading_with_external_colon(slice) {
         return ListTailBoundaryAction::InsertParagraphBreak;
     }
 
-    if starts_clear_sentence_after_list_tail(output, slice) {
+    if has_body_text && starts_clear_sentence_after_list_tail(output, slice) {
         return ListTailBoundaryAction::InsertParagraphBreak;
     }
 
-    if starts_relative_clause_after_list_tail(output, slice) {
+    if has_body_text && starts_relative_clause_after_list_tail(output, slice) {
         return ListTailBoundaryAction::InsertSpace;
     }
 
@@ -1945,6 +1947,30 @@ fn classify_list_tail_boundary(output: &str, slice: &str) -> ListTailBoundaryAct
         .filter(|character| character.is_ascii_digit())
         .map(|_| ListTailBoundaryAction::InsertParagraphBreak)
         .unwrap_or(ListTailBoundaryAction::None)
+}
+
+fn list_item_has_body_text(output: &str) -> bool {
+    let trimmed_start = output.trim_start_matches([' ', '\t']);
+    let Some(content) = strip_list_marker_prefix(trimmed_start) else {
+        return !trimmed_start.trim().is_empty();
+    };
+
+    content.chars().any(|character| !character.is_whitespace())
+}
+
+fn strip_list_marker_prefix(text: &str) -> Option<&str> {
+    if let Some(rest) = text.strip_prefix('-') {
+        return Some(rest.trim_start_matches([' ', '\t']));
+    }
+    if let Some(rest) = text.strip_prefix('*') {
+        return Some(rest.trim_start_matches([' ', '\t']));
+    }
+    if let Some(rest) = text.strip_prefix('•') {
+        return Some(rest.trim_start_matches([' ', '\t']));
+    }
+
+    ordered_list_marker_len(text)
+        .map(|marker_len| text[marker_len..].trim_start_matches([' ', '\t']))
 }
 
 fn starts_emphasized_heading_with_external_colon(text: &str) -> bool {
@@ -3613,6 +3639,13 @@ mod tests {
     fn preserves_acronym_tails_inside_list_items() {
         let input = "Summary:\n- ServiceNow REST API conventions and authentication";
         let expected = "Summary:\n• ServiceNow REST API conventions and authentication";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn preserves_emphasized_headings_at_start_of_list_items() {
+        let input = "Summary:\n- **API Conventions**: OAuth2.0, Basic Auth";
+        let expected = "Summary:\n• <b>API Conventions</b>: OAuth2.0, Basic Auth";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
