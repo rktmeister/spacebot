@@ -1258,6 +1258,9 @@ fn normalize_emphasized_block_boundaries(line: &str) -> String {
                 }
             } else {
                 normalized.push_str(span);
+                if should_insert_space_after_emphasis_span(inner, following) {
+                    normalized.push(' ');
+                }
             }
 
             index = closing_end;
@@ -1441,6 +1444,45 @@ fn starts_emphasized_block_break(text: &str) -> bool {
         || starts_emphasized_field_label(text)
 }
 
+fn starts_unordered_or_ordered_list_marker(text: &str) -> bool {
+    let trimmed = text.trim_start_matches([' ', '\t']);
+
+    if trimmed.starts_with('-') || trimmed.starts_with('•') {
+        return trimmed[1..].chars().next().is_some_and(|character| {
+            character.is_whitespace()
+                || character == '`'
+                || character == '#'
+                || character.is_ascii_alphabetic()
+        });
+    }
+
+    if let Some(rest) = trimmed.strip_prefix('*') {
+        return rest.chars().next().is_some_and(char::is_whitespace);
+    }
+
+    ordered_list_marker_len(trimmed).is_some_and(|marker_len| {
+        trimmed[marker_len..]
+            .chars()
+            .next()
+            .is_some_and(|character| {
+                character.is_whitespace()
+                    || character == '*'
+                    || character == '_'
+                    || character == '`'
+                    || character == '#'
+                    || character.is_ascii_alphabetic()
+            })
+    })
+}
+
+fn starts_block_followup(text: &str) -> bool {
+    let trimmed = text.trim_start_matches([' ', '\t']);
+    starts_unordered_or_ordered_list_marker(trimmed)
+        || trimmed.starts_with('>')
+        || trimmed.starts_with("```")
+        || starts_emphasized_field_label(trimmed)
+}
+
 fn starts_emphasized_field_label(text: &str) -> bool {
     let Some((closing_start, _closing_end)) = find_emphasis_span(text, 0) else {
         return false;
@@ -1458,6 +1500,28 @@ fn should_insert_space_after_emphasized_label(following: &str) -> bool {
 
     let trimmed = following.trim_start_matches([' ', '\t']);
     !starts_emphasized_block_break(trimmed)
+}
+
+fn should_insert_space_after_emphasis_span(inner: &str, following: &str) -> bool {
+    let Some(next_character) = following.chars().next() else {
+        return false;
+    };
+    if next_character.is_whitespace() {
+        return false;
+    }
+
+    let trimmed = following.trim_start_matches([' ', '\t']);
+    leading_sentence_starter_word_len(trimmed).is_some()
+        && emphasis_span_is_self_contained(inner)
+        && !starts_emphasized_block_break(trimmed)
+}
+
+fn emphasis_span_is_self_contained(inner: &str) -> bool {
+    let trimmed = inner.trim();
+    !trimmed.is_empty()
+        && (trimmed.split_whitespace().count() > 1
+            || trimmed.contains(['.', ':', '-', '/', '_', '#'])
+            || trimmed.chars().any(|character| character.is_ascii_digit()))
 }
 
 fn escape_literal_angle_bracket_emails(line: &str) -> String {
@@ -1805,7 +1869,7 @@ fn normalize_single_list_item_line(line: &str) -> String {
         let slice = &line[index..];
         if should_split_list_tail(&normalized, slice) {
             trim_trailing_horizontal_whitespace(&mut normalized);
-            normalized.push('\n');
+            normalized.push_str("\n\n");
         }
 
         let character = slice.chars().next().expect("valid utf-8 boundary");
@@ -1828,14 +1892,23 @@ fn should_split_list_tail(output: &str, slice: &str) -> bool {
     if output.is_empty() || output.ends_with('\n') {
         return false;
     }
-    if !output.contains('—') {
-        return false;
-    }
 
     let Some(previous_character) = previous_non_whitespace_char(output) else {
         return false;
     };
     if matches!(previous_character, '.' | '!' | '?' | ':' | ';') {
+        return false;
+    }
+
+    if starts_emphasized_heading_with_external_colon(slice) {
+        return true;
+    }
+
+    if starts_sentence_after_list_tail(output, slice) {
+        return true;
+    }
+
+    if !output.contains('—') {
         return false;
     }
 
@@ -1851,6 +1924,70 @@ fn should_split_list_tail(output: &str, slice: &str) -> bool {
         .chars()
         .next()
         .is_some_and(|character| character.is_ascii_digit())
+}
+
+fn starts_emphasized_heading_with_external_colon(text: &str) -> bool {
+    let Some((closing_start, closing_end)) = find_emphasis_span(text, 0) else {
+        return false;
+    };
+
+    let inner = text[2..closing_start].trim();
+    if !looks_like_compact_heading_label(inner) {
+        return false;
+    }
+
+    text[closing_end..]
+        .trim_start_matches([' ', '\t'])
+        .starts_with(':')
+}
+
+fn looks_like_compact_heading_label(inner: &str) -> bool {
+    if inner.is_empty() || inner.contains(['.', '/', '_']) || inner.split_whitespace().count() > 4 {
+        return false;
+    }
+
+    inner
+        .chars()
+        .find(|character| character.is_ascii_alphanumeric())
+        .is_some_and(|character| character.is_ascii_uppercase())
+}
+
+fn starts_sentence_after_list_tail(output: &str, slice: &str) -> bool {
+    if leading_sentence_starter_word_len(slice).is_none() {
+        return false;
+    }
+
+    if let Some(word) = trailing_ascii_alpha_token(output) {
+        if word.chars().all(|character| character.is_ascii_lowercase()) {
+            return true;
+        }
+
+        if word.len() <= 3 && word.chars().all(|character| character.is_ascii_uppercase()) {
+            return true;
+        }
+    }
+
+    previous_non_whitespace_char(output).is_some_and(|character| character.is_ascii_digit())
+}
+
+fn trailing_ascii_alpha_token(text: &str) -> Option<&str> {
+    let end = text.char_indices().rev().find_map(|(index, character)| {
+        (!character.is_whitespace()).then_some(index + character.len_utf8())
+    })?;
+
+    let start = text[..end]
+        .char_indices()
+        .rev()
+        .find_map(|(index, character)| {
+            (!character.is_ascii_alphabetic()).then_some(index + character.len_utf8())
+        })
+        .unwrap_or(0);
+
+    let token = &text[start..end];
+    token
+        .chars()
+        .all(|character| character.is_ascii_alphabetic())
+        .then_some(token)
 }
 
 fn insert_section_break_if_needed(text: &mut String) {
@@ -1948,9 +2085,7 @@ fn starts_block_section_label(text: &str) -> bool {
     };
 
     let following = text[label_end..].trim_start_matches([' ', '\t']);
-    starts_compact_list_marker(following)
-        || following.starts_with('>')
-        || following.starts_with("```")
+    starts_block_followup(following)
 }
 
 fn leading_section_label_head_len(text: &str) -> Option<usize> {
@@ -3392,7 +3527,22 @@ mod tests {
     fn leaves_inline_prose_labels_without_block_followups_alone() {
         let input =
             "I've sent the comprehensive Markdown document: **guide.md**The guide continues below.";
-        let expected = "I've sent the comprehensive Markdown document: <b>guide.md</b>The guide continues below.";
+        let expected = "I've sent the comprehensive Markdown document: <b>guide.md</b> The guide continues below.";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_list_item_tail_before_next_emphasized_heading() {
+        let input = "Summary:\n- March13,1:00-3:00 PM**Task #10**: Meeting with Azizul";
+        let expected = "Summary:\n• March 13, 1:00-3:00 PM\n\n<b>Task #10</b>: Meeting with Azizul";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_list_item_tail_before_next_sentence() {
+        let input = "Summary:\n- implementation stepsThe worker will deliver the final document.";
+        let expected =
+            "Summary:\n• implementation steps\n\nThe worker will deliver the final document.";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
