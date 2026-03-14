@@ -1137,7 +1137,7 @@ fn normalize_plain_segment_after_inline_code(segment: &str) -> String {
     let mut normalized = String::with_capacity(segment.len() + segment.len() / 8);
     normalized.push_str(leading_whitespace);
     if leading_whitespace.is_empty() {
-        if starts_section_label(content).is_some() {
+        if starts_block_section_label(content) {
             normalized.push_str("\n\n");
         } else if starts_compact_list_marker(content) {
             normalized.push('\n');
@@ -1678,7 +1678,7 @@ fn should_insert_section_break(output: &str, slice: &str) -> bool {
     if output.is_empty() || output.ends_with('\n') {
         return false;
     }
-    if starts_section_label(slice).is_none() {
+    if !starts_block_section_label(slice) {
         return false;
     }
 
@@ -1697,7 +1697,7 @@ fn should_insert_space_before_sentence_starter(output: &str, slice: &str) -> boo
         previous_non_whitespace_char(output),
         Some(character)
             if character.is_ascii_digit()
-                || matches!(character, ')' | ']' | '>' | '/' | ':' | ';' | '.' | '!' | '?' | '`')
+                || matches!(character, ')' | ']' | '>' | ':' | ';' | '.' | '!' | '?' | '`')
     )
 }
 
@@ -1940,6 +1940,17 @@ fn starts_section_label(text: &str) -> Option<usize> {
         index += leading_section_label_tail_len(&text[index..])?;
         words += 1;
     }
+}
+
+fn starts_block_section_label(text: &str) -> bool {
+    let Some(label_end) = starts_section_label(text) else {
+        return false;
+    };
+
+    let following = text[label_end..].trim_start_matches([' ', '\t']);
+    starts_compact_list_marker(following)
+        || following.starts_with('>')
+        || following.starts_with("```")
 }
 
 fn leading_section_label_head_len(text: &str) -> Option<usize> {
@@ -3342,6 +3353,13 @@ mod tests {
     }
 
     #[test]
+    fn preserves_slash_delimited_timezones() {
+        let input = "It's **11:16 AM** (Asia/Singapore time) on March13,2026.";
+        let expected = "It's **11:16 AM** (Asia/Singapore time) on March 13, 2026.";
+        assert_eq!(normalize_telegram_markdown(input), expected);
+    }
+
+    #[test]
     fn normalizes_ordinal_spacing() {
         let input = "The only pending item is scheduled for Wednesday the11th.";
         let expected = "The only pending item is scheduled for Wednesday the 11th.";
@@ -3367,6 +3385,14 @@ mod tests {
         let input = "Summary: Re: Weekly rollout statusAction items:- Added the fallback path";
         let expected =
             "Summary: Re: Weekly rollout status\n\nAction items:\n\n• Added the fallback path";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn leaves_inline_prose_labels_without_block_followups_alone() {
+        let input =
+            "I've sent the comprehensive Markdown document: **guide.md**The guide continues below.";
+        let expected = "I've sent the comprehensive Markdown document: <b>guide.md</b>The guide continues below.";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
