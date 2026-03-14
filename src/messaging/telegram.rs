@@ -1510,7 +1510,7 @@ fn should_insert_space_after_emphasis_span(inner: &str, following: &str) -> bool
     }
 
     let trimmed = following.trim_start_matches([' ', '\t']);
-    starts_clause_starter(trimmed)
+    leading_sentence_starter_word_len(trimmed).is_some()
         && emphasis_span_is_self_contained(inner)
         && !starts_emphasized_block_break(trimmed)
 }
@@ -1859,16 +1859,25 @@ fn normalize_single_list_item_line(line: &str) -> String {
     let mut index = 0;
 
     while index < line.len() {
+        let slice = &line[index..];
+        match classify_list_tail_boundary(&normalized, slice) {
+            ListTailBoundaryAction::None => {}
+            ListTailBoundaryAction::InsertSpace => {
+                trim_trailing_horizontal_whitespace(&mut normalized);
+                if !normalized.ends_with([' ', '\n']) {
+                    normalized.push(' ');
+                }
+            }
+            ListTailBoundaryAction::InsertParagraphBreak => {
+                trim_trailing_horizontal_whitespace(&mut normalized);
+                normalized.push_str("\n\n");
+            }
+        }
+
         if let Some((_, closing_end)) = find_emphasis_span(line, index) {
             normalized.push_str(&line[index..closing_end]);
             index = closing_end;
             continue;
-        }
-
-        let slice = &line[index..];
-        if should_split_list_tail(&normalized, slice) {
-            trim_trailing_horizontal_whitespace(&mut normalized);
-            normalized.push_str("\n\n");
         }
 
         let character = slice.chars().next().expect("valid utf-8 boundary");
@@ -1879,6 +1888,13 @@ fn normalize_single_list_item_line(line: &str) -> String {
     normalized
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ListTailBoundaryAction {
+    None,
+    InsertSpace,
+    InsertParagraphBreak,
+}
+
 fn starts_list_item_line(line: &str) -> bool {
     let trimmed = line.trim_start_matches([' ', '\t']);
     trimmed.starts_with('-')
@@ -1887,42 +1903,48 @@ fn starts_list_item_line(line: &str) -> bool {
         || ordered_list_marker_len(trimmed).is_some()
 }
 
-fn should_split_list_tail(output: &str, slice: &str) -> bool {
+fn classify_list_tail_boundary(output: &str, slice: &str) -> ListTailBoundaryAction {
     if output.is_empty() || output.ends_with('\n') {
-        return false;
+        return ListTailBoundaryAction::None;
     }
 
     let Some(previous_character) = previous_non_whitespace_char(output) else {
-        return false;
+        return ListTailBoundaryAction::None;
     };
     if matches!(previous_character, '.' | '!' | '?' | ':' | ';') {
-        return false;
+        return ListTailBoundaryAction::None;
     }
 
     if starts_emphasized_heading_with_external_colon(slice) {
-        return true;
+        return ListTailBoundaryAction::InsertParagraphBreak;
     }
 
-    if starts_sentence_after_list_tail(output, slice) {
-        return true;
+    if starts_clear_sentence_after_list_tail(output, slice) {
+        return ListTailBoundaryAction::InsertParagraphBreak;
+    }
+
+    if starts_relative_clause_after_list_tail(output, slice) {
+        return ListTailBoundaryAction::InsertSpace;
     }
 
     if !output.contains('—') {
-        return false;
+        return ListTailBoundaryAction::None;
     }
 
     let Some(word_len) = leading_titlecase_word_len(slice) else {
-        return false;
+        return ListTailBoundaryAction::None;
     };
     let rest = &slice[word_len..];
     if !rest.starts_with(' ') {
-        return false;
+        return ListTailBoundaryAction::None;
     }
 
     rest.trim_start()
         .chars()
         .next()
-        .is_some_and(|character| character.is_ascii_digit())
+        .filter(|character| character.is_ascii_digit())
+        .map(|_| ListTailBoundaryAction::InsertParagraphBreak)
+        .unwrap_or(ListTailBoundaryAction::None)
 }
 
 fn starts_emphasized_heading_with_external_colon(text: &str) -> bool {
@@ -1951,8 +1973,8 @@ fn looks_like_compact_heading_label(inner: &str) -> bool {
         .is_some_and(|character| character.is_ascii_uppercase())
 }
 
-fn starts_sentence_after_list_tail(output: &str, slice: &str) -> bool {
-    if !starts_clause_starter(slice) {
+fn starts_clear_sentence_after_list_tail(output: &str, slice: &str) -> bool {
+    if !starts_clear_sentence_starter(slice) {
         return false;
     }
 
@@ -1969,17 +1991,38 @@ fn starts_sentence_after_list_tail(output: &str, slice: &str) -> bool {
     previous_non_whitespace_char(output).is_some_and(|character| character.is_ascii_digit())
 }
 
-fn starts_clause_starter(text: &str) -> bool {
-    const CLAUSE_STARTERS: &[&str] = &[
-        "The", "This", "That", "These", "Those", "It", "Its", "They", "Their", "We", "Our", "You",
-        "Your", "I", "Both", "Another", "Then", "There", "Here",
+fn starts_relative_clause_after_list_tail(output: &str, slice: &str) -> bool {
+    if !starts_relative_clause_starter(slice) {
+        return false;
+    }
+
+    trailing_ascii_alpha_token(output)
+        .is_some_and(|word| word.chars().all(|character| character.is_ascii_lowercase()))
+}
+
+fn starts_clear_sentence_starter(text: &str) -> bool {
+    const STARTERS: &[&str] = &[
+        "The", "This", "That", "These", "Those", "Both", "Another", "Then", "There", "Here", "But",
+        "However",
     ];
 
-    CLAUSE_STARTERS.iter().any(|starter| {
+    STARTERS.iter().any(|starter| {
         text == *starter
             || text
                 .strip_prefix(starter)
                 .is_some_and(|rest| rest.chars().next().is_some_and(char::is_whitespace))
+    })
+}
+
+fn starts_relative_clause_starter(text: &str) -> bool {
+    const STARTERS: &[&str] = &["I", "We", "You", "Our", "Your", "Their"];
+
+    STARTERS.iter().any(|starter| {
+        text.strip_prefix(starter).is_some_and(|rest| {
+            rest.chars()
+                .next()
+                .is_some_and(|character| character.is_whitespace() || character == '\'')
+        })
     })
 }
 
@@ -3563,6 +3606,22 @@ mod tests {
     fn does_not_split_phrase_continuations_inside_list_items() {
         let input = "Summary:\n- MID Server role and Basic Auth setup";
         let expected = "Summary:\n• MID Server role and Basic Auth setup";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn preserves_acronym_tails_inside_list_items() {
+        let input = "Summary:\n- ServiceNow REST API conventions and authentication";
+        let expected = "Summary:\n• ServiceNow REST API conventions and authentication";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn normalizes_list_item_tail_before_relative_clause_without_paragraph_split() {
+        let input =
+            "Summary:\n- The cron remindersI set up earlier will also notify you in Telegram.";
+        let expected =
+            "Summary:\n• The cron reminders I set up earlier will also notify you in Telegram.";
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
