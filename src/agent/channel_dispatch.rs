@@ -109,8 +109,9 @@ fn build_worker_status_text(
     let system_info =
         crate::agent::status::SystemInfo::from_runtime_config(runtime_config, sandbox);
     let temporal_context = TemporalContext::from_runtime(runtime_config);
+    let current_date_line = temporal_context.current_date_line();
     let current_time_line = temporal_context.current_time_line();
-    Some(system_info.render_for_worker(&current_time_line))
+    Some(system_info.render_for_worker(&current_date_line, &current_time_line))
 }
 
 #[derive(Debug, Clone)]

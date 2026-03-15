@@ -95,6 +95,25 @@ impl TemporalContext {
         format!("{display}; UTC {utc_timestamp}")
     }
 
+    pub(crate) fn format_date_line(&self, timestamp: DateTime<Utc>) -> String {
+        match &self.timezone {
+            TemporalTimezone::Named {
+                timezone_name,
+                timezone,
+            } => {
+                let local_timestamp = timestamp.with_timezone(timezone);
+                format!(
+                    "{} ({timezone_name})",
+                    local_timestamp.format("%a, %d %b %Y")
+                )
+            }
+            TemporalTimezone::SystemLocal => {
+                let local_timestamp = timestamp.with_timezone(&Local);
+                format!("{} (system local)", local_timestamp.format("%a, %d %b %Y"))
+            }
+        }
+    }
+
     pub(crate) fn format_display_timestamp(&self, timestamp: DateTime<Utc>) -> String {
         match &self.timezone {
             TemporalTimezone::Named {
@@ -122,5 +141,37 @@ impl TemporalContext {
 
     pub(crate) fn current_time_line(&self) -> String {
         self.format_timestamp(self.now_utc)
+    }
+
+    pub(crate) fn current_date_line(&self) -> String {
+        self.format_date_line(self.now_utc)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TemporalContext, TemporalTimezone};
+    use chrono::TimeZone as _;
+
+    #[test]
+    fn render_current_date_line_formats_named_timezone() {
+        let timezone = "Asia/Singapore"
+            .parse()
+            .expect("Asia/Singapore should parse");
+        let context = TemporalContext {
+            now_utc: chrono::Utc
+                .with_ymd_and_hms(2026, 3, 15, 1, 0, 0)
+                .single()
+                .expect("valid UTC timestamp"),
+            timezone: TemporalTimezone::Named {
+                timezone_name: "Asia/Singapore".to_string(),
+                timezone,
+            },
+        };
+
+        assert_eq!(
+            context.current_date_line(),
+            "Sun, 15 Mar 2026 (Asia/Singapore)"
+        );
     }
 }

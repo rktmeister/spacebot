@@ -435,10 +435,11 @@ pub(super) async fn inspect_prompt(
         &channel_state.deps.sandbox,
     );
     let temporal_context = crate::agent::channel_prompt::TemporalContext::from_runtime(rc.as_ref());
+    let current_date_line = temporal_context.current_date_line();
     let current_time_line = temporal_context.current_time_line();
     let status_text = {
         let status = channel_state.status_block.read().await;
-        status.render_full(&current_time_line, &system_info)
+        status.render_full(&current_date_line, &current_time_line, &system_info)
     };
 
     let conversation_context = match channel_state.channel_store.get(&query.channel_id).await {

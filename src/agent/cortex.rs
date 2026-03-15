@@ -2697,8 +2697,10 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         crate::agent::status::SystemInfo::from_runtime_config(&deps.runtime_config, &deps.sandbox);
     let temporal_context =
         crate::agent::channel_prompt::TemporalContext::from_runtime(&deps.runtime_config);
+    let current_date_line = temporal_context.current_date_line();
     let current_time_line = temporal_context.current_time_line();
-    let worker_status_text = Some(system_info.render_for_worker(&current_time_line));
+    let worker_status_text =
+        Some(system_info.render_for_worker(&current_date_line, &current_time_line));
 
     let worker_system_prompt = prompt_engine
         .render_worker_prompt(

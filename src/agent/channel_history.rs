@@ -1013,7 +1013,12 @@ mod tests {
         };
 
         let rendered = info.render_for_worker(
+            "Wed, 26 Feb 2026 (America/New_York)",
             "2026-02-26 15:30:00 EST (America/New_York, UTC-05:00); UTC 2026-02-26 20:30:00 UTC",
+        );
+        assert!(
+            rendered.contains("Date: Wed, 26 Feb 2026 (America/New_York)"),
+            "worker status should include date context"
         );
         assert!(
             rendered.contains("Time: 2026-02-26 15:30:00 EST"),

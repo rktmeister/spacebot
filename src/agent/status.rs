@@ -116,10 +116,11 @@ impl SystemInfo {
 
     /// Render a compact status string suitable for worker system prompts.
     ///
-    /// Workers get a lighter version: just time + model + context window.
+    /// Workers get a lighter version: date + time + model + context window.
     /// No warmup, no cron, no bulletin — they don't need it.
-    pub fn render_for_worker(&self, current_time_line: &str) -> String {
+    pub fn render_for_worker(&self, current_date_line: &str, current_time_line: &str) -> String {
         let mut output = String::from("## System\n");
+        output.push_str(&format!("Date: {current_date_line}\n"));
         output.push_str(&format!("Time: {current_time_line}\n"));
         output.push_str(&format!("Model: {}\n", self.worker_model));
         output.push_str(&format!("Context: {} tokens\n", self.context_window));
@@ -352,28 +353,42 @@ impl StatusBlock {
 
     /// Render the status block as a string for context injection.
     pub fn render(&self) -> String {
-        self.render_with_context(None, None)
+        self.render_with_context(None, None, None)
     }
 
-    /// Render the status block with optional current time context.
-    pub fn render_with_time_context(&self, current_time_line: Option<&str>) -> String {
-        self.render_with_context(current_time_line, None)
+    /// Render the status block with optional current date and time context.
+    pub fn render_with_time_context(
+        &self,
+        current_date_line: Option<&str>,
+        current_time_line: Option<&str>,
+    ) -> String {
+        self.render_with_context(current_date_line, current_time_line, None)
     }
 
-    /// Render the status block with optional time context and system info.
+    /// Render the status block with optional date/time context and system info.
     pub fn render_with_context(
         &self,
+        current_date_line: Option<&str>,
         current_time_line: Option<&str>,
         system_info: Option<&SystemInfo>,
     ) -> String {
         let mut output = String::new();
 
-        // System configuration summary (includes current time when available)
+        // System configuration summary (includes current date/time when available)
         if let Some(info) = system_info {
-            output.push_str(&render_system_info(info, current_time_line));
-        } else if let Some(current_time_line) = current_time_line {
-            // Fallback: render time standalone when no system info is provided
-            output.push_str(&format!("Current date/time: {current_time_line}\n\n"));
+            output.push_str(&render_system_info(
+                info,
+                current_date_line,
+                current_time_line,
+            ));
+        } else if current_date_line.is_some() || current_time_line.is_some() {
+            if let Some(current_date_line) = current_date_line {
+                output.push_str(&format!("Current date: {current_date_line}\n"));
+            }
+            if let Some(current_time_line) = current_time_line {
+                output.push_str(&format!("Current date/time: {current_time_line}\n"));
+            }
+            output.push('\n');
         }
 
         // Active workers
@@ -460,9 +475,18 @@ impl StatusBlock {
         output
     }
 
-    /// Render the status block with time context and system info (convenience).
-    pub fn render_full(&self, current_time_line: &str, system_info: &SystemInfo) -> String {
-        self.render_with_context(Some(current_time_line), Some(system_info))
+    /// Render the status block with date/time context and system info (convenience).
+    pub fn render_full(
+        &self,
+        current_date_line: &str,
+        current_time_line: &str,
+        system_info: &SystemInfo,
+    ) -> String {
+        self.render_with_context(
+            Some(current_date_line),
+            Some(current_time_line),
+            Some(system_info),
+        )
     }
 
     /// Check if a worker is active.
@@ -517,10 +541,17 @@ impl StatusBlock {
 }
 
 /// Render the system info section as compact key-value lines.
-fn render_system_info(info: &SystemInfo, current_time_line: Option<&str>) -> String {
+fn render_system_info(
+    info: &SystemInfo,
+    current_date_line: Option<&str>,
+    current_time_line: Option<&str>,
+) -> String {
     let mut output = String::from("## System\n");
 
-    // Current date/time + timezone (first line — source of truth for temporal reasoning)
+    // Current date/time + timezone (first lines — source of truth for temporal reasoning)
+    if let Some(date_line) = current_date_line {
+        output.push_str(&format!("Date: {date_line}\n"));
+    }
     if let Some(time_line) = current_time_line {
         output.push_str(&format!("Time: {time_line}\n"));
     }
@@ -626,7 +657,11 @@ mod tests {
     #[test]
     fn render_with_time_context_renders_current_time_when_empty() {
         let status = StatusBlock::new();
-        let rendered = status.render_with_time_context(Some("2026-02-26 12:00:00 UTC"));
+        let rendered = status.render_with_time_context(
+            Some("Wed, 26 Feb 2026 (UTC)"),
+            Some("2026-02-26 12:00:00 UTC"),
+        );
+        assert!(rendered.contains("Current date: Wed, 26 Feb 2026 (UTC)"));
         assert!(rendered.contains("Current date/time: 2026-02-26 12:00:00 UTC"));
     }
 
@@ -720,8 +755,13 @@ mod tests {
             cron_job_count: Some(4),
         };
 
-        let rendered = status.render_full("2026-03-08 10:30:00 EST", &info);
+        let rendered = status.render_full(
+            "Sat, 08 Mar 2026 (America/New_York)",
+            "2026-03-08 10:30:00 EST",
+            &info,
+        );
 
+        assert!(rendered.contains("Date: Sat, 08 Mar 2026 (America/New_York)"));
         // Time is inside System section
         assert!(rendered.contains("Time: 2026-03-08 10:30:00 EST"));
         // Version
@@ -761,7 +801,7 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = status.render_with_context(None, Some(&info));
+        let rendered = status.render_with_context(None, None, Some(&info));
         assert!(rendered.contains("Models: anthropic/claude-sonnet-4\n"));
         assert!(!rendered.contains("channel="));
     }
@@ -778,7 +818,7 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = status.render_with_context(None, Some(&info));
+        let rendered = status.render_with_context(None, None, Some(&info));
         assert!(rendered.contains("channel/branch=anthropic/claude-sonnet-4"));
         assert!(rendered.contains("worker=anthropic/claude-haiku-35"));
     }
@@ -795,7 +835,7 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = status.render_with_context(None, Some(&info));
+        let rendered = status.render_with_context(None, None, Some(&info));
         assert!(rendered.contains("channel=anthropic/claude-opus-4"));
         assert!(rendered.contains("branch=anthropic/claude-sonnet-4"));
         assert!(rendered.contains("worker=anthropic/claude-haiku-35"));
@@ -812,7 +852,7 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = status.render_with_context(None, Some(&info));
+        let rendered = status.render_with_context(None, None, Some(&info));
         assert!(rendered.contains("Thinking: channel=high, worker=low"));
     }
 
@@ -827,7 +867,7 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = status.render_with_context(None, Some(&info));
+        let rendered = status.render_with_context(None, None, Some(&info));
         assert!(!rendered.contains("Thinking:"));
     }
 
@@ -841,7 +881,7 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = status.render_with_context(None, Some(&info));
+        let rendered = status.render_with_context(None, None, Some(&info));
         assert!(!rendered.contains("Cron:"));
     }
 }

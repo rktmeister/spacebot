@@ -398,8 +398,10 @@ impl Tool for DetachedSpawnWorkerTool {
             crate::agent::status::SystemInfo::from_runtime_config(rc.as_ref(), &self.deps.sandbox);
         let temporal_context =
             crate::agent::channel_prompt::TemporalContext::from_runtime(rc.as_ref());
+        let current_date_line = temporal_context.current_date_line();
         let current_time_line = temporal_context.current_time_line();
-        let worker_status_text = Some(system_info.render_for_worker(&current_time_line));
+        let worker_status_text =
+            Some(system_info.render_for_worker(&current_date_line, &current_time_line));
 
         let sandbox_enabled = self.deps.sandbox.mode_enabled();
         let sandbox_containment_active = self.deps.sandbox.containment_active();

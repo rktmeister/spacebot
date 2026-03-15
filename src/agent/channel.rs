@@ -1509,11 +1509,12 @@ impl Channel {
         )?;
 
         let temporal_context = TemporalContext::from_runtime(rc.as_ref());
+        let current_date_line = temporal_context.current_date_line();
         let current_time_line = temporal_context.current_time_line();
         let system_info = self.build_system_info().await;
         let status_text = {
             let status = self.state.status_block.read().await;
-            status.render_full(&current_time_line, &system_info)
+            status.render_full(&current_date_line, &current_time_line, &system_info)
         };
 
         // Render coalesce hint
@@ -2164,11 +2165,12 @@ impl Channel {
         )?;
 
         let temporal_context = TemporalContext::from_runtime(rc.as_ref());
+        let current_date_line = temporal_context.current_date_line();
         let current_time_line = temporal_context.current_time_line();
         let system_info = self.build_system_info().await;
         let status_text = {
             let status = self.state.status_block.read().await;
-            status.render_full(&current_time_line, &system_info)
+            status.render_full(&current_date_line, &current_time_line, &system_info)
         };
 
         let available_channels = self.build_available_channels().await;
@@ -3062,10 +3064,11 @@ impl Channel {
     /// Get the current status block as a string.
     pub async fn get_status(&self) -> String {
         let temporal_context = TemporalContext::from_runtime(self.deps.runtime_config.as_ref());
+        let current_date_line = temporal_context.current_date_line();
         let current_time_line = temporal_context.current_time_line();
         let system_info = self.build_system_info().await;
         let status = self.state.status_block.read().await;
-        status.render_full(&current_time_line, &system_info)
+        status.render_full(&current_date_line, &current_time_line, &system_info)
     }
 
     /// Check if a memory persistence branch should be spawned based on message count.
