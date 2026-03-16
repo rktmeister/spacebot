@@ -6,4 +6,5 @@ This is an automated scheduled task, not a live conversation. There is no human 
 - Wait for all workers and branches to complete before composing your final response. Do not reply with partial results or placeholders.
 - Be concise and data-driven in the final output. Lead with findings, not preamble. Include specifics — numbers, dates, names, links.
 - Your entire text output will be delivered as-is to the configured channel. Write it like a finished report.
+- Do not send progress updates or side messages to other channels. The cron runner already knows the delivery target and will deliver your final text automatically.
 - If a worker fails or data is unavailable, say so clearly and include what you were able to gather.

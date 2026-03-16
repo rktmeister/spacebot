@@ -1912,6 +1912,11 @@ impl Channel {
     async fn build_available_channels(&self) -> Option<String> {
         self.deps.messaging_manager.as_ref()?;
 
+        let current_adapter = self.current_adapter();
+        if matches!(current_adapter, Some("cron")) {
+            return None;
+        }
+
         let channels = match self.state.channel_store.list_active().await {
             Ok(channels) => channels,
             Err(error) => {
@@ -1920,13 +1925,10 @@ impl Channel {
             }
         };
 
-        // Filter out the current channel and cron channels
         let entries: Vec<crate::prompts::engine::ChannelEntry> = channels
             .into_iter()
             .filter(|channel| {
-                channel.id.as_str() != self.id.as_ref()
-                    && channel.platform != "cron"
-                    && channel.platform != "webhook"
+                should_expose_channel_as_sendable_target(self.id.as_ref(), current_adapter, channel)
             })
             .map(|channel| crate::prompts::engine::ChannelEntry {
                 name: channel.display_name.unwrap_or_else(|| channel.id.clone()),
@@ -3309,13 +3311,29 @@ fn should_send_quiet_mode_fallback(
         )
 }
 
+fn should_expose_channel_as_sendable_target(
+    current_channel_id: &str,
+    current_adapter: Option<&str>,
+    channel: &crate::conversation::channels::ChannelInfo,
+) -> bool {
+    if matches!(current_adapter, Some("cron")) {
+        return false;
+    }
+
+    channel.id.as_str() != current_channel_id
+        && channel.platform != "cron"
+        && channel.platform != "webhook"
+        && channel.platform != "link"
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         QuietModeFallbackState, compute_listen_mode_invocation, recv_channel_event,
-        should_process_event_for_channel, should_send_discord_quiet_mode_ping_ack,
-        should_send_quiet_mode_fallback,
+        should_expose_channel_as_sendable_target, should_process_event_for_channel,
+        should_send_discord_quiet_mode_ping_ack, should_send_quiet_mode_fallback,
     };
+    use crate::conversation::channels::ChannelInfo;
     use crate::memory::MemoryType;
     use crate::{AgentId, ChannelId, InboundMessage, MessageContent, ProcessEvent, ProcessId};
     use std::collections::HashMap;
@@ -3342,6 +3360,18 @@ mod tests {
             timestamp: chrono::Utc::now(),
             metadata: message_metadata,
             formatted_author: None,
+        }
+    }
+
+    fn channel_info(id: &str, platform: &str) -> ChannelInfo {
+        ChannelInfo {
+            id: id.to_string(),
+            platform: platform.to_string(),
+            display_name: Some(id.to_string()),
+            platform_meta: None,
+            is_active: true,
+            created_at: chrono::Utc::now(),
+            last_activity_at: chrono::Utc::now(),
         }
     }
 
@@ -3385,6 +3415,26 @@ mod tests {
 
         let event = recv_channel_event(&mut event_rx).await;
         assert!(matches!(event, crate::BroadcastRecvResult::Closed));
+    }
+
+    #[test]
+    fn available_channels_hide_internal_link_targets() {
+        let link_channel = channel_info("link:main:admin", "link");
+        assert!(!should_expose_channel_as_sendable_target(
+            "telegram:-5179214743",
+            Some("telegram"),
+            &link_channel,
+        ));
+    }
+
+    #[test]
+    fn available_channels_hide_all_targets_for_cron_contexts() {
+        let telegram_channel = channel_info("telegram:-5179214743", "telegram");
+        assert!(!should_expose_channel_as_sendable_target(
+            "cron:weekday-email-briefing",
+            Some("cron"),
+            &telegram_channel,
+        ));
     }
 
     #[test]

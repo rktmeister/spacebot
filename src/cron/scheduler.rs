@@ -893,8 +893,9 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
 
     // Collect responses with a timeout. The channel may produce multiple messages
     // (e.g. status updates, then text). We only care about text responses.
-    let mut collected_text = Vec::new();
+    let mut latest_text = None;
     let timeout = Duration::from_secs(job.timeout_secs.unwrap_or(120));
+    let mut timed_out = false;
 
     // Drop the sender so the channel knows no more messages are coming.
     // The channel will process the one message and then its event loop will end
@@ -907,6 +908,7 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
         if remaining.is_zero() {
             tracing::warn!(cron_id = %job.id, "cron job timed out after {timeout:?}");
             channel_handle.abort();
+            timed_out = true;
             break;
         }
         match tokio::time::timeout(remaining, response_rx.recv()).await {
@@ -914,13 +916,13 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
                 response: OutboundResponse::Text(text),
                 ..
             })) => {
-                collected_text.push(text);
+                update_latest_cron_text(&mut latest_text, text);
             }
             Ok(Some(RoutedResponse {
                 response: OutboundResponse::RichMessage { text, .. },
                 ..
             })) => {
-                collected_text.push(text);
+                update_latest_cron_text(&mut latest_text, text);
             }
             Ok(Some(_)) => {}
             Ok(None) => {
@@ -929,6 +931,7 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
             Err(_) => {
                 tracing::warn!(cron_id = %job.id, "cron job timed out after {timeout:?}");
                 channel_handle.abort();
+                timed_out = true;
                 break;
             }
         }
@@ -937,17 +940,28 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
     // Wait for the channel task to finish (it should already be done since we dropped channel_tx)
     let _ = channel_handle.await;
 
-    let result_text = collected_text.join("\n\n");
-    let has_result = !result_text.trim().is_empty();
+    let result_text = match finalize_cron_delivery_text(latest_text, timed_out) {
+        Ok(result_text) => result_text,
+        Err(error) => {
+            if let Err(log_error) = context
+                .store
+                .log_execution(&job.id, false, Some(&error.to_string()))
+                .await
+            {
+                tracing::warn!(%log_error, "failed to log cron execution");
+            }
+            return Err(error);
+        }
+    };
 
     // Deliver result to target (only if there's something to say)
-    if has_result {
+    if let Some(result_text) = result_text.as_deref() {
         if let Err(error) = context
             .messaging_manager
             .broadcast(
                 &job.delivery_target.adapter,
                 &job.delivery_target.target,
-                OutboundResponse::Text(result_text.clone()),
+                OutboundResponse::Text(result_text.to_string()),
             )
             .await
         {
@@ -976,11 +990,7 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
         tracing::debug!(cron_id = %job.id, "cron job produced no output, skipping delivery");
     }
 
-    let summary = if has_result {
-        Some(result_text.as_str())
-    } else {
-        None
-    };
+    let summary = result_text.as_deref();
     if let Err(error) = context.store.log_execution(&job.id, true, summary).await {
         tracing::warn!(%error, "failed to log cron execution");
     }
@@ -988,9 +998,29 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
     Ok(())
 }
 
+fn update_latest_cron_text(latest_text: &mut Option<String>, text: String) {
+    if !text.trim().is_empty() {
+        *latest_text = Some(text);
+    }
+}
+
+fn finalize_cron_delivery_text(
+    latest_text: Option<String>,
+    timed_out: bool,
+) -> Result<Option<String>> {
+    if timed_out {
+        return Err(anyhow::anyhow!("cron job timed out before producing a final result").into());
+    }
+
+    Ok(latest_text.filter(|text| !text.trim().is_empty()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{hour_in_active_window, normalize_active_hours};
+    use super::{
+        finalize_cron_delivery_text, hour_in_active_window, normalize_active_hours,
+        update_latest_cron_text,
+    };
 
     #[test]
     fn test_hour_in_active_window_non_wrapping() {
@@ -1022,5 +1052,28 @@ mod tests {
         assert_eq!(normalize_active_hours(Some((12, 12))), None);
         assert_eq!(normalize_active_hours(Some((9, 17))), Some((9, 17)));
         assert_eq!(normalize_active_hours(None), None);
+    }
+
+    #[test]
+    fn latest_cron_text_replaces_earlier_progress_updates() {
+        let mut latest_text = None;
+        update_latest_cron_text(&mut latest_text, "still working".to_string());
+        update_latest_cron_text(&mut latest_text, "final briefing".to_string());
+
+        assert_eq!(latest_text.as_deref(), Some("final briefing"));
+    }
+
+    #[test]
+    fn timed_out_cron_does_not_deliver_partial_text() {
+        let error = finalize_cron_delivery_text(Some("partial progress".to_string()), true)
+            .expect_err("timed out crons should fail");
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn completed_cron_delivers_latest_text() {
+        let result = finalize_cron_delivery_text(Some("final briefing".to_string()), false)
+            .expect("completed cron should succeed");
+        assert_eq!(result.as_deref(), Some("final briefing"));
     }
 }

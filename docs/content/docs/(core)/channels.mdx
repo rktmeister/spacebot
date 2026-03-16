@@ -140,7 +140,7 @@ All write operations are fire-and-forget — they spawn a tokio task and return 
 
 ## Cross-Channel Messaging
 
-Channels are aware of each other. On every turn, the channel's system prompt is injected with a list of all active channels (excluding the current one, cron jobs, and webhooks). This gives the LLM context about where it can send messages.
+Channels are aware of each other. On every turn, the channel's system prompt is injected with a list of all active user-facing channels (excluding the current one, cron jobs, webhooks, and internal link channels). This gives the LLM context about where it can send messages.
 
 The `send_message_to_another_channel` tool lets a channel send a message to any known channel. The flow:
 

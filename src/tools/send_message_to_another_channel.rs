@@ -268,6 +268,10 @@ impl Tool for SendMessageTool {
             }
         };
 
+        if let Some(error) = unsupported_channel_target_error(&channel) {
+            return Err(SendMessageError(error));
+        }
+
         let broadcast_target = crate::messaging::target::resolve_broadcast_target(&channel)
             .ok_or_else(|| {
                 SendMessageError(format!(
@@ -425,11 +429,31 @@ fn parse_explicit_email_target(raw: &str) -> Option<crate::messaging::target::Br
     crate::messaging::target::parse_delivery_target(&format!("email:{trimmed}"))
 }
 
+fn unsupported_channel_target_error(
+    channel: &crate::conversation::channels::ChannelInfo,
+) -> Option<String> {
+    let channel_name = channel.display_name.as_deref().unwrap_or(&channel.id);
+    match channel.platform.as_str() {
+        "link" => Some(format!(
+            "channel '{channel_name}' is an internal link channel. Use send_agent_message for agent-to-agent coordination; send_message_to_another_channel only supports real messaging channels."
+        )),
+        "cron" => Some(format!(
+            "channel '{channel_name}' is a scheduled task channel. Cron channels are internal and cannot receive proactive messages."
+        )),
+        "webhook" => Some(format!(
+            "channel '{channel_name}' is a webhook channel. Webhook channels are internal and cannot receive proactive messages."
+        )),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         parse_explicit_email_target, parse_explicit_signal_prefix, parse_implicit_signal_shorthand,
+        unsupported_channel_target_error,
     };
+    use crate::conversation::channels::ChannelInfo;
 
     #[test]
     fn parses_prefixed_email_target() {
@@ -460,6 +484,35 @@ mod tests {
     #[test]
     fn ignores_channel_name_target() {
         assert!(parse_explicit_email_target("general").is_none());
+    }
+
+    fn channel_info(id: &str, platform: &str) -> ChannelInfo {
+        ChannelInfo {
+            id: id.to_string(),
+            platform: platform.to_string(),
+            display_name: Some(id.to_string()),
+            platform_meta: None,
+            is_active: true,
+            created_at: chrono::Utc::now(),
+            last_activity_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn rejects_internal_link_channels() {
+        let link_channel = channel_info("link:main:admin", "link");
+        let error =
+            unsupported_channel_target_error(&link_channel).expect("link targets should fail");
+        assert!(error.contains("internal link channel"));
+        assert!(error.contains("send_agent_message"));
+    }
+
+    #[test]
+    fn rejects_internal_cron_channels() {
+        let cron_channel = channel_info("cron:weekday-email-briefing", "cron");
+        let error =
+            unsupported_channel_target_error(&cron_channel).expect("cron targets should fail");
+        assert!(error.contains("scheduled task channel"));
     }
 
     // Signal tests - explicit signal: prefix (always honored regardless of adapter)

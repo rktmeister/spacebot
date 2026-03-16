@@ -1797,8 +1797,10 @@ fn should_insert_list_break(output: &str, slice: &str) -> bool {
     };
 
     if ordered_list_marker_len(slice.trim_start_matches([' ', '\t'])).is_some() {
-        return is_token_ending_character(previous_character)
-            || matches!(previous_character, ':' | ';' | '.' | '!' | '?');
+        return matches!(
+            previous_character,
+            ')' | ']' | '*' | '`' | ':' | ';' | '.' | '!' | '?'
+        );
     }
 
     matches!(
@@ -3590,6 +3592,13 @@ mod tests {
         let input = "The update was posted today (April9,2026) at7:45 PM. You'll need to review it within the last30 days.";
         let expected = "The update was posted today (April 9, 2026) at 7:45 PM. You'll need to review it within the last 30 days.";
         assert_eq!(normalize_telegram_markdown(input), expected);
+    }
+
+    #[test]
+    fn does_not_split_years_in_plain_prose() {
+        let input = "Creating your weekday morning briefing for Monday, March 16, 2026. Let me gather the latest from your inbox and calendar.";
+        assert_eq!(normalize_telegram_markdown(input), input);
+        assert_eq!(markdown_to_telegram_html(input), input);
     }
 
     #[test]

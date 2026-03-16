@@ -381,7 +381,9 @@ pub async fn add_channel_tools(
     handle.add_tool(BranchTool::new(state.clone())).await?;
     handle.add_tool(SpawnWorkerTool::new(state.clone())).await?;
     handle.add_tool(RouteTool::new(state.clone())).await?;
-    if let Some(messaging_manager) = &state.deps.messaging_manager {
+    if let Some(messaging_manager) = &state.deps.messaging_manager
+        && current_adapter.as_deref() != Some("cron")
+    {
         let send_message_display_name = state
             .deps
             .agent_names
