@@ -53,6 +53,11 @@ pub trait Messaging: Send + Sync + 'static {
         async { Ok(()) }
     }
 
+    /// Whether this adapter can deliver outbound messages.
+    fn supports_outbound_delivery(&self) -> bool {
+        true
+    }
+
     /// Fetch recent message history from the platform for context backfill.
     /// Returns messages in chronological order (oldest first).
     /// `before` is the message that triggered channel creation — fetch messages before it.
@@ -100,6 +105,8 @@ pub trait MessagingDyn: Send + Sync + 'static {
         target: &'a str,
         response: OutboundResponse,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
+
+    fn supports_outbound_delivery(&self) -> bool;
 
     fn fetch_history<'a>(
         &'a self,
@@ -149,6 +156,10 @@ impl<T: Messaging> MessagingDyn for T {
         response: OutboundResponse,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(Messaging::broadcast(self, target, response))
+    }
+
+    fn supports_outbound_delivery(&self) -> bool {
+        Messaging::supports_outbound_delivery(self)
     }
 
     fn fetch_history<'a>(

@@ -733,7 +733,8 @@ impl Channel {
     }
 
     fn suppress_plaintext_fallback(&self) -> bool {
-        matches!(self.current_adapter(), Some("email"))
+        self.current_adapter()
+            .is_some_and(|adapter| adapter == "email" || adapter.starts_with("email:"))
     }
 
     /// Return a handle that allows external supervision to cancel this channel's

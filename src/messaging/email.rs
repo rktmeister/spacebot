@@ -173,6 +173,7 @@ pub struct EmailAdapter {
     imap_username: String,
     imap_password: String,
     imap_use_tls: bool,
+    allow_outbound: bool,
     smtp_host: String,
     smtp_port: u16,
     smtp_username: String,
@@ -184,7 +185,7 @@ pub struct EmailAdapter {
     allowed_senders: Vec<String>,
     max_body_bytes: usize,
     max_attachment_bytes: usize,
-    smtp_transport: AsyncSmtpTransport<Tokio1Executor>,
+    smtp_transport: Option<AsyncSmtpTransport<Tokio1Executor>>,
     shutdown_tx: Arc<RwLock<Option<watch::Sender<bool>>>>,
     poll_task: Arc<RwLock<Option<JoinHandle<()>>>>,
 }
@@ -197,6 +198,7 @@ impl std::fmt::Debug for EmailAdapter {
             .field("imap_username", &"[REDACTED]")
             .field("imap_password", &"[REDACTED]")
             .field("imap_use_tls", &self.imap_use_tls)
+            .field("allow_outbound", &self.allow_outbound)
             .field("smtp_host", &self.smtp_host)
             .field("smtp_port", &self.smtp_port)
             .field("smtp_username", &"[REDACTED]")
@@ -224,6 +226,7 @@ impl EmailAdapter {
         // Build a temporary EmailConfig to reuse build_smtp_transport and shared logic.
         let email_config = EmailConfig {
             enabled: config.enabled,
+            allow_outbound: config.allow_outbound,
             imap_host: config.imap_host.clone(),
             imap_port: config.imap_port,
             imap_username: config.imap_username.clone(),
@@ -260,7 +263,11 @@ impl EmailAdapter {
             folders
         };
 
-        let smtp_transport = build_smtp_transport(config)?;
+        let smtp_transport = if config.allow_outbound {
+            Some(build_smtp_transport(config)?)
+        } else {
+            None
+        };
 
         Ok(Self {
             runtime_key,
@@ -269,6 +276,7 @@ impl EmailAdapter {
             imap_username: config.imap_username.clone(),
             imap_password: config.imap_password.clone(),
             imap_use_tls: config.imap_use_tls,
+            allow_outbound: config.allow_outbound,
             smtp_host: config.smtp_host.clone(),
             smtp_port: config.smtp_port,
             smtp_username: config.smtp_username.clone(),
@@ -310,6 +318,12 @@ impl EmailAdapter {
             .parse()
             .with_context(|| format!("invalid email from_address '{}'", self.from_address))?;
         Ok(Mailbox::new(self.from_name.clone(), from_address))
+    }
+
+    fn smtp_transport(&self) -> crate::Result<&AsyncSmtpTransport<Tokio1Executor>> {
+        self.smtp_transport
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("outbound email delivery is disabled").into())
     }
 
     async fn send_email(
@@ -365,7 +379,7 @@ impl EmailAdapter {
             builder.body(body).context("failed to build email body")?
         };
 
-        self.smtp_transport
+        self.smtp_transport()?
             .send(message)
             .await
             .context("failed to send email")?;
@@ -377,6 +391,10 @@ impl EmailAdapter {
 impl Messaging for EmailAdapter {
     fn name(&self) -> &str {
         &self.runtime_key
+    }
+
+    fn supports_outbound_delivery(&self) -> bool {
+        self.allow_outbound
     }
 
     async fn start(&self) -> crate::Result<InboundStream> {
@@ -688,13 +706,14 @@ impl Messaging for EmailAdapter {
         .await
         .context("email IMAP health check task failed")??;
 
-        let smtp_ok = self
-            .smtp_transport
-            .test_connection()
-            .await
-            .context("SMTP health check failed")?;
-        if !smtp_ok {
-            return Err(anyhow::anyhow!("SMTP server rejected test connection").into());
+        if let Some(smtp_transport) = &self.smtp_transport {
+            let smtp_ok = smtp_transport
+                .test_connection()
+                .await
+                .context("SMTP health check failed")?;
+            if !smtp_ok {
+                return Err(anyhow::anyhow!("SMTP server rejected test connection").into());
+            }
         }
 
         Ok(())
@@ -711,7 +730,9 @@ impl Messaging for EmailAdapter {
             tracing::warn!(%error, "email poll task join failed during shutdown");
         }
 
-        self.smtp_transport.shutdown().await;
+        if let Some(smtp_transport) = &self.smtp_transport {
+            smtp_transport.shutdown().await;
+        }
 
         tracing::info!("email adapter shut down");
         Ok(())
@@ -2219,8 +2240,44 @@ mod tests {
         normalize_email_target, normalize_reply_subject, normalize_search_folders,
         parse_inbound_email, parse_primary_mailbox, sort_and_limit_search_hits,
     };
-    use crate::MessageContent;
+    use crate::config::EmailConfig;
+    use crate::messaging::traits::Messaging as _;
+    use crate::{InboundMessage, MessageContent, OutboundResponse};
+    use std::collections::HashMap;
     use std::time::Duration;
+
+    fn test_email_config(allow_outbound: bool) -> EmailConfig {
+        EmailConfig {
+            enabled: true,
+            allow_outbound,
+            imap_host: "imap.example.com".to_string(),
+            imap_port: 993,
+            imap_username: "bot@example.com".to_string(),
+            imap_password: "secret".to_string(),
+            imap_use_tls: true,
+            smtp_host: if allow_outbound {
+                "smtp.example.com".to_string()
+            } else {
+                String::new()
+            },
+            smtp_port: 587,
+            smtp_username: "bot@example.com".to_string(),
+            smtp_password: "secret".to_string(),
+            smtp_use_starttls: true,
+            from_address: if allow_outbound {
+                "bot@example.com".to_string()
+            } else {
+                String::new()
+            },
+            from_name: Some("Spacebot".to_string()),
+            poll_interval_secs: 30,
+            folders: vec!["INBOX".to_string()],
+            allowed_senders: Vec::new(),
+            max_body_bytes: 20_000,
+            max_attachment_bytes: 20_000,
+            instances: Vec::new(),
+        }
+    }
 
     fn test_poll_config() -> EmailPollConfig {
         EmailPollConfig {
@@ -2238,6 +2295,74 @@ mod tests {
             max_attachment_bytes: 20_000,
             runtime_key: "email".to_string(),
         }
+    }
+
+    #[test]
+    fn from_config_supports_imap_only_mode() {
+        let adapter = EmailAdapter::from_config(&test_email_config(false))
+            .expect("IMAP-only email config should build");
+
+        assert!(!adapter.supports_outbound_delivery());
+    }
+
+    #[tokio::test]
+    async fn broadcast_rejects_when_outbound_is_disabled() {
+        let adapter = EmailAdapter::from_config(&test_email_config(false))
+            .expect("IMAP-only email config should build");
+        let error = adapter
+            .broadcast(
+                "alice@example.com",
+                OutboundResponse::Text("hello".to_string()),
+            )
+            .await
+            .expect_err("broadcast should fail when outbound is disabled");
+
+        assert!(
+            error
+                .to_string()
+                .contains("outbound email delivery is disabled"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn respond_rejects_when_outbound_is_disabled() {
+        let adapter = EmailAdapter::from_config(&test_email_config(false))
+            .expect("IMAP-only email config should build");
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "email_reply_to".to_string(),
+            serde_json::Value::String("alice@example.com".to_string()),
+        );
+        metadata.insert(
+            "email_subject".to_string(),
+            serde_json::Value::String("Question".to_string()),
+        );
+
+        let message = InboundMessage {
+            id: "1".to_string(),
+            source: "email".to_string(),
+            adapter: None,
+            conversation_id: "email:test:thread".to_string(),
+            sender_id: "alice@example.com".to_string(),
+            agent_id: None,
+            content: MessageContent::Text("hello".to_string()),
+            timestamp: chrono::Utc::now(),
+            metadata,
+            formatted_author: None,
+        };
+
+        let error = adapter
+            .respond(&message, OutboundResponse::Text("reply".to_string()))
+            .await
+            .expect_err("respond should fail when outbound is disabled");
+
+        assert!(
+            error
+                .to_string()
+                .contains("outbound email delivery is disabled"),
+            "{error}"
+        );
     }
 
     fn invite_email_fixture() -> String {

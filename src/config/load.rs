@@ -1963,10 +1963,11 @@ impl Config {
                         let smtp_host =
                             instance.smtp_host.as_deref().and_then(resolve_env_value);
 
+                        let allow_outbound = instance.allow_outbound;
                         let has_credentials = imap_host.is_some()
                             && imap_username.is_some()
                             && imap_password.is_some()
-                            && smtp_host.is_some();
+                            && (!allow_outbound || smtp_host.is_some());
 
                         if instance.enabled && !has_credentials {
                             tracing::warn!(
@@ -1998,6 +1999,7 @@ impl Config {
                         EmailInstanceConfig {
                             name: instance.name,
                             enabled: instance.enabled && has_credentials,
+                            allow_outbound,
                             imap_host: imap_host.unwrap_or_default(),
                             imap_port: instance.imap_port,
                             imap_username: imap_username_val,
@@ -2036,10 +2038,11 @@ impl Config {
                     .ok()
                     .or_else(|| email.smtp_host.as_deref().and_then(resolve_env_value));
 
+                let allow_outbound = email.allow_outbound;
                 let has_default = imap_host.is_some()
                     && imap_username.is_some()
                     && imap_password.is_some()
-                    && smtp_host.is_some();
+                    && (!allow_outbound || smtp_host.is_some());
 
                 if !has_default && instances.is_empty() {
                     return None;
@@ -2068,6 +2071,7 @@ impl Config {
 
                 Some(EmailConfig {
                     enabled: email.enabled,
+                    allow_outbound,
                     imap_host,
                     imap_port: email.imap_port,
                     imap_username,

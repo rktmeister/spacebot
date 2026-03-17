@@ -125,6 +125,15 @@ impl MessagingManager {
         self.adapters.read().await.contains_key(name)
     }
 
+    /// Returns true when the adapter exists and can send outbound messages.
+    pub async fn supports_outbound_delivery(&self, name: &str) -> bool {
+        self.adapters
+            .read()
+            .await
+            .get(name)
+            .is_some_and(|adapter| adapter.supports_outbound_delivery())
+    }
+
     /// Returns true if any adapter exists for the given platform.
     pub async fn has_platform_adapters(&self, platform: &str) -> bool {
         let prefix = format!("{platform}:");

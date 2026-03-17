@@ -1,15 +1,18 @@
 ---
 title: Email Setup
-description: Connect Spacebot to an inbox with IMAP + SMTP.
+description: Connect Spacebot to an inbox with IMAP and optional SMTP.
 ---
 
 # Email Setup
 
-Connect Spacebot to any mailbox that supports IMAP and SMTP. Inbound messages are polled over IMAP, and replies are sent over SMTP.
+Connect Spacebot to any mailbox that supports IMAP. Inbound messages are polled over IMAP. SMTP is optional and is only needed when you want intentional outbound email delivery.
 
-You need:
+You always need:
 
 - an IMAP host, username, and password
+
+For outbound email sending, you also need:
+
 - an SMTP host, username, and password
 - a sender address (`from_address`) for outbound replies
 
@@ -42,6 +45,25 @@ Typical defaults are IMAP `993` (TLS) and SMTP `587` (STARTTLS).
 ```toml
 [messaging.email]
 enabled = true
+allow_outbound = false
+
+imap_host = "imap.example.com"
+imap_port = 993
+imap_username = "inbox@example.com"
+imap_password = "env:EMAIL_IMAP_PASSWORD"
+imap_use_tls = true
+
+poll_interval_secs = 30
+folders = ["INBOX"]
+allowed_senders = []
+```
+
+If you want outbound email too, add the SMTP fields:
+
+```toml
+[messaging.email]
+enabled = true
+allow_outbound = true
 
 imap_host = "imap.example.com"
 imap_port = 993
@@ -63,7 +85,7 @@ folders = ["INBOX"]
 allowed_senders = []
 ```
 
-Credentials support `env:VAR_NAME` references.
+Credentials support `env:VAR_NAME` references. `allow_outbound` defaults to `true`, so set it to `false` if you want IMAP-only ingest with no SMTP sending capability.
 
 </Tab>
 </Tabs>
@@ -92,12 +114,12 @@ Email channels are treated as intake streams, not always-on chat threads.
 
 ## Intentional outbound email from another channel
 
-When the Email adapter is configured, you can intentionally send email from a non-email channel (for example, Telegram or Discord) using cross-channel messaging.
+When the Email adapter is configured with `allow_outbound = true`, you can intentionally send email from a non-email channel (for example, Telegram or Discord) using cross-channel messaging.
 
 - explicit format: `email:alice@example.com`
 - bare address also works: `alice@example.com`
 
-This keeps email channels inbound-only while still allowing deliberate outbound send workflows.
+This keeps email channels inbound-only while still allowing deliberate outbound send workflows when enabled.
 
 ## Search mailbox content (`email_search`)
 

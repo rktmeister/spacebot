@@ -87,7 +87,10 @@ impl Tool for SendMessageTool {
     type Output = SendMessageOutput;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let email_adapter_available = self.messaging_manager.has_adapter("email").await;
+        let email_adapter_available = self
+            .messaging_manager
+            .supports_outbound_delivery("email")
+            .await;
         // Check if current adapter is Signal (e.g., "signal:gvoice1" starts with "signal")
         let signal_adapter_available = self
             .current_adapter
@@ -225,6 +228,16 @@ impl Tool for SendMessageTool {
 
         // Check for explicit email target
         if let Some(explicit_target) = parse_explicit_email_target(&args.target) {
+            if !self
+                .messaging_manager
+                .supports_outbound_delivery(&explicit_target.adapter)
+                .await
+            {
+                return Err(SendMessageError(
+                    "email outbound delivery is disabled or not configured".to_string(),
+                ));
+            }
+
             self.messaging_manager
                 .broadcast(
                     &explicit_target.adapter,

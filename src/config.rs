@@ -1661,6 +1661,7 @@ maintenance_merge_similarity_threshold = 1.1
             telegram: None,
             email: Some(EmailConfig {
                 enabled: true,
+                allow_outbound: true,
                 imap_host: "imap.test.com".into(),
                 imap_port: 993,
                 imap_username: "user".into(),
@@ -1696,6 +1697,53 @@ maintenance_merge_similarity_threshold = 1.1
             dm_allowed_users: vec![],
         }];
         assert!(validate_named_messaging_adapters(&messaging, &bindings).is_err());
+    }
+
+    #[test]
+    fn validate_email_binding_allows_imap_only_default_adapter() {
+        let messaging = MessagingConfig {
+            discord: None,
+            slack: None,
+            telegram: None,
+            email: Some(EmailConfig {
+                enabled: true,
+                allow_outbound: false,
+                imap_host: "imap.test.com".into(),
+                imap_port: 993,
+                imap_username: "user".into(),
+                imap_password: "pass".into(),
+                imap_use_tls: true,
+                smtp_host: String::new(),
+                smtp_port: 587,
+                smtp_username: String::new(),
+                smtp_password: String::new(),
+                smtp_use_starttls: true,
+                from_address: String::new(),
+                from_name: None,
+                poll_interval_secs: 60,
+                folders: vec![],
+                allowed_senders: vec![],
+                max_body_bytes: 1_000_000,
+                max_attachment_bytes: 10_000_000,
+                instances: vec![],
+            }),
+            webhook: None,
+            twitch: None,
+            signal: None,
+        };
+        let bindings = vec![Binding {
+            agent_id: "main".into(),
+            channel: "email".into(),
+            adapter: None,
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        }];
+
+        assert!(validate_named_messaging_adapters(&messaging, &bindings).is_ok());
     }
 
     #[test]

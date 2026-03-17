@@ -1822,7 +1822,7 @@ pub(super) fn build_adapter_validation_states(
         let default_present = !email.imap_host.trim().is_empty()
             && !email.imap_username.trim().is_empty()
             && !email.imap_password.trim().is_empty()
-            && !email.smtp_host.trim().is_empty();
+            && (!email.allow_outbound || !email.smtp_host.trim().is_empty());
         validate_runtime_keys("email", default_present, &named_instances)?;
         states.insert(
             "email",
@@ -2205,6 +2205,7 @@ impl SystemSecrets for TelegramConfig {
 #[derive(Clone)]
 pub struct EmailConfig {
     pub enabled: bool,
+    pub allow_outbound: bool,
     pub imap_host: String,
     pub imap_port: u16,
     pub imap_username: String,
@@ -2230,6 +2231,7 @@ pub struct EmailConfig {
 pub struct EmailInstanceConfig {
     pub name: String,
     pub enabled: bool,
+    pub allow_outbound: bool,
     pub imap_host: String,
     pub imap_port: u16,
     pub imap_username: String,
@@ -2254,6 +2256,7 @@ impl std::fmt::Debug for EmailInstanceConfig {
         f.debug_struct("EmailInstanceConfig")
             .field("name", &self.name)
             .field("enabled", &self.enabled)
+            .field("allow_outbound", &self.allow_outbound)
             .field("imap_host", &self.imap_host)
             .field("imap_port", &self.imap_port)
             .field("imap_username", &"[REDACTED]")
@@ -2279,6 +2282,7 @@ impl std::fmt::Debug for EmailConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EmailConfig")
             .field("enabled", &self.enabled)
+            .field("allow_outbound", &self.allow_outbound)
             .field("imap_host", &self.imap_host)
             .field("imap_port", &self.imap_port)
             .field("imap_username", &"[REDACTED]")

@@ -587,6 +587,8 @@ pub(super) struct TomlTelegramInstanceConfig {
 pub(super) struct TomlEmailConfig {
     #[serde(default)]
     pub(super) enabled: bool,
+    #[serde(default = "default_email_allow_outbound")]
+    pub(super) allow_outbound: bool,
     pub(super) imap_host: Option<String>,
     #[serde(default = "default_email_imap_port")]
     pub(super) imap_port: u16,
@@ -622,6 +624,8 @@ pub(super) struct TomlEmailInstanceConfig {
     pub(super) name: String,
     #[serde(default)]
     pub(super) enabled: bool,
+    #[serde(default = "default_email_allow_outbound")]
+    pub(super) allow_outbound: bool,
     pub(super) imap_host: Option<String>,
     #[serde(default = "default_email_imap_port")]
     pub(super) imap_port: u16,
@@ -743,6 +747,10 @@ pub(super) fn default_email_imap_port() -> u16 {
 }
 
 pub(super) fn default_email_imap_use_tls() -> bool {
+    true
+}
+
+pub(super) fn default_email_allow_outbound() -> bool {
     true
 }
 
