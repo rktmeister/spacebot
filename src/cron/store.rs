@@ -3,7 +3,8 @@
 use crate::cron::scheduler::CronConfig;
 use crate::error::Result;
 use anyhow::Context as _;
-use sqlx::SqlitePool;
+use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
+use sqlx::{Row as _, SqlitePool};
 use std::collections::HashMap;
 
 /// Cron job store for persistence.
@@ -16,6 +17,65 @@ impl CronStore {
     /// Create a new cron store.
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    /// Rewrite legacy SQLite timestamp strings into explicit RFC3339 UTC form.
+    ///
+    /// Older cron execution rows rely on SQLite's `CURRENT_TIMESTAMP`, which
+    /// stores `YYYY-MM-DD HH:MM:SS` in UTC but without an explicit offset.
+    /// Browsers commonly parse that as local time, shifting dashboard displays.
+    pub async fn normalize_execution_timestamps(&self) -> Result<usize> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, executed_at
+            FROM cron_executions
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to load cron execution timestamps for normalization")?;
+
+        let mut updates = Vec::new();
+        for row in rows {
+            let execution_id: String = row.try_get("id")?;
+            let executed_at: String = row.try_get("executed_at")?;
+            let normalized = normalize_cron_timestamp_lossy(&executed_at);
+            if normalized != executed_at {
+                updates.push((execution_id, normalized));
+            }
+        }
+
+        if updates.is_empty() {
+            return Ok(0);
+        }
+
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin cron timestamp normalization transaction")?;
+
+        for (execution_id, normalized_timestamp) in &updates {
+            sqlx::query(
+                r#"
+                UPDATE cron_executions
+                SET executed_at = ?
+                WHERE id = ?
+                "#,
+            )
+            .bind(normalized_timestamp)
+            .bind(execution_id)
+            .execute(&mut *transaction)
+            .await
+            .context("failed to rewrite normalized cron execution timestamp")?;
+        }
+
+        transaction
+            .commit()
+            .await
+            .context("failed to commit cron timestamp normalization transaction")?;
+
+        Ok(updates.len())
     }
 
     /// Save a cron job configuration.
@@ -130,15 +190,17 @@ impl CronStore {
         result_summary: Option<&str>,
     ) -> Result<()> {
         let execution_id = uuid::Uuid::new_v4().to_string();
+        let executed_at = utc_timestamp_rfc3339();
 
         sqlx::query(
             r#"
-            INSERT INTO cron_executions (id, cron_id, success, result_summary)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO cron_executions (id, cron_id, executed_at, success, result_summary)
+            VALUES (?, ?, ?, ?, ?)
             "#,
         )
         .bind(&execution_id)
         .bind(cron_id)
+        .bind(&executed_at)
         .bind(success as i64)
         .bind(result_summary)
         .execute(&self.pool)
@@ -215,7 +277,9 @@ impl CronStore {
             .into_iter()
             .map(|row| CronExecutionEntry {
                 id: row.try_get("id").unwrap_or_default(),
-                executed_at: row.try_get("executed_at").unwrap_or_default(),
+                executed_at: normalize_cron_timestamp_lossy(
+                    &row.try_get::<String, _>("executed_at").unwrap_or_default(),
+                ),
                 success: row.try_get::<i64, _>("success").unwrap_or(0) != 0,
                 result_summary: row.try_get("result_summary").ok(),
             })
@@ -243,7 +307,9 @@ impl CronStore {
             .into_iter()
             .map(|row| CronExecutionEntry {
                 id: row.try_get("id").unwrap_or_default(),
-                executed_at: row.try_get("executed_at").unwrap_or_default(),
+                executed_at: normalize_cron_timestamp_lossy(
+                    &row.try_get::<String, _>("executed_at").unwrap_or_default(),
+                ),
                 success: row.try_get::<i64, _>("success").unwrap_or(0) != 0,
                 result_summary: row.try_get("result_summary").ok(),
             })
@@ -274,7 +340,7 @@ impl CronStore {
             let cron_id: String = row.try_get("cron_id")?;
             let last: Option<String> = row.try_get("last_executed_at")?;
             if let Some(last) = last {
-                map.insert(cron_id, last);
+                map.insert(cron_id, normalize_cron_timestamp_lossy(&last));
             }
         }
 
@@ -301,7 +367,11 @@ impl CronStore {
         if let Some(row) = row {
             let success_count: i64 = row.try_get("success_count").unwrap_or(0);
             let failure_count: i64 = row.try_get("failure_count").unwrap_or(0);
-            let last_executed_at: Option<String> = row.try_get("last_executed_at").ok();
+            let last_executed_at: Option<String> = row
+                .try_get::<Option<String>, _>("last_executed_at")
+                .ok()
+                .flatten()
+                .map(|value| normalize_cron_timestamp_lossy(&value));
 
             Ok(CronExecutionStats {
                 success_count: success_count as u64,
@@ -312,6 +382,39 @@ impl CronStore {
             Ok(CronExecutionStats::default())
         }
     }
+}
+
+const LEGACY_SQLITE_TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+const LEGACY_SQLITE_TIMESTAMP_FRACTIONAL_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
+
+fn utc_timestamp_rfc3339() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn normalize_cron_timestamp(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(trimmed) {
+        return Some(parsed.to_utc().to_rfc3339_opts(SecondsFormat::Secs, true));
+    }
+
+    for format in [
+        LEGACY_SQLITE_TIMESTAMP_FORMAT,
+        LEGACY_SQLITE_TIMESTAMP_FRACTIONAL_FORMAT,
+    ] {
+        if let Ok(parsed) = NaiveDateTime::parse_from_str(trimmed, format) {
+            return Some(parsed.and_utc().to_rfc3339_opts(SecondsFormat::Secs, true));
+        }
+    }
+
+    None
+}
+
+fn normalize_cron_timestamp_lossy(value: &str) -> String {
+    normalize_cron_timestamp(value).unwrap_or_else(|| value.to_string())
 }
 
 /// Entry in the cron execution log.
@@ -330,5 +433,31 @@ pub struct CronExecutionStats {
     pub failure_count: u64,
     pub last_executed_at: Option<String>,
 }
+#[cfg(test)]
+mod tests {
+    use super::{normalize_cron_timestamp, normalize_cron_timestamp_lossy};
 
-use sqlx::Row as _;
+    #[test]
+    fn normalizes_legacy_sqlite_timestamp_as_utc() {
+        assert_eq!(
+            normalize_cron_timestamp("2026-03-18 01:00:00").as_deref(),
+            Some("2026-03-18T01:00:00Z")
+        );
+    }
+
+    #[test]
+    fn normalizes_rfc3339_offsets_to_utc() {
+        assert_eq!(
+            normalize_cron_timestamp("2026-03-18T09:00:00+08:00").as_deref(),
+            Some("2026-03-18T01:00:00Z")
+        );
+    }
+
+    #[test]
+    fn lossy_normalizer_preserves_unparseable_values() {
+        assert_eq!(
+            normalize_cron_timestamp_lossy("not-a-timestamp"),
+            "not-a-timestamp"
+        );
+    }
+}

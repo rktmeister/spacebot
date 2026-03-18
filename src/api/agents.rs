@@ -818,6 +818,23 @@ pub async fn create_agent_internal(
     state.register_agent_events(agent_id.clone(), event_rx);
 
     let cron_store = std::sync::Arc::new(crate::cron::CronStore::new(db.sqlite.clone()));
+    match cron_store.normalize_execution_timestamps().await {
+        Ok(normalized_count) if normalized_count > 0 => {
+            tracing::info!(
+                agent_id = %agent_id,
+                normalized_count,
+                "normalized legacy cron execution timestamps to RFC3339 UTC"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(
+                agent_id = %agent_id,
+                %error,
+                "failed to normalize cron execution timestamps"
+            );
+        }
+    }
     let cron_context = crate::cron::CronContext {
         deps: deps.clone(),
         screenshot_dir: agent_config.screenshot_dir(),

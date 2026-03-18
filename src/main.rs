@@ -3189,6 +3189,24 @@ async fn initialize_agents(
         let store = Arc::new(spacebot::cron::CronStore::new(agent.db.sqlite.clone()));
         agent.deps.messaging_manager = Some(messaging_manager.clone());
 
+        match store.normalize_execution_timestamps().await {
+            Ok(normalized_count) if normalized_count > 0 => {
+                tracing::info!(
+                    agent_id = %agent_id,
+                    normalized_count,
+                    "normalized legacy cron execution timestamps to RFC3339 UTC"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    agent_id = %agent_id,
+                    %error,
+                    "failed to normalize cron execution timestamps"
+                );
+            }
+        }
+
         // Seed cron jobs from config into the database
         for cron_def in &agent.config.cron {
             let cron_config = spacebot::cron::CronConfig {
