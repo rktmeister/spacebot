@@ -4,6 +4,7 @@ import { api, type AgentMessageEvent, type ChannelInfo, type ToolStartedEvent, t
 import { generateId } from "@/lib/id";
 import { useEventSource, type ConnectionState } from "@/hooks/useEventSource";
 import { useChannelLiveState, type ChannelLiveState, type ActiveWorker } from "@/hooks/useChannelLiveState";
+import { useServer } from "@/hooks/useServer";
 
 interface LiveContextValue {
 	liveStates: Record<string, ChannelLiveState>;
@@ -290,9 +291,15 @@ export function LiveContextProvider({ children }: { children: ReactNode }) {
 		bumpTaskVersion();
 	}, [syncStatusSnapshot, queryClient, bumpTaskVersion]);
 
-	const { connectionState } = useEventSource(api.eventsUrl, {
+	const { serverUrl, state: serverState } = useServer();
+	// Compute the SSE events URL from the current server URL so the
+	// EventSource reconnects whenever the user changes servers.
+	const eventsUrl = useMemo(() => api.getEventsUrl(), [serverUrl]);
+
+	const { connectionState } = useEventSource(eventsUrl, {
 		handlers,
 		onReconnect,
+		enabled: serverState === "connected",
 	});
 
 	// Consider app "ready" once we have any data loaded

@@ -1,7 +1,44 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs;
+use std::path::PathBuf;
 use tauri::Manager;
+
+/// Resolve the path to the connection settings file in the app data directory.
+fn settings_path(app: &tauri::AppHandle) -> PathBuf {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .expect("failed to resolve app data dir");
+    dir.join("connection.json")
+}
+
+/// Read the saved server URL, or return the default.
+#[tauri::command]
+fn get_server_url(app: tauri::AppHandle) -> String {
+    let path = settings_path(&app);
+    if let Ok(contents) = fs::read_to_string(&path) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) {
+            if let Some(url) = value.get("server_url").and_then(|v| v.as_str()) {
+                return url.to_string();
+            }
+        }
+    }
+    "http://localhost:19898".to_string()
+}
+
+/// Persist the server URL to disk.
+#[tauri::command]
+fn set_server_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let path = settings_path(&app);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let value = serde_json::json!({ "server_url": url });
+    fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).map_err(|e| e.to_string())?;
+    Ok(())
+}
 
 fn main() {
     tracing_subscriber::fmt()
@@ -13,6 +50,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![get_server_url, set_server_url])
         .setup(|app| {
             // Apply macOS titlebar style (invisible toolbar for traffic light padding)
             #[cfg(target_os = "macos")]
