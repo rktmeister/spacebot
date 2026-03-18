@@ -5,7 +5,7 @@
 //! runs the job's prompt through the LLM, and delivers the result
 //! to the delivery target via the messaging system.
 
-use crate::agent::channel::Channel;
+use crate::agent::channel::{Channel, CronTurnFinalization};
 use crate::cron::store::CronStore;
 use crate::error::Result;
 use crate::messaging::MessagingManager;
@@ -864,6 +864,7 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
         None, // cron channels don't capture prompt snapshots
         None, // cron channels don't share live transcript cache
     );
+    let mut cron_finalization_rx = channel.cron_finalization_receiver();
 
     // Spawn the channel's event loop
     let channel_handle = tokio::spawn(async move {
@@ -891,19 +892,23 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
         .await
         .map_err(|error| anyhow::anyhow!("failed to send cron prompt to channel: {error}"))?;
 
-    // Collect responses with a timeout. The channel may produce multiple messages
-    // (e.g. status updates, then text). We only care about text responses.
-    let mut latest_text = None;
     let timeout = Duration::from_secs(job.timeout_secs.unwrap_or(120));
     let mut timed_out = false;
+    let mut final_output = CronTurnFinalization::Pending;
 
     // Drop the sender so the channel knows no more messages are coming.
-    // The channel will process the one message and then its event loop will end
-    // when the sender is dropped (message_rx returns None).
     drop(channel_tx);
 
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
+        if let CronTurnFinalization::Ready { output } = &*cron_finalization_rx.borrow() {
+            final_output = CronTurnFinalization::Ready {
+                output: output.clone(),
+            };
+            channel_handle.abort();
+            break;
+        }
+
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             tracing::warn!(cron_id = %job.id, "cron job timed out after {timeout:?}");
@@ -911,24 +916,40 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
             timed_out = true;
             break;
         }
-        match tokio::time::timeout(remaining, response_rx.recv()).await {
-            Ok(Some(RoutedResponse {
-                response: OutboundResponse::Text(text),
-                ..
-            })) => {
-                update_latest_cron_text(&mut latest_text, text);
+
+        tokio::select! {
+            response = response_rx.recv() => match response {
+                Some(RoutedResponse {
+                    response: OutboundResponse::Text(text),
+                    ..
+                }) => {
+                    tracing::debug!(
+                        cron_id = %job.id,
+                        response_len = text.len(),
+                        "drained cron text response before finalization"
+                    );
+                }
+                Some(RoutedResponse {
+                    response: OutboundResponse::RichMessage { text, .. },
+                    ..
+                }) => {
+                    tracing::debug!(
+                        cron_id = %job.id,
+                        response_len = text.len(),
+                        "drained cron rich response before finalization"
+                    );
+                }
+                Some(_) => {}
+                None => {
+                    break;
+                }
+            },
+            changed = cron_finalization_rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
             }
-            Ok(Some(RoutedResponse {
-                response: OutboundResponse::RichMessage { text, .. },
-                ..
-            })) => {
-                update_latest_cron_text(&mut latest_text, text);
-            }
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                break;
-            }
-            Err(_) => {
+            _ = tokio::time::sleep(remaining) => {
                 tracing::warn!(cron_id = %job.id, "cron job timed out after {timeout:?}");
                 channel_handle.abort();
                 timed_out = true;
@@ -937,10 +958,10 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
         }
     }
 
-    // Wait for the channel task to finish (it should already be done since we dropped channel_tx)
+    // Wait for the channel task to finish after the scheduler decides the run outcome.
     let _ = channel_handle.await;
 
-    let result_text = match finalize_cron_delivery_text(latest_text, timed_out) {
+    let result_text = match finalize_cron_delivery(final_output, timed_out) {
         Ok(result_text) => result_text,
         Err(error) => {
             if let Err(log_error) = context
@@ -998,29 +1019,26 @@ async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
     Ok(())
 }
 
-fn update_latest_cron_text(latest_text: &mut Option<String>, text: String) {
-    if !text.trim().is_empty() {
-        *latest_text = Some(text);
-    }
-}
-
-fn finalize_cron_delivery_text(
-    latest_text: Option<String>,
+fn finalize_cron_delivery(
+    final_output: CronTurnFinalization,
     timed_out: bool,
 ) -> Result<Option<String>> {
     if timed_out {
         return Err(anyhow::anyhow!("cron job timed out before producing a final result").into());
     }
 
-    Ok(latest_text.filter(|text| !text.trim().is_empty()))
+    match final_output {
+        CronTurnFinalization::Pending => {
+            Err(anyhow::anyhow!("cron job ended before producing a terminal result").into())
+        }
+        CronTurnFinalization::Ready { output } => Ok(output.filter(|text| !text.trim().is_empty())),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        finalize_cron_delivery_text, hour_in_active_window, normalize_active_hours,
-        update_latest_cron_text,
-    };
+    use super::{finalize_cron_delivery, hour_in_active_window, normalize_active_hours};
+    use crate::agent::channel::CronTurnFinalization;
 
     #[test]
     fn test_hour_in_active_window_non_wrapping() {
@@ -1055,25 +1073,40 @@ mod tests {
     }
 
     #[test]
-    fn latest_cron_text_replaces_earlier_progress_updates() {
-        let mut latest_text = None;
-        update_latest_cron_text(&mut latest_text, "still working".to_string());
-        update_latest_cron_text(&mut latest_text, "final briefing".to_string());
-
-        assert_eq!(latest_text.as_deref(), Some("final briefing"));
-    }
-
-    #[test]
-    fn timed_out_cron_does_not_deliver_partial_text() {
-        let error = finalize_cron_delivery_text(Some("partial progress".to_string()), true)
-            .expect_err("timed out crons should fail");
+    fn timed_out_cron_does_not_deliver_terminal_output() {
+        let error = finalize_cron_delivery(
+            CronTurnFinalization::Ready {
+                output: Some("final briefing".to_string()),
+            },
+            true,
+        )
+        .expect_err("timed out crons should fail");
         assert!(error.to_string().contains("timed out"));
     }
 
     #[test]
-    fn completed_cron_delivers_latest_text() {
-        let result = finalize_cron_delivery_text(Some("final briefing".to_string()), false)
-            .expect("completed cron should succeed");
+    fn finalized_cron_delivers_terminal_text() {
+        let result = finalize_cron_delivery(
+            CronTurnFinalization::Ready {
+                output: Some("final briefing".to_string()),
+            },
+            false,
+        )
+        .expect("completed cron should succeed");
         assert_eq!(result.as_deref(), Some("final briefing"));
+    }
+
+    #[test]
+    fn finalized_cron_can_skip_delivery() {
+        let result = finalize_cron_delivery(CronTurnFinalization::Ready { output: None }, false)
+            .expect("finalized cron without output should still succeed");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn non_terminal_cron_is_treated_as_failure() {
+        let error = finalize_cron_delivery(CronTurnFinalization::Pending, false)
+            .expect_err("non-terminal cron runs should fail");
+        assert!(error.to_string().contains("terminal result"));
     }
 }

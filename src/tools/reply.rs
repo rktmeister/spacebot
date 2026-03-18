@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::RwLock;
 
 static BROKEN_DISCORD_MENTION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"<{2,}@(!?)>\s*(\d{15,22})>").expect("hardcoded broken mention regex")
@@ -26,9 +27,21 @@ static DISCORD_ID_REGEX: LazyLock<Regex> =
 /// after the LLM turn to decide whether to suppress fallback text output.
 pub type RepliedFlag = Arc<AtomicBool>;
 
+/// Shared per-turn capture of the final user-visible output text.
+///
+/// Reply tool calls write their successful content here so cron channels can
+/// later distinguish the final deliverable for the completed turn from any
+/// earlier partial output.
+pub type TurnOutputCapture = Arc<RwLock<Option<String>>>;
+
 /// Create a new replied flag (defaults to false).
 pub fn new_replied_flag() -> RepliedFlag {
     Arc::new(AtomicBool::new(false))
+}
+
+/// Create a new per-turn output capture slot.
+pub fn new_turn_output_capture() -> TurnOutputCapture {
+    Arc::new(RwLock::new(None))
 }
 
 /// Tool for replying to users.
@@ -44,6 +57,7 @@ pub struct ReplyTool {
     conversation_logger: ConversationLogger,
     channel_id: ChannelId,
     replied_flag: RepliedFlag,
+    turn_output_capture: TurnOutputCapture,
     agent_display_name: String,
 }
 
@@ -55,6 +69,7 @@ impl ReplyTool {
         conversation_logger: ConversationLogger,
         channel_id: ChannelId,
         replied_flag: RepliedFlag,
+        turn_output_capture: TurnOutputCapture,
         agent_display_name: impl Into<String>,
     ) -> Self {
         Self {
@@ -63,6 +78,7 @@ impl ReplyTool {
             conversation_logger,
             channel_id,
             replied_flag,
+            turn_output_capture,
             agent_display_name: agent_display_name.into(),
         }
     }
@@ -451,6 +467,7 @@ impl Tool for ReplyTool {
             &converted_content,
             Some(&self.agent_display_name),
         );
+        *self.turn_output_capture.write().await = Some(converted_content.clone());
 
         // Mark the turn as handled so handle_agent_result skips the fallback send.
         self.replied_flag.store(true, Ordering::Relaxed);

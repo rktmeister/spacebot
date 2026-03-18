@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use tokio::sync::broadcast;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, mpsc, watch};
 
 /// Shared cache of in-flight worker transcript steps, keyed by worker ID.
 pub type LiveWorkerTranscripts =
@@ -54,6 +54,30 @@ struct PendingResult {
     result: String,
     /// Whether the process completed successfully.
     success: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum CronTurnFinalization {
+    #[default]
+    Pending,
+    Ready {
+        output: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CronAsyncState {
+    active_branches: usize,
+    active_workers: usize,
+    pending_results: usize,
+    pending_retrigger: bool,
+}
+
+fn cron_can_finalize(state: CronAsyncState) -> bool {
+    state.active_branches == 0
+        && state.active_workers == 0
+        && state.pending_results == 0
+        && !state.pending_retrigger
 }
 
 const EVENT_LAG_WARNING_INTERVAL_SECS: u64 = 30;
@@ -453,6 +477,8 @@ pub struct Channel {
     listen_only_session_override: Option<bool>,
     /// Handle exposed to the supervision control plane.
     control_handle: ChannelControlHandle,
+    /// Cron-only terminal delivery signal for schedulers.
+    cron_finalization_tx: watch::Sender<CronTurnFinalization>,
 }
 
 /// RAII guard that records `message_handling_duration_seconds` when dropped,
@@ -511,6 +537,7 @@ impl Channel {
         let channel_store = ChannelStore::new(deps.sqlite_pool.clone());
 
         let compactor = Compactor::new(id.clone(), deps.clone(), history.clone());
+        let (cron_finalization_tx, _) = watch::channel(CronTurnFinalization::Pending);
 
         let state = ChannelState {
             channel_id: id.clone(),
@@ -589,6 +616,7 @@ impl Channel {
             listen_only_mode: resolved_listen_only_mode,
             listen_only_session_override: None,
             control_handle,
+            cron_finalization_tx,
         };
 
         (channel, message_tx)
@@ -741,6 +769,43 @@ impl Channel {
     /// workers and branches without direct access to Channel internals.
     pub fn control_handle(&self) -> ChannelControlHandle {
         self.control_handle.clone()
+    }
+
+    pub(crate) fn cron_finalization_receiver(&self) -> watch::Receiver<CronTurnFinalization> {
+        self.cron_finalization_tx.subscribe()
+    }
+
+    async fn current_cron_async_state(&self) -> CronAsyncState {
+        CronAsyncState {
+            active_branches: self.state.active_branches.read().await.len(),
+            active_workers: self.state.worker_handles.read().await.len(),
+            pending_results: self.pending_results.len(),
+            pending_retrigger: self.pending_retrigger,
+        }
+    }
+
+    async fn maybe_finalize_cron_turn(
+        &self,
+        turn_output_capture: &crate::tools::TurnOutputCapture,
+    ) {
+        if self.current_adapter() != Some("cron") {
+            return;
+        }
+
+        let async_state = self.current_cron_async_state().await;
+        if !cron_can_finalize(async_state) {
+            tracing::debug!(
+                channel_id = %self.id,
+                ?async_state,
+                "cron turn completed but async work is still pending"
+            );
+            return;
+        }
+
+        let output = turn_output_capture.read().await.clone();
+        let _ = self
+            .cron_finalization_tx
+            .send(CronTurnFinalization::Ready { output });
     }
 
     fn rewrite_tool_routed_command_prompt(&self, raw_text: &str) -> Option<String> {
@@ -1457,7 +1522,7 @@ impl Channel {
         }
 
         // Run agent turn with any image/audio attachments preserved
-        let (result, skip_flag, replied_flag, _) = self
+        let (result, skip_flag, replied_flag, turn_output_capture, _) = self
             .run_agent_turn(
                 &combined_text,
                 &system_prompt,
@@ -1468,8 +1533,14 @@ impl Channel {
             )
             .await?;
 
-        self.handle_agent_result(result, &skip_flag, &replied_flag, false)
-            .await;
+        self.handle_agent_result(
+            result,
+            &skip_flag,
+            &replied_flag,
+            &turn_output_capture,
+            false,
+        )
+        .await;
         // Check compaction
         if let Err(error) = self.compactor.check_and_compact().await {
             tracing::warn!(channel_id = %self.id, %error, "compaction check failed");
@@ -1784,8 +1855,8 @@ impl Channel {
             .adapter
             .as_deref()
             .or_else(|| self.current_adapter());
-        let (result, skip_flag, replied_flag, retrigger_reply_preserved) = self
-            .run_agent_turn(
+        let (result, skip_flag, replied_flag, turn_output_capture, retrigger_reply_preserved) =
+            self.run_agent_turn(
                 &user_text,
                 &system_prompt,
                 &message.conversation_id,
@@ -1795,8 +1866,14 @@ impl Channel {
             )
             .await?;
 
-        self.handle_agent_result(result, &skip_flag, &replied_flag, is_retrigger)
-            .await;
+        self.handle_agent_result(
+            result,
+            &skip_flag,
+            &replied_flag,
+            &turn_output_capture,
+            is_retrigger,
+        )
+        .await;
 
         // Safety-net: in quiet mode, explicit mention/reply should never be dropped silently.
         if should_send_quiet_mode_fallback(
@@ -2222,10 +2299,12 @@ impl Channel {
         std::result::Result<String, rig::completion::PromptError>,
         crate::tools::SkipFlag,
         crate::tools::RepliedFlag,
+        crate::tools::TurnOutputCapture,
         bool,
     )> {
         let skip_flag = crate::tools::new_skip_flag();
         let replied_flag = crate::tools::new_replied_flag();
+        let turn_output_capture = crate::tools::new_turn_output_capture();
         let allow_direct_reply = !self.suppress_plaintext_fallback();
 
         // Set the originating channel on the delegation tool so task completion
@@ -2256,6 +2335,7 @@ impl Channel {
             conversation_id,
             skip_flag.clone(),
             replied_flag.clone(),
+            turn_output_capture.clone(),
             self.deps.cron_tool.clone(),
             send_agent_message_tool,
             allow_direct_reply,
@@ -2382,11 +2462,17 @@ impl Channel {
             tracing::warn!(%error, "failed to remove channel tools");
         }
 
-        Ok((result, skip_flag, replied_flag, retrigger_reply_preserved))
+        Ok((
+            result,
+            skip_flag,
+            replied_flag,
+            turn_output_capture,
+            retrigger_reply_preserved,
+        ))
     }
 
     /// Send outbound text and record send metrics.
-    async fn send_outbound_text(&self, text: String, error_context: &str) {
+    async fn send_outbound_text(&self, text: String, error_context: &str) -> bool {
         match self.send_routed(OutboundResponse::Text(text)).await {
             Ok(()) => {
                 #[cfg(feature = "metrics")]
@@ -2397,6 +2483,7 @@ impl Channel {
                         .with_label_values(&[&self.deps.agent_id, channel_type])
                         .inc();
                 }
+                true
             }
             Err(error) => {
                 #[cfg(feature = "metrics")]
@@ -2408,6 +2495,7 @@ impl Channel {
                         .inc();
                 }
                 tracing::error!(%error, channel_id = %self.id, "{error_context}");
+                false
             }
         }
     }
@@ -2424,6 +2512,7 @@ impl Channel {
         result: std::result::Result<String, rig::completion::PromptError>,
         skip_flag: &crate::tools::SkipFlag,
         replied_flag: &crate::tools::RepliedFlag,
+        turn_output_capture: &crate::tools::TurnOutputCapture,
         is_retrigger: bool,
     ) {
         #[cfg(feature = "metrics")]
@@ -2487,11 +2576,15 @@ impl Channel {
                                 self.state
                                     .conversation_logger
                                     .log_bot_message(&self.state.channel_id, &final_text);
-                                self.send_outbound_text(
-                                    final_text,
-                                    "failed to send retrigger fallback reply",
-                                )
-                                .await;
+                                if self
+                                    .send_outbound_text(
+                                        final_text.clone(),
+                                        "failed to send retrigger fallback reply",
+                                    )
+                                    .await
+                                {
+                                    *turn_output_capture.write().await = Some(final_text);
+                                }
                             }
                         }
                     } else {
@@ -2552,11 +2645,15 @@ impl Channel {
                                 self.state
                                     .conversation_logger
                                     .log_bot_message(&self.state.channel_id, &final_text);
-                                self.send_outbound_text(
-                                    final_text,
-                                    "failed to send retrigger fallback reply",
-                                )
-                                .await;
+                                if self
+                                    .send_outbound_text(
+                                        final_text.clone(),
+                                        "failed to send retrigger fallback reply",
+                                    )
+                                    .await
+                                {
+                                    *turn_output_capture.write().await = Some(final_text);
+                                }
                             }
                         }
                     } else {
@@ -2608,8 +2705,15 @@ impl Channel {
                                 &final_text,
                                 Some(self.agent_display_name()),
                             );
-                            self.send_outbound_text(final_text, "failed to send fallback reply")
-                                .await;
+                            if self
+                                .send_outbound_text(
+                                    final_text.clone(),
+                                    "failed to send fallback reply",
+                                )
+                                .await
+                            {
+                                *turn_output_capture.write().await = Some(final_text);
+                            }
                         }
                     }
 
@@ -2646,9 +2750,13 @@ impl Channel {
                     .inc();
                 // Send error to user so they know something went wrong
                 let error_msg = format!("I encountered an error: {}", error);
-                self.send_routed(OutboundResponse::Text(error_msg))
+                if self
+                    .send_routed(OutboundResponse::Text(error_msg.clone()))
                     .await
-                    .ok();
+                    .is_ok()
+                {
+                    *turn_output_capture.write().await = Some(error_msg);
+                }
                 tracing::error!(channel_id = %self.id, %error, "channel LLM call failed");
             }
         }
@@ -2657,6 +2765,8 @@ impl Channel {
         self.send_routed(OutboundResponse::Status(crate::StatusUpdate::StopTyping))
             .await
             .ok();
+
+        self.maybe_finalize_cron_turn(turn_output_capture).await;
     }
 
     /// Handle a process event (branch results, worker completions, status updates).
@@ -3534,6 +3644,48 @@ mod tests {
         };
 
         assert!(!should_process_event_for_channel(&event, &channel_id));
+    }
+
+    #[test]
+    fn cron_turn_can_finalize_when_async_state_is_quiescent() {
+        assert!(cron_can_finalize(CronAsyncState {
+            active_branches: 0,
+            active_workers: 0,
+            pending_results: 0,
+            pending_retrigger: false,
+        }));
+    }
+
+    #[test]
+    fn cron_turn_cannot_finalize_with_active_async_work() {
+        assert!(!cron_can_finalize(CronAsyncState {
+            active_branches: 1,
+            active_workers: 0,
+            pending_results: 0,
+            pending_retrigger: false,
+        }));
+        assert!(!cron_can_finalize(CronAsyncState {
+            active_branches: 0,
+            active_workers: 1,
+            pending_results: 0,
+            pending_retrigger: false,
+        }));
+    }
+
+    #[test]
+    fn cron_turn_cannot_finalize_with_pending_retrigger_or_results() {
+        assert!(!cron_can_finalize(CronAsyncState {
+            active_branches: 0,
+            active_workers: 0,
+            pending_results: 1,
+            pending_retrigger: false,
+        }));
+        assert!(!cron_can_finalize(CronAsyncState {
+            active_branches: 0,
+            active_workers: 0,
+            pending_results: 0,
+            pending_retrigger: true,
+        }));
     }
 
     #[test]

@@ -116,7 +116,10 @@ pub use project_manage::{
 };
 pub use react::{ReactArgs, ReactError, ReactOutput, ReactTool};
 pub use read_skill::{ReadSkillArgs, ReadSkillError, ReadSkillOutput, ReadSkillTool};
-pub use reply::{RepliedFlag, ReplyArgs, ReplyError, ReplyOutput, ReplyTool, new_replied_flag};
+pub use reply::{
+    RepliedFlag, ReplyArgs, ReplyError, ReplyOutput, ReplyTool, TurnOutputCapture,
+    new_replied_flag, new_turn_output_capture,
+};
 pub use route::{RouteArgs, RouteError, RouteOutput, RouteTool};
 pub use secret_set::{SecretSetArgs, SecretSetError, SecretSetOutput, SecretSetTool};
 pub use send_agent_message::{
@@ -352,6 +355,7 @@ pub async fn add_channel_tools(
     conversation_id: impl Into<String>,
     skip_flag: SkipFlag,
     replied_flag: RepliedFlag,
+    turn_output_capture: TurnOutputCapture,
     cron_tool: Option<CronTool>,
     send_agent_message_tool: Option<SendAgentMessageTool>,
     allow_direct_reply: bool,
@@ -374,6 +378,7 @@ pub async fn add_channel_tools(
                 state.conversation_logger.clone(),
                 state.channel_id.clone(),
                 replied_flag.clone(),
+                turn_output_capture,
                 agent_display_name,
             ))
             .await?;
