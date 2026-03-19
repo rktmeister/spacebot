@@ -2545,6 +2545,18 @@ async fn initialize_agents(
             embedding_model.clone(),
         ));
 
+        // Working memory event log (temporal situational awareness).
+        let working_memory_timezone = {
+            let user_tz = agent_config.user_timezone.as_deref();
+            let cron_tz = agent_config.cron_timezone.as_deref();
+            user_tz
+                .or(cron_tz)
+                .and_then(|tz_name| tz_name.parse::<chrono_tz::Tz>().ok())
+                .unwrap_or(chrono_tz::Tz::UTC)
+        };
+        let working_memory =
+            spacebot::memory::WorkingMemoryStore::new(db.sqlite.clone(), working_memory_timezone);
+
         // Per-agent control and memory event buses (broadcast fan-out).
         let (event_tx, memory_event_tx) = spacebot::create_process_event_buses();
 
@@ -2650,6 +2662,7 @@ async fn initialize_agents(
                 spacebot::agent::process_control::ProcessControlRegistry::new(),
             ),
             injection_tx: injection_tx.clone(),
+            working_memory,
         };
 
         let agent = spacebot::Agent {
@@ -2698,6 +2711,19 @@ async fn initialize_agents(
     }
 
     tracing::info!(agent_count = agents.len(), "all agents initialized");
+
+    // Record startup in each agent's working memory.
+    for agent in agents.values() {
+        agent
+            .deps
+            .working_memory
+            .emit(
+                spacebot::memory::WorkingMemoryEventType::System,
+                format!("Agent started ({})", agent.config.id),
+            )
+            .importance(0.3)
+            .record();
+    }
 
     // Wire agent event streams, DB pools, and config summaries into the API server
     {
