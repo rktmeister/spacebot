@@ -260,6 +260,20 @@ Each task card shows:
 - Worker status — if in_progress, shows live worker status
 - Metadata badges — GitHub issue/PR links rendered as small icons
 
+Recommended metadata shape for GitHub linkage:
+
+```json
+{
+  "github_issue": {
+    "repo": "spacedriveapp/spacebot",
+    "number": 123,
+    "url": "https://github.com/spacedriveapp/spacebot/issues/123"
+  }
+}
+```
+
+Task metadata updates should deep-merge nested objects so agents and workers can add fields like `url`, `labels`, or `state` later without replacing the rest of the stored GitHub reference.
+
 Clicking a card opens a detail panel (slide-out or modal) with:
 
 - Full description (markdown rendered)
