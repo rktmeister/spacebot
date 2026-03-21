@@ -1826,7 +1826,9 @@ fn should_insert_list_break(output: &str, slice: &str) -> bool {
     matches!(
         previous_character,
         ')' | ']' | '*' | '`' | ':' | ';' | '.' | '!' | '?'
-    ) || (is_token_ending_character(previous_character) && unordered_marker_has_explicit_gap(slice))
+    ) || (is_token_ending_character(previous_character)
+        && unordered_marker_has_explicit_gap(slice)
+        && !should_suppress_unordered_list_break(output, slice))
 }
 
 fn unordered_marker_has_explicit_gap(text: &str) -> bool {
@@ -1842,6 +1844,29 @@ fn unordered_marker_has_explicit_gap(text: &str) -> bool {
     };
 
     rest.chars().next().is_some_and(char::is_whitespace)
+}
+
+fn should_suppress_unordered_list_break(output: &str, slice: &str) -> bool {
+    slice.trim_start_matches([' ', '\t']).starts_with('-')
+        && line_has_unclosed_parenthetical_context(output)
+}
+
+fn line_has_unclosed_parenthetical_context(text: &str) -> bool {
+    let line = text.rsplit('\n').next().unwrap_or(text);
+    let mut parenthesis_depth = 0usize;
+    let mut bracket_depth = 0usize;
+
+    for character in line.chars() {
+        match character {
+            '(' => parenthesis_depth += 1,
+            ')' => parenthesis_depth = parenthesis_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    parenthesis_depth > 0 || bracket_depth > 0
 }
 
 fn normalize_list_item_tail_boundaries(text: &str) -> String {
@@ -3961,6 +3986,13 @@ mod tests {
     fn production_briefing_preserves_mixed_alphanumeric_brand_names() {
         let input = "Already past deadline (March 18-19). Finalize recruitment materials and Bot4Teams proposals.";
         assert_eq!(normalize_telegram_markdown(input), input);
+    }
+
+    #[test]
+    fn preserves_parenthetical_appositives_inside_list_items() {
+        let input = "- Alex Example (Partner Team - Strategy Lead, Operations Lab)";
+        let expected = "• Alex Example (Partner Team - Strategy Lead, Operations Lab)";
+        assert_eq!(markdown_to_telegram_html(input), expected);
     }
 
     #[test]
