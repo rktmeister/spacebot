@@ -1341,6 +1341,10 @@ fn is_block_heading_candidate(
         return false;
     }
 
+    if !trimmed.ends_with(':') && looks_like_inline_date_phrase(trimmed) {
+        return false;
+    }
+
     if ends_with_ordered_list_marker(prefix) {
         return false;
     }
@@ -1679,6 +1683,9 @@ fn should_insert_space_between_word_and_number(
     }
 
     let next_slice = &line[boundary_index + character.len_utf8()..];
+    if has_uppercase_ascii_alpha_after_digit_run(next_slice) {
+        return false;
+    }
 
     if word.len() < 2 {
         return word.eq_ignore_ascii_case("a")
@@ -1690,6 +1697,14 @@ fn should_insert_space_between_word_and_number(
     }
 
     true
+}
+
+fn has_uppercase_ascii_alpha_after_digit_run(text: &str) -> bool {
+    let after_digits = text.trim_start_matches(|character: char| character.is_ascii_digit());
+    after_digits
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_uppercase())
 }
 
 fn count_ascii_digits_backward(text: &str, end: usize) -> usize {
@@ -1779,6 +1794,10 @@ fn should_insert_space_before_sentence_starter(output: &str, slice: &str) -> boo
         return false;
     }
 
+    if trailing_token_has_ascii_alpha_before_trailing_digits(output) {
+        return false;
+    }
+
     matches!(
         previous_non_whitespace_char(output),
         Some(character)
@@ -1800,7 +1819,8 @@ fn should_insert_list_break(output: &str, slice: &str) -> bool {
         return matches!(
             previous_character,
             ')' | ']' | '*' | '`' | ':' | ';' | '.' | '!' | '?'
-        );
+        ) || (is_token_ending_character(previous_character)
+            && current_block_contains_ordered_list_item(output));
     }
 
     matches!(
@@ -1893,6 +1913,12 @@ fn normalize_single_list_item_line(line: &str) -> String {
                     normalized.push(' ');
                 }
             }
+            ListTailBoundaryAction::InsertLineBreak => {
+                trim_trailing_horizontal_whitespace(&mut normalized);
+                if !normalized.ends_with('\n') {
+                    normalized.push('\n');
+                }
+            }
             ListTailBoundaryAction::InsertParagraphBreak => {
                 trim_trailing_horizontal_whitespace(&mut normalized);
                 normalized.push_str("\n\n");
@@ -1917,6 +1943,7 @@ fn normalize_single_list_item_line(line: &str) -> String {
 enum ListTailBoundaryAction {
     None,
     InsertSpace,
+    InsertLineBreak,
     InsertParagraphBreak,
 }
 
@@ -1942,11 +1969,18 @@ fn classify_list_tail_boundary(output: &str, slice: &str) -> ListTailBoundaryAct
 
     let has_body_text = list_item_has_body_text(output);
 
+    if has_body_text && starts_ordered_list_continuation(output, slice) {
+        return ListTailBoundaryAction::InsertLineBreak;
+    }
+
     if has_body_text && starts_emphasized_heading_with_external_colon(slice) {
         return ListTailBoundaryAction::InsertParagraphBreak;
     }
 
     if has_body_text && starts_clear_sentence_after_list_tail(output, slice) {
+        if list_item_tail_prefers_line_break_before_sentence(output) {
+            return ListTailBoundaryAction::InsertLineBreak;
+        }
         return ListTailBoundaryAction::InsertParagraphBreak;
     }
 
@@ -1954,24 +1988,7 @@ fn classify_list_tail_boundary(output: &str, slice: &str) -> ListTailBoundaryAct
         return ListTailBoundaryAction::InsertSpace;
     }
 
-    if !output.contains('—') {
-        return ListTailBoundaryAction::None;
-    }
-
-    let Some(word_len) = leading_titlecase_word_len(slice) else {
-        return ListTailBoundaryAction::None;
-    };
-    let rest = &slice[word_len..];
-    if !rest.starts_with(' ') {
-        return ListTailBoundaryAction::None;
-    }
-
-    rest.trim_start()
-        .chars()
-        .next()
-        .filter(|character| character.is_ascii_digit())
-        .map(|_| ListTailBoundaryAction::InsertParagraphBreak)
-        .unwrap_or(ListTailBoundaryAction::None)
+    ListTailBoundaryAction::None
 }
 
 fn list_item_has_body_text(output: &str) -> bool {
@@ -2051,6 +2068,33 @@ fn starts_relative_clause_after_list_tail(output: &str, slice: &str) -> bool {
         .is_some_and(|word| word.chars().all(|character| character.is_ascii_lowercase()))
 }
 
+fn list_item_tail_prefers_line_break_before_sentence(output: &str) -> bool {
+    let trimmed_output = output.trim_start_matches([' ', '\t']);
+    starts_list_item_line(trimmed_output) && output.contains("**") && output.contains('—')
+}
+
+fn starts_ordered_list_continuation(output: &str, slice: &str) -> bool {
+    let trimmed_output = output.trim_start_matches([' ', '\t']);
+    if ordered_list_marker_len(trimmed_output).is_none() {
+        return false;
+    }
+
+    let trimmed_slice = slice.trim_start_matches([' ', '\t']);
+    ordered_list_marker_len(trimmed_slice).is_some_and(|marker_len| {
+        trimmed_slice[marker_len..]
+            .chars()
+            .next()
+            .is_some_and(|character| {
+                character.is_whitespace()
+                    || character == '*'
+                    || character == '_'
+                    || character == '`'
+                    || character == '#'
+                    || character.is_ascii_alphabetic()
+            })
+    })
+}
+
 fn starts_clear_sentence_starter(text: &str) -> bool {
     const STARTERS: &[&str] = &[
         "The", "This", "That", "These", "Those", "Both", "Another", "Then", "There", "Here", "But",
@@ -2077,7 +2121,7 @@ fn starts_relative_clause_starter(text: &str) -> bool {
     })
 }
 
-fn trailing_ascii_alpha_token(text: &str) -> Option<&str> {
+fn trailing_non_whitespace_token(text: &str) -> Option<&str> {
     let end = text.char_indices().rev().find_map(|(index, character)| {
         (!character.is_whitespace()).then_some(index + character.len_utf8())
     })?;
@@ -2086,15 +2130,59 @@ fn trailing_ascii_alpha_token(text: &str) -> Option<&str> {
         .char_indices()
         .rev()
         .find_map(|(index, character)| {
-            (!character.is_ascii_alphabetic()).then_some(index + character.len_utf8())
+            character
+                .is_whitespace()
+                .then_some(index + character.len_utf8())
         })
         .unwrap_or(0);
 
-    let token = &text[start..end];
-    token
+    Some(&text[start..end])
+}
+
+fn trailing_token_has_ascii_alpha_before_trailing_digits(text: &str) -> bool {
+    let Some(token) = trailing_non_whitespace_token(text) else {
+        return false;
+    };
+    if !token
         .chars()
-        .all(|character| character.is_ascii_alphabetic())
-        .then_some(token)
+        .all(|character| character.is_ascii_alphanumeric())
+    {
+        return false;
+    }
+
+    let trailing_digit_bytes = token
+        .chars()
+        .rev()
+        .take_while(|character| character.is_ascii_digit())
+        .map(char::len_utf8)
+        .sum::<usize>();
+    if trailing_digit_bytes == 0 || trailing_digit_bytes == token.len() {
+        return false;
+    }
+
+    token[..token.len() - trailing_digit_bytes]
+        .chars()
+        .any(|character| character.is_ascii_alphabetic())
+}
+
+fn trailing_ascii_alpha_token(text: &str) -> Option<&str> {
+    let token = trailing_non_whitespace_token(text)?;
+    (!token.is_empty()
+        && token
+            .chars()
+            .all(|character| character.is_ascii_alphabetic()))
+    .then_some(token)
+}
+
+fn current_block_contains_ordered_list_item(text: &str) -> bool {
+    let block = text
+        .trim_end_matches('\n')
+        .rsplit("\n\n")
+        .next()
+        .unwrap_or(text);
+    block
+        .lines()
+        .any(|line| ordered_list_marker_len(line.trim_start_matches([' ', '\t'])).is_some())
 }
 
 fn insert_section_break_if_needed(text: &mut String) {
@@ -2117,6 +2205,57 @@ fn insert_list_break_if_needed(text: &mut String) {
         Some(':' | ';' | '.' | '!' | '?') => text.push_str("\n\n"),
         _ => text.push('\n'),
     }
+}
+
+fn looks_like_inline_date_phrase(text: &str) -> bool {
+    const DATE_WORDS: &[&str] = &[
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ];
+
+    let trimmed = text.trim();
+    trimmed.chars().any(|character| character.is_ascii_digit())
+        && DATE_WORDS.iter().any(|word| {
+            trimmed == *word
+                || trimmed.strip_prefix(word).is_some_and(|rest| {
+                    rest.starts_with(' ') || rest.starts_with(',') || rest.starts_with('-')
+                })
+        })
+}
+
+fn is_single_word_colon_label(text: &str) -> bool {
+    let line = text
+        .trim_end_matches('\n')
+        .rsplit('\n')
+        .next()
+        .unwrap_or(text)
+        .trim();
+    let Some(label) = line.strip_suffix(':').map(str::trim) else {
+        return false;
+    };
+
+    !label.is_empty()
+        && label.split_whitespace().count() == 1
+        && label
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
 }
 
 fn trim_trailing_horizontal_whitespace(text: &mut String) {
@@ -2375,6 +2514,7 @@ struct TelegramEntityRenderer {
     list_item_depth: usize,
     blockquote_depth: usize,
     table_state: Option<TableState>,
+    last_closed_paragraph_is_single_word_label: bool,
 }
 
 impl TelegramEntityRenderer {
@@ -2388,6 +2528,7 @@ impl TelegramEntityRenderer {
             list_item_depth: 0,
             blockquote_depth: 0,
             table_state: None,
+            last_closed_paragraph_is_single_word_label: false,
         }
     }
 
@@ -2479,14 +2620,19 @@ impl TelegramEntityRenderer {
 
         match tag {
             Tag::Paragraph if !self.in_list_item() && self.blockquote_depth == 0 => {
+                self.last_closed_paragraph_is_single_word_label = false;
                 self.ensure_blank_line();
             }
-            Tag::Paragraph => {}
+            Tag::Paragraph => {
+                self.last_closed_paragraph_is_single_word_label = false;
+            }
             Tag::Heading(..) => {
+                self.last_closed_paragraph_is_single_word_label = false;
                 self.ensure_blank_line();
                 self.open_entity(MessageEntityKind::Bold);
             }
             Tag::BlockQuote => {
+                self.last_closed_paragraph_is_single_word_label = false;
                 if self.output.ends_with('\n') && self.output.trim_end_matches('\n').ends_with(':')
                 {
                     self.trim_trailing_newlines_to(1);
@@ -2497,6 +2643,7 @@ impl TelegramEntityRenderer {
                 self.open_entity(MessageEntityKind::Blockquote);
             }
             Tag::CodeBlock(kind) => {
+                self.last_closed_paragraph_is_single_word_label = false;
                 if self.in_list_item() {
                     self.ensure_line_break();
                 } else {
@@ -2507,11 +2654,14 @@ impl TelegramEntityRenderer {
                 });
             }
             Tag::List(start) => {
-                if self.in_list_item() {
+                if self.last_closed_paragraph_is_single_word_label {
+                    self.trim_trailing_newlines_to(1);
+                } else if self.in_list_item() {
                     self.ensure_line_break();
                 } else {
                     self.ensure_blank_line();
                 }
+                self.last_closed_paragraph_is_single_word_label = false;
 
                 let list = match start {
                     Some(next_index) => ListContext::Ordered {
@@ -2558,22 +2708,31 @@ impl TelegramEntityRenderer {
         }
 
         match tag {
-            Tag::Paragraph => self.close_block(),
+            Tag::Paragraph => {
+                let paragraph_is_single_word_label =
+                    !self.in_list_item() && is_single_word_colon_label(&self.output);
+                self.close_block();
+                self.last_closed_paragraph_is_single_word_label = paragraph_is_single_word_label;
+            }
             Tag::Heading(..) => {
+                self.last_closed_paragraph_is_single_word_label = false;
                 self.close_entity();
                 self.ensure_blank_line();
             }
             Tag::BlockQuote => {
+                self.last_closed_paragraph_is_single_word_label = false;
                 self.trim_trailing_newlines_to(0);
                 self.close_entity();
                 self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
                 self.ensure_blank_line();
             }
             Tag::CodeBlock(_) => {
+                self.last_closed_paragraph_is_single_word_label = false;
                 self.close_entity();
                 self.close_block();
             }
             Tag::List(_) => {
+                self.last_closed_paragraph_is_single_word_label = false;
                 self.trim_trailing_newlines_to(if self.in_list_item() { 1 } else { 0 });
                 self.list_stack.pop();
                 if !self.in_list_item() {
@@ -2581,6 +2740,7 @@ impl TelegramEntityRenderer {
                 }
             }
             Tag::Item => {
+                self.last_closed_paragraph_is_single_word_label = false;
                 self.trim_trailing_newlines_to(0);
                 self.push_text("\n");
                 self.list_item_depth = self.list_item_depth.saturating_sub(1);
@@ -3777,6 +3937,30 @@ mod tests {
         let input = "**Content:**> Line one\n> Line two";
         let expected = "<b>Content:</b>\n<blockquote>Line one\nLine two</blockquote>";
         assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn production_briefing_dates_stay_inline_after_dash_context() {
+        let input = "- **Vendor Invoice Follow-up** — Finance retriggered PO notification on March 18. You need to:";
+        assert_eq!(normalize_telegram_markdown(input), input);
+    }
+
+    #[test]
+    fn production_briefing_parenthesized_deadlines_stay_inline() {
+        let input = "- **Conference Planning 2026** — Event: May 5-7, 2026, Las Vegas. Booking deadline: **April 6, 2026** (Hotel One, Hotel Two, Hotel Three, or Hotel Four).";
+        assert_eq!(normalize_telegram_markdown(input), input);
+    }
+
+    #[test]
+    fn production_briefing_preserves_quoted_titles_without_leading_space() {
+        let input = "- March 24, 2026, 11:00 AM EST — Community Session: \"Finding the Right Community for Your Next Step\"";
+        assert_eq!(normalize_telegram_markdown(input), input);
+    }
+
+    #[test]
+    fn production_briefing_preserves_mixed_alphanumeric_brand_names() {
+        let input = "Already past deadline (March 18-19). Finalize recruitment materials and Bot4Teams proposals.";
+        assert_eq!(normalize_telegram_markdown(input), input);
     }
 
     #[test]
