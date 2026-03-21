@@ -2235,10 +2235,11 @@ struct EmailReplyContext {
 #[cfg(test)]
 mod tests {
     use super::{
-        EmailPollConfig, EmailSearchHit, EmailSearchQuery, build_imap_search_criterion,
-        derive_thread_key, extract_message_ids, extract_text_and_attachments, is_local_mail_host,
-        normalize_email_target, normalize_reply_subject, normalize_search_folders,
-        parse_inbound_email, parse_primary_mailbox, sort_and_limit_search_hits,
+        EmailAdapter, EmailPollConfig, EmailSearchHit, EmailSearchQuery,
+        build_imap_search_criterion, derive_thread_key, extract_message_ids,
+        extract_text_and_attachments, is_local_mail_host, normalize_email_target,
+        normalize_reply_subject, normalize_search_folders, parse_inbound_email,
+        parse_primary_mailbox, sort_and_limit_search_hits,
     };
     use crate::config::EmailConfig;
     use crate::messaging::traits::Messaging as _;

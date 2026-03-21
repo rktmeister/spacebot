@@ -15,7 +15,8 @@ pub(crate) use load::resolve_env_value;
 pub use load::set_resolve_secrets_store;
 pub use onboarding::run_onboarding;
 pub use permissions::{
-    DiscordPermissions, SignalPermissions, SlackPermissions, TelegramPermissions, TwitchPermissions,
+    DiscordPermissions, MattermostPermissions, SignalPermissions, SlackPermissions,
+    TelegramPermissions, TwitchPermissions,
 };
 pub(crate) use providers::default_provider_config;
 pub use runtime::RuntimeConfig;
@@ -576,6 +577,7 @@ bind = "127.0.0.1"
             guild_id: None,
             workspace_id: workspace_id.map(String::from),
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users,
@@ -1212,7 +1214,8 @@ maintenance_merge_similarity_threshold = 1.1
     }
 
     #[test]
-    fn test_work_readiness_rejects_stale_bulletin() {
+    fn test_work_readiness_allows_old_synthesis() {
+        // Knowledge synthesis is change-driven — staleness no longer blocks readiness.
         let readiness = evaluate_work_readiness(
             WarmupConfig {
                 refresh_secs: 60,
@@ -1228,10 +1231,9 @@ maintenance_merge_similarity_threshold = 1.1
             122_000,
         );
 
-        assert_eq!(readiness.stale_after_secs, 120);
         assert_eq!(readiness.bulletin_age_secs, Some(121));
-        assert!(!readiness.ready);
-        assert_eq!(readiness.reason, Some(WorkReadinessReason::BulletinStale));
+        assert!(readiness.ready, "old synthesis should not block readiness");
+        assert_eq!(readiness.reason, None);
     }
 
     #[test]
@@ -1432,6 +1434,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],
@@ -1448,6 +1451,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],
@@ -1479,6 +1483,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],
@@ -1496,6 +1501,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],
@@ -1513,6 +1519,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],
@@ -1530,6 +1537,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],
@@ -1547,6 +1555,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],
@@ -1575,6 +1584,7 @@ maintenance_merge_similarity_threshold = 1.1
             webhook: None,
             twitch: None,
             signal: None,
+            mattermost: None,
         };
         let bindings = vec![
             Binding {
@@ -1584,7 +1594,7 @@ maintenance_merge_similarity_threshold = 1.1
                 guild_id: None,
                 workspace_id: None,
                 chat_id: None,
-
+                team_id: None,
                 channel_ids: vec![],
                 require_mention: false,
                 dm_allowed_users: vec![],
@@ -1596,7 +1606,7 @@ maintenance_merge_similarity_threshold = 1.1
                 guild_id: None,
                 workspace_id: None,
                 chat_id: None,
-
+                team_id: None,
                 channel_ids: vec![],
                 require_mention: false,
                 dm_allowed_users: vec![],
@@ -1620,6 +1630,7 @@ maintenance_merge_similarity_threshold = 1.1
             webhook: None,
             twitch: None,
             signal: None,
+            mattermost: None,
         };
         let bindings = vec![Binding {
             agent_id: "main".into(),
@@ -1628,6 +1639,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],
@@ -1684,6 +1696,7 @@ maintenance_merge_similarity_threshold = 1.1
             webhook: None,
             twitch: None,
             signal: None,
+            mattermost: None,
         };
         let bindings = vec![Binding {
             agent_id: "main".into(),
@@ -1692,6 +1705,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],
@@ -1730,6 +1744,7 @@ maintenance_merge_similarity_threshold = 1.1
             webhook: None,
             twitch: None,
             signal: None,
+            mattermost: None,
         };
         let bindings = vec![Binding {
             agent_id: "main".into(),
@@ -1738,6 +1753,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],
@@ -1766,6 +1782,7 @@ maintenance_merge_similarity_threshold = 1.1
             webhook: None,
             twitch: None,
             signal: None,
+            mattermost: None,
         };
         // Binding targets default adapter, but no default credentials exist
         let bindings = vec![Binding {
@@ -1775,6 +1792,7 @@ maintenance_merge_similarity_threshold = 1.1
             guild_id: None,
             workspace_id: None,
             chat_id: None,
+            team_id: None,
             channel_ids: vec![],
             require_mention: false,
             dm_allowed_users: vec![],

@@ -129,6 +129,10 @@ async fn bootstrap_deps() -> anyhow::Result<(spacebot::AgentDeps, spacebot::conf
             spacebot::agent::process_control::ProcessControlRegistry::new(),
         ),
         injection_tx: tokio::sync::mpsc::channel(1).0,
+        working_memory: spacebot::memory::WorkingMemoryStore::new(
+            db.sqlite.clone(),
+            chrono_tz::Tz::UTC,
+        ),
     };
 
     Ok((deps, config))
@@ -254,6 +258,7 @@ async fn dump_channel_context() {
     let tool_server = rig::tool::server::ToolServer::new().run();
     let skip_flag = spacebot::tools::new_skip_flag();
     let replied_flag = spacebot::tools::new_replied_flag();
+    let turn_output_capture = spacebot::tools::new_turn_output_capture();
     spacebot::tools::add_channel_tools(
         &tool_server,
         state,
@@ -261,6 +266,7 @@ async fn dump_channel_context() {
         "test-conversation",
         skip_flag,
         replied_flag,
+        turn_output_capture,
         None,
         None,
         true,
@@ -493,6 +499,7 @@ async fn dump_all_contexts() {
     let channel_tool_server = rig::tool::server::ToolServer::new().run();
     let skip_flag = spacebot::tools::new_skip_flag();
     let replied_flag = spacebot::tools::new_replied_flag();
+    let turn_output_capture = spacebot::tools::new_turn_output_capture();
     spacebot::tools::add_channel_tools(
         &channel_tool_server,
         state,
@@ -500,6 +507,7 @@ async fn dump_all_contexts() {
         "test",
         skip_flag,
         replied_flag,
+        turn_output_capture,
         None,
         None,
         true,
