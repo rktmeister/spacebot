@@ -21,30 +21,51 @@ async function consumeSSE(
 
 	const decoder = new TextDecoder();
 	let buffer = "";
+	let currentEvent = "";
+	let currentData: string[] = [];
+
+	const flushEvent = () => {
+		if (!currentEvent) return;
+		onEvent(currentEvent, currentData.join("\n"));
+		currentEvent = "";
+		currentData = [];
+	};
+
+	const processLine = (rawLine: string) => {
+		const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+		if (line.length === 0) {
+			flushEvent();
+			return;
+		}
+		if (line.startsWith(":")) return;
+		if (line.startsWith("event:")) {
+			currentEvent = line.slice(6).trimStart();
+			return;
+		}
+		if (line.startsWith("data:")) {
+			currentData.push(line.slice(5).trimStart());
+		}
+	};
 
 	while (true) {
 		const { done, value } = await reader.read();
-		if (done) break;
+		buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
 
-		buffer += decoder.decode(value, { stream: true });
-		const lines = buffer.split("\n");
-		buffer = lines.pop() ?? "";
-
-		let currentEvent = "";
-		let currentData = "";
-
-		for (const line of lines) {
-			if (line.startsWith("event: ")) {
-				currentEvent = line.slice(7);
-			} else if (line.startsWith("data: ")) {
-				currentData = line.slice(6);
-			} else if (line === "" && currentEvent) {
-				onEvent(currentEvent, currentData);
-				currentEvent = "";
-				currentData = "";
-			}
+		let newlineIndex = buffer.indexOf("\n");
+		while (newlineIndex !== -1) {
+			const line = buffer.slice(0, newlineIndex);
+			buffer = buffer.slice(newlineIndex + 1);
+			processLine(line);
+			newlineIndex = buffer.indexOf("\n");
 		}
+
+		if (done) break;
 	}
+
+	if (buffer.length > 0) {
+		processLine(buffer);
+	}
+	flushEvent();
 }
 
 function generateThreadId(): string {
@@ -102,65 +123,75 @@ export function useCortexChat(agentId: string, channelId?: string, options?: { f
 				throw new Error(`HTTP ${response.status}`);
 			}
 
-		await consumeSSE(response, (eventType, data) => {
-			if (eventType === "tool_started") {
-				try {
-					const parsed = JSON.parse(data);
-					setToolActivity((prev) => [
-						...prev,
-						{
-							tool: parsed.tool,
-							call_id: parsed.call_id ?? "",
-							args: parsed.args ?? "",
-							status: "running",
-						},
-					]);
-				} catch { /* ignore */ }
-			} else if (eventType === "tool_completed") {
-				try {
-					const parsed = JSON.parse(data);
-					setToolActivity((prev) =>
-						prev.map((t) =>
-							t.call_id === parsed.call_id && t.status === "running"
-								? {
-									...t,
-									status: "done",
-									result: parsed.result,
-									result_preview: parsed.result_preview,
-								}
-								: t,
-						),
-					);
-				} catch { /* ignore */ }
-			} else if (eventType === "done") {
-				try {
-					const parsed = JSON.parse(data);
-					const toolCalls: CortexChatToolCall[] | undefined =
-						Array.isArray(parsed.tool_calls) && parsed.tool_calls.length > 0
-							? parsed.tool_calls
-							: undefined;
-					const assistantMessage: CortexChatMessage = {
-						id: `resp-${Date.now()}`,
-						thread_id: threadId,
-						role: "assistant",
-						content: parsed.full_text,
-						channel_context: channelId ?? null,
-						created_at: new Date().toISOString(),
-						tool_calls: toolCalls,
-					};
-					setMessages((prev) => [...prev, assistantMessage]);
-				} catch {
-					setError("Failed to parse response");
+			await consumeSSE(response, (eventType, data) => {
+				if (eventType === "tool_started") {
+					try {
+						const parsed = JSON.parse(data);
+						setToolActivity((prev) => [
+							...prev,
+							{
+								tool: parsed.tool,
+								call_id: parsed.call_id ?? "",
+								args: parsed.args ?? "",
+								status: "running",
+							},
+						]);
+					} catch { /* ignore */ }
+				} else if (eventType === "tool_completed") {
+					try {
+						const parsed = JSON.parse(data);
+						setToolActivity((prev) =>
+							prev.map((t) =>
+								t.call_id === parsed.call_id && t.status === "running"
+									? {
+										...t,
+										status: "done",
+										result: parsed.result,
+										result_preview: parsed.result_preview,
+									}
+									: t,
+							),
+						);
+					} catch { /* ignore */ }
+				} else if (eventType === "done") {
+					try {
+						const parsed = JSON.parse(data);
+						const toolCalls: CortexChatToolCall[] | undefined =
+							Array.isArray(parsed.tool_calls) && parsed.tool_calls.length > 0
+								? parsed.tool_calls
+								: undefined;
+						const assistantMessage: CortexChatMessage = {
+							id: `resp-${Date.now()}`,
+							thread_id: threadId,
+							role: "assistant",
+							content: parsed.full_text,
+							channel_context: channelId ?? null,
+							created_at: new Date().toISOString(),
+							tool_calls: toolCalls,
+						};
+						setMessages((prev) => [...prev, assistantMessage]);
+					} catch {
+						setError("Failed to parse response");
+					}
+				} else if (eventType === "error") {
+					try {
+						const parsed = JSON.parse(data);
+						setError(parsed.message);
+					} catch {
+						setError("Unknown error");
+					}
 				}
-			} else if (eventType === "error") {
-				try {
-					const parsed = JSON.parse(data);
-					setError(parsed.message);
-				} catch {
-					setError("Unknown error");
-				}
+			});
+
+			// Reconcile with persisted thread state so the UI still lands on the
+			// final assistant message even if the stream parser misses an event.
+			try {
+				const data = await api.cortexChatMessages(agentId, threadId);
+				setThreadId(data.thread_id);
+				setMessages(data.messages);
+			} catch (error) {
+				console.warn("Failed to reconcile cortex chat thread:", error);
 			}
-		});
 		} catch (error) {
 			setError(error instanceof Error ? error.message : "Request failed");
 		} finally {
