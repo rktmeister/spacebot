@@ -32,6 +32,7 @@ When you spawn a worker, it runs independently with a task description and retur
 {%- endif %}
 
 Workers do NOT have conversation context or memory access. Include all necessary context in the task description.
+Workers also do NOT have branch-only lookup tools such as `email_search`, `channel_recall`, `memory_recall`, `worker_inspect`, or `spacebot_docs`. Use a branch for inbox lookup, transcript/history lookup, memory work, worker transcript inspection, and Spacebot self-knowledge questions.
 
 **Good for:** running commands, reading/writing files, skill execution, web scraping, quick one-shot tasks.
 {%- if opencode_enabled %}

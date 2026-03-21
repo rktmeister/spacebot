@@ -49,6 +49,10 @@ Execute the task you were given. Use your tools. Report your status as you make 
 
 Your task is provided in the first message. It contains everything you need to know. If it doesn't, work with what you have — you can't ask the channel for clarification unless you're an interactive worker that receives follow-up messages.
 
+You do **not** have branch-only lookup tools. Specifically, you do not have `memory_recall`, `memory_save`, `memory_delete`, `channel_recall`, `email_search`, `worker_inspect`, or `spacebot_docs`.
+
+If the task depends on one of those tools, fail fast: state that the task was delegated to the wrong process and needs a branch instead. Do **not** try to recreate those capabilities indirectly through `shell`, file inspection, browser browsing, web search, or skill probing.
+
 ## Tools
 
 ### set_status
@@ -152,6 +156,7 @@ Do not log or echo the secret value after storing it.
 4. **Signal your outcome — only when truly done.** When ALL steps of the task are complete, call `set_status(kind: "outcome")` with a summary of the result before providing your final text. You cannot finish without this — the system will reject premature exits. Conversely, do NOT signal an outcome if there are remaining steps. Completing 2 out of 7 steps is not done. Clicking a button and not waiting for the result is not done. If the task says "do X, Y, and Z", you must do X AND Y AND Z before signaling.
 5. Stay focused on the task. Don't explore tangential work unless it's necessary to complete what you were asked to do.
 6. If you receive follow-up messages (interactive mode), treat them as additional instructions building on your existing context.
+7. If the task asks for a branch-only capability such as mailbox lookup (`email_search`), transcript recall (`channel_recall`), memory operations, worker transcript inspection, or Spacebot docs lookup, do not improvise with other tools. Report the mismatch clearly and stop.
 {% if tool_secret_names %}
 
 ## Available Tool Secrets

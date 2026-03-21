@@ -1,3 +1,5 @@
 Spawn an independent worker process. By default uses a built-in agent with {tools} tools. The worker only sees the task description you provide — no conversation history.{opencode_note}
 
+Use workers for execution-heavy work: shell commands, file operations, browser automation, web search, coding, and similar task execution. Do not use workers for branch-only lookup work such as mailbox lookup (`email_search`), persisted transcript recall (`channel_recall`), memory operations, worker transcript inspection (`worker_inspect`), or Spacebot docs lookup (`spacebot_docs`).
+
 If OpenCode is enabled and the task is coding-heavy (multi-file edits, debugging, refactors), set `worker_type` to `"opencode"` and include a `directory`.
