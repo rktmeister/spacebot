@@ -1090,15 +1090,9 @@ impl Channel {
 
     /// Check if this is a DM (direct message) conversation based on conversation_id.
     fn is_dm(&self) -> bool {
-        // Check conversation_id pattern for DM indicators
-        if let Some(ref conv_id) = self.conversation_id {
-            conv_id.contains(":dm:")
-                || conv_id.starts_with("discord:dm:")
-                || conv_id.starts_with("slack:dm:")
-        } else {
-            // If no conversation_id set yet, default to not DM (safer)
-            false
-        }
+        self.conversation_id
+            .as_deref()
+            .map_or(false, is_dm_conversation_id)
     }
 
     /// Update the coalesce deadline based on buffer size and config.
@@ -1763,7 +1757,7 @@ impl Channel {
 
         // Listen-first guardrail:
         // ingest all messages, but only reply when explicitly invoked.
-        if self.listen_only_mode && message.source != "system" {
+        if self.listen_only_mode && message.source != "system" && !self.is_dm() {
             (invoked_by_command, invoked_by_mention, invoked_by_reply) =
                 self.compute_listen_mode_invocation(&message, &raw_text);
 
@@ -3480,12 +3474,25 @@ fn should_send_quiet_mode_fallback(
         )
 }
 
+/// Check if a conversation ID represents a DM (direct message).
+///
+/// Discord and Mattermost embed a `:dm:` segment in the conversation ID.
+/// Slack uses `slack:TEAM:DCHANNEL` where the channel ID starts with `D`.
+fn is_dm_conversation_id(conv_id: &str) -> bool {
+    conv_id.contains(":dm:")
+        || conv_id.starts_with("slack:")
+            && conv_id
+                .rsplit(':')
+                .next()
+                .is_some_and(|last| last.starts_with('D'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        QuietModeFallbackState, compute_listen_mode_invocation, recv_channel_event,
-        should_process_event_for_channel, should_send_discord_quiet_mode_ping_ack,
-        should_send_quiet_mode_fallback,
+        QuietModeFallbackState, compute_listen_mode_invocation, is_dm_conversation_id,
+        recv_channel_event, should_process_event_for_channel,
+        should_send_discord_quiet_mode_ping_ack, should_send_quiet_mode_fallback,
     };
     use crate::memory::MemoryType;
     use crate::{AgentId, ChannelId, InboundMessage, MessageContent, ProcessEvent, ProcessId};
@@ -3757,5 +3764,29 @@ mod tests {
                 replied_flag: false,
             }
         ));
+    }
+
+    #[test]
+    fn is_dm_conversation_id_detects_dm_patterns() {
+        // Slack DMs — channel ID starts with 'D'
+        assert!(is_dm_conversation_id("slack:T07GZRRFRRT:D0AHN0BM8D8"));
+        assert!(is_dm_conversation_id(
+            "slack:adapter:T07GZRRFRRT:D0AHN0BM8D8"
+        ));
+
+        // Discord DMs
+        assert!(is_dm_conversation_id("discord:dm:123456789"));
+
+        // Mattermost DMs
+        assert!(is_dm_conversation_id("mattermost:team1:dm:user1"));
+
+        // Generic :dm: pattern
+        assert!(is_dm_conversation_id("platform:dm:some-id"));
+
+        // Non-DM patterns
+        assert!(!is_dm_conversation_id("slack:T07GZRRFRRT:C12345"));
+        assert!(!is_dm_conversation_id("discord:guild:123:channel:456"));
+        assert!(!is_dm_conversation_id("discord:conversation"));
+        assert!(!is_dm_conversation_id(""));
     }
 }
