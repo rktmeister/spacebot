@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, lazy, Suspense } from "react";
 import { Button } from "@/ui/Button";
 import { Input } from "@/ui/Input";
 import { useServer } from "@/hooks/useServer";
-import { IS_TAURI } from "@/api/client";
+import { IS_TAURI } from "@/platform";
 
 const Orb = lazy(() => import("@/components/Orb"));
 

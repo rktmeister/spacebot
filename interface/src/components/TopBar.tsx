@@ -1,6 +1,7 @@
 import { createContext, useContext, useRef, useCallback, useSyncExternalStore, type ReactNode, type MouseEvent } from "react";
 import { Link } from "@tanstack/react-router";
-import { BASE_PATH, IS_TAURI } from "@/api/client";
+import { BASE_PATH } from "@/api/client";
+import { IS_TAURI, startDragging } from "@/platform";
 
 // ── Context ──────────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ export function TopBar() {
 		const target = e.target as HTMLElement;
 		if (target.closest("a, button, input, select, textarea, [role=button]")) return;
 		e.preventDefault();
-		(window as any).__TAURI_INTERNALS__.invoke("plugin:window|start_dragging");
+		startDragging();
 	}, []);
 
 	return (
