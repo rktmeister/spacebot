@@ -91,6 +91,40 @@ cp "${EMBED_SRC}/vite.config.embed.ts" "${APP_DIR}/vite.config.embed.ts"
 cp "${EMBED_SRC}/index-embed.html"     "${APP_DIR}/index-embed.html"
 
 # ---------------------------------------------------------------------------
+# 2b. Apply compatibility patches for the running OpenCode binary version.
+#     The embed is built from anomalyco/opencode@OPENCODE_COMMIT (1.2.15-based)
+#     but spacebot runs against the latest installed OpenCode binary which may
+#     have a different agent schema (no `mode`/`hidden` fields).
+#
+#     Root cause: when the OpenCode server restarts, the embed re-bootstraps
+#     and calls GET /agent. If the server responds with an empty body during
+#     startup, the SDK returns {data: {}} (empty object). The original code
+#     uses `?? []` which only catches null/undefined — `{}` is truthy and
+#     passes through, causing `.filter is not a function` on the object.
+#
+#     Fix: use Array.isArray() guards instead of nullish coalescing.
+# ---------------------------------------------------------------------------
+echo "[opencode-embed] Applying compatibility patches..."
+LOCAL_TSX="${APP_DIR}/src/context/local.tsx"
+BOOTSTRAP_TS="${APP_DIR}/src/context/global-sync/bootstrap.ts"
+
+# Patch 1: local.tsx — guard the agent .filter() call with Array.isArray.
+# The original line:  sync.data.agent.filter(...)
+# After patch:        (Array.isArray(sync.data.agent) ? sync.data.agent : []).filter(...)
+perl -pi -e \
+  's/sync\.data\.agent\.filter\(/(Array.isArray(sync.data.agent) ? sync.data.agent : []).filter(/g' \
+  "${LOCAL_TSX}"
+echo "[opencode-embed] Patched local.tsx: Array.isArray guard on agent filter"
+
+# Patch 2: bootstrap.ts — guard the setStore("agent", ...) call.
+# The original line:  input.setStore("agent", x.data ?? [])
+# After patch:        input.setStore("agent", Array.isArray(x.data) ? x.data : [])
+perl -pi -e \
+  's/input\.setStore\("agent",\s*x\.data\s*\?\?\s*\[\]\)/input.setStore("agent", Array.isArray(x.data) ? x.data : [])/g' \
+  "${BOOTSTRAP_TS}"
+echo "[opencode-embed] Patched bootstrap.ts: Array.isArray guard on agent store"
+
+# ---------------------------------------------------------------------------
 # 3. Install dependencies
 # ---------------------------------------------------------------------------
 echo "[opencode-embed] Installing dependencies..."
