@@ -82,7 +82,7 @@ impl MemoryStore {
         .bind(memory.last_accessed_at)
         .bind(memory.access_count)
         .bind(&memory.source)
-        .bind(memory.channel_id.as_ref().map(|id| id.as_ref()))
+        .bind(memory.channel_id.as_deref())
         .bind(memory.forgotten)
         .execute(&self.pool)
         .await
@@ -159,7 +159,7 @@ impl MemoryStore {
         .bind(memory.last_accessed_at)
         .bind(memory.access_count)
         .bind(&memory.source)
-        .bind(memory.channel_id.as_ref().map(|id| id.as_ref()))
+        .bind(memory.channel_id.as_deref())
         .bind(memory.forgotten)
         .bind(&memory.id)
         .execute(&self.pool)
@@ -290,7 +290,7 @@ impl MemoryStore {
         .bind(updated_survivor.last_accessed_at)
         .bind(updated_survivor.access_count)
         .bind(&updated_survivor.source)
-        .bind(updated_survivor.channel_id.as_ref().map(|id| id.as_ref()))
+        .bind(updated_survivor.channel_id.as_deref())
         .bind(updated_survivor.forgotten)
         .bind(&updated_survivor.id)
         .execute(&mut *transaction)
@@ -694,7 +694,7 @@ fn row_to_memory(row: &sqlx::sqlite::SqliteRow) -> Memory {
             .unwrap_or_else(|_| chrono::Utc::now()),
         access_count: row.try_get("access_count").unwrap_or(0),
         source: row.try_get("source").ok(),
-        channel_id: channel_id.map(|id| Arc::from(id) as crate::ChannelId),
+        channel_id,
         forgotten: row.try_get::<bool, _>("forgotten").unwrap_or(false),
     }
 }

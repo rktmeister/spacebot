@@ -60,14 +60,14 @@ mod tests {
 
     impl EnvGuard {
         fn new() -> Self {
-            // NOTE: Keep in sync with provider env vars that affect test behavior
-            const KEYS: [&str; 27] = [
+            const KEYS: &[&str] = &[
                 "SPACEBOT_DIR",
                 "SPACEBOT_DEPLOYMENT",
                 "SPACEBOT_CRON_TIMEZONE",
                 "SPACEBOT_USER_TIMEZONE",
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_AUTH_TOKEN",
                 "ANTHROPIC_OAUTH_TOKEN",
                 "OPENAI_API_KEY",
                 "OPENROUTER_API_KEY",
@@ -89,14 +89,15 @@ mod tests {
                 "MINIMAX_CN_API_KEY",
                 "MOONSHOT_API_KEY",
                 "ZAI_CODING_PLAN_API_KEY",
+                "GITHUB_COPILOT_API_KEY",
             ];
 
             let vars = KEYS
-                .into_iter()
-                .map(|key| (key, std::env::var(key).ok()))
+                .iter()
+                .map(|&key| (key, std::env::var(key).ok()))
                 .collect::<Vec<_>>();
 
-            for key in KEYS {
+            for &key in KEYS {
                 unsafe {
                     std::env::remove_var(key);
                 }
@@ -1612,11 +1613,13 @@ maintenance_merge_similarity_threshold = 1.1
                 dm_allowed_users: vec![],
             },
         ];
-        assert!(validate_named_messaging_adapters(&messaging, &bindings).is_ok());
+        let result = validate_named_messaging_adapters(&messaging, bindings, false)
+            .expect("bindings should be resolvable");
+        assert_eq!(result.len(), 2);
     }
 
     #[test]
-    fn validate_named_adapters_missing_instance() {
+    fn validate_named_adapters_missing_instance_skipped() {
         let messaging = MessagingConfig {
             discord: None,
             slack: None,
@@ -1644,7 +1647,9 @@ maintenance_merge_similarity_threshold = 1.1
             require_mention: false,
             dm_allowed_users: vec![],
         }];
-        assert!(validate_named_messaging_adapters(&messaging, &bindings).is_err());
+        let result = validate_named_messaging_adapters(&messaging, bindings, false)
+            .expect("bindings should be resolvable");
+        assert!(result.is_empty(), "unresolvable binding should be skipped");
     }
 
     #[test]
@@ -1710,7 +1715,12 @@ maintenance_merge_similarity_threshold = 1.1
             require_mention: false,
             dm_allowed_users: vec![],
         }];
-        assert!(validate_named_messaging_adapters(&messaging, &bindings).is_err());
+        let result = validate_named_messaging_adapters(&messaging, bindings, false)
+            .expect("bindings should be resolvable");
+        assert!(
+            result.is_empty(),
+            "unsupported platform binding should be skipped"
+        );
     }
 
     #[test]
@@ -1758,12 +1768,18 @@ maintenance_merge_similarity_threshold = 1.1
             require_mention: false,
             dm_allowed_users: vec![],
         }];
+        let result = validate_named_messaging_adapters(&messaging, bindings, false)
+            .expect("bindings should be resolvable");
 
-        assert!(validate_named_messaging_adapters(&messaging, &bindings).is_ok());
+        assert_eq!(
+            result.len(),
+            1,
+            "imap-only email default should remain bindable"
+        );
     }
 
     #[test]
-    fn validate_binding_without_default_adapter_rejected() {
+    fn validate_binding_without_default_adapter_skipped() {
         let messaging = MessagingConfig {
             discord: None,
             slack: None,
@@ -1797,7 +1813,241 @@ maintenance_merge_similarity_threshold = 1.1
             require_mention: false,
             dm_allowed_users: vec![],
         }];
-        assert!(validate_named_messaging_adapters(&messaging, &bindings).is_err());
+        let result = validate_named_messaging_adapters(&messaging, bindings, false)
+            .expect("bindings should be resolvable");
+        assert!(
+            result.is_empty(),
+            "binding without default adapter should be skipped"
+        );
+    }
+
+    #[test]
+    fn validate_mixed_valid_and_invalid_bindings_filters_correctly() {
+        let messaging = MessagingConfig {
+            discord: None,
+            slack: None,
+            telegram: Some(TelegramConfig {
+                enabled: true,
+                token: "tok".into(),
+                instances: vec![TelegramInstanceConfig {
+                    name: "support".into(),
+                    enabled: true,
+                    token: "tok2".into(),
+                    dm_allowed_users: vec![],
+                }],
+                dm_allowed_users: vec![],
+            }),
+            email: None,
+            webhook: None,
+            twitch: None,
+            signal: None,
+            mattermost: None,
+        };
+        let bindings = vec![
+            // Valid: default adapter with credentials
+            Binding {
+                agent_id: "agent-a".into(),
+                channel: "telegram".into(),
+                adapter: None,
+                guild_id: None,
+                workspace_id: None,
+                chat_id: None,
+                team_id: None,
+                channel_ids: vec![],
+                require_mention: false,
+                dm_allowed_users: vec![],
+            },
+            // Invalid: references a non-existent named adapter
+            Binding {
+                agent_id: "agent-b".into(),
+                channel: "telegram".into(),
+                adapter: Some("ghost".into()),
+                guild_id: None,
+                workspace_id: None,
+                chat_id: None,
+                team_id: None,
+                channel_ids: vec![],
+                require_mention: false,
+                dm_allowed_users: vec![],
+            },
+            // Valid: references an existing named adapter
+            Binding {
+                agent_id: "agent-c".into(),
+                channel: "telegram".into(),
+                adapter: Some("support".into()),
+                guild_id: None,
+                workspace_id: None,
+                chat_id: None,
+                team_id: None,
+                channel_ids: vec![],
+                require_mention: false,
+                dm_allowed_users: vec![],
+            },
+            // Invalid: no discord config at all
+            Binding {
+                agent_id: "agent-d".into(),
+                channel: "discord".into(),
+                adapter: None,
+                guild_id: None,
+                workspace_id: None,
+                chat_id: None,
+                team_id: None,
+                channel_ids: vec![],
+                require_mention: false,
+                dm_allowed_users: vec![],
+            },
+        ];
+        let result = validate_named_messaging_adapters(&messaging, bindings, false)
+            .expect("bindings should be resolvable");
+        assert_eq!(
+            result.len(),
+            2,
+            "only the two valid bindings should survive"
+        );
+        assert_eq!(result[0].agent_id, "agent-a");
+        assert_eq!(result[1].agent_id, "agent-c");
+    }
+
+    #[test]
+    fn validate_missing_messaging_config_skipped() {
+        let messaging = MessagingConfig {
+            discord: None,
+            slack: None,
+            telegram: None,
+            email: None,
+            webhook: None,
+            twitch: None,
+            signal: None,
+            mattermost: None,
+        };
+        let bindings = vec![Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: None,
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            team_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        }];
+        let result = validate_named_messaging_adapters(&messaging, bindings, false)
+            .expect("bindings should be resolvable");
+        assert!(
+            result.is_empty(),
+            "binding with no messaging config should be skipped"
+        );
+    }
+
+    #[test]
+    fn validate_strict_mode_rejects_missing_messaging_config() {
+        let messaging = MessagingConfig {
+            discord: None,
+            slack: None,
+            telegram: None,
+            email: None,
+            webhook: None,
+            twitch: None,
+            signal: None,
+            mattermost: None,
+        };
+        let bindings = vec![Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: None,
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            team_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        }];
+        let result = validate_named_messaging_adapters(&messaging, bindings, true);
+        assert!(
+            result.is_err(),
+            "strict mode should reject unresolvable bindings"
+        );
+    }
+
+    #[test]
+    fn validate_disabled_instance_is_filtered_out() {
+        let messaging = MessagingConfig {
+            discord: None,
+            slack: None,
+            telegram: Some(TelegramConfig {
+                enabled: true,
+                token: "tok".into(),
+                instances: vec![TelegramInstanceConfig {
+                    name: "support".into(),
+                    enabled: false,
+                    token: "tok2".into(),
+                    dm_allowed_users: vec![],
+                }],
+                dm_allowed_users: vec![],
+            }),
+            email: None,
+            webhook: None,
+            twitch: None,
+            signal: None,
+            mattermost: None,
+        };
+        let bindings = vec![Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: Some("support".into()),
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            team_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        }];
+        let result = validate_named_messaging_adapters(&messaging, bindings, false)
+            .expect("bindings should be resolvable");
+        assert!(
+            result.is_empty(),
+            "binding to disabled instance should be skipped"
+        );
+    }
+
+    #[test]
+    fn validate_disabled_platform_default_is_filtered_out() {
+        let messaging = MessagingConfig {
+            discord: None,
+            slack: None,
+            telegram: Some(TelegramConfig {
+                enabled: false,
+                token: "tok".into(),
+                instances: vec![],
+                dm_allowed_users: vec![],
+            }),
+            email: None,
+            webhook: None,
+            twitch: None,
+            signal: None,
+            mattermost: None,
+        };
+        let bindings = vec![Binding {
+            agent_id: "main".into(),
+            channel: "telegram".into(),
+            adapter: None,
+            guild_id: None,
+            workspace_id: None,
+            chat_id: None,
+            team_id: None,
+            channel_ids: vec![],
+            require_mention: false,
+            dm_allowed_users: vec![],
+        }];
+        let result = validate_named_messaging_adapters(&messaging, bindings, false)
+            .expect("bindings should be resolvable");
+        assert!(
+            result.is_empty(),
+            "binding to disabled platform default should be skipped"
+        );
     }
 
     #[test]

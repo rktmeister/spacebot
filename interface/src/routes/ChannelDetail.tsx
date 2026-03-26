@@ -271,13 +271,13 @@ function TimelineEntry({ item, liveWorkers, liveBranches, channelId, agentId }: 
 			);
 		case "branch_run": {
 			const live = liveBranches[item.id];
-			if (live) return <LiveBranchRunItem item={item} live={live} channelId={channelId} />;
-			return <BranchRunItem item={item} />;
+			if (live) return <LiveBranchRunItem item={item as TimelineBranchRun} live={live} channelId={channelId} />;
+			return <BranchRunItem item={item as TimelineBranchRun} />;
 		}
 		case "worker_run": {
 			const live = liveWorkers[item.id];
-			if (live) return <LiveWorkerRunItem item={item} live={live} channelId={channelId} agentId={agentId} />;
-			return <WorkerRunItem item={item} agentId={agentId} />;
+			if (live) return <LiveWorkerRunItem item={item as TimelineWorkerRun} live={live} channelId={channelId} agentId={agentId} />;
+			return <WorkerRunItem item={item as TimelineWorkerRun} agentId={agentId} />;
 		}
 	}
 }

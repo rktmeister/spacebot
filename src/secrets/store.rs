@@ -73,7 +73,7 @@ impl Display for DecryptedSecret {
 /// All secrets are readable by Rust code via `SecretsStore::get()` regardless
 /// of category. The category answers one question: should this value be injected
 /// as an env var into worker subprocesses?
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SecretCategory {
     /// Not exposed to subprocesses. Rust code reads them for internal use
@@ -920,7 +920,7 @@ impl SecretsStore {
 }
 
 /// Portable backup format for all secrets in a store.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExportData {
     /// Format version (currently 1).
     pub version: u32,
@@ -932,7 +932,7 @@ pub struct ExportData {
 }
 
 /// A single secret in the export format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExportEntry {
     pub name: String,
     pub value: String,

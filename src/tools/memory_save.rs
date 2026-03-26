@@ -396,7 +396,10 @@ impl Tool for MemorySaveTool {
             let event = ProcessEvent::MemorySaved {
                 agent_id: event_context.agent_id.clone(),
                 memory_id: memory.id.clone(),
-                channel_id: memory.channel_id.clone(),
+                channel_id: memory
+                    .channel_id
+                    .as_ref()
+                    .map(|s| std::sync::Arc::from(s.as_str())),
                 memory_type: memory.memory_type,
                 importance: memory.importance,
                 content_summary: summarize_memory_content(&memory.content),

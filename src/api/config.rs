@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct RoutingSection {
     channel: String,
     branch: String,
@@ -18,7 +18,7 @@ pub(super) struct RoutingSection {
     rate_limit_cooldown_secs: u64,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct TuningSection {
     max_concurrent_branches: usize,
     max_concurrent_workers: usize,
@@ -28,14 +28,14 @@ pub(super) struct TuningSection {
     history_backfill_count: usize,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct CompactionSection {
     background_threshold: f32,
     aggressive_threshold: f32,
     emergency_threshold: f32,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct CortexSection {
     tick_interval_secs: u64,
     maintenance_interval_secs: u64,
@@ -53,7 +53,7 @@ pub(super) struct CortexSection {
     maintenance_merge_similarity_threshold: f32,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct WarmupSection {
     enabled: bool,
     eager_embedding_load: bool,
@@ -61,7 +61,7 @@ pub(super) struct WarmupSection {
     startup_delay_secs: u64,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct CoalesceSection {
     enabled: bool,
     debounce_ms: u64,
@@ -70,13 +70,13 @@ pub(super) struct CoalesceSection {
     multi_user_only: bool,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct MemoryPersistenceSection {
     enabled: bool,
     message_interval: usize,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct BrowserSection {
     enabled: bool,
     headless: bool,
@@ -85,19 +85,19 @@ pub(super) struct BrowserSection {
     close_policy: String,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct ChannelSection {
     listen_only_mode: bool,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct SandboxSection {
     mode: String,
     writable_paths: Vec<String>,
     passthrough_env: Vec<String>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct ProjectsSection {
     use_worktrees: bool,
     worktree_name_template: String,
@@ -107,13 +107,13 @@ pub(super) struct ProjectsSection {
     disk_usage_warning_threshold: u64,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct DiscordSection {
     enabled: bool,
     allow_bot_messages: bool,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct AgentConfigResponse {
     routing: RoutingSection,
     tuning: TuningSection,
@@ -129,12 +129,12 @@ pub(super) struct AgentConfigResponse {
     discord: DiscordSection,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct AgentConfigQuery {
     agent_id: String,
 }
 
-#[derive(Deserialize, Debug, Default)]
+#[derive(Deserialize, Debug, Default, utoipa::ToSchema)]
 pub(super) struct AgentConfigUpdateRequest {
     agent_id: String,
     #[serde(default)]
@@ -163,7 +163,7 @@ pub(super) struct AgentConfigUpdateRequest {
     discord: Option<DiscordUpdate>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct RoutingUpdate {
     channel: Option<String>,
     branch: Option<String>,
@@ -174,7 +174,7 @@ pub(super) struct RoutingUpdate {
     rate_limit_cooldown_secs: Option<u64>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct TuningUpdate {
     max_concurrent_branches: Option<usize>,
     max_concurrent_workers: Option<usize>,
@@ -184,14 +184,14 @@ pub(super) struct TuningUpdate {
     history_backfill_count: Option<usize>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct CompactionUpdate {
     background_threshold: Option<f32>,
     aggressive_threshold: Option<f32>,
     emergency_threshold: Option<f32>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct CortexUpdate {
     tick_interval_secs: Option<u64>,
     maintenance_interval_secs: Option<u64>,
@@ -209,7 +209,7 @@ pub(super) struct CortexUpdate {
     maintenance_merge_similarity_threshold: Option<f32>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct WarmupUpdate {
     enabled: Option<bool>,
     eager_embedding_load: Option<bool>,
@@ -217,7 +217,7 @@ pub(super) struct WarmupUpdate {
     startup_delay_secs: Option<u64>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct CoalesceUpdate {
     enabled: Option<bool>,
     debounce_ms: Option<u64>,
@@ -226,13 +226,13 @@ pub(super) struct CoalesceUpdate {
     multi_user_only: Option<bool>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct MemoryPersistenceUpdate {
     enabled: Option<bool>,
     message_interval: Option<usize>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct BrowserUpdate {
     enabled: Option<bool>,
     headless: Option<bool>,
@@ -241,19 +241,19 @@ pub(super) struct BrowserUpdate {
     close_policy: Option<ClosePolicy>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct ChannelUpdate {
     listen_only_mode: Option<bool>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct SandboxUpdate {
     mode: Option<String>,
     writable_paths: Option<Vec<String>>,
     passthrough_env: Option<Vec<String>>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct ProjectsUpdate {
     use_worktrees: Option<bool>,
     worktree_name_template: Option<String>,
@@ -263,13 +263,23 @@ pub(super) struct ProjectsUpdate {
     disk_usage_warning_threshold: Option<u64>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct DiscordUpdate {
     allow_bot_messages: Option<bool>,
 }
 
 /// Get the resolved configuration for an agent.
 /// Reads live values from the agent's RuntimeConfig (hot-reloaded via ArcSwap).
+#[utoipa::path(
+    get,
+    path = "/agents/config",
+    params(AgentConfigQuery),
+    responses(
+        (status = 200, body = AgentConfigResponse),
+        (status = 404, description = "Agent not found"),
+    ),
+    tag = "config",
+)]
 pub(super) async fn get_agent_config(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<AgentConfigQuery>,
@@ -399,6 +409,17 @@ pub(super) async fn get_agent_config(
 
 /// Update agent configuration by editing config.toml with toml_edit.
 /// This preserves formatting and comments while writing the new values.
+#[utoipa::path(
+    put,
+    path = "/agents/config",
+    request_body = AgentConfigUpdateRequest,
+    responses(
+        (status = 200, body = AgentConfigResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "config",
+)]
 pub(super) async fn update_agent_config(
     State(state): State<Arc<ApiState>>,
     axum::Json(request): axum::Json<AgentConfigUpdateRequest>,

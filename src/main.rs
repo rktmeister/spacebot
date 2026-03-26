@@ -1545,7 +1545,7 @@ fn configured_agent_infos(config: &spacebot::config::Config) -> Vec<spacebot::ap
             role: agent.role,
             gradient_start: agent.gradient_start,
             gradient_end: agent.gradient_end,
-            workspace: agent.workspace,
+            workspace: agent.workspace.to_string_lossy().to_string(),
             context_window: agent.context_window,
             max_turns: agent.max_turns,
             max_concurrent_branches: agent.max_concurrent_branches,
@@ -1582,10 +1582,18 @@ async fn run(
     let (injection_tx, mut injection_rx) =
         tokio::sync::mpsc::channel::<spacebot::ChannelInjection>(64);
 
-    // Shared cross-agent task store registry. Populated after all agents are initialized.
-    let task_store_registry: Arc<
-        ArcSwap<std::collections::HashMap<String, Arc<spacebot::tasks::TaskStore>>>,
-    > = Arc::new(ArcSwap::from_pointee(std::collections::HashMap::new()));
+    // Instance-level global task database. Shared across all agents with globally
+    // unique task numbers. Lives alongside secrets.redb in the instance data dir.
+    let global_task_pool = spacebot::db::connect_global_tasks(&config.instance_dir.join("data"))
+        .await
+        .context("failed to initialize global task database")?;
+
+    // Migrate legacy per-agent tasks to the global database on first run.
+    spacebot::tasks::migration::migrate_legacy_tasks(&config.instance_dir, &global_task_pool)
+        .await
+        .context("failed to migrate legacy tasks to global database")?;
+
+    let global_task_store = Arc::new(spacebot::tasks::TaskStore::new(global_task_pool));
 
     // Start HTTP API server if enabled
     let mut api_state = spacebot::api::ApiState::new_with_provider_sender(
@@ -1593,9 +1601,9 @@ async fn run(
         agent_tx,
         agent_remove_tx,
         injection_tx.clone(),
-        task_store_registry.clone(),
     );
     api_state.auth_token = config.api.auth_token.clone();
+    api_state.set_task_store(global_task_store.clone());
     let api_state = Arc::new(api_state);
 
     // Keep the secrets API available in setup mode so encrypted stores can be
@@ -1761,7 +1769,7 @@ async fn run(
             agent_links.clone(),
             agent_humans.clone(),
             injection_tx.clone(),
-            task_store_registry.clone(),
+            global_task_store.clone(),
             &bootstrapped_store,
         )
         .await?;
@@ -2357,7 +2365,7 @@ async fn run(
                                     agent_links.clone(),
                                     agent_humans.clone(),
                                     injection_tx.clone(),
-                                    task_store_registry.clone(),
+                                    global_task_store.clone(),
                                     &bootstrapped_store,
                                 ).await {
                                     Ok(()) => {
@@ -2500,9 +2508,7 @@ async fn initialize_agents(
     agent_links: Arc<ArcSwap<Vec<spacebot::links::AgentLink>>>,
     agent_humans: Arc<ArcSwap<Vec<spacebot::config::HumanDef>>>,
     injection_tx: tokio::sync::mpsc::Sender<spacebot::ChannelInjection>,
-    task_store_registry: Arc<
-        ArcSwap<std::collections::HashMap<String, Arc<spacebot::tasks::TaskStore>>>,
-    >,
+    global_task_store: Arc<spacebot::tasks::TaskStore>,
     bootstrapped_store: &Option<Arc<spacebot::secrets::store::SecretsStore>>,
 ) -> anyhow::Result<()> {
     let resolved_agents = config.resolve_agents();
@@ -2621,7 +2627,6 @@ async fn initialize_agents(
         // Per-agent memory system
         let memory_store =
             spacebot::memory::MemoryStore::with_agent_id(db.sqlite.clone(), &agent_config.id);
-        let task_store = Arc::new(spacebot::tasks::TaskStore::new(db.sqlite.clone()));
         let project_store = Arc::new(spacebot::projects::ProjectStore::new(db.sqlite.clone()));
         let embedding_table = spacebot::memory::EmbeddingTable::open_or_create(&db.lance)
             .await
@@ -2740,7 +2745,7 @@ async fn initialize_agents(
             memory_search,
             llm_manager: llm_manager.clone(),
             mcp_manager,
-            task_store: task_store.clone(),
+            task_store: global_task_store.clone(),
             project_store: project_store.clone(),
             cron_tool: None,
             runtime_config,
@@ -2752,7 +2757,6 @@ async fn initialize_agents(
             links: agent_links.clone(),
             agent_names: agent_name_map.clone(),
             humans: agent_humans.clone(),
-            task_store_registry: task_store_registry.clone(),
             process_control_registry: Arc::new(
                 spacebot::agent::process_control::ProcessControlRegistry::new(),
             ),
@@ -2769,15 +2773,6 @@ async fn initialize_agents(
 
         tracing::info!(agent_id = %agent_config.id, "agent initialized");
         agents.insert(agent_id, agent);
-    }
-
-    // Populate the cross-agent task store registry now that all agents exist.
-    {
-        let registry: std::collections::HashMap<String, Arc<spacebot::tasks::TaskStore>> = agents
-            .iter()
-            .map(|(agent_id, agent)| (agent_id.to_string(), agent.deps.task_store.clone()))
-            .collect();
-        task_store_registry.store(Arc::new(registry));
     }
 
     // Pre-register both sides of every link channel so they appear in each
@@ -2826,7 +2821,6 @@ async fn initialize_agents(
         let mut agent_configs = Vec::new();
         let mut memory_searches = std::collections::HashMap::new();
         let mut mcp_managers = std::collections::HashMap::new();
-        let mut task_stores = std::collections::HashMap::new();
         let mut project_stores = std::collections::HashMap::new();
         let mut agent_workspaces = std::collections::HashMap::new();
         let mut agent_identity_dirs = std::collections::HashMap::new();
@@ -2839,7 +2833,6 @@ async fn initialize_agents(
             agent_pools.insert(agent_id.to_string(), agent.db.sqlite.clone());
             memory_searches.insert(agent_id.to_string(), agent.deps.memory_search.clone());
             mcp_managers.insert(agent_id.to_string(), agent.deps.mcp_manager.clone());
-            task_stores.insert(agent_id.to_string(), agent.deps.task_store.clone());
             project_stores.insert(agent_id.to_string(), agent.deps.project_store.clone());
             agent_workspaces.insert(agent_id.to_string(), agent.config.workspace.clone());
             agent_identity_dirs.insert(agent_id.to_string(), agent.config.identity_dir.clone());
@@ -2852,7 +2845,7 @@ async fn initialize_agents(
                 role: agent.config.role.clone(),
                 gradient_start: agent.config.gradient_start.clone(),
                 gradient_end: agent.config.gradient_end.clone(),
-                workspace: agent.config.workspace.clone(),
+                workspace: agent.config.workspace.to_string_lossy().to_string(),
                 context_window: agent.config.context_window,
                 max_turns: agent.config.max_turns,
                 max_concurrent_branches: agent.config.max_concurrent_branches,
@@ -2863,7 +2856,6 @@ async fn initialize_agents(
         api_state.set_agent_configs(agent_configs);
         api_state.set_memory_searches(memory_searches);
         api_state.set_mcp_managers(mcp_managers);
-        api_state.set_task_stores(task_stores);
         api_state.set_project_stores(project_stores);
         api_state.set_runtime_configs(runtime_configs);
         api_state.set_agent_workspaces(agent_workspaces);
@@ -3303,12 +3295,22 @@ async fn initialize_agents(
         let perms = spacebot::config::SignalPermissions::from_config(signal_config);
         Arc::new(ArcSwap::from_pointee(perms))
     });
+    if let Some(perms) = &*signal_permissions {
+        api_state.set_signal_permissions(perms.clone()).await;
+    }
 
-    if let Some(signal_config) = &config.messaging.signal
-        && signal_config.enabled
-    {
-        let tmp_dir = config.instance_dir.join("tmp");
-        if !signal_config.http_url.is_empty() && !signal_config.account.is_empty() {
+    // Signal: start default adapter (requires root enabled) and named instances (independent).
+    // Unlike Discord/Telegram where named instances inherit the root enabled gate,
+    // Signal named instances start independently when they have valid credentials
+    // and their own enabled flag is set. This allows running multiple Signal accounts
+    // without needing a "default" account enabled.
+    let tmp_dir = config.instance_dir.join("tmp");
+    if let Some(signal_config) = &config.messaging.signal {
+        // Start default adapter only if root is enabled AND has credentials
+        if signal_config.enabled
+            && !signal_config.http_url.is_empty()
+            && !signal_config.account.is_empty()
+        {
             let adapter = spacebot::messaging::signal::SignalAdapter::new(
                 "signal",
                 &signal_config.http_url,
@@ -3322,6 +3324,7 @@ async fn initialize_agents(
             new_messaging_manager.register(adapter).await;
         }
 
+        // Start named instances regardless of root enabled flag (as long as config exists)
         for instance in signal_config
             .instances
             .iter()
@@ -3467,7 +3470,11 @@ async fn initialize_agents(
         }
 
         // Store cron tool on deps so each channel can register it on its own tool server
-        let cron_tool = spacebot::tools::CronTool::new(store.clone(), scheduler.clone());
+        let cron_tool = spacebot::tools::CronTool::new(
+            store.clone(),
+            scheduler.clone(),
+            messaging_manager.clone(),
+        );
         agent.deps.cron_tool = Some(cron_tool);
 
         cron_stores_map.insert(agent_id.to_string(), store);

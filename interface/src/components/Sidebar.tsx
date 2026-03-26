@@ -21,7 +21,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { api } from "@/api/client";
 import type { ChannelLiveState } from "@/hooks/useChannelLiveState";
 import { useAgentOrder } from "@/hooks/useAgentOrder";
-import { DashboardSquare01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { DashboardSquare01Icon, Settings01Icon, LeftToRightListBulletIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CreateAgentDialog } from "@/components/CreateAgentDialog";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
@@ -32,9 +32,9 @@ interface SidebarProps {
 
 interface SortableAgentItemProps {
 	agentId: string;
-	displayName?: string;
-	gradientStart?: string;
-	gradientEnd?: string;
+	displayName?: string | null | undefined;
+	gradientStart?: string | null | undefined;
+	gradientEnd?: string | null | undefined;
 	isActive: boolean;
 }
 
@@ -98,12 +98,12 @@ export function Sidebar({ liveStates: _liveStates }: SidebarProps) {
 
 	const agentIds = useMemo(() => agents.map((a) => a.id), [agents]);
 	const agentDisplayNames = useMemo(() => {
-		const map: Record<string, string | undefined> = {};
+		const map: Record<string, string | null | undefined> = {};
 		for (const a of agents) map[a.id] = a.display_name;
 		return map;
 	}, [agents]);
 	const agentGradients = useMemo(() => {
-		const map: Record<string, { start?: string; end?: string }> = {};
+		const map: Record<string, { start?: string | null | undefined; end?: string | null | undefined }> = {};
 		for (const a of agents) map[a.id] = { start: a.gradient_start, end: a.gradient_end };
 		return map;
 	}, [agents]);
@@ -111,6 +111,7 @@ export function Sidebar({ liveStates: _liveStates }: SidebarProps) {
 
 	const matchRoute = useMatchRoute();
 	const isOverview = matchRoute({ to: "/" });
+	const isTasks = matchRoute({ to: "/tasks" });
 	const isSettings = matchRoute({ to: "/settings" });
 	const isOrchestrate = matchRoute({ to: "/orchestrate" });
 
@@ -160,6 +161,15 @@ export function Sidebar({ liveStates: _liveStates }: SidebarProps) {
 						<rect x="6" y="2" width="4" height="12" rx="1" />
 						<rect x="11" y="2" width="4" height="12" rx="1" />
 					</svg>
+				</Link>
+				<Link
+					to="/tasks"
+					className={`flex h-8 w-8 items-center justify-center rounded-md ${
+						isTasks ? "bg-sidebar-selected text-sidebar-ink" : "text-sidebar-inkDull hover:bg-sidebar-selected/50"
+					}`}
+					title="Tasks"
+				>
+					<HugeiconsIcon icon={LeftToRightListBulletIcon} className="h-4 w-4" />
 				</Link>
 				<Link
 					to="/settings"

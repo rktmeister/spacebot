@@ -418,7 +418,7 @@ fn normalize_cron_timestamp_lossy(value: &str) -> String {
 }
 
 /// Entry in the cron execution log.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct CronExecutionEntry {
     pub id: String,
     pub executed_at: String,

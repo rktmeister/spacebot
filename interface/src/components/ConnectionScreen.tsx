@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, lazy, Suspense } from "react";
 import { Button } from "@/ui/Button";
 import { Input } from "@/ui/Input";
 import { useServer } from "@/hooks/useServer";
-import { IS_TAURI } from "@/api/client";
+import { IS_TAURI } from "@/platform";
 
 const Orb = lazy(() => import("@/components/Orb"));
 
@@ -89,7 +89,7 @@ export function ConnectionScreen() {
 	const isChecking = state === "checking";
 
 	return (
-		<div className="flex h-screen w-screen flex-col items-center justify-center bg-app">
+		<div className="flex h-screen w-full flex-col items-center justify-center bg-app overflow-hidden">
 			{/* Draggable titlebar region for Tauri */}
 			{IS_TAURI && (
 				<div

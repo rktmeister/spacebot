@@ -354,7 +354,7 @@ function WorkerColumn({worker}: {worker: OrchestrationWorker}) {
 				<OpenCodeEmbed
 					port={worker.opencode_port!}
 					sessionId={worker.opencode_session_id ?? worker.id}
-					directory={worker.directory}
+					directory={worker.directory ?? null}
 				/>
 			</div>
 		</div>

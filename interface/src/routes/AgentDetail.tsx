@@ -209,13 +209,13 @@ export function AgentDetail({ agentId, liveStates }: AgentDetailProps) {
 				)}
 
 				{/* Recent Cortex Events */}
-				{overviewData && overviewData.recent_cortex_events.length > 0 && (
-					<CortexEventsSection
-						agentId={agentId}
-						events={overviewData.recent_cortex_events}
-						lastBulletinAt={overviewData.last_bulletin_at}
-					/>
-				)}
+			{overviewData && overviewData.recent_cortex_events.length > 0 && (
+				<CortexEventsSection
+					agentId={agentId}
+					events={overviewData.recent_cortex_events as CortexEvent[]}
+					lastBulletinAt={overviewData.last_bulletin_at ?? null}
+				/>
+			)}
 			</div>
 		</div>
 	);
@@ -233,7 +233,7 @@ function HeroSection({
 	onDelete,
 }: {
 	agentId: string;
-	displayName?: string;
+	displayName?: string | null | undefined;
 	channelCount: number;
 	workers: number;
 	branches: number;
@@ -718,9 +718,9 @@ function CronSection({ agentId, jobs }: { agentId: string; jobs: CronJobInfo[] }
 						<span className="min-w-0 flex-1 truncate text-sm text-ink-dull" title={job.prompt}>
 							{job.prompt}
 						</span>
-						<code className="rounded bg-app-lightBox/60 px-1.5 py-0.5 font-mono text-tiny text-ink-faint">
-							{formatCronSchedule(job.cron_expr, job.interval_secs)}
-						</code>
+					<code className="rounded bg-app-lightBox/60 px-1.5 py-0.5 font-mono text-tiny text-ink-faint">
+						{formatCronSchedule(job.cron_expr ?? null, job.interval_secs)}
+					</code>
 						{job.active_hours && (
 							<span className="text-tiny text-ink-faint">
 								{String(job.active_hours[0]).padStart(2, "0")}:00-{String(job.active_hours[1]).padStart(2, "0")}:00

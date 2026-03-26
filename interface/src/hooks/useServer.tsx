@@ -8,6 +8,7 @@ import {
 	type ReactNode,
 } from "react";
 import { setServerUrl as setClientServerUrl } from "@/api/client";
+import { IS_TAURI, invoke as platformInvoke } from "@/platform";
 
 export type ServerState = "checking" | "connected" | "disconnected";
 
@@ -62,8 +63,7 @@ function normalizeUrl(raw: string): string {
 	}
 }
 
-/** Check if we're inside a Tauri webview */
-const IS_TAURI = !!(window as any).__TAURI_INTERNALS__;
+// IS_TAURI imported from @/platform
 
 async function checkHealth(baseUrl: string): Promise<boolean> {
 	const controller = new AbortController();
@@ -85,8 +85,7 @@ async function persistUrl(url: string): Promise<void> {
 	localStorage.setItem(STORAGE_KEY, url);
 	if (IS_TAURI) {
 		try {
-			const { invoke } = await import("@tauri-apps/api/core");
-			await invoke("set_server_url", { url });
+			await platformInvoke("set_server_url", { url });
 		} catch {
 			// Tauri command not available (e.g. dev mode without Tauri)
 		}
@@ -98,8 +97,7 @@ async function persistUrl(url: string): Promise<void> {
 async function loadPersistedUrl(): Promise<string | null> {
 	if (IS_TAURI) {
 		try {
-			const { invoke } = await import("@tauri-apps/api/core");
-			const url = await invoke<string>("get_server_url");
+			const url = await platformInvoke<string>("get_server_url");
 			// The Tauri command returns the default sentinel when nothing
 			// is stored. Treat it (and empty strings) as "not persisted"
 			// so we fall through to localStorage.

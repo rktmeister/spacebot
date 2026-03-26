@@ -22,6 +22,7 @@ import {AgentSkills} from "@/routes/AgentSkills";
 import {AgentWorkers} from "@/routes/AgentWorkers";
 import {AgentProjects} from "@/routes/AgentProjects";
 import {AgentTasks} from "@/routes/AgentTasks";
+import {GlobalTasks} from "@/routes/GlobalTasks";
 import {AgentChat} from "@/routes/AgentChat";
 import {Settings} from "@/routes/Settings";
 import {Orchestrate} from "@/routes/Orchestrate";
@@ -35,7 +36,7 @@ function RootLayout() {
 
 	return (
 		<TopBarProvider>
-			<div className="flex h-screen flex-col bg-app">
+			<div className="flex h-screen flex-col overflow-hidden bg-app">
 				<TopBar />
 				<ConnectionBanner state={connectionState} hasData={hasData} />
 				<div className="flex min-h-0 flex-1">
@@ -138,6 +139,20 @@ const orchestrateRoute = createRoute({
 			</div>,
 		);
 		return <Orchestrate />;
+	},
+});
+
+const tasksRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: "/tasks",
+	component: function TasksPage() {
+		useSetTopBar(
+			<div className="flex h-full items-center gap-4 px-6">
+				<h1 className="font-plex text-sm font-medium text-ink">Tasks</h1>
+				<span className="text-xs text-ink-faint">All tasks across agents</span>
+			</div>,
+		);
+		return <GlobalTasks />;
 	},
 });
 
@@ -372,6 +387,7 @@ const routeTree = rootRoute.addChildren([
 	settingsRoute,
 	logsRoute,
 	orchestrateRoute,
+	tasksRoute,
 	agentRoute,
 	agentChatRoute,
 	agentChannelsRoute,

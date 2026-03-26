@@ -37,7 +37,7 @@ enum DeviceOAuthSessionStatus {
     Failed(String),
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct ProviderStatus {
     anthropic: bool,
     openai: bool,
@@ -63,33 +63,33 @@ pub(super) struct ProviderStatus {
     github_copilot: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct ProvidersResponse {
     providers: ProviderStatus,
     has_any: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct ProviderUpdateRequest {
     provider: String,
     api_key: String,
     model: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct ProviderUpdateResponse {
     success: bool,
     message: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct ProviderModelTestRequest {
     provider: String,
     api_key: String,
     model: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct ProviderModelTestResponse {
     success: bool,
     message: String,
@@ -98,12 +98,12 @@ pub(super) struct ProviderModelTestResponse {
     sample: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct OpenAiOAuthBrowserStartRequest {
     model: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct OpenAiOAuthBrowserStartResponse {
     success: bool,
     message: String,
@@ -112,12 +112,12 @@ pub(super) struct OpenAiOAuthBrowserStartResponse {
     state: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct OpenAiOAuthBrowserStatusRequest {
     state: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct OpenAiOAuthBrowserStatusResponse {
     found: bool,
     done: bool,
@@ -343,6 +343,15 @@ async fn finalize_openai_oauth(
     Ok(())
 }
 
+#[utoipa::path(
+    get,
+    path = "/providers",
+    responses(
+        (status = 200, body = ProvidersResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "providers",
+)]
 pub(super) async fn get_providers(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<ProvidersResponse>, StatusCode> {
@@ -524,6 +533,16 @@ pub(super) async fn get_providers(
     Ok(Json(ProvidersResponse { providers, has_any }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/providers/openai/browser-oauth/start",
+    request_body = OpenAiOAuthBrowserStartRequest,
+    responses(
+        (status = 200, body = OpenAiOAuthBrowserStartResponse),
+        (status = 400, description = "Invalid request"),
+    ),
+    tag = "providers",
+)]
 pub(super) async fn start_openai_browser_oauth(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<OpenAiOAuthBrowserStartRequest>,
@@ -709,6 +728,18 @@ async fn run_device_oauth_background(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/providers/openai/browser-oauth/status",
+    params(
+        ("state" = String, Query, description = "OAuth state parameter"),
+    ),
+    responses(
+        (status = 200, body = OpenAiOAuthBrowserStatusResponse),
+        (status = 400, description = "Invalid request"),
+    ),
+    tag = "providers",
+)]
 pub(super) async fn openai_browser_oauth_status(
     Query(request): Query<OpenAiOAuthBrowserStatusRequest>,
 ) -> Result<Json<OpenAiOAuthBrowserStatusResponse>, StatusCode> {
@@ -762,6 +793,16 @@ pub(super) async fn openai_browser_oauth_status(
     Ok(Json(response))
 }
 
+#[utoipa::path(
+    post,
+    path = "/providers",
+    request_body = ProviderUpdateRequest,
+    responses(
+        (status = 200, body = ProviderUpdateResponse),
+        (status = 400, description = "Invalid request"),
+    ),
+    tag = "providers",
+)]
 pub(super) async fn update_provider(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<ProviderUpdateRequest>,
@@ -841,6 +882,16 @@ pub(super) async fn update_provider(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/providers/test-model",
+    request_body = ProviderModelTestRequest,
+    responses(
+        (status = 200, body = ProviderModelTestResponse),
+        (status = 400, description = "Invalid request"),
+    ),
+    tag = "providers",
+)]
 pub(super) async fn test_provider_model(
     Json(request): Json<ProviderModelTestRequest>,
 ) -> Result<Json<ProviderModelTestResponse>, StatusCode> {
@@ -926,6 +977,19 @@ pub(super) async fn test_provider_model(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/providers/{provider}",
+    params(
+        ("provider" = String, Path, description = "Provider name to delete"),
+    ),
+    responses(
+        (status = 200, body = ProviderUpdateResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 404, description = "Provider not found"),
+    ),
+    tag = "providers",
+)]
 pub(super) async fn delete_provider(
     State(state): State<Arc<ApiState>>,
     axum::extract::Path(provider): axum::extract::Path<String>,

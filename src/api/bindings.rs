@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct BindingResponse {
     agent_id: String,
     channel: String,
@@ -20,18 +20,18 @@ pub(super) struct BindingResponse {
     dm_allowed_users: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct BindingsListResponse {
     bindings: Vec<BindingResponse>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct BindingsQuery {
     #[serde(default)]
     agent_id: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateBindingRequest {
     agent_id: String,
     channel: String,
@@ -56,7 +56,7 @@ pub(super) struct CreateBindingRequest {
     platform_credentials: Option<PlatformCredentials>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct PlatformCredentials {
     #[serde(default)]
     discord_token: Option<String>,
@@ -98,7 +98,7 @@ pub(super) struct PlatformCredentials {
     twitch_refresh_token: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct CreateBindingResponse {
     success: bool,
     /// True if platform credentials were added/changed (adapter needs restart).
@@ -106,7 +106,7 @@ pub(super) struct CreateBindingResponse {
     message: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct DeleteBindingRequest {
     agent_id: String,
     channel: String,
@@ -122,13 +122,13 @@ pub(super) struct DeleteBindingRequest {
     team_id: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct DeleteBindingResponse {
     success: bool,
     message: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateBindingRequest {
     original_agent_id: String,
     original_channel: String,
@@ -163,13 +163,25 @@ pub(super) struct UpdateBindingRequest {
     dm_allowed_users: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct UpdateBindingResponse {
     success: bool,
     message: String,
 }
 
 /// List all bindings, optionally filtered by agent_id.
+#[utoipa::path(
+    get,
+    path = "/bindings",
+    params(
+        ("agent_id" = Option<String>, Query, description = "Filter by agent ID"),
+    ),
+    responses(
+        (status = 200, body = BindingsListResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "bindings",
+)]
 pub(super) async fn list_bindings(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<BindingsQuery>,
@@ -205,6 +217,17 @@ pub(super) async fn list_bindings(
 }
 
 /// Create a new binding (and optionally configure platform credentials).
+#[utoipa::path(
+    post,
+    path = "/bindings",
+    request_body = CreateBindingRequest,
+    responses(
+        (status = 200, body = CreateBindingResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "bindings",
+)]
 pub(super) async fn create_binding(
     State(state): State<Arc<ApiState>>,
     axum::Json(request): axum::Json<CreateBindingRequest>,
@@ -674,6 +697,18 @@ pub(super) async fn create_binding(
     }))
 }
 
+/// Update an existing binding.
+#[utoipa::path(
+    put,
+    path = "/bindings",
+    request_body = UpdateBindingRequest,
+    responses(
+        (status = 200, body = UpdateBindingResponse),
+        (status = 404, description = "Binding not found or config not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "bindings",
+)]
 pub(super) async fn update_binding(
     State(state): State<Arc<ApiState>>,
     axum::Json(request): axum::Json<UpdateBindingRequest>,
@@ -890,6 +925,17 @@ pub(super) async fn update_binding(
 }
 
 /// Delete a binding by matching agent_id + channel + platform-specific identifiers.
+#[utoipa::path(
+    delete,
+    path = "/bindings",
+    request_body = DeleteBindingRequest,
+    responses(
+        (status = 200, body = DeleteBindingResponse),
+        (status = 404, description = "Binding not found or config not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "bindings",
+)]
 pub(super) async fn delete_binding(
     State(state): State<Arc<ApiState>>,
     axum::Json(request): axum::Json<DeleteBindingRequest>,

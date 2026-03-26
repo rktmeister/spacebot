@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct ChannelResponse {
     agent_id: String,
     id: String,
@@ -21,12 +21,12 @@ pub(super) struct ChannelResponse {
     created_at: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct ChannelsResponse {
     channels: Vec<ChannelResponse>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct ListChannelsQuery {
     #[serde(default)]
     include_inactive: bool,
@@ -57,13 +57,13 @@ fn sort_channels_newest_first(channels: &mut [AgentChannel]) {
     );
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct MessagesResponse {
     items: Vec<crate::conversation::history::TimelineItem>,
     has_more: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct MessagesQuery {
     channel_id: String,
     #[serde(default = "default_message_limit")]
@@ -75,20 +75,34 @@ fn default_message_limit() -> i64 {
     20
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CancelProcessRequest {
     channel_id: String,
     process_type: String,
     process_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct CancelProcessResponse {
     success: bool,
     message: String,
 }
 
 /// List channels across agents, with optional activity and agent filters.
+#[utoipa::path(
+    get,
+    path = "/channels",
+    params(
+        ("include_inactive" = bool, Query, description = "Include inactive channels"),
+        ("agent_id" = Option<String>, Query, description = "Filter by agent ID"),
+        ("is_active" = Option<bool>, Query, description = "Filter by active state"),
+    ),
+    responses(
+        (status = 200, body = ChannelsResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
 pub(super) async fn list_channels(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<ListChannelsQuery>,
@@ -136,6 +150,20 @@ pub(super) async fn list_channels(
 
 /// Get the unified timeline for a channel: messages, branch runs, and worker runs
 /// interleaved chronologically.
+#[utoipa::path(
+    get,
+    path = "/channels/messages",
+    params(
+        ("channel_id" = String, Query, description = "Channel ID"),
+        ("limit" = i64, Query, description = "Maximum number of messages to return (default: 20, max: 100)"),
+        ("before" = Option<String>, Query, description = "Pagination cursor for fetching older messages"),
+    ),
+    responses(
+        (status = 200, body = MessagesResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
 pub(super) async fn channel_messages(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<MessagesQuery>,
@@ -174,6 +202,14 @@ pub(super) async fn channel_messages(
 }
 
 /// Get live status (active workers, branches, completed items) for all channels.
+#[utoipa::path(
+    get,
+    path = "/channels/status",
+    responses(
+        (status = 200, body = serde_json::Value),
+    ),
+    tag = "channels",
+)]
 pub(super) async fn channel_status(
     State(state): State<Arc<ApiState>>,
 ) -> Json<HashMap<String, serde_json::Value>> {
@@ -193,13 +229,13 @@ pub(super) async fn channel_status(
     Json(result)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct DeleteChannelQuery {
     agent_id: String,
     channel_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct SetChannelArchiveRequest {
     agent_id: String,
     channel_id: String,
@@ -207,6 +243,20 @@ pub(super) struct SetChannelArchiveRequest {
 }
 
 /// Delete a channel and its message history.
+#[utoipa::path(
+    delete,
+    path = "/channels",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID that owns the channel"),
+        ("channel_id" = String, Query, description = "Channel ID to delete"),
+    ),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 404, description = "Channel or agent not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
 pub(super) async fn delete_channel(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<DeleteChannelQuery>,
@@ -234,6 +284,17 @@ pub(super) async fn delete_channel(
 }
 
 /// Archive or unarchive a channel without deleting its history.
+#[utoipa::path(
+    post,
+    path = "/channels/archive",
+    request_body = SetChannelArchiveRequest,
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 404, description = "Channel or agent not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
 pub(super) async fn set_channel_archive(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<SetChannelArchiveRequest>,
@@ -274,6 +335,18 @@ fn archive_update_response_payload(archived: bool) -> serde_json::Value {
 }
 
 /// Cancel a running worker or branch via the API.
+#[utoipa::path(
+    post,
+    path = "/channels/cancel-process",
+    request_body = CancelProcessRequest,
+    responses(
+        (status = 200, body = CancelProcessResponse),
+        (status = 400, description = "Invalid process type or process ID"),
+        (status = 404, description = "Process or channel not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
 pub(super) async fn cancel_process(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<CancelProcessRequest>,
@@ -379,7 +452,7 @@ pub(super) async fn cancel_process(
 
 // ── Prompt Inspect ──────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct PromptInspectQuery {
     channel_id: String,
 }
@@ -388,6 +461,19 @@ pub(super) struct PromptInspectQuery {
 /// given channel. Returns the rendered system prompt and conversation
 /// history — useful for debugging prompt construction, coalescing,
 /// status block content, and context window usage.
+#[utoipa::path(
+    get,
+    path = "/channels/prompt/inspect",
+    params(
+        ("channel_id" = String, Query, description = "Channel ID to inspect"),
+    ),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 404, description = "Channel not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
 pub(super) async fn inspect_prompt(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<PromptInspectQuery>,
@@ -457,6 +543,7 @@ pub(super) async fn inspect_prompt(
                     &info.platform,
                     server_name,
                     info.display_name.as_deref(),
+                    Some(&info.id),
                 )
                 .ok()
         }
@@ -705,13 +792,24 @@ pub(super) async fn inspect_prompt(
 
 // ── Prompt Capture Toggle ──────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct PromptCaptureBody {
     channel_id: String,
     enabled: bool,
 }
 
 /// Enable or disable prompt capture for a specific channel.
+#[utoipa::path(
+    post,
+    path = "/channels/prompt/capture",
+    request_body = PromptCaptureBody,
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 404, description = "Agent or settings not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
 pub(super) async fn set_prompt_capture(
     State(state): State<Arc<ApiState>>,
     Json(body): Json<PromptCaptureBody>,
@@ -751,7 +849,7 @@ pub(super) async fn set_prompt_capture(
 
 // ── Prompt Snapshot History ────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct SnapshotListQuery {
     channel_id: String,
     #[serde(default = "default_snapshot_limit")]
@@ -763,6 +861,20 @@ fn default_snapshot_limit() -> usize {
 }
 
 /// List prompt snapshots for a channel (newest first).
+#[utoipa::path(
+    get,
+    path = "/channels/prompt/snapshots",
+    params(
+        ("channel_id" = String, Query, description = "Channel ID to list snapshots for"),
+        ("limit" = usize, Query, description = "Maximum number of snapshots to return (default: 50)"),
+    ),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 404, description = "Snapshot store not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
 pub(super) async fn list_prompt_snapshots(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<SnapshotListQuery>,
@@ -782,13 +894,27 @@ pub(super) async fn list_prompt_snapshots(
     })))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct SnapshotGetQuery {
     channel_id: String,
     timestamp_ms: i64,
 }
 
 /// Retrieve a specific prompt snapshot.
+#[utoipa::path(
+    get,
+    path = "/channels/prompt/snapshots/get",
+    params(
+        ("channel_id" = String, Query, description = "Channel ID the snapshot belongs to"),
+        ("timestamp_ms" = i64, Query, description = "Snapshot timestamp in milliseconds"),
+    ),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 404, description = "Snapshot or store not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
 pub(super) async fn get_prompt_snapshot(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<SnapshotGetQuery>,

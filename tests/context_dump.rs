@@ -122,9 +122,6 @@ async fn bootstrap_deps() -> anyhow::Result<(spacebot::AgentDeps, spacebot::conf
         links: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
         agent_names: Arc::new(std::collections::HashMap::new()),
         humans: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
-        task_store_registry: Arc::new(arc_swap::ArcSwap::from_pointee(
-            std::collections::HashMap::new(),
-        )),
         process_control_registry: Arc::new(
             spacebot::agent::process_control::ProcessControlRegistry::new(),
         ),
@@ -190,7 +187,7 @@ fn build_channel_system_prompt(rc: &spacebot::config::RuntimeConfig) -> String {
         .expect("failed to render worker capabilities");
 
     let conversation_context = prompt_engine
-        .render_conversation_context("discord", Some("Test Server"), Some("#general"))
+        .render_conversation_context("discord", Some("Test Server"), Some("#general"), None)
         .ok();
 
     let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };

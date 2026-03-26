@@ -371,7 +371,7 @@ function WorkerDetail({
 }) {
 	const isLive = detail.status === "running" || !!liveWorker;
 	const isIdle = liveWorker?.isIdle ?? detail.status === "idle";
-	const duration = durationBetween(detail.started_at, detail.completed_at);
+	const duration = durationBetween(detail.started_at, detail.completed_at ?? null);
 	const displayStatus = liveWorker?.status;
 	const currentTool = liveWorker?.currentTool;
 	const toolCalls = liveWorker?.toolCalls ?? detail.tool_calls ?? 0;
@@ -443,13 +443,13 @@ function WorkerDetail({
 				<div className="flex items-center justify-between gap-3">
 					<div className="flex items-center gap-3 text-tiny text-ink-faint">
 						{detail.channel_name && <span>{detail.channel_name}</span>}
-						{hasOpenCodeEmbed && detail.opencode_port && (
-							<OpenCodeDirectLink
-								port={detail.opencode_port}
-								sessionId={detail.opencode_session_id!}
-								directory={detail.directory}
-							/>
-						)}
+				{hasOpenCodeEmbed && detail.opencode_port && (
+					<OpenCodeDirectLink
+						port={detail.opencode_port}
+						sessionId={detail.opencode_session_id!}
+						directory={detail.directory ?? null}
+					/>
+				)}
 						{isRunning ? (
 							<span>
 								Running for{" "}
@@ -512,12 +512,12 @@ function WorkerDetail({
 			</div>
 
 			{/* Content */}
-			{activeTab === "opencode" && hasOpenCodeEmbed ? (
-				<OpenCodeEmbed
-					port={detail.opencode_port!}
-					sessionId={detail.opencode_session_id!}
-					directory={detail.directory}
-				/>
+		{activeTab === "opencode" && hasOpenCodeEmbed ? (
+			<OpenCodeEmbed
+				port={detail.opencode_port!}
+				sessionId={detail.opencode_session_id!}
+				directory={detail.directory ?? null}
+			/>
 			) : (
 				<div ref={transcriptRef} className="flex-1 overflow-y-auto">
 					{/* Result section */}

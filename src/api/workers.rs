@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct WorkerListQuery {
     agent_id: String,
     #[serde(default = "default_limit")]
@@ -25,13 +25,13 @@ fn default_limit() -> i64 {
     50
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct WorkerListResponse {
     workers: Vec<WorkerListItem>,
     total: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct WorkerListItem {
     id: String,
     task: String,
@@ -60,13 +60,13 @@ pub(super) struct WorkerListItem {
     project_name: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct WorkerDetailQuery {
     agent_id: String,
     worker_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct WorkerDetailResponse {
     id: String,
     task: String,
@@ -90,6 +90,22 @@ pub(super) struct WorkerDetailResponse {
 }
 
 /// List worker runs for an agent, with live status merged from StatusBlocks.
+#[utoipa::path(
+    get,
+    path = "/agents/workers",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID"),
+        ("limit" = i64, Query, description = "Maximum number of results to return"),
+        ("offset" = i64, Query, description = "Number of results to skip"),
+        ("status" = Option<String>, Query, description = "Filter by worker status"),
+    ),
+    responses(
+        (status = 200, body = WorkerListResponse),
+        (status = 404, description = "Agent not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "workers",
+)]
 pub(super) async fn list_workers(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<WorkerListQuery>,
@@ -165,6 +181,20 @@ pub(super) async fn list_workers(
 }
 
 /// Get full detail for a single worker run, including decompressed transcript.
+#[utoipa::path(
+    get,
+    path = "/agents/workers/detail",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID"),
+        ("worker_id" = String, Query, description = "Worker ID"),
+    ),
+    responses(
+        (status = 200, body = WorkerDetailResponse),
+        (status = 404, description = "Agent or worker not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "workers",
+)]
 pub(super) async fn worker_detail(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<WorkerDetailQuery>,

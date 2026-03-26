@@ -1,5 +1,4 @@
 export const BASE_PATH: string = (window as any).__SPACEBOT_BASE_PATH || "";
-export const IS_TAURI: boolean = !!(window as any).__TAURI_INTERNALS__;
 
 /**
  * Dynamic server URL for the Tauri desktop app. When set, all API
@@ -19,26 +18,85 @@ function getApiBase(): string {
 	return BASE_PATH + "/api";
 }
 
-export interface StatusResponse {
-	status: string;
-	version: string;
-	pid: number;
-	uptime_seconds: number;
-}
+import type * as Types from "./types";
 
-export interface ChannelInfo {
-	agent_id: string;
-	id: string;
-	platform: string;
-	display_name: string | null;
-	is_active: boolean;
-	last_activity_at: string;
-	created_at: string;
-}
+// Re-export commonly used types from schema for backward compatibility
+// Only re-export types that don't have local definitions with extra fields
+export type {
+	// System
+	StatusResponse,
+	InstanceOverviewResponse,
+	// Channels
+	ChannelResponse,
+	ChannelsResponse,
+	MessagesResponse,
+	TimelineItem,
+	// Workers
+	WorkerListItem,
+	WorkerListResponse,
+	WorkerDetailResponse,
+	TranscriptStep,
+	// Agents
+	AgentInfo,
+	AgentsResponse,
+	AgentSummary,
+	AgentOverviewResponse,
+	AgentProfile,
+	AgentProfileResponse,
+	CronJobInfo,
+	// Memory (schema types only)
+	Memory,
+	Association,
+	RelationType,
+	MemoryGraphResponse,
+	MemoryGraphNeighborsResponse,
+	// Cortex chat (schema types)
+	CortexChatMessage,
+	CortexChatThread,
+	CortexChatToolCall,
+	CortexChatMessagesResponse,
+	CortexChatThreadsResponse,
+	// Config (schema types only)
+	GlobalSettingsResponse,
+	GlobalSettingsUpdateResponse,
+	RawConfigResponse,
+	RawConfigUpdateResponse,
+	// Providers
+	ProvidersResponse,
+	ProviderUpdateResponse,
+	ProviderModelTestResponse,
+	OpenAiOAuthBrowserStartResponse,
+	OpenAiOAuthBrowserStatusResponse,
+	ModelInfo,
+	ModelsResponse,
+	// Ingest
+	IngestFileInfo,
+	IngestFilesResponse,
+	IngestUploadResponse,
+	IngestDeleteResponse,
+	// Messaging
+	PlatformStatus,
+	AdapterInstanceStatus,
+	MessagingStatusResponse,
+	CreateMessagingInstanceRequest,
+	MessagingInstanceActionResponse,
+} from "./types";
 
-export interface ChannelsResponse {
-	channels: ChannelInfo[];
-}
+// Import and re-export Topology types from schema
+import type {
+	TopologyAgent,
+	TopologyLink,
+	TopologyGroup,
+	TopologyHuman,
+	TopologyResponse,
+} from "./types";
+
+export type { TopologyAgent, TopologyLink, TopologyGroup, TopologyHuman, TopologyResponse };
+
+// Aliases for backward compatibility
+export type ChannelInfo = Types.ChannelResponse;
+export type WorkerRunInfo = Types.WorkerListItem;
+export type AssociationItem = Types.Association;
 
 export type ProcessType = "channel" | "branch" | "worker";
 
@@ -143,6 +201,15 @@ export interface ToolCompletedEvent {
 	result: string;
 }
 
+// -- Agent link events --
+
+export interface AgentMessageEvent {
+	from_agent_id: string;
+	to_agent_id: string;
+	link_id: string;
+	channel_id: string;
+}
+
 // -- OpenCode live transcript part types --
 
 export type OpenCodeToolState =
@@ -176,7 +243,7 @@ export interface CortexChatMessageEvent {
 	agent_id: string;
 	thread_id: string;
 	content: string;
-	tool_calls?: CortexChatToolCall[];
+	tool_calls?: Types.CortexChatToolCall[];
 }
 
 export type ApiEvent =
@@ -196,13 +263,7 @@ export type ApiEvent =
 	| WorkerTextEvent
 	| CortexChatMessageEvent;
 
-async function fetchJson<T>(path: string): Promise<T> {
-	const response = await fetch(`${getApiBase()}${path}`);
-	if (!response.ok) {
-		throw new Error(`API error: ${response.status}`);
-	}
-	return response.json();
-}
+// -- Timeline types (discriminated union parts) --
 
 export interface TimelineMessage {
 	type: "message";
@@ -233,12 +294,18 @@ export interface TimelineWorkerRun {
 	completed_at: string | null;
 }
 
-export type TimelineItem = TimelineMessage | TimelineBranchRun | TimelineWorkerRun;
+// Note: TimelineItem is re-exported from types.ts as a union type
 
-export interface MessagesResponse {
-	items: TimelineItem[];
-	has_more: boolean;
+async function fetchJson<T>(path: string): Promise<T> {
+	const response = await fetch(`${getApiBase()}${path}`);
+	if (!response.ok) {
+		throw new Error(`API error: ${response.status}`);
+	}
+	return response.json();
 }
+
+/** channel_id -> StatusBlockSnapshot */
+export type ChannelStatusResponse = Record<string, StatusBlockSnapshot>;
 
 export interface WorkerStatusInfo {
 	id: string;
@@ -269,9 +336,6 @@ export interface StatusBlockSnapshot {
 	active_branches: BranchStatusInfo[];
 	completed_items: CompletedItemInfo[];
 }
-
-/** channel_id -> StatusBlockSnapshot */
-export type ChannelStatusResponse = Record<string, StatusBlockSnapshot>;
 
 export interface PromptInspectResponse {
 	channel_id: string;
@@ -312,153 +376,9 @@ export interface PromptCaptureResponse {
 	capture_enabled: boolean;
 }
 
-// --- Workers API types ---
+// --- Memory helper types (extended beyond schema) ---
 
-export type ActionContent =
-	| { type: "text"; text: string }
-	| { type: "tool_call"; id: string; name: string; args: string };
-
-export type TranscriptStep =
-	| { type: "action"; content: ActionContent[] }
-	| { type: "tool_result"; call_id: string; name: string; text: string };
-
-export interface WorkerRunInfo {
-	id: string;
-	task: string;
-	status: string;
-	worker_type: string;
-	channel_id: string | null;
-	channel_name: string | null;
-	started_at: string;
-	completed_at: string | null;
-	has_transcript: boolean;
-	live_status: string | null;
-	tool_calls: number;
-	opencode_port: number | null;
-	opencode_session_id: string | null;
-	directory: string | null;
-	interactive: boolean;
-	project_id: string | null;
-	project_name: string | null;
-}
-
-export interface WorkerDetailResponse {
-	id: string;
-	task: string;
-	result: string | null;
-	status: string;
-	worker_type: string;
-	channel_id: string | null;
-	channel_name: string | null;
-	started_at: string;
-	completed_at: string | null;
-	transcript: TranscriptStep[] | null;
-	tool_calls: number;
-	opencode_session_id: string | null;
-	opencode_port: number | null;
-	interactive: boolean;
-	directory: string | null;
-}
-
-export interface WorkerListResponse {
-	workers: WorkerRunInfo[];
-	total: number;
-}
-
-export interface AgentInfo {
-	id: string;
-	display_name?: string;
-	role?: string;
-	gradient_start?: string;
-	gradient_end?: string;
-	workspace: string;
-	context_window: number;
-	max_turns: number;
-	max_concurrent_branches: number;
-	max_concurrent_workers: number;
-}
-
-export interface AgentsResponse {
-	agents: AgentInfo[];
-}
-
-export interface CronJobInfo {
-	id: string;
-	prompt: string;
-	cron_expr: string | null;
-	interval_secs: number;
-	delivery_target: string;
-	enabled: boolean;
-	run_once: boolean;
-	active_hours: [number, number] | null;
-}
-
-export interface AgentOverviewResponse {
-	memory_counts: Record<string, number>;
-	memory_total: number;
-	channel_count: number;
-	cron_jobs: CronJobInfo[];
-	last_bulletin_at: string | null;
-	recent_cortex_events: CortexEvent[];
-	memory_daily: { date: string; count: number }[];
-	activity_daily: { date: string; branches: number; workers: number }[];
-	activity_heatmap: { day: number; hour: number; count: number }[];
-	latest_bulletin: string | null;
-}
-
-export interface AgentProfile {
-	agent_id: string;
-	display_name: string | null;
-	status: string | null;
-	bio: string | null;
-	avatar_seed: string | null;
-	generated_at: string;
-	updated_at: string;
-}
-
-export interface AgentProfileResponse {
-	profile: AgentProfile | null;
-}
-
-export interface AgentSummary {
-	id: string;
-	channel_count: number;
-	memory_total: number;
-	cron_job_count: number;
-	activity_sparkline: number[];
-	last_activity_at: string | null;
-	last_bulletin_at: string | null;
-	profile: AgentProfile | null;
-}
-
-export interface InstanceOverviewResponse {
-	version: string;
-	uptime_seconds: number;
-	pid: number;
-	agents: AgentSummary[];
-}
-
-export type Deployment = "docker" | "hosted" | "native";
-
-export interface UpdateStatus {
-	current_version: string;
-	latest_version: string | null;
-	update_available: boolean;
-	release_url: string | null;
-	release_notes: string | null;
-	deployment: Deployment;
-	can_apply: boolean;
-	cannot_apply_reason: string | null;
-	docker_image: string | null;
-	checked_at: string | null;
-	error: string | null;
-}
-
-export interface UpdateApplyResponse {
-	status: "updating" | "error";
-	error?: string;
-}
-
+// Extended MemoryType with additional values not yet in schema
 export type MemoryType =
 	| "fact"
 	| "preference"
@@ -476,6 +396,7 @@ export const MEMORY_TYPES: MemoryType[] = [
 
 export type MemorySort = "recent" | "importance" | "most_accessed";
 
+// Extended MemoryItem with forgotten field (not yet in schema)
 export interface MemoryItem {
 	id: string;
 	content: string;
@@ -505,34 +426,6 @@ export interface MemoriesSearchResponse {
 	results: MemorySearchResultItem[];
 }
 
-export type RelationType =
-	| "related_to"
-	| "updates"
-	| "contradicts"
-	| "caused_by"
-	| "result_of"
-	| "part_of";
-
-export interface AssociationItem {
-	id: string;
-	source_id: string;
-	target_id: string;
-	relation_type: RelationType;
-	weight: number;
-	created_at: string;
-}
-
-export interface MemoryGraphResponse {
-	nodes: MemoryItem[];
-	edges: AssociationItem[];
-	total: number;
-}
-
-export interface MemoryGraphNeighborsResponse {
-	nodes: MemoryItem[];
-	edges: AssociationItem[];
-}
-
 export interface MemoryGraphParams {
 	limit?: number;
 	offset?: number;
@@ -556,6 +449,8 @@ export interface MemoriesSearchParams {
 	limit?: number;
 	memory_type?: MemoryType;
 }
+
+// --- Cortex event types ---
 
 export type CortexEventType =
 	| "bulletin_generated"
@@ -599,48 +494,13 @@ export interface CortexEventsParams {
 	event_type?: CortexEventType;
 }
 
-// -- Cortex Chat --
-
-export interface CortexChatToolCall {
-	id: string;
-	tool: string;
-	args: string;
-	result: string | null;
-	status: "running" | "completed" | "error";
-}
-
-export interface CortexChatMessage {
-	id: string;
-	thread_id: string;
-	role: "user" | "assistant";
-	content: string;
-	channel_context: string | null;
-	created_at: string;
-	tool_calls?: CortexChatToolCall[];
-}
-
-export interface CortexChatMessagesResponse {
-	messages: CortexChatMessage[];
-	thread_id: string;
-}
-
-export interface CortexChatThread {
-	thread_id: string;
-	preview: string;
-	message_count: number;
-	first_message_at: string;
-	last_message_at: string;
-}
-
-export interface CortexChatThreadsResponse {
-	threads: CortexChatThread[];
-}
+// -- Cortex Chat SSE types (not in schema) --
 
 export type CortexChatSSEEvent =
 	| { type: "thinking" }
 	| { type: "tool_started"; tool: string; call_id: string; args: string }
 	| { type: "tool_completed"; tool: string; call_id: string; args: string; result: string; result_preview: string }
-	| { type: "done"; full_text: string; tool_calls: CortexChatToolCall[] }
+	| { type: "done"; full_text: string; tool_calls: Types.CortexChatToolCall[] }
 	| { type: "error"; message: string };
 
 // -- Factory Presets --
@@ -663,20 +523,7 @@ export interface PresetsResponse {
 	presets: PresetMeta[];
 }
 
-export interface IdentityFiles {
-	soul: string | null;
-	identity: string | null;
-	role: string | null;
-}
-
-export interface IdentityUpdateRequest {
-	agent_id: string;
-	soul?: string | null;
-	identity?: string | null;
-	role?: string | null;
-}
-
-// -- Agent Config Types --
+// -- Config types with frontend-specific extensions --
 
 export interface RoutingSection {
 	channel: string;
@@ -931,103 +778,62 @@ export interface CronExecutionsParams {
 	limit?: number;
 }
 
-export interface ProviderStatus {
-	anthropic: boolean;
-	openai: boolean;
-	openai_chatgpt: boolean;
-	openrouter: boolean;
-	kilo: boolean;
-	zhipu: boolean;
-	groq: boolean;
-	together: boolean;
-	fireworks: boolean;
-	deepseek: boolean;
-	xai: boolean;
-	mistral: boolean;
-	gemini: boolean;
-	ollama: boolean;
-	opencode_zen: boolean;
-	opencode_go: boolean;
-	nvidia: boolean;
-	minimax: boolean;
-	minimax_cn: boolean;
-	moonshot: boolean;
-	zai_coding_plan: boolean;
-	github_copilot: boolean;
+// -- Update Types --
+
+export type Deployment = "docker" | "hosted" | "native";
+
+export interface UpdateStatus {
+	current_version: string;
+	latest_version: string | null;
+	update_available: boolean;
+	release_url: string | null;
+	release_notes: string | null;
+	deployment: Deployment;
+	can_apply: boolean;
+	cannot_apply_reason: string | null;
+	docker_image: string | null;
+	checked_at: string | null;
+	error: string | null;
 }
 
-export interface ProvidersResponse {
-	providers: ProviderStatus;
-	has_any: boolean;
+export interface UpdateApplyResponse {
+	status: "updating" | "error";
+	error?: string;
 }
 
-export interface ProviderActionResponse {
-	success: boolean;
-	message: string;
+// -- Global Settings Types --
+
+export interface OpenCodePermissions {
+	edit: string;
+	bash: string;
+	webfetch: string;
 }
 
-export interface ProviderModelTestResponse {
-	success: boolean;
-	message: string;
-	provider: string;
-	model: string;
-	sample: string | null;
+export interface OpenCodeSettings {
+	enabled: boolean;
+	path: string;
+	max_servers: number;
+	server_startup_timeout_secs: number;
+	max_restart_retries: number;
+	permissions: OpenCodePermissions;
 }
 
-export interface OpenAiOAuthBrowserStartResponse {
-	success: boolean;
-	message: string;
-	user_code: string | null;
-	verification_url: string | null;
-	state: string | null;
+export interface OpenCodeSettingsUpdate {
+	enabled?: boolean;
+	path?: string;
+	max_servers?: number;
+	server_startup_timeout_secs?: number;
+	max_restart_retries?: number;
+	permissions?: Partial<OpenCodePermissions>;
 }
 
-export interface OpenAiOAuthBrowserStatusResponse {
-	found: boolean;
-	done: boolean;
-	success: boolean;
-	message: string | null;
-}
-
-// -- Model Types --
-
-export interface ModelInfo {
-	id: string;
-	name: string;
-	provider: string;
-	context_window: number | null;
-	tool_call: boolean;
-	reasoning: boolean;
-	input_audio: boolean;
-}
-
-export interface ModelsResponse {
-	models: ModelInfo[];
-}
-
-// -- Ingest Types --
-
-export interface IngestFileInfo {
-	content_hash: string;
-	filename: string;
-	file_size: number;
-	total_chunks: number;
-	chunks_completed: number;
-	status: "queued" | "processing" | "completed" | "failed";
-	started_at: string;
-	completed_at: string | null;
-}
-
-export interface IngestFilesResponse {
-	files: IngestFileInfo[];
-}
-
-export interface IngestUploadResponse {
-	uploaded: string[];
-}
-
-export interface IngestDeleteResponse {
-	success: boolean;
+export interface GlobalSettingsUpdate {
+	brave_search_key?: string | null;
+	api_enabled?: boolean;
+	api_port?: number;
+	api_bind?: string;
+	worker_log_mode?: string;
+	opencode?: OpenCodeSettingsUpdate;
 }
 
 // -- Skills Types --
@@ -1104,12 +910,6 @@ export interface UploadSkillResponse {
 	installed: string[];
 }
 
-export interface RegistrySkillContentResponse {
-	source: string;
-	skill_id: string;
-	content: string | null;
-}
-
 // -- Task Types --
 
 export type TaskStatus = "pending_approval" | "backlog" | "ready" | "in_progress" | "done";
@@ -1122,12 +922,13 @@ export interface TaskSubtask {
 
 export interface TaskItem {
 	id: string;
-	agent_id: string;
 	task_number: number;
 	title: string;
 	description?: string;
 	status: TaskStatus;
 	priority: TaskPriority;
+	owner_agent_id: string;
+	assigned_agent_id: string;
 	subtasks: TaskSubtask[];
 	metadata: Record<string, unknown>;
 	source_memory_id?: string;
@@ -1154,6 +955,8 @@ export interface TaskActionResponse {
 }
 
 export interface CreateTaskRequest {
+	owner_agent_id: string;
+	assigned_agent_id?: string;
 	title: string;
 	description?: string;
 	status?: TaskStatus;
@@ -1169,6 +972,7 @@ export interface UpdateTaskRequest {
 	description?: string;
 	status?: TaskStatus;
 	priority?: TaskPriority;
+	assigned_agent_id?: string;
 	subtasks?: TaskSubtask[];
 	metadata?: Record<string, unknown>;
 	complete_subtask?: number;
@@ -1177,71 +981,6 @@ export interface UpdateTaskRequest {
 }
 
 // -- Messaging / Bindings Types --
-
-export interface PlatformStatus {
-	configured: boolean;
-	enabled: boolean;
-}
-
-export interface AdapterInstanceStatus {
-	platform: string;
-	name: string | null;
-	runtime_key: string;
-	configured: boolean;
-	enabled: boolean;
-	binding_count: number;
-}
-
-export interface MessagingStatusResponse {
-	discord: PlatformStatus;
-	slack: PlatformStatus;
-	telegram: PlatformStatus;
-	webhook: PlatformStatus;
-	twitch: PlatformStatus;
-	email: PlatformStatus;
-	instances: AdapterInstanceStatus[];
-}
-
-export interface CreateMessagingInstanceRequest {
-	platform: string;
-	name?: string;
-	enabled?: boolean;
-	credentials: {
-		discord_token?: string;
-		slack_bot_token?: string;
-		slack_app_token?: string;
-		telegram_token?: string;
-		twitch_username?: string;
-		twitch_oauth_token?: string;
-		twitch_client_id?: string;
-		twitch_client_secret?: string;
-		twitch_refresh_token?: string;
-		email_imap_host?: string;
-		email_imap_port?: number;
-		email_imap_username?: string;
-		email_imap_password?: string;
-		email_smtp_host?: string;
-		email_smtp_port?: number;
-		email_smtp_username?: string;
-		email_smtp_password?: string;
-		email_from_address?: string;
-		webhook_port?: number;
-		webhook_bind?: string;
-		webhook_auth_token?: string;
-		mattermost_base_url?: string;
-		mattermost_token?: string;
-	};
-}
-
-export interface DeleteMessagingInstanceRequest {
-	platform: string;
-	name?: string;
-}
-
-export interface MessagingInstanceActionResponse {
-	success: boolean;
-	message: string;
-}
 
 export interface BindingInfo {
 	agent_id: string;
@@ -1335,66 +1074,7 @@ export interface DeleteBindingResponse {
 	message: string;
 }
 
-// -- Global Settings Types --
-
-export interface OpenCodePermissions {
-	edit: string;
-	bash: string;
-	webfetch: string;
-}
-
-export interface OpenCodeSettings {
-	enabled: boolean;
-	path: string;
-	max_servers: number;
-	server_startup_timeout_secs: number;
-	max_restart_retries: number;
-	permissions: OpenCodePermissions;
-}
-
-export interface OpenCodeSettingsUpdate {
-	enabled?: boolean;
-	path?: string;
-	max_servers?: number;
-	server_startup_timeout_secs?: number;
-	max_restart_retries?: number;
-	permissions?: Partial<OpenCodePermissions>;
-}
-
-export interface GlobalSettingsResponse {
-	brave_search_key: string | null;
-	api_enabled: boolean;
-	api_port: number;
-	api_bind: string;
-	worker_log_mode: string;
-	opencode: OpenCodeSettings;
-}
-
-export interface GlobalSettingsUpdate {
-	brave_search_key?: string | null;
-	api_enabled?: boolean;
-	api_port?: number;
-	api_bind?: string;
-	worker_log_mode?: string;
-	opencode?: OpenCodeSettingsUpdate;
-}
-
-export interface GlobalSettingsUpdateResponse {
-	success: boolean;
-	message: string;
-	requires_restart: boolean;
-}
-
-export interface RawConfigResponse {
-	content: string;
-}
-
-export interface RawConfigUpdateResponse {
-	success: boolean;
-	message: string;
-}
-
-// -- Agent Links & Topology --
+// -- Links & Topology Types --
 
 export type LinkDirection = "one_way" | "two_way";
 export type LinkKind = "hierarchical" | "peer";
@@ -1408,45 +1088,6 @@ export interface AgentLinkResponse {
 
 export interface LinksResponse {
 	links: AgentLinkResponse[];
-}
-
-export interface TopologyAgent {
-	id: string;
-	name: string;
-	display_name?: string;
-	role?: string;
-}
-
-export interface TopologyLink {
-	from: string;
-	to: string;
-	direction: string;
-	kind: string;
-}
-
-export interface TopologyGroup {
-	name: string;
-	agent_ids: string[];
-	color?: string;
-}
-
-export interface TopologyHuman {
-	id: string;
-	display_name?: string;
-	role?: string;
-	bio?: string;
-	description?: string;
-	discord_id?: string;
-	telegram_id?: string;
-	slack_id?: string;
-	email?: string;
-}
-
-export interface TopologyResponse {
-	agents: TopologyAgent[];
-	humans: TopologyHuman[];
-	links: TopologyLink[];
-	groups: TopologyGroup[];
 }
 
 export interface CreateHumanRequest {
@@ -1496,14 +1137,7 @@ export interface UpdateLinkRequest {
 	kind?: LinkKind;
 }
 
-export interface AgentMessageEvent {
-	from_agent_id: string;
-	to_agent_id: string;
-	link_id: string;
-	channel_id: string;
-}
-
-// ── Projects ─────────────────────────────────────────────────────────────
+// -- Projects Types --
 
 export type ProjectStatus = "active" | "archived";
 
@@ -1563,11 +1197,6 @@ export interface ProjectWithRelations extends Project {
 	worktrees: ProjectWorktreeWithRepo[];
 }
 
-export interface ProjectDetailResponse {
-	/** The flattened project + repos + worktrees (serde #[flatten]) */
-	[key: string]: unknown;
-}
-
 export interface ProjectActionResponse {
 	success: boolean;
 	message: string;
@@ -1618,7 +1247,7 @@ export interface CreateWorktreeRequest {
 	start_point?: string;
 }
 
-// ── Secrets ──────────────────────────────────────────────────────────────
+// -- Secrets Types --
 
 export type SecretCategory = "system" | "tool";
 export type StoreState = "unencrypted" | "locked" | "unlocked";
@@ -1679,13 +1308,13 @@ export interface MigrateResponse {
 }
 
 export const api = {
-	status: () => fetchJson<StatusResponse>("/status"),
-	overview: () => fetchJson<InstanceOverviewResponse>("/overview"),
-	agents: () => fetchJson<AgentsResponse>("/agents"),
+	status: () => fetchJson<Types.StatusResponse>("/status"),
+	overview: () => fetchJson<Types.InstanceOverviewResponse>("/agents/instance"),
+	agents: () => fetchJson<Types.AgentsResponse>("/agents"),
 	factoryPresets: () => fetchJson<PresetsResponse>("/factory/presets"),
 	agentOverview: (agentId: string) =>
-		fetchJson<AgentOverviewResponse>(`/agents/overview?agent_id=${encodeURIComponent(agentId)}`),
-	channels: () => fetchJson<ChannelsResponse>("/channels"),
+		fetchJson<Types.AgentOverviewResponse>(`/agents/overview?agent_id=${encodeURIComponent(agentId)}`),
+	channels: () => fetchJson<Types.ChannelsResponse>("/channels"),
 	deleteChannel: async (agentId: string, channelId: string) => {
 		const params = new URLSearchParams({ agent_id: agentId, channel_id: channelId });
 		const response = await fetch(`${getApiBase()}/channels?${params}`, { method: "DELETE" });
@@ -1695,7 +1324,7 @@ export const api = {
 	channelMessages: (channelId: string, limit = 20, before?: string) => {
 		const params = new URLSearchParams({ channel_id: channelId, limit: String(limit) });
 		if (before) params.set("before", before);
-		return fetchJson<MessagesResponse>(`/channels/messages?${params}`);
+		return fetchJson<Types.MessagesResponse>(`/channels/messages?${params}`);
 	},
 	channelStatus: () => fetchJson<ChannelStatusResponse>("/channels/status"),
 	inspectPrompt: (channelId: string) =>
@@ -1722,11 +1351,11 @@ export const api = {
 		if (params.limit) search.set("limit", String(params.limit));
 		if (params.offset) search.set("offset", String(params.offset));
 		if (params.status) search.set("status", params.status);
-		return fetchJson<WorkerListResponse>(`/agents/workers?${search}`);
+		return fetchJson<Types.WorkerListResponse>(`/agents/workers?${search}`);
 	},
 	workerDetail: (agentId: string, workerId: string) =>
-		fetchJson<WorkerDetailResponse>(`/agents/workers/detail?agent_id=${encodeURIComponent(agentId)}&worker_id=${encodeURIComponent(workerId)}`),
-	agentMemories: (agentId: string, params: MemoriesListParams = {}) => {
+		fetchJson<Types.WorkerDetailResponse>(`/agents/workers/detail?agent_id=${encodeURIComponent(agentId)}&worker_id=${encodeURIComponent(workerId)}`),
+	agentMemories: (agentId: string, params: MemoryGraphParams = {}) => {
 		const search = new URLSearchParams({ agent_id: agentId });
 		if (params.limit) search.set("limit", String(params.limit));
 		if (params.offset) search.set("offset", String(params.offset));
@@ -1746,13 +1375,13 @@ export const api = {
 		if (params.offset) search.set("offset", String(params.offset));
 		if (params.memory_type) search.set("memory_type", params.memory_type);
 		if (params.sort) search.set("sort", params.sort);
-		return fetchJson<MemoryGraphResponse>(`/agents/memories/graph?${search}`);
+		return fetchJson<Types.MemoryGraphResponse>(`/agents/memories/graph?${search}`);
 	},
 	memoryGraphNeighbors: (agentId: string, memoryId: string, params: MemoryGraphNeighborsParams = {}) => {
 		const search = new URLSearchParams({ agent_id: agentId, memory_id: memoryId });
 		if (params.depth) search.set("depth", String(params.depth));
 		if (params.exclude?.length) search.set("exclude", params.exclude.join(","));
-		return fetchJson<MemoryGraphNeighborsResponse>(`/agents/memories/graph/neighbors?${search}`);
+		return fetchJson<Types.MemoryGraphNeighborsResponse>(`/agents/memories/graph/neighbors?${search}`);
 	},
 	cortexEvents: (agentId: string, params: CortexEventsParams = {}) => {
 		const search = new URLSearchParams({ agent_id: agentId });
@@ -1764,7 +1393,7 @@ export const api = {
 	cortexChatMessages: (agentId: string, threadId?: string, limit = 50) => {
 		const search = new URLSearchParams({ agent_id: agentId, limit: String(limit) });
 		if (threadId) search.set("thread_id", threadId);
-		return fetchJson<CortexChatMessagesResponse>(`/cortex-chat/messages?${search}`);
+		return fetchJson<Types.CortexChatMessagesResponse>(`/cortex-chat/messages?${search}`);
 	},
 	cortexChatSend: (agentId: string, threadId: string, message: string, channelId?: string) =>
 		fetch(`${getApiBase()}/cortex-chat/send`, {
@@ -1778,7 +1407,7 @@ export const api = {
 			}),
 		}),
 	cortexChatThreads: (agentId: string) =>
-		fetchJson<CortexChatThreadsResponse>(
+		fetchJson<Types.CortexChatThreadsResponse>(
 			`/cortex-chat/threads?agent_id=${encodeURIComponent(agentId)}`,
 		),
 	cortexChatDeleteThread: async (agentId: string, threadId: string) => {
@@ -1790,10 +1419,10 @@ export const api = {
 		if (!response.ok) throw new Error(`HTTP ${response.status}`);
 	},
 	agentProfile: (agentId: string) =>
-		fetchJson<AgentProfileResponse>(`/agents/profile?agent_id=${encodeURIComponent(agentId)}`),
+		fetchJson<Types.AgentProfileResponse>(`/agents/profile?agent_id=${encodeURIComponent(agentId)}`),
 	agentIdentity: (agentId: string) =>
-		fetchJson<IdentityFiles>(`/agents/identity?agent_id=${encodeURIComponent(agentId)}`),
-	updateIdentity: async (request: IdentityUpdateRequest) => {
+		fetchJson<{ soul: string | null; identity: string | null; role: string | null }>(`/agents/identity?agent_id=${encodeURIComponent(agentId)}`),
+	updateIdentity: async (request: { agent_id: string; soul?: string | null; identity?: string | null; role?: string | null }) => {
 		const response = await fetch(`${getApiBase()}/agents/identity`, {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
@@ -1802,7 +1431,7 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<IdentityFiles>;
+		return response.json() as Promise<{ soul: string | null; identity: string | null; role: string | null }>;
 	},
 	createAgent: async (agentId: string, displayName?: string, role?: string) => {
 		const response = await fetch(`${getApiBase()}/agents`, {
@@ -1953,7 +1582,7 @@ export const api = {
 	},
 
 	// Provider management
-	providers: () => fetchJson<ProvidersResponse>("/providers"),
+	providers: () => fetchJson<Types.ProvidersResponse>("/providers"),
 	updateProvider: async (provider: string, apiKey: string, model: string) => {
 		const response = await fetch(`${getApiBase()}/providers`, {
 			method: "PUT",
@@ -1963,7 +1592,7 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<ProviderActionResponse>;
+		return response.json() as Promise<Types.ProviderUpdateResponse>;
 	},
 	testProviderModel: async (provider: string, apiKey: string, model: string) => {
 		const response = await fetch(`${getApiBase()}/providers/test`, {
@@ -1974,7 +1603,7 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<ProviderModelTestResponse>;
+		return response.json() as Promise<Types.ProviderModelTestResponse>;
 	},
 	startOpenAiOAuthBrowser: async (params: {model: string}) => {
 		const response = await fetch(`${getApiBase()}/providers/openai/oauth/browser/start`, {
@@ -1987,7 +1616,7 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<OpenAiOAuthBrowserStartResponse>;
+		return response.json() as Promise<Types.OpenAiOAuthBrowserStartResponse>;
 	},
 	openAiOAuthBrowserStatus: async (state: string) => {
 		const response = await fetch(
@@ -1996,7 +1625,7 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<OpenAiOAuthBrowserStatusResponse>;
+		return response.json() as Promise<Types.OpenAiOAuthBrowserStatusResponse>;
 	},
 	removeProvider: async (provider: string) => {
 		const response = await fetch(`${getApiBase()}/providers/${encodeURIComponent(provider)}`, {
@@ -2005,7 +1634,7 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<ProviderActionResponse>;
+		return response.json() as Promise<Types.ProviderUpdateResponse>;
 	},
 
 	// Model listing
@@ -2014,7 +1643,7 @@ export const api = {
 		if (provider) params.set("provider", provider);
 		if (capability) params.set("capability", capability);
 		const query = params.toString() ? `?${params.toString()}` : "";
-		return fetchJson<ModelsResponse>(`/models${query}`);
+		return fetchJson<Types.ModelsResponse>(`/models${query}`);
 	},
 	refreshModels: async () => {
 		const response = await fetch(`${getApiBase()}/models/refresh`, {
@@ -2023,12 +1652,12 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<ModelsResponse>;
+		return response.json() as Promise<Types.ModelsResponse>;
 	},
 
 	// Ingest API
 	ingestFiles: (agentId: string) =>
-		fetchJson<IngestFilesResponse>(`/agents/ingest/files?agent_id=${encodeURIComponent(agentId)}`),
+		fetchJson<Types.IngestFilesResponse>(`/agents/ingest/files?agent_id=${encodeURIComponent(agentId)}`),
 
 	uploadIngestFiles: async (agentId: string, files: File[]) => {
 		const formData = new FormData();
@@ -2042,7 +1671,7 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<IngestUploadResponse>;
+		return response.json() as Promise<Types.IngestUploadResponse>;
 	},
 
 	deleteIngestFile: async (agentId: string, contentHash: string) => {
@@ -2053,11 +1682,11 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<IngestDeleteResponse>;
+		return response.json() as Promise<Types.IngestDeleteResponse>;
 	},
 
 	// Messaging / Bindings API
-	messagingStatus: () => fetchJson<MessagingStatusResponse>("/messaging/status"),
+	messagingStatus: () => fetchJson<Types.MessagingStatusResponse>("/messaging/status"),
 
 	bindings: (agentId?: string) => {
 		const params = agentId
@@ -2130,7 +1759,7 @@ export const api = {
 		return response.json() as Promise<{ success: boolean; message: string }>;
 	},
 
-	createMessagingInstance: async (request: CreateMessagingInstanceRequest) => {
+	createMessagingInstance: async (request: Types.CreateMessagingInstanceRequest) => {
 		const response = await fetch(`${getApiBase()}/messaging/instances`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -2139,10 +1768,10 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<MessagingInstanceActionResponse>;
+		return response.json() as Promise<Types.MessagingInstanceActionResponse>;
 	},
 
-	deleteMessagingInstance: async (request: DeleteMessagingInstanceRequest) => {
+	deleteMessagingInstance: async (request: Types.DeleteMessagingInstanceRequest) => {
 		const response = await fetch(`${getApiBase()}/messaging/instances`, {
 			method: "DELETE",
 			headers: { "Content-Type": "application/json" },
@@ -2151,13 +1780,13 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<MessagingInstanceActionResponse>;
+		return response.json() as Promise<Types.MessagingInstanceActionResponse>;
 	},
 
 	// Global Settings API
-	globalSettings: () => fetchJson<GlobalSettingsResponse>("/settings"),
+	globalSettings: () => fetchJson<Types.GlobalSettingsResponse>("/settings"),
 	
-	updateGlobalSettings: async (settings: GlobalSettingsUpdate) => {
+	updateGlobalSettings: async (settings: Types.GlobalSettingsUpdate) => {
 		const response = await fetch(`${getApiBase()}/settings`, {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
@@ -2166,11 +1795,11 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<GlobalSettingsUpdateResponse>;
+		return response.json() as Promise<Types.GlobalSettingsUpdateResponse>;
 	},
 
 	// Raw config API
-	rawConfig: () => fetchJson<RawConfigResponse>("/config/raw"),
+	rawConfig: () => fetchJson<Types.RawConfigResponse>("/config/raw"),
 	updateRawConfig: async (content: string) => {
 		const response = await fetch(`${getApiBase()}/config/raw`, {
 			method: "PUT",
@@ -2180,7 +1809,7 @@ export const api = {
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
-		return response.json() as Promise<RawConfigUpdateResponse>;
+		return response.json() as Promise<Types.RawConfigUpdateResponse>;
 	},
 
 	// Changelog API
@@ -2266,7 +1895,7 @@ export const api = {
 		),
 
 	registrySkillContent: (source: string, skillId: string) =>
-		fetchJson<RegistrySkillContentResponse>(
+		fetchJson<SkillContentResponse>(
 			`/skills/registry/content?source=${encodeURIComponent(source)}&skill_id=${encodeURIComponent(skillId)}`,
 		),
 
@@ -2401,54 +2030,68 @@ export const api = {
 		fetch(`${getApiBase()}/webchat/history?agent_id=${encodeURIComponent(agentId)}&session_id=${encodeURIComponent(sessionId)}&limit=${limit}`),
 
 	// Tasks API
-	listTasks: (agentId: string, params?: { status?: TaskStatus; priority?: TaskPriority; limit?: number }) => {
-		const search = new URLSearchParams({ agent_id: agentId });
+	listTasks: (params?: { agent_id?: string; owner_agent_id?: string; assigned_agent_id?: string; status?: TaskStatus; priority?: TaskPriority; created_by?: string; limit?: number }) => {
+		const search = new URLSearchParams();
+		if (params?.agent_id) search.set("agent_id", params.agent_id);
+		if (params?.owner_agent_id) search.set("owner_agent_id", params.owner_agent_id);
+		if (params?.assigned_agent_id) search.set("assigned_agent_id", params.assigned_agent_id);
 		if (params?.status) search.set("status", params.status);
 		if (params?.priority) search.set("priority", params.priority);
+		if (params?.created_by) search.set("created_by", params.created_by);
 		if (params?.limit) search.set("limit", String(params.limit));
-		return fetchJson<TaskListResponse>(`/agents/tasks?${search}`);
+		const query = search.toString();
+		return fetchJson<TaskListResponse>(query ? `/tasks?${query}` : "/tasks");
 	},
-	getTask: (agentId: string, taskNumber: number) =>
-		fetchJson<TaskResponse>(`/agents/tasks/${taskNumber}?agent_id=${encodeURIComponent(agentId)}`),
-	createTask: async (agentId: string, request: CreateTaskRequest): Promise<TaskResponse> => {
-		const response = await fetch(`${getApiBase()}/agents/tasks`, {
+	getTask: (taskNumber: number) =>
+		fetchJson<TaskResponse>(`/tasks/${taskNumber}`),
+	createTask: async (request: CreateTaskRequest): Promise<TaskResponse> => {
+		const response = await fetch(`${getApiBase()}/tasks`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ ...request, agent_id: agentId }),
+			body: JSON.stringify(request),
 		});
 		if (!response.ok) throw new Error(`API error: ${response.status}`);
 		return response.json() as Promise<TaskResponse>;
 	},
-	updateTask: async (agentId: string, taskNumber: number, request: UpdateTaskRequest): Promise<TaskResponse> => {
-		const response = await fetch(`${getApiBase()}/agents/tasks/${taskNumber}`, {
+	updateTask: async (taskNumber: number, request: UpdateTaskRequest): Promise<TaskResponse> => {
+		const response = await fetch(`${getApiBase()}/tasks/${taskNumber}`, {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ ...request, agent_id: agentId }),
+			body: JSON.stringify(request),
 		});
 		if (!response.ok) throw new Error(`API error: ${response.status}`);
 		return response.json() as Promise<TaskResponse>;
 	},
-	deleteTask: async (agentId: string, taskNumber: number): Promise<TaskActionResponse> => {
-		const response = await fetch(`${getApiBase()}/agents/tasks/${taskNumber}?agent_id=${encodeURIComponent(agentId)}`, {
+	deleteTask: async (taskNumber: number): Promise<TaskActionResponse> => {
+		const response = await fetch(`${getApiBase()}/tasks/${taskNumber}`, {
 			method: "DELETE",
 		});
 		if (!response.ok) throw new Error(`API error: ${response.status}`);
 		return response.json() as Promise<TaskActionResponse>;
 	},
-	approveTask: async (agentId: string, taskNumber: number, approvedBy?: string): Promise<TaskResponse> => {
-		const response = await fetch(`${getApiBase()}/agents/tasks/${taskNumber}/approve`, {
+	approveTask: async (taskNumber: number, approvedBy?: string): Promise<TaskResponse> => {
+		const response = await fetch(`${getApiBase()}/tasks/${taskNumber}/approve`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ agent_id: agentId, approved_by: approvedBy }),
+			body: JSON.stringify({ approved_by: approvedBy }),
 		});
 		if (!response.ok) throw new Error(`API error: ${response.status}`);
 		return response.json() as Promise<TaskResponse>;
 	},
-	executeTask: async (agentId: string, taskNumber: number): Promise<TaskResponse> => {
-		const response = await fetch(`${getApiBase()}/agents/tasks/${taskNumber}/execute`, {
+	executeTask: async (taskNumber: number): Promise<TaskResponse> => {
+		const response = await fetch(`${getApiBase()}/tasks/${taskNumber}/execute`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ agent_id: agentId }),
+			body: JSON.stringify({}),
+		});
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<TaskResponse>;
+	},
+	assignTask: async (taskNumber: number, assignedAgentId: string): Promise<TaskResponse> => {
+		const response = await fetch(`${getApiBase()}/tasks/${taskNumber}/assign`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ assigned_agent_id: assignedAgentId }),
 		});
 		if (!response.ok) throw new Error(`API error: ${response.status}`);
 		return response.json() as Promise<TaskResponse>;
@@ -2615,6 +2258,18 @@ export const api = {
 		);
 		if (!response.ok) throw new Error(`API error: ${response.status}`);
 		return response.json() as Promise<ProjectActionResponse>;
+	},
+
+	// TTS / Voice overlay methods (stubs)
+	ttsProfiles: async (_agentId: string): Promise<{ id: string; name: string }[]> => {
+		// TODO: Implement actual TTS profiles endpoint
+		return [];
+	},
+
+	webChatSendAudio: async (agentId: string, _sessionId: string, _blob: Blob): Promise<Response> => {
+		// TODO: Implement actual audio sending endpoint
+		console.warn("webChatSendAudio not implemented", agentId);
+		return new Response(null, { status: 501 });
 	},
 
 	getEventsUrl: () => `${getApiBase()}/events`,

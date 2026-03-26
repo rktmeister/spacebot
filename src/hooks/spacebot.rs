@@ -918,6 +918,17 @@ where
 
         let is_tool_error = result.starts_with("Toolset error:");
 
+        // Log tool errors so operators can see when tools fail (including
+        // deserialization errors that happen before the tool's call() method).
+        if is_tool_error {
+            tracing::warn!(
+                process_id = %self.process_id,
+                tool_name = %tool_name,
+                error = %result,
+                "tool call failed"
+            );
+        }
+
         if !is_tool_error
             && tool_name == "memory_persistence_complete"
             && let Some(contract_state) = &self.memory_persistence_contract

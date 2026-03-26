@@ -23,7 +23,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 
 /// A persisted cortex chat message.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct CortexChatMessage {
     pub id: String,
     pub thread_id: String,
@@ -37,7 +37,7 @@ pub struct CortexChatMessage {
 }
 
 /// Summary of a cortex chat thread (returned by list_threads).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct CortexChatThread {
     pub thread_id: String,
     pub preview: String,
@@ -47,7 +47,7 @@ pub struct CortexChatThread {
 }
 
 /// A tool call + result pair persisted alongside assistant messages.
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct CortexChatToolCall {
     pub id: String,
     pub tool: String,
