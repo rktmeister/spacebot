@@ -1,1 +1,1 @@
-Create a pending proposal for a new calendar event. This does not write to the remote calendar yet; it returns a proposal that can be reviewed and then applied explicitly.
+Create a pending proposal for a new calendar event. Pass a `draft` with `summary`, `start_at`, `end_at`, optional `timezone`, optional `description` and `location`, and any attendees. This does not write to the remote calendar yet; it returns a proposal. If the user has already clearly asked for this exact event to be created, follow up with `calendar_apply` in the same branch.

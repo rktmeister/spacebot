@@ -169,6 +169,27 @@ function calendarLabel(overview?: CalendarOverview): string {
 	return selected?.display_name || selected?.href || "No calendar selected";
 }
 
+function formatViewLabel(viewMode: ViewMode, cursorDate: Date): string {
+	if (viewMode === "month") {
+		return cursorDate.toLocaleDateString([], {
+			month: "long",
+			year: "numeric",
+		});
+	}
+
+	const weekStart = startOfWeek(cursorDate);
+	const weekEnd = addDays(weekStart, 6);
+	const sameMonth = weekStart.getMonth() === weekEnd.getMonth();
+	const sameYear = weekStart.getFullYear() === weekEnd.getFullYear();
+	if (sameMonth && sameYear) {
+		return `${weekStart.toLocaleDateString([], { month: "long" })} ${weekStart.getDate()}-${weekEnd.getDate()}, ${weekStart.getFullYear()}`;
+	}
+	if (sameYear) {
+		return `${weekStart.toLocaleDateString([], { month: "short", day: "numeric" })} - ${weekEnd.toLocaleDateString([], { month: "short", day: "numeric" })}, ${weekStart.getFullYear()}`;
+	}
+	return `${weekStart.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })} - ${weekEnd.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}`;
+}
+
 export function AgentCalendar({ agentId }: AgentCalendarProps) {
 	const queryClient = useQueryClient();
 	const [viewMode, setViewMode] = useState<ViewMode>("month");
@@ -253,6 +274,7 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 	});
 
 	const occurrences = occurrencesQuery.data?.occurrences ?? [];
+	const viewLabel = useMemo(() => formatViewLabel(viewMode, cursorDate), [cursorDate, viewMode]);
 	const selectedEvent = selectedEventQuery.data?.event;
 	const groupedOccurrences = useMemo(() => {
 		const grouped = new Map<string, CalendarOccurrence[]>();
@@ -428,6 +450,7 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 			<div className="flex items-center gap-2 border-b border-app-line px-6 py-3">
 				<Badge variant="accent" size="md">{viewMode}</Badge>
 				<Badge variant="outline" size="md">{calendarLabel(overviewQuery.data)}</Badge>
+				<div className="font-plex text-sm text-ink">{viewLabel}</div>
 				{overviewQuery.data?.source?.last_successful_sync_at && (
 					<span className="text-xs text-ink-faint">
 						synced {formatTimeAgo(overviewQuery.data.source.last_successful_sync_at)}
