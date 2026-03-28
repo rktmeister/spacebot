@@ -1,5 +1,7 @@
 Manage scheduled tasks (cron jobs). Actions: `create`, `list`, `delete`.
 
+Cron is for proactive bot behavior: reminders, briefings, follow-up nudges, recurring checks, and scheduled automation. Do not use cron to represent real meetings, appointments, or calendar commitments that should live on the user's calendar.
+
 **Scheduling:** Always use `cron_expr` (5-field cron syntax) for wall-clock schedules. `interval_secs` is a legacy fallback that drifts — only use it for cadences cron can't express (e.g. every 90 minutes).
 
 **Prompts:** Write the prompt as a complete instruction the agent can execute without context. The cron channel has no conversation history — each run starts fresh. Be specific: "Check the status of PR #42 on spacedrive/spacedrive and report whether CI passed" not "check on things".
@@ -7,6 +9,8 @@ Manage scheduled tasks (cron jobs). Actions: `create`, `list`, `delete`.
 **Delivery:** In normal chat, omit `delivery_target`. Cron results stay pinned to the current conversation automatically. Only set `delivery_target` when creating jobs outside a live conversation context where no default target exists.
 
 **One-shot:** Set `run_once: true` for reminders or one-time tasks. The job disables itself after the first run.
+
+If the user wants both a real event and a reminder around it, the calendar event should be created through the calendar tools separately. Use cron only for the reminder or automation layer.
 
 **Active hours:** Use `active_start_hour`/`active_end_hour` to restrict runs to a time window (e.g. business hours only).
 
