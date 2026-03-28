@@ -301,7 +301,7 @@ pub async fn start_http_server(
         // Mount all protected routes
         .merge(protected_routes)
         .route(
-            "/calendar/ics/{agent_id}/{token}.ics",
+            "/calendar/ics/{agent_id}/{token}/calendar.ics",
             get(calendar::export_calendar_ics),
         )
         // Static file handler for frontend (unprotected)

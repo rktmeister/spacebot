@@ -637,7 +637,7 @@ Add calendar API routes under `/api/agents/calendar/...`.
 - `POST /api/agents/calendar/propose`
 - `POST /api/agents/calendar/apply`
 - `POST /api/agents/calendar/sync`
-- `GET /api/agents/calendar/ics/{token}.ics` when ICS export is enabled
+- `GET /calendar/ics/{agent_id}/{token}/calendar.ics` when ICS export is enabled
 
 ### Response Principles
 

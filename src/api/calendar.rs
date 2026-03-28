@@ -153,7 +153,7 @@ fn build_ics_export_url(
     let token = calendar.ics_export_token.as_deref()?;
     calendar.selected_calendar_href.as_ref()?;
     Some(format!(
-        "{}/calendar/ics/{}/{}.ics",
+        "{}/calendar/ics/{}/{}/calendar.ics",
         base_url.trim_end_matches('/'),
         urlencoding::encode(agent_id),
         urlencoding::encode(token),
