@@ -430,6 +430,22 @@ impl CalendarStore {
         })
     }
 
+    pub async fn clear_calendar_sync_token(&self, calendar_href: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE calendar_calendars
+            SET sync_token = NULL
+            WHERE href = ?
+            "#,
+        )
+        .bind(calendar_href)
+        .execute(&self.pool)
+        .await
+        .context("failed to clear calendar sync token")?;
+
+        Ok(())
+    }
+
     async fn insert_attendee(
         &self,
         transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -564,6 +580,23 @@ impl CalendarStore {
             .into_iter()
             .filter_map(|row| row.try_get::<String, _>("raw_ics").ok())
             .collect())
+    }
+
+    pub async fn has_active_resource(&self, remote_href: &str) -> Result<bool> {
+        let row = sqlx::query(
+            r#"
+            SELECT 1
+            FROM calendar_resources
+            WHERE remote_href = ? AND deleted = 0
+            LIMIT 1
+            "#,
+        )
+        .bind(remote_href)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to check calendar resource state")?;
+
+        Ok(row.is_some())
     }
 
     pub async fn create_change_proposal(
@@ -934,5 +967,34 @@ mod tests {
             calendars[0].last_synced_at.as_deref(),
             Some("2026-03-28T09:05:00Z")
         );
+    }
+
+    #[tokio::test]
+    async fn clear_calendar_sync_token_resets_selected_calendar_cursor() {
+        let store = setup_store().await;
+        let href = "https://example.com/calendars/main/";
+        seed_source(&store).await;
+
+        store
+            .replace_discovered_calendars(
+                "default",
+                &[calendar_collection(href, Some("token-old"))],
+                Some(href),
+            )
+            .await
+            .expect("failed to save initial discovery");
+
+        store
+            .clear_calendar_sync_token(href)
+            .await
+            .expect("failed to clear sync token");
+
+        let calendars = store
+            .list_calendars("default")
+            .await
+            .expect("failed to list calendars");
+
+        assert_eq!(calendars.len(), 1);
+        assert_eq!(calendars[0].sync_token, None);
     }
 }

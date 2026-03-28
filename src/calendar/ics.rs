@@ -718,18 +718,20 @@ fn parse_user_datetime(
     timezone: Option<&str>,
     all_day: bool,
 ) -> anyhow::Result<ParsedIcalDateTime> {
+    let normalized_timezone = normalize_timezone_label(timezone);
+
     if all_day {
         let date = NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
             .or_else(|_| DateTime::parse_from_rfc3339(value).map(|dt| dt.date_naive()))
             .with_context(|| format!("invalid all-day date '{value}'"))?;
-        let tz = parse_rrule_timezone(timezone);
+        let tz = parse_rrule_timezone(normalized_timezone.as_deref());
         let local = tz
             .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
             .single()
             .ok_or_else(|| anyhow!("invalid all-day local datetime"))?;
         return Ok(ParsedIcalDateTime {
             utc: local.with_timezone(&Utc),
-            timezone: timezone.map(str::to_string),
+            timezone: normalized_timezone,
             all_day: true,
             local_date: Some(date),
             local_datetime: None,
@@ -738,12 +740,12 @@ fn parse_user_datetime(
 
     if let Ok(parsed) = DateTime::parse_from_rfc3339(value.trim()) {
         let utc = parsed.with_timezone(&Utc);
-        if let Some(tz_name) = timezone {
-            let tz = parse_rrule_timezone(Some(tz_name));
+        if let Some(tz_name) = normalized_timezone {
+            let tz = parse_rrule_timezone(Some(&tz_name));
             let local = utc.with_timezone(&tz).naive_local();
             return Ok(ParsedIcalDateTime {
                 utc,
-                timezone: Some(tz_name.to_string()),
+                timezone: Some(tz_name),
                 all_day: false,
                 local_date: None,
                 local_datetime: Some(local),
@@ -761,14 +763,14 @@ fn parse_user_datetime(
     let naive = NaiveDateTime::parse_from_str(value.trim(), "%Y-%m-%dT%H:%M:%S")
         .or_else(|_| NaiveDateTime::parse_from_str(value.trim(), "%Y-%m-%dT%H:%M"))
         .with_context(|| format!("invalid datetime '{value}'"))?;
-    let tz = parse_rrule_timezone(timezone);
+    let tz = parse_rrule_timezone(normalized_timezone.as_deref());
     let local = tz
         .from_local_datetime(&naive)
         .single()
         .ok_or_else(|| anyhow!("ambiguous or invalid local datetime '{value}'"))?;
     Ok(ParsedIcalDateTime {
         utc: local.with_timezone(&Utc),
-        timezone: timezone.map(str::to_string),
+        timezone: normalized_timezone,
         all_day: false,
         local_date: None,
         local_datetime: Some(naive),
@@ -881,7 +883,7 @@ fn format_dt_line(name: &str, value: &ParsedIcalDateTime) -> String {
     }
 
     if let (Some(timezone), Some(local_datetime)) = (
-        normalized_tzid(value.timezone.as_deref()),
+        canonical_tzid(value.timezone.as_deref()),
         &value.local_datetime,
     ) && timezone != "UTC"
     {
@@ -986,7 +988,7 @@ fn parse_ical_datetime_value(
     value: &str,
     params: &HashMap<String, String>,
 ) -> Option<ParsedIcalDateTime> {
-    let timezone = params.get("TZID").cloned();
+    let timezone = normalize_timezone_label(params.get("TZID").map(String::as_str));
     let normalized = value.trim();
     let value_type = params.get("VALUE").map(String::as_str);
 
@@ -1032,17 +1034,66 @@ fn parse_ical_datetime_value(
 }
 
 fn parse_rrule_timezone(timezone: Option<&str>) -> Tz {
-    normalized_tzid(timezone)
+    canonical_tzid(timezone)
         .and_then(|value| value.parse::<chrono_tz::Tz>().ok().map(Into::into))
         .unwrap_or(Tz::UTC)
 }
 
-fn normalized_tzid(timezone: Option<&str>) -> Option<&str> {
+pub fn normalize_timezone_label(timezone: Option<&str>) -> Option<String> {
     let timezone = timezone?.trim();
-    if timezone.eq_ignore_ascii_case("UTC") {
-        return Some("UTC");
+    if timezone.is_empty() {
+        return None;
     }
-    timezone.parse::<chrono_tz::Tz>().ok().map(|_| timezone)
+    if timezone.eq_ignore_ascii_case("UTC") {
+        return Some("UTC".to_string());
+    }
+    if let Ok(parsed) = timezone.parse::<chrono_tz::Tz>() {
+        return Some(parsed.to_string());
+    }
+    windows_timezone_to_iana(timezone)
+        .map(str::to_string)
+        .or_else(|| Some(timezone.to_string()))
+}
+
+fn canonical_tzid(timezone: Option<&str>) -> Option<String> {
+    let timezone = normalize_timezone_label(timezone)?;
+    if timezone == "UTC" || timezone.parse::<chrono_tz::Tz>().is_ok() {
+        return Some(timezone);
+    }
+    None
+}
+
+fn windows_timezone_to_iana(timezone: &str) -> Option<&'static str> {
+    match timezone {
+        "UTC" => Some("UTC"),
+        "Singapore Standard Time" => Some("Asia/Singapore"),
+        "SE Asia Standard Time" => Some("Asia/Bangkok"),
+        "China Standard Time" => Some("Asia/Shanghai"),
+        "Tokyo Standard Time" => Some("Asia/Tokyo"),
+        "India Standard Time" => Some("Asia/Kolkata"),
+        "Pakistan Standard Time" => Some("Asia/Karachi"),
+        "Arabian Standard Time" => Some("Asia/Dubai"),
+        "Arab Standard Time" => Some("Asia/Riyadh"),
+        "GMT Standard Time" => Some("Europe/London"),
+        "W. Europe Standard Time" => Some("Europe/Berlin"),
+        "Romance Standard Time" => Some("Europe/Paris"),
+        "Turkey Standard Time" => Some("Europe/Istanbul"),
+        "Russian Standard Time" => Some("Europe/Moscow"),
+        "South Africa Standard Time" => Some("Africa/Johannesburg"),
+        "Eastern Standard Time" => Some("America/New_York"),
+        "Central Standard Time" => Some("America/Chicago"),
+        "Mountain Standard Time" => Some("America/Denver"),
+        "US Mountain Standard Time" => Some("America/Phoenix"),
+        "Pacific Standard Time" => Some("America/Los_Angeles"),
+        "Alaskan Standard Time" => Some("America/Anchorage"),
+        "Hawaiian Standard Time" => Some("Pacific/Honolulu"),
+        "AUS Eastern Standard Time" => Some("Australia/Sydney"),
+        "E. Australia Standard Time" => Some("Australia/Brisbane"),
+        "Cen. Australia Standard Time" => Some("Australia/Adelaide"),
+        "W. Australia Standard Time" => Some("Australia/Perth"),
+        "New Zealand Standard Time" => Some("Pacific/Auckland"),
+        _ => None,
+    }
 }
 
 fn unescape_ical_text(value: &str) -> String {
@@ -1113,10 +1164,55 @@ mod tests {
     }
 
     #[test]
-    fn format_dt_line_uses_utc_for_invalid_timezone_names() {
+    fn parse_calendar_events_maps_windows_timezone_ids_to_iana() {
+        let raw_ics = indoc::indoc! {"
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:test-windows-tz
+            SUMMARY:Windows timezone event
+            DTSTART;TZID=Singapore Standard Time:20260309T163000
+            DTEND;TZID=Singapore Standard Time:20260309T170000
+            END:VEVENT
+            END:VCALENDAR
+        "};
+
+        let events = parse_calendar_events(raw_ics).expect("raw ICS should parse");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].timezone.as_deref(), Some("Asia/Singapore"));
+        assert_eq!(events[0].start_at_utc, "2026-03-09T08:30:00+00:00");
+        assert_eq!(events[0].end_at_utc, "2026-03-09T09:00:00+00:00");
+    }
+
+    #[test]
+    fn parse_user_datetime_maps_windows_timezone_ids_to_iana() {
+        let parsed = parse_user_datetime(
+            "2026-03-09T08:30:00+00:00",
+            Some("Singapore Standard Time"),
+            false,
+        )
+        .expect("RFC3339 input should parse");
+
+        assert_eq!(parsed.timezone.as_deref(), Some("Asia/Singapore"));
+        assert_eq!(
+            parsed
+                .local_datetime
+                .expect("local datetime should be populated")
+                .to_string(),
+            "2026-03-09 16:30:00"
+        );
+        assert_eq!(
+            format_dt_line("DTSTART", &parsed),
+            "DTSTART;TZID=Asia/Singapore:20260309T163000"
+        );
+    }
+
+    #[test]
+    fn format_dt_line_uses_utc_for_unknown_timezone_names() {
         let parsed = parse_user_datetime(
             "2026-04-07T13:30:00+00:00",
-            Some("SE Asia Standard Time"),
+            Some("Completely Made Up Timezone"),
             false,
         )
         .expect("RFC3339 input should parse");

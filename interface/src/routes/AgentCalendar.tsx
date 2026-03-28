@@ -712,10 +712,11 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 							<div className="flex justify-end gap-2">
 								<Button variant="outline" onClick={() => setProposal(null)}>Cancel</Button>
 								<Button
+									variant={proposal.action === "delete" ? "destructive" : "default"}
 									onClick={() => applyProposalMutation.mutate(proposal.id)}
 									loading={applyProposalMutation.isPending}
 								>
-									Apply Change
+									{proposal.action === "delete" ? "Delete Event" : "Apply Change"}
 								</Button>
 							</div>
 						</div>

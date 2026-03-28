@@ -2,7 +2,8 @@
 
 use crate::calendar::caldav::CalDavClient;
 use crate::calendar::ics::{
-    build_new_event_resource, expand_occurrences, export_resources_to_ics, update_existing_resource,
+    build_new_event_resource, expand_occurrences, export_resources_to_ics,
+    normalize_timezone_label, update_existing_resource,
 };
 use crate::calendar::store::CalendarStore;
 use crate::calendar::types::{
@@ -446,6 +447,8 @@ impl CalendarService {
         let client = self.build_client(&config)?;
         let outcome: Result<CalendarChangeProposal> = async {
             let mut expected_create_uid = None;
+            let mut expected_deleted_resource_href = None;
+            let mut force_full_sync_calendar_href = None;
             match proposal.action {
                 CalendarProposalAction::Create => {
                     let selected_href = self.selected_calendar_href()?;
@@ -495,9 +498,14 @@ impl CalendarService {
                             proposal.basis_etag.as_deref().or(current.etag.as_deref()),
                         )
                         .await?;
+                    expected_deleted_resource_href = Some(current.remote_href.clone());
+                    force_full_sync_calendar_href = Some(current.calendar_href.clone());
                 }
             }
 
+            if let Some(calendar_href) = force_full_sync_calendar_href {
+                self.store.clear_calendar_sync_token(&calendar_href).await?;
+            }
             self.sync_now().await?;
             if let Some((calendar_href, remote_uid)) = expected_create_uid {
                 self.store
@@ -508,6 +516,14 @@ impl CalendarService {
                             "calendar create applied remotely but did not appear in the local mirror"
                         )
                     })?;
+            }
+            if let Some(remote_href) = expected_deleted_resource_href {
+                if self.store.has_active_resource(&remote_href).await? {
+                    return Err(anyhow!(
+                        "calendar delete applied remotely but the event still appears in the local mirror"
+                    )
+                    .into());
+                }
             }
             let applied_at = Utc::now().to_rfc3339();
             self.store
@@ -666,17 +682,18 @@ fn normalize_draft_timezone(
     mut draft: CalendarEventDraft,
     default_timezone: Option<&str>,
 ) -> CalendarEventDraft {
-    if draft
+    let missing_timezone = draft
         .timezone
         .as_deref()
         .map(str::trim)
-        .is_none_or(|timezone| timezone.is_empty())
-    {
-        draft.timezone = default_timezone
-            .map(str::trim)
-            .filter(|timezone| !timezone.is_empty())
-            .map(str::to_string);
-    }
+        .is_none_or(|timezone| timezone.is_empty());
+
+    draft.timezone = if missing_timezone {
+        normalize_timezone_label(default_timezone)
+    } else {
+        normalize_timezone_label(draft.timezone.as_deref())
+    };
+
     draft
 }
 
@@ -759,5 +776,23 @@ mod tests {
 
         let normalized = normalize_draft_timezone(draft, Some("Asia/Singapore"));
         assert_eq!(normalized.timezone.as_deref(), Some("UTC"));
+    }
+
+    #[test]
+    fn normalize_draft_timezone_canonicalizes_known_windows_timezone_names() {
+        let draft = CalendarEventDraft {
+            summary: "ERP update".to_string(),
+            description: None,
+            location: None,
+            start_at: "2026-03-30T09:00:00".to_string(),
+            end_at: "2026-03-30T10:00:00".to_string(),
+            timezone: Some("Singapore Standard Time".to_string()),
+            all_day: false,
+            recurrence_rule: None,
+            attendees: Vec::new(),
+        };
+
+        let normalized = normalize_draft_timezone(draft, Some("Asia/Singapore"));
+        assert_eq!(normalized.timezone.as_deref(), Some("Asia/Singapore"));
     }
 }
