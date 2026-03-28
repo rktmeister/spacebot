@@ -138,7 +138,7 @@ impl CalendarService {
                     display_name: calendar.display_name.clone(),
                     description: calendar.description.clone(),
                     color: calendar.color.clone(),
-                    timezone: calendar.timezone.clone(),
+                    timezone: normalize_timezone_label(calendar.timezone.as_deref()),
                     ctag: calendar.ctag.clone(),
                     sync_token: calendar.sync_token.clone(),
                     is_selected: selected_href.as_deref() == Some(calendar.href.as_str()),

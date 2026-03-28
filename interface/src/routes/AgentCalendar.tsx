@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	api,
@@ -24,6 +24,7 @@ import {
 	DialogTitle,
 	Input,
 	TextArea,
+	buttonStyles,
 	cx,
 	Toggle,
 } from "@/ui";
@@ -47,6 +48,51 @@ interface EventFormState {
 }
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
+const MEETING_HOST_PATTERN =
+	/(?:^|\.)((?:us\d+web\.)?zoom(?:gov)?\.us|teams\.microsoft\.com|meet\.google\.com|webex\.com|gotomeeting\.com|meet\.jit\.si|whereby\.com)$/i;
+
+function browserTimeZone(): string {
+	return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function resolveSupportedTimeZone(timezone?: string | null): string {
+	const candidate = timezone?.trim();
+	if (candidate) {
+		try {
+			new Intl.DateTimeFormat([], { timeZone: candidate });
+			return candidate;
+		} catch {}
+	}
+	return browserTimeZone();
+}
+
+function formatPartsInTimeZone(
+	date: Date,
+	timeZone: string,
+	includeTime: boolean,
+): Record<string, string> {
+	const formatter = new Intl.DateTimeFormat("en-CA", {
+		timeZone,
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		...(includeTime
+			? {
+					hour: "2-digit",
+					minute: "2-digit",
+					hour12: false,
+			  }
+			: {}),
+	});
+
+	return Object.fromEntries(
+		formatter
+			.formatToParts(date)
+			.filter((part) => part.type !== "literal")
+			.map((part) => [part.type, part.value]),
+	);
+}
 
 function startOfDay(date: Date): Date {
 	return new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -79,36 +125,30 @@ function dayKey(value: string | Date): string {
 	).padStart(2, "0")}`;
 }
 
-function toLocalInputValue(value: string, allDay: boolean): string {
+function toCalendarInputValue(
+	value: string,
+	allDay: boolean,
+	timezone?: string | null,
+): string {
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return "";
-	if (allDay) {
-		return dayKey(date);
-	}
-	const adjusted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-	return adjusted.toISOString().slice(0, 16);
+	const resolvedTimeZone = resolveSupportedTimeZone(timezone);
+	const parts = formatPartsInTimeZone(date, resolvedTimeZone, !allDay);
+	const day = `${parts.year}-${parts.month}-${parts.day}`;
+	if (allDay) return day;
+	return `${day}T${parts.hour}:${parts.minute}`;
 }
 
-function fromFormValue(value: string, allDay: boolean): string {
-	if (allDay) {
-		return value;
-	}
-	const local = new Date(value);
-	return Number.isNaN(local.getTime()) ? value : local.toISOString();
-}
-
-function defaultFormState(baseDate: Date): EventFormState {
-	const start = new Date(baseDate);
-	start.setHours(9, 0, 0, 0);
-	const end = new Date(start);
-	end.setHours(10, 0, 0, 0);
+function defaultFormState(baseDate: Date, timezone?: string | null): EventFormState {
+	const resolvedTimeZone = resolveSupportedTimeZone(timezone);
+	const day = dayKey(baseDate);
 	return {
 		summary: "",
 		description: "",
 		location: "",
-		start_at: toLocalInputValue(start.toISOString(), false),
-		end_at: toLocalInputValue(end.toISOString(), false),
-		timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+		start_at: `${day}T09:00`,
+		end_at: `${day}T10:00`,
+		timezone: resolvedTimeZone,
 		all_day: false,
 		recurrence_rule: "",
 	};
@@ -119,9 +159,9 @@ function eventToFormState(event: CalendarEvent): EventFormState {
 		summary: event.summary ?? "",
 		description: event.description ?? "",
 		location: event.location ?? "",
-		start_at: toLocalInputValue(event.start_at_utc, event.all_day),
-		end_at: toLocalInputValue(event.end_at_utc, event.all_day),
-		timezone: event.timezone ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"),
+		start_at: toCalendarInputValue(event.start_at_utc, event.all_day, event.timezone),
+		end_at: toCalendarInputValue(event.end_at_utc, event.all_day, event.timezone),
+		timezone: resolveSupportedTimeZone(event.timezone),
 		all_day: event.all_day,
 		recurrence_rule: event.recurrence_rule ?? "",
 	};
@@ -132,8 +172,8 @@ function formToDraft(form: EventFormState): CalendarEventDraft {
 		summary: form.summary.trim(),
 		description: form.description.trim() || null,
 		location: form.location.trim() || null,
-		start_at: fromFormValue(form.start_at, form.all_day),
-		end_at: fromFormValue(form.end_at, form.all_day),
+		start_at: form.start_at,
+		end_at: form.end_at,
 		timezone: form.timezone.trim() || null,
 		all_day: form.all_day,
 		recurrence_rule: form.recurrence_rule.trim() || null,
@@ -151,17 +191,98 @@ function rangeForView(viewMode: ViewMode, cursor: Date): { start: Date; end: Dat
 	return { start, end: addDays(start, 42) };
 }
 
-function formatPanelTime(value: string, allDay: boolean): string {
+function formatPanelTime(
+	value: string,
+	allDay: boolean,
+	timezone?: string | null,
+): string {
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return value;
+	const resolvedTimeZone = resolveSupportedTimeZone(timezone);
 	return allDay
-		? date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
+		? date.toLocaleDateString([], {
+				timeZone: resolvedTimeZone,
+				month: "short",
+				day: "numeric",
+				year: "numeric",
+		  })
 		: date.toLocaleString([], {
+				timeZone: resolvedTimeZone,
 				month: "short",
 				day: "numeric",
 				hour: "numeric",
 				minute: "2-digit",
 		  });
+}
+
+function extractUrls(text?: string | null): string[] {
+	if (!text) return [];
+	const matches = Array.from(text.matchAll(URL_PATTERN), (match) =>
+		match[0].replace(/[),.;]+$/u, "").replace(/^<|>$/gu, ""),
+	).filter(Boolean);
+	return Array.from(new Set(matches));
+}
+
+function extractMeetingUrl(event?: CalendarEvent | null): string | null {
+	if (!event) return null;
+	const candidates = [
+		...extractUrls(event.location),
+		...extractUrls(event.description),
+	];
+	if (candidates.length === 0) return null;
+	const meetingUrl = candidates.find((url) => {
+		try {
+			return MEETING_HOST_PATTERN.test(new URL(url).hostname);
+		} catch {
+			return false;
+		}
+	});
+	return meetingUrl ?? candidates[0] ?? null;
+}
+
+function renderLinkifiedText(text: string) {
+	const matches = Array.from(text.matchAll(URL_PATTERN));
+	if (matches.length === 0) return text;
+
+	const nodes = [];
+	let cursor = 0;
+	for (const match of matches) {
+		const rawUrl = match[0];
+		const start = match.index ?? 0;
+		const normalizedUrl = rawUrl
+			.replace(/[),.;]+$/u, "")
+			.replace(/^<|>$/gu, "");
+		const normalizedLength = normalizedUrl.length;
+		if (start > cursor) {
+			nodes.push(text.slice(cursor, start));
+		}
+		nodes.push(
+			<a
+				key={`${start}-${normalizedUrl}`}
+				href={normalizedUrl}
+				target="_blank"
+				rel="noopener noreferrer"
+				className="break-all text-accent hover:underline"
+			>
+				{normalizedUrl}
+			</a>,
+		);
+		cursor = start + normalizedLength;
+		if (rawUrl.length > normalizedLength) {
+			nodes.push(rawUrl.slice(normalizedLength));
+			cursor = start + rawUrl.length;
+		}
+	}
+	if (cursor < text.length) {
+		nodes.push(text.slice(cursor));
+	}
+	return (
+		<>
+			{nodes.map((node, index) => (
+				<Fragment key={index}>{node}</Fragment>
+			))}
+		</>
+	);
 }
 
 function calendarLabel(overview?: CalendarOverview): string {
@@ -276,6 +397,11 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 	const occurrences = occurrencesQuery.data?.occurrences ?? [];
 	const viewLabel = useMemo(() => formatViewLabel(viewMode, cursorDate), [cursorDate, viewMode]);
 	const selectedEvent = selectedEventQuery.data?.event;
+	const selectedCalendar = useMemo(
+		() => overviewQuery.data?.calendars.find((calendar) => calendar.is_selected),
+		[overviewQuery.data],
+	);
+	const meetingUrl = useMemo(() => extractMeetingUrl(selectedEvent), [selectedEvent]);
 	const groupedOccurrences = useMemo(() => {
 		const grouped = new Map<string, CalendarOccurrence[]>();
 		for (const occurrence of occurrences) {
@@ -292,7 +418,7 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 
 	const openCreate = () => {
 		setEditorMode("create");
-		setFormState(defaultFormState(cursorDate));
+		setFormState(defaultFormState(cursorDate, selectedCalendar?.timezone));
 		setEditorError(null);
 		setEditorOpen(true);
 	};
@@ -313,6 +439,10 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 		}
 		if (!draft.start_at || !draft.end_at) {
 			setEditorError("Start and end are required.");
+			return;
+		}
+		if (draft.end_at <= draft.start_at) {
+			setEditorError("End must be after start.");
 			return;
 		}
 
@@ -424,7 +554,9 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 										onClick={() => setSelectedOccurrence(occurrence)}
 									>
 										<div className="text-xs text-ink-faint">
-											{occurrence.all_day ? "All day" : formatPanelTime(occurrence.start_at, false)}
+											{occurrence.all_day
+												? "All day"
+												: formatPanelTime(occurrence.start_at, false, occurrence.timezone)}
 										</div>
 										<div className="mt-1 text-sm text-ink">{occurrence.summary || "Untitled event"}</div>
 										{occurrence.location && (
@@ -527,8 +659,17 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 									<div className="text-xs uppercase tracking-[0.16em] text-ink-faint">Selected Event</div>
 									<h2 className="mt-2 font-plex text-xl text-ink">{selectedEvent.summary || "Untitled event"}</h2>
 									<div className="mt-2 text-sm text-ink-dull">
-										{formatPanelTime(selectedOccurrence.start_at, selectedOccurrence.all_day)} to{" "}
-										{formatPanelTime(selectedOccurrence.end_at, selectedOccurrence.all_day)}
+										{formatPanelTime(
+											selectedOccurrence.start_at,
+											selectedOccurrence.all_day,
+											selectedOccurrence.timezone ?? selectedEvent.timezone,
+										)}{" "}
+										to{" "}
+										{formatPanelTime(
+											selectedOccurrence.end_at,
+											selectedOccurrence.all_day,
+											selectedOccurrence.timezone ?? selectedEvent.timezone,
+										)}
 									</div>
 									{selectedEvent.timezone && <div className="text-sm text-ink-faint">{selectedEvent.timezone}</div>}
 								</div>
@@ -551,19 +692,33 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 									>
 										Delete
 									</Button>
+									{meetingUrl && (
+										<a
+											href={meetingUrl}
+											target="_blank"
+											rel="noopener noreferrer"
+											className={buttonStyles({ variant: "outline", size: "sm" })}
+										>
+											Open Meeting
+										</a>
+									)}
 								</div>
 
 								{selectedEvent.location && (
 									<div>
 										<div className="text-xs uppercase tracking-[0.16em] text-ink-faint">Location</div>
-										<div className="mt-1 text-sm text-ink">{selectedEvent.location}</div>
+										<div className="mt-1 text-sm text-ink">
+											{renderLinkifiedText(selectedEvent.location)}
+										</div>
 									</div>
 								)}
 
 								{selectedEvent.description && (
 									<div>
 										<div className="text-xs uppercase tracking-[0.16em] text-ink-faint">Description</div>
-										<div className="mt-1 whitespace-pre-wrap text-sm text-ink-dull">{selectedEvent.description}</div>
+										<div className="mt-1 whitespace-pre-wrap text-sm text-ink-dull">
+											{renderLinkifiedText(selectedEvent.description)}
+										</div>
 									</div>
 								)}
 

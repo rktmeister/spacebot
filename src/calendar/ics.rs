@@ -99,11 +99,13 @@ pub fn parse_calendar_events(raw_ics: &str) -> anyhow::Result<Vec<SyncedCalendar
     let lines = unfold_ical_lines(raw_ics);
     let mut events = Vec::new();
     let mut current: Option<SyncedEventBuilder> = None;
+    let mut nested_component_depth = 0usize;
 
     for line in lines {
         let trimmed = line.trim();
         if trimmed.eq_ignore_ascii_case("BEGIN:VEVENT") {
             current = Some(SyncedEventBuilder::default());
+            nested_component_depth = 0;
             continue;
         }
         if trimmed.eq_ignore_ascii_case("END:VEVENT") {
@@ -112,12 +114,24 @@ pub fn parse_calendar_events(raw_ics: &str) -> anyhow::Result<Vec<SyncedCalendar
             {
                 events.push(event);
             }
+            nested_component_depth = 0;
             continue;
         }
 
         let Some(builder) = current.as_mut() else {
             continue;
         };
+        if trimmed.starts_with("BEGIN:") {
+            nested_component_depth += 1;
+            continue;
+        }
+        if trimmed.starts_with("END:") {
+            nested_component_depth = nested_component_depth.saturating_sub(1);
+            continue;
+        }
+        if nested_component_depth > 0 {
+            continue;
+        }
         let Some((name, params, value)) = parse_ical_property(trimmed) else {
             continue;
         };
@@ -338,6 +352,7 @@ pub fn build_new_event_resource(
 ) -> anyhow::Result<String> {
     let start = parse_user_datetime(&draft.start_at, draft.timezone.as_deref(), draft.all_day)?;
     let end = parse_user_datetime(&draft.end_at, draft.timezone.as_deref(), draft.all_day)?;
+    ensure_valid_event_range(&start, &end)?;
 
     let mut lines = vec![
         "BEGIN:VCALENDAR".to_string(),
@@ -404,6 +419,7 @@ pub fn update_existing_resource(
         parse_user_datetime(&draft.start_at, draft.timezone.as_deref(), draft.all_day)?;
     let requested_end =
         parse_user_datetime(&draft.end_at, draft.timezone.as_deref(), draft.all_day)?;
+    ensure_valid_event_range(&requested_start, &requested_end)?;
     let recurring_time_change = current_event.is_recurring()
         && (current_start.utc != requested_start.utc
             || current_event.all_day != draft.all_day
@@ -853,6 +869,16 @@ fn parse_ical_duration(value: &str) -> Option<Duration> {
     Some(if sign < 0 { -duration } else { duration })
 }
 
+fn ensure_valid_event_range(
+    start: &ParsedIcalDateTime,
+    end: &ParsedIcalDateTime,
+) -> anyhow::Result<()> {
+    if end.utc <= start.utc {
+        return Err(anyhow!("calendar event end must be after start"));
+    }
+    Ok(())
+}
+
 fn format_dtstart_line(
     start_at_utc: &str,
     timezone: Option<&str>,
@@ -1205,6 +1231,62 @@ mod tests {
         assert_eq!(
             format_dt_line("DTSTART", &parsed),
             "DTSTART;TZID=Asia/Singapore:20260309T163000"
+        );
+    }
+
+    #[test]
+    fn parse_calendar_events_ignores_nested_valarm_fields() {
+        let raw_ics = indoc::indoc! {"
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:test-valarm
+            SUMMARY:Invite with alarm
+            DESCRIPTION:Join here https://teams.microsoft.com/meet/test
+            LOCATION:Microsoft Teams Meeting
+            DTSTART;TZID=Singapore Standard Time:20260309T163000
+            DTEND;TZID=Singapore Standard Time:20260309T170000
+            BEGIN:VALARM
+            DESCRIPTION:REMINDER
+            TRIGGER:-PT15M
+            END:VALARM
+            END:VEVENT
+            END:VCALENDAR
+        "};
+
+        let events = parse_calendar_events(raw_ics).expect("raw ICS should parse");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].description.as_deref(),
+            Some("Join here https://teams.microsoft.com/meet/test")
+        );
+        assert_eq!(
+            events[0].location.as_deref(),
+            Some("Microsoft Teams Meeting")
+        );
+    }
+
+    #[test]
+    fn build_new_event_resource_rejects_non_positive_ranges() {
+        let draft = CalendarEventDraft {
+            summary: "Bad range".to_string(),
+            description: None,
+            location: None,
+            start_at: "2026-03-30T09:00".to_string(),
+            end_at: "2026-03-30T09:00".to_string(),
+            timezone: Some("Asia/Singapore".to_string()),
+            all_day: false,
+            recurrence_rule: None,
+            attendees: Vec::new(),
+        };
+
+        let error =
+            build_new_event_resource(&draft, "uid-bad-range", 0).expect_err("range should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("calendar event end must be after start")
         );
     }
 
