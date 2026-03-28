@@ -118,11 +118,10 @@ function addMonths(date: Date, months: number): Date {
 	return new Date(date.getFullYear(), date.getMonth() + months, 1);
 }
 
-function dayKey(value: string | Date): string {
+function dayKey(value: string | Date, timeZone: string = browserTimeZone()): string {
 	const date = typeof value === "string" ? new Date(value) : value;
-	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
-		date.getDate(),
-	).padStart(2, "0")}`;
+	const parts = formatPartsInTimeZone(date, timeZone, false);
+	return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 function toCalendarInputValue(
@@ -319,6 +318,7 @@ function formatViewLabel(viewMode: ViewMode, cursorDate: Date): string {
 
 export function AgentCalendar({ agentId }: AgentCalendarProps) {
 	const queryClient = useQueryClient();
+	const displayTimeZone = useMemo(() => browserTimeZone(), []);
 	const [viewMode, setViewMode] = useState<ViewMode>("month");
 	const [cursorDate, setCursorDate] = useState(() => startOfDay(new Date()));
 	const [selectedOccurrence, setSelectedOccurrence] = useState<CalendarOccurrence | null>(null);
@@ -408,10 +408,14 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 		[overviewQuery.data],
 	);
 	const meetingUrl = useMemo(() => extractMeetingUrl(selectedEvent), [selectedEvent]);
+	const selectedEventTimeZone = useMemo(
+		() => (selectedEvent?.timezone ? resolveSupportedTimeZone(selectedEvent.timezone) : null),
+		[selectedEvent?.timezone],
+	);
 	const groupedOccurrences = useMemo(() => {
 		const grouped = new Map<string, CalendarOccurrence[]>();
 		for (const occurrence of occurrences) {
-			const key = dayKey(occurrence.start_at);
+			const key = dayKey(occurrence.start_at, displayTimeZone);
 			const bucket = grouped.get(key) ?? [];
 			bucket.push(occurrence);
 			grouped.set(key, bucket);
@@ -420,7 +424,7 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 			bucket.sort((left, right) => left.start_at.localeCompare(right.start_at));
 		}
 		return grouped;
-	}, [occurrences]);
+	}, [displayTimeZone, occurrences]);
 
 	const openCreate = () => {
 		setEditorMode("create");
@@ -493,7 +497,7 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 				))}
 				{Array.from({ length: 42 }, (_, index) => {
 					const currentDay = addDays(gridStart, index);
-					const dayOccurrences = groupedOccurrences.get(dayKey(currentDay)) ?? [];
+					const dayOccurrences = groupedOccurrences.get(dayKey(currentDay, displayTimeZone)) ?? [];
 					const inMonth = currentDay.getMonth() === cursorDate.getMonth();
 					return (
 						<button
@@ -502,7 +506,7 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 							className={cx(
 								"flex min-h-0 flex-col border-b border-r border-app-line px-2 py-2 text-left transition-colors",
 								inMonth ? "bg-app-darkBox/10" : "bg-app-darkBox/5 text-ink-faint",
-								dayKey(currentDay) === dayKey(new Date()) && "bg-accent/8",
+								dayKey(currentDay, displayTimeZone) === dayKey(new Date(), displayTimeZone) && "bg-accent/8",
 							)}
 							onClick={() => {
 								setCursorDate(currentDay);
@@ -539,7 +543,7 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 			<div className="grid h-full grid-cols-7 border-t border-app-line">
 				{Array.from({ length: 7 }, (_, index) => {
 					const currentDay = addDays(weekStart, index);
-					const dayOccurrences = groupedOccurrences.get(dayKey(currentDay)) ?? [];
+					const dayOccurrences = groupedOccurrences.get(dayKey(currentDay, displayTimeZone)) ?? [];
 					return (
 						<div key={currentDay.toISOString()} className="flex min-h-0 flex-col border-r border-app-line">
 							<div className="border-b border-app-line px-3 py-3">
@@ -562,7 +566,7 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 										<div className="text-xs text-ink-faint">
 											{occurrence.all_day
 												? "All day"
-												: formatPanelTime(occurrence.start_at, false, occurrence.timezone)}
+												: formatPanelTime(occurrence.start_at, false, displayTimeZone)}
 										</div>
 										<div className="mt-1 text-sm text-ink">{occurrence.summary || "Untitled event"}</div>
 										{occurrence.location && (
@@ -589,6 +593,7 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 				<Badge variant="accent" size="md">{viewMode}</Badge>
 				<Badge variant="outline" size="md">{calendarLabel(overviewQuery.data)}</Badge>
 				<div className="font-plex text-sm text-ink">{viewLabel}</div>
+				<div className="text-xs text-ink-faint">local time {displayTimeZone}</div>
 				{overviewQuery.data?.source?.last_successful_sync_at && (
 					<span className="text-xs text-ink-faint">
 						synced {formatTimeAgo(overviewQuery.data.source.last_successful_sync_at)}
@@ -668,16 +673,21 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 										{formatPanelTime(
 											selectedOccurrence.start_at,
 											selectedOccurrence.all_day,
-											selectedOccurrence.timezone ?? selectedEvent.timezone,
+											displayTimeZone,
 										)}{" "}
 										to{" "}
 										{formatPanelTime(
 											selectedOccurrence.end_at,
 											selectedOccurrence.all_day,
-											selectedOccurrence.timezone ?? selectedEvent.timezone,
+											displayTimeZone,
 										)}
 									</div>
-									{selectedEvent.timezone && <div className="text-sm text-ink-faint">{selectedEvent.timezone}</div>}
+									<div className="text-sm text-ink-faint">
+										Shown in {displayTimeZone}
+										{selectedEventTimeZone && selectedEventTimeZone !== displayTimeZone
+											? ` • event timezone ${selectedEventTimeZone}`
+											: ""}
+									</div>
 								</div>
 
 								<div className="flex gap-2">
