@@ -223,11 +223,17 @@ function extractUrls(text?: string | null): string[] {
 	return Array.from(new Set(matches));
 }
 
+function unfoldIcsText(rawIcs?: string | null): string {
+	if (!rawIcs) return "";
+	return rawIcs.replace(/\r?\n[ \t]/g, "");
+}
+
 function extractMeetingUrl(event?: CalendarEvent | null): string | null {
 	if (!event) return null;
 	const candidates = [
 		...extractUrls(event.location),
 		...extractUrls(event.description),
+		...extractUrls(unfoldIcsText(event.raw_ics)),
 	];
 	if (candidates.length === 0) return null;
 	const meetingUrl = candidates.find((url) => {
