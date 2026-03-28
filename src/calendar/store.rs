@@ -122,7 +122,7 @@ impl CalendarStore {
                     color = excluded.color,
                     timezone = excluded.timezone,
                     ctag = excluded.ctag,
-                    sync_token = COALESCE(excluded.sync_token, calendar_calendars.sync_token),
+                    sync_token = COALESCE(calendar_calendars.sync_token, excluded.sync_token),
                     is_selected = excluded.is_selected,
                     discovered_at = excluded.discovered_at,
                     last_synced_at = COALESCE(excluded.last_synced_at, calendar_calendars.last_synced_at)
@@ -810,4 +810,129 @@ fn row_to_proposal(row: &sqlx::sqlite::SqliteRow) -> Result<CalendarChangePropos
         applied_at: row.try_get("applied_at")?,
         error: row.try_get("error")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn setup_store() -> CalendarStore {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("failed to create in-memory pool");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("failed to run migrations");
+        CalendarStore::new(pool)
+    }
+
+    fn calendar_collection(href: &str, sync_token: Option<&str>) -> CalendarCollection {
+        CalendarCollection {
+            href: href.to_string(),
+            display_name: Some("Calendar".to_string()),
+            description: None,
+            color: None,
+            timezone: Some("UTC".to_string()),
+            ctag: Some("ctag-1".to_string()),
+            sync_token: sync_token.map(str::to_string),
+            is_selected: true,
+            discovered_at: "2026-03-28T09:00:00Z".to_string(),
+            last_synced_at: Some("2026-03-28T09:00:00Z".to_string()),
+        }
+    }
+
+    async fn seed_source(store: &CalendarStore) {
+        store
+            .save_source_state(&CalendarSourceState {
+                source_id: "default".to_string(),
+                provider_kind: "caldav".to_string(),
+                base_url: Some("https://example.com/caldav".to_string()),
+                principal_url: None,
+                home_set_url: None,
+                auth_kind: "basic".to_string(),
+                last_discovery_at: None,
+                last_sync_at: None,
+                last_successful_sync_at: None,
+                last_error: None,
+                sync_status: Some("discovered".to_string()),
+            })
+            .await
+            .expect("failed to seed calendar source");
+    }
+
+    #[tokio::test]
+    async fn discovery_refresh_preserves_existing_sync_token_until_sync_applies() {
+        let store = setup_store().await;
+        let href = "https://example.com/calendars/main/";
+        seed_source(&store).await;
+
+        store
+            .replace_discovered_calendars(
+                "default",
+                &[calendar_collection(href, Some("token-old"))],
+                Some(href),
+            )
+            .await
+            .expect("failed to save initial discovery");
+
+        store
+            .replace_discovered_calendars(
+                "default",
+                &[calendar_collection(href, Some("token-new-from-discovery"))],
+                Some(href),
+            )
+            .await
+            .expect("failed to refresh discovery");
+
+        let calendars = store
+            .list_calendars("default")
+            .await
+            .expect("failed to list calendars");
+
+        assert_eq!(calendars.len(), 1);
+        assert_eq!(calendars[0].sync_token.as_deref(), Some("token-old"));
+    }
+
+    #[tokio::test]
+    async fn apply_sync_delta_advances_sync_token() {
+        let store = setup_store().await;
+        let href = "https://example.com/calendars/main/";
+        seed_source(&store).await;
+
+        store
+            .replace_discovered_calendars(
+                "default",
+                &[calendar_collection(href, Some("token-old"))],
+                Some(href),
+            )
+            .await
+            .expect("failed to save initial discovery");
+
+        store
+            .apply_sync_delta(ApplySyncDeltaParams {
+                calendar_href: href,
+                resources: &[],
+                deleted_hrefs: &[],
+                sync_token: Some("token-new"),
+                ctag: Some("ctag-2"),
+                full_refresh: false,
+                synced_at: "2026-03-28T09:05:00Z",
+            })
+            .await
+            .expect("failed to apply sync delta");
+
+        let calendars = store
+            .list_calendars("default")
+            .await
+            .expect("failed to list calendars");
+
+        assert_eq!(calendars.len(), 1);
+        assert_eq!(calendars[0].sync_token.as_deref(), Some("token-new"));
+        assert_eq!(calendars[0].ctag.as_deref(), Some("ctag-2"));
+        assert_eq!(
+            calendars[0].last_synced_at.as_deref(),
+            Some("2026-03-28T09:05:00Z")
+        );
+    }
 }

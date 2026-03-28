@@ -120,6 +120,7 @@ impl CalendarService {
             })
             .await?;
 
+        let existing_calendars = self.store.list_calendars(DEFAULT_SOURCE_ID).await?;
         let outcome: Result<CalendarSyncSummary> = async {
             let discovery = client.discover().await?;
             let discovered_at = Utc::now().to_rfc3339();
@@ -200,10 +201,7 @@ impl CalendarService {
                 });
             };
 
-            let current_sync_token = calendars
-                .iter()
-                .find(|calendar| calendar.href == selected_href)
-                .and_then(|calendar| calendar.sync_token.clone());
+            let current_sync_token = previous_sync_token(&existing_calendars, &selected_href);
             let delta = client
                 .sync_calendar(&selected_href, current_sync_token.as_deref())
                 .await?;
@@ -443,6 +441,7 @@ impl CalendarService {
 
         let client = self.build_client(&config)?;
         let outcome: Result<CalendarChangeProposal> = async {
+            let mut expected_create_uid = None;
             match proposal.action {
                 CalendarProposalAction::Create => {
                     let selected_href = self.selected_calendar_href()?;
@@ -453,6 +452,7 @@ impl CalendarService {
                     client
                         .put_resource(&remote_href, &raw_ics, None, true)
                         .await?;
+                    expected_create_uid = Some((selected_href, uid));
                 }
                 CalendarProposalAction::Update => {
                     let event_id = proposal
@@ -495,6 +495,16 @@ impl CalendarService {
             }
 
             self.sync_now().await?;
+            if let Some((calendar_href, remote_uid)) = expected_create_uid {
+                self.store
+                    .find_series_master(&calendar_href, &remote_uid)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "calendar create applied remotely but did not appear in the local mirror"
+                        )
+                    })?;
+            }
             let applied_at = Utc::now().to_rfc3339();
             self.store
                 .update_proposal_status(
@@ -625,4 +635,60 @@ fn render_delete_diff(current: &CalendarEvent) -> String {
         current.start_at_utc,
         current.end_at_utc,
     )
+}
+
+fn previous_sync_token(
+    existing_calendars: &[CalendarCollection],
+    selected_href: &str,
+) -> Option<String> {
+    existing_calendars
+        .iter()
+        .find(|calendar| calendar.href == selected_href)
+        .and_then(|calendar| calendar.sync_token.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn calendar_collection(href: &str, sync_token: Option<&str>) -> CalendarCollection {
+        CalendarCollection {
+            href: href.to_string(),
+            display_name: Some("Calendar".to_string()),
+            description: None,
+            color: None,
+            timezone: Some("UTC".to_string()),
+            ctag: Some("ctag-1".to_string()),
+            sync_token: sync_token.map(str::to_string),
+            is_selected: true,
+            discovered_at: "2026-03-28T09:00:00Z".to_string(),
+            last_synced_at: Some("2026-03-28T09:00:00Z".to_string()),
+        }
+    }
+
+    #[test]
+    fn previous_sync_token_uses_local_calendar_state() {
+        let calendars = vec![
+            calendar_collection("https://example.com/calendars/other/", Some("token-other")),
+            calendar_collection("https://example.com/calendars/main/", Some("token-local")),
+        ];
+
+        assert_eq!(
+            previous_sync_token(&calendars, "https://example.com/calendars/main/").as_deref(),
+            Some("token-local")
+        );
+    }
+
+    #[test]
+    fn previous_sync_token_returns_none_for_new_calendar() {
+        let calendars = vec![calendar_collection(
+            "https://example.com/calendars/other/",
+            Some("token-other"),
+        )];
+
+        assert_eq!(
+            previous_sync_token(&calendars, "https://example.com/calendars/main/"),
+            None
+        );
+    }
 }
