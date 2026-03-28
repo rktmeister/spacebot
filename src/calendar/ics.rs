@@ -880,8 +880,10 @@ fn format_dt_line(name: &str, value: &ParsedIcalDateTime) -> String {
         );
     }
 
-    if let (Some(timezone), Some(local_datetime)) = (&value.timezone, &value.local_datetime)
-        && timezone != "UTC"
+    if let (Some(timezone), Some(local_datetime)) = (
+        normalized_tzid(value.timezone.as_deref()),
+        &value.local_datetime,
+    ) && timezone != "UTC"
     {
         return format!(
             "{name};TZID={timezone}:{}",
@@ -1030,9 +1032,17 @@ fn parse_ical_datetime_value(
 }
 
 fn parse_rrule_timezone(timezone: Option<&str>) -> Tz {
-    timezone
+    normalized_tzid(timezone)
         .and_then(|value| value.parse::<chrono_tz::Tz>().ok().map(Into::into))
         .unwrap_or(Tz::UTC)
+}
+
+fn normalized_tzid(timezone: Option<&str>) -> Option<&str> {
+    let timezone = timezone?.trim();
+    if timezone.eq_ignore_ascii_case("UTC") {
+        return Some("UTC");
+    }
+    timezone.parse::<chrono_tz::Tz>().ok().map(|_| timezone)
 }
 
 fn unescape_ical_text(value: &str) -> String {
@@ -1042,4 +1052,78 @@ fn unescape_ical_text(value: &str) -> String {
         .replace("\\,", ",")
         .replace("\\;", ";")
         .replace("\\\\", "\\")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::calendar::types::CalendarEvent;
+
+    fn recurring_event(timezone: Option<&str>) -> CalendarEvent {
+        CalendarEvent {
+            id: "event-1".to_string(),
+            resource_id: "resource-1".to_string(),
+            calendar_href: "https://example.com/cal/".to_string(),
+            remote_href: "https://example.com/cal/event-1.ics".to_string(),
+            remote_uid: "uid-1".to_string(),
+            recurrence_id_utc: None,
+            summary: Some("Recurring".to_string()),
+            description: None,
+            location: None,
+            status: Some("CONFIRMED".to_string()),
+            organizer_name: None,
+            organizer_email: None,
+            start_at_utc: "2026-04-07T13:30:00+00:00".to_string(),
+            end_at_utc: "2026-04-07T14:00:00+00:00".to_string(),
+            timezone: timezone.map(str::to_string),
+            all_day: false,
+            recurrence_rule: Some(
+                "FREQ=WEEKLY;UNTIL=20260804T063000Z;INTERVAL=2;BYDAY=TU;WKST=MO".to_string(),
+            ),
+            recurrence_exdates_json: None,
+            sequence: 0,
+            transparency: None,
+            etag: None,
+            raw_ics: String::new(),
+            deleted: false,
+            attendees: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn expand_occurrences_tolerates_non_iana_timezone_names() {
+        let start = Utc
+            .with_ymd_and_hms(2026, 4, 1, 0, 0, 0)
+            .single()
+            .expect("valid range start");
+        let end = Utc
+            .with_ymd_and_hms(2026, 4, 15, 0, 0, 0)
+            .single()
+            .expect("valid range end");
+
+        let occurrences = expand_occurrences(
+            &[recurring_event(Some("SE Asia Standard Time"))],
+            start,
+            end,
+        )
+        .expect("invalid timezone names should fall back to UTC recurrence expansion");
+
+        assert!(!occurrences.is_empty());
+        assert_eq!(occurrences[0].remote_uid, "uid-1");
+    }
+
+    #[test]
+    fn format_dt_line_uses_utc_for_invalid_timezone_names() {
+        let parsed = parse_user_datetime(
+            "2026-04-07T13:30:00+00:00",
+            Some("SE Asia Standard Time"),
+            false,
+        )
+        .expect("RFC3339 input should parse");
+
+        assert_eq!(
+            format_dt_line("DTSTART", &parsed),
+            "DTSTART:20260407T133000Z"
+        );
+    }
 }

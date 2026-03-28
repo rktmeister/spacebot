@@ -494,6 +494,10 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 						</div>
 					) : occurrencesQuery.isLoading ? (
 						<div className="flex h-full items-center justify-center text-sm text-ink-faint">Loading events…</div>
+					) : occurrencesQuery.isError ? (
+						<div className="flex h-full items-center justify-center px-6 text-center text-sm text-red-400">
+							Failed to load calendar events. {occurrencesQuery.error.message}
+						</div>
 					) : viewMode === "month" ? (
 						renderMonth()
 					) : (

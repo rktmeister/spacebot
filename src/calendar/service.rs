@@ -338,6 +338,8 @@ impl CalendarService {
         &self,
         draft: CalendarEventDraft,
     ) -> Result<CalendarChangeProposal> {
+        let default_timezone = self.default_event_timezone();
+        let draft = normalize_draft_timezone(draft, default_timezone.as_deref());
         self.store
             .create_change_proposal(
                 CalendarProposalAction::Create,
@@ -355,6 +357,8 @@ impl CalendarService {
         event_id: &str,
         draft: CalendarEventDraft,
     ) -> Result<CalendarChangeProposal> {
+        let default_timezone = self.default_event_timezone();
+        let draft = normalize_draft_timezone(draft, default_timezone.as_deref());
         let current = self
             .store
             .get_event(event_id)
@@ -585,6 +589,17 @@ impl CalendarService {
         let client = self.build_client(&config)?;
         client.resolve_href(&href).map_err(Into::into)
     }
+
+    fn default_event_timezone(&self) -> Option<String> {
+        self.runtime_config
+            .user_timezone
+            .load()
+            .as_ref()
+            .clone()
+            .or_else(|| self.runtime_config.cron_timezone.load().as_ref().clone())
+            .map(|timezone| timezone.trim().to_string())
+            .filter(|timezone| !timezone.is_empty())
+    }
 }
 
 fn render_create_diff(draft: &CalendarEventDraft) -> String {
@@ -647,6 +662,24 @@ fn previous_sync_token(
         .and_then(|calendar| calendar.sync_token.clone())
 }
 
+fn normalize_draft_timezone(
+    mut draft: CalendarEventDraft,
+    default_timezone: Option<&str>,
+) -> CalendarEventDraft {
+    if draft
+        .timezone
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(|timezone| timezone.is_empty())
+    {
+        draft.timezone = default_timezone
+            .map(str::trim)
+            .filter(|timezone| !timezone.is_empty())
+            .map(str::to_string);
+    }
+    draft
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,5 +723,41 @@ mod tests {
             previous_sync_token(&calendars, "https://example.com/calendars/main/"),
             None
         );
+    }
+
+    #[test]
+    fn normalize_draft_timezone_uses_default_when_missing() {
+        let draft = CalendarEventDraft {
+            summary: "ERP update".to_string(),
+            description: None,
+            location: None,
+            start_at: "2026-03-30T09:00:00".to_string(),
+            end_at: "2026-03-30T10:00:00".to_string(),
+            timezone: None,
+            all_day: false,
+            recurrence_rule: None,
+            attendees: Vec::new(),
+        };
+
+        let normalized = normalize_draft_timezone(draft, Some("Asia/Singapore"));
+        assert_eq!(normalized.timezone.as_deref(), Some("Asia/Singapore"));
+    }
+
+    #[test]
+    fn normalize_draft_timezone_preserves_explicit_timezone() {
+        let draft = CalendarEventDraft {
+            summary: "ERP update".to_string(),
+            description: None,
+            location: None,
+            start_at: "2026-03-30T09:00:00".to_string(),
+            end_at: "2026-03-30T10:00:00".to_string(),
+            timezone: Some("UTC".to_string()),
+            all_day: false,
+            recurrence_rule: None,
+            attendees: Vec::new(),
+        };
+
+        let normalized = normalize_draft_timezone(draft, Some("Asia/Singapore"));
+        assert_eq!(normalized.timezone.as_deref(), Some("UTC"));
     }
 }
