@@ -235,14 +235,13 @@ function extractMeetingUrl(event?: CalendarEvent | null): string | null {
 		...extractUrls(unfoldIcsText(event.raw_ics)),
 	];
 	if (candidates.length === 0) return null;
-	const meetingUrl = candidates.find((url) => {
+	return candidates.find((url) => {
 		try {
 			return MEETING_HOST_PATTERN.test(new URL(url).hostname);
 		} catch {
 			return false;
 		}
-	});
-	return meetingUrl ?? candidates[0] ?? null;
+	}) ?? null;
 }
 
 function renderLinkifiedText(text: string) {
