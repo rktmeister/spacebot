@@ -108,6 +108,20 @@ pub(super) struct ProjectsSection {
 }
 
 #[derive(Serialize, Debug, utoipa::ToSchema)]
+pub(super) struct CalendarSection {
+    enabled: bool,
+    provider_kind: String,
+    auth_kind: String,
+    base_url: Option<String>,
+    has_username: bool,
+    has_password: bool,
+    selected_calendar_href: Option<String>,
+    sync_interval_secs: u64,
+    read_only: bool,
+    has_ics_export_token: bool,
+}
+
+#[derive(Serialize, Debug, utoipa::ToSchema)]
 pub(super) struct DiscordSection {
     enabled: bool,
     allow_bot_messages: bool,
@@ -126,6 +140,7 @@ pub(super) struct AgentConfigResponse {
     channel: ChannelSection,
     sandbox: SandboxSection,
     projects: ProjectsSection,
+    calendar: CalendarSection,
     discord: DiscordSection,
 }
 
@@ -159,6 +174,8 @@ pub(super) struct AgentConfigUpdateRequest {
     sandbox: Option<SandboxUpdate>,
     #[serde(default)]
     projects: Option<ProjectsUpdate>,
+    #[serde(default)]
+    calendar: Option<CalendarUpdate>,
     #[serde(default)]
     discord: Option<DiscordUpdate>,
 }
@@ -264,6 +281,18 @@ pub(super) struct ProjectsUpdate {
 }
 
 #[derive(Deserialize, Debug, utoipa::ToSchema)]
+pub(super) struct CalendarUpdate {
+    enabled: Option<bool>,
+    base_url: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    selected_calendar_href: Option<String>,
+    sync_interval_secs: Option<u64>,
+    read_only: Option<bool>,
+    ics_export_token: Option<String>,
+}
+
+#[derive(Deserialize, Debug, utoipa::ToSchema)]
 pub(super) struct DiscordUpdate {
     allow_bot_messages: Option<bool>,
 }
@@ -299,6 +328,7 @@ pub(super) async fn get_agent_config(
     let channel = rc.channel_config.load();
     let sandbox = rc.sandbox.load();
     let projects = rc.projects.load();
+    let calendar = rc.calendar.load();
 
     let response = AgentConfigResponse {
         routing: RoutingSection {
@@ -385,6 +415,30 @@ pub(super) async fn get_agent_config(
             auto_discover_repos: projects.auto_discover_repos,
             auto_discover_worktrees: projects.auto_discover_worktrees,
             disk_usage_warning_threshold: projects.disk_usage_warning_threshold,
+        },
+        calendar: CalendarSection {
+            enabled: calendar.enabled,
+            provider_kind: calendar.provider_kind.to_string(),
+            auth_kind: calendar.auth_kind.to_string(),
+            base_url: calendar.base_url.clone(),
+            has_username: calendar
+                .username
+                .as_deref()
+                .map(|value| !value.is_empty())
+                .unwrap_or(false),
+            has_password: calendar
+                .password
+                .as_deref()
+                .map(|value| !value.is_empty())
+                .unwrap_or(false),
+            selected_calendar_href: calendar.selected_calendar_href.clone(),
+            sync_interval_secs: calendar.sync_interval_secs,
+            read_only: calendar.read_only,
+            has_ics_export_token: calendar
+                .ics_export_token
+                .as_deref()
+                .map(|value| !value.is_empty())
+                .unwrap_or(false),
         },
         discord: {
             let perms = state.discord_permissions.read().await;
@@ -482,6 +536,9 @@ pub(super) async fn update_agent_config(
     }
     if let Some(projects) = &request.projects {
         update_projects_table(&mut doc, agent_idx, projects)?;
+    }
+    if let Some(calendar) = &request.calendar {
+        update_calendar_table(&mut doc, agent_idx, calendar)?;
     }
     if let Some(discord) = &request.discord {
         update_discord_table(&mut doc, discord)?;
@@ -927,6 +984,48 @@ fn update_projects_table(
     if let Some(threshold) = projects.disk_usage_warning_threshold {
         let clamped = i64::try_from(threshold).unwrap_or(i64::MAX);
         table["disk_usage_warning_threshold"] = toml_edit::value(clamped);
+    }
+    Ok(())
+}
+
+fn set_optional_string(table: &mut toml_edit::Table, key: &str, value: &str) {
+    if value.trim().is_empty() {
+        table.remove(key);
+    } else {
+        table[key] = toml_edit::value(value);
+    }
+}
+
+fn update_calendar_table(
+    doc: &mut toml_edit::DocumentMut,
+    agent_idx: usize,
+    calendar: &CalendarUpdate,
+) -> Result<(), StatusCode> {
+    let agent = get_agent_table_mut(doc, agent_idx)?;
+    let table = get_or_create_subtable(agent, "calendar")?;
+    if let Some(v) = calendar.enabled {
+        table["enabled"] = toml_edit::value(v);
+    }
+    if let Some(ref v) = calendar.base_url {
+        set_optional_string(table, "base_url", v);
+    }
+    if let Some(ref v) = calendar.username {
+        set_optional_string(table, "username", v);
+    }
+    if let Some(ref v) = calendar.password {
+        set_optional_string(table, "password", v);
+    }
+    if let Some(ref v) = calendar.selected_calendar_href {
+        set_optional_string(table, "selected_calendar_href", v);
+    }
+    if let Some(v) = calendar.sync_interval_secs {
+        table["sync_interval_secs"] = toml_edit::value(v as i64);
+    }
+    if let Some(v) = calendar.read_only {
+        table["read_only"] = toml_edit::value(v);
+    }
+    if let Some(ref v) = calendar.ics_export_token {
+        set_optional_string(table, "ics_export_token", v);
     }
     Ok(())
 }

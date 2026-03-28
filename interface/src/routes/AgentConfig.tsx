@@ -16,7 +16,7 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 		|| id.includes("sonnet-4-6") || id.includes("sonnet-4.6");
 }
 
-type SectionId = "general" | "soul" | "identity" | "role" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "channel" | "sandbox" | "projects";
+type SectionId = "general" | "soul" | "identity" | "role" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "channel" | "sandbox" | "projects" | "calendar";
 
 const SECTIONS: {
 	id: SectionId;
@@ -39,6 +39,7 @@ const SECTIONS: {
 	{ id: "channel", label: "Channel Behavior", group: "config", description: "Reply behavior", detail: "Listen-only mode suppresses unsolicited replies in busy channels. The agent still responds to slash commands, @mentions, and replies to its own messages." },
 	{ id: "sandbox", label: "Sandbox", group: "config", description: "Process containment", detail: "OS-level filesystem containment for shell tool subprocesses. When enabled, worker processes run inside a kernel-enforced sandbox (bubblewrap on Linux, sandbox-exec on macOS) with an allowlist-only filesystem — only system paths, the workspace, and explicitly configured extra paths are accessible." },
 	{ id: "projects", label: "Projects", group: "config", description: "Workspace management", detail: "Controls how the agent manages project workspaces, git repos, and worktrees. Use worktrees for parallel feature branches, auto-discover to scan for repos on project creation, and set a disk usage warning threshold." },
+	{ id: "calendar", label: "Calendar", group: "config", description: "Remote calendar sync", detail: "Configures the provider-backed calendar mirror used by the dashboard and agent tools. V1 writes to CalDAV using basic auth. Use secret: references for credentials, keep the export token private, and set the selected calendar href after discovery." },
 ];
 
 interface AgentConfigProps {
@@ -741,6 +742,21 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 	type ConfigValues = Record<string, string | number | boolean | string[]>;
 	const sandbox = config.sandbox ?? SANDBOX_DEFAULTS;
 	const channel = config.channel ?? { listen_only_mode: false };
+	const buildCalendarValues = (): ConfigValues => ({
+		enabled: config.calendar.enabled,
+		provider_kind: config.calendar.provider_kind,
+		auth_kind: config.calendar.auth_kind,
+		base_url: config.calendar.base_url ?? "",
+		username: "",
+		password: "",
+		has_username: config.calendar.has_username,
+		has_password: config.calendar.has_password,
+		selected_calendar_href: config.calendar.selected_calendar_href ?? "",
+		sync_interval_secs: config.calendar.sync_interval_secs,
+		read_only: config.calendar.read_only,
+		ics_export_token: "",
+		has_ics_export_token: config.calendar.has_ics_export_token,
+	});
 	const [localValues, setLocalValues] = useState<ConfigValues>(() => {
 		// Initialize from config based on section
 		switch (sectionId) {
@@ -764,12 +780,15 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 				return { mode: sandbox.mode, writable_paths: sandbox.writable_paths } as ConfigValues;
 			case "projects":
 				return { ...config.projects } as ConfigValues;
+			case "calendar":
+				return buildCalendarValues();
 			default:
 				return {};
 		}
 	});
 
 	const [localDirty, setLocalDirty] = useState(false);
+	const [sensitiveTouched, setSensitiveTouched] = useState<Record<string, boolean>>({});
 
 	useEffect(() => {
 		onDirtyChange(localDirty);
@@ -809,19 +828,47 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 				case "projects":
 					setLocalValues({ ...config.projects });
 					break;
+				case "calendar":
+					setLocalValues(buildCalendarValues());
+					break;
 			}
+			setSensitiveTouched({});
 		}
-	}, [config, sectionId, localDirty]);
+	}, [buildCalendarValues, channel, config, localDirty, sandbox, sectionId]);
 
 	const handleChange = useCallback((field: string, value: string | number | boolean | string[]) => {
 		setLocalValues((prev) => ({ ...prev, [field]: value }));
+		if (field === "username" || field === "password" || field === "ics_export_token") {
+			setSensitiveTouched((prev) => ({ ...prev, [field]: true }));
+		}
 		setLocalDirty(true);
 	}, []);
 
 	const handleSave = useCallback(() => {
-		onSave({ [sectionId]: localValues });
+		if (sectionId === "calendar") {
+			const update: Record<string, string | number | boolean> = {
+				enabled: localValues.enabled as boolean,
+				base_url: localValues.base_url as string,
+				selected_calendar_href: localValues.selected_calendar_href as string,
+				sync_interval_secs: localValues.sync_interval_secs as number,
+				read_only: localValues.read_only as boolean,
+			};
+			if (sensitiveTouched.username) {
+				update.username = localValues.username as string;
+			}
+			if (sensitiveTouched.password) {
+				update.password = localValues.password as string;
+			}
+			if (sensitiveTouched.ics_export_token) {
+				update.ics_export_token = localValues.ics_export_token as string;
+			}
+			onSave({ calendar: update });
+		} else {
+			onSave({ [sectionId]: localValues });
+		}
+		setSensitiveTouched({});
 		setLocalDirty(false);
-	}, [onSave, sectionId, localValues]);
+	}, [localValues, onSave, sectionId, sensitiveTouched]);
 
 	const handleRevert = useCallback(() => {
 		switch (sectionId) {
@@ -855,9 +902,13 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 			case "projects":
 				setLocalValues({ ...config.projects });
 				break;
+			case "calendar":
+				setLocalValues(buildCalendarValues());
+				break;
 		}
+		setSensitiveTouched({});
 		setLocalDirty(false);
-	}, [config, sectionId]);
+	}, [buildCalendarValues, channel, config, sandbox, sectionId]);
 
 	// Register save/revert handlers
 	useEffect(() => {
@@ -1274,6 +1325,101 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 							min={0}
 							step={1073741824}
 						/>
+					</div>
+				);
+			case "calendar":
+				return (
+					<div className="grid gap-4">
+						<ConfigToggleField
+							label="Enabled"
+							description="Enable the provider-backed calendar sync and dashboard tools for this agent."
+							value={localValues.enabled as boolean}
+							onChange={(v) => handleChange("enabled", v)}
+						/>
+						<div className="grid gap-4 md:grid-cols-2">
+							<div className="flex flex-col gap-1.5">
+								<label className="text-sm font-medium text-ink">Provider</label>
+								<Input
+									value={localValues.provider_kind as string}
+									disabled
+									className="border-app-line/50 bg-app-darkBox/20 text-ink-faint"
+								/>
+							</div>
+							<div className="flex flex-col gap-1.5">
+								<label className="text-sm font-medium text-ink">Auth</label>
+								<Input
+									value={localValues.auth_kind as string}
+									disabled
+									className="border-app-line/50 bg-app-darkBox/20 text-ink-faint"
+								/>
+								<p className="text-tiny text-ink-faint">V1 supports basic auth CalDAV only.</p>
+							</div>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label className="text-sm font-medium text-ink">Base URL</label>
+							<p className="text-tiny text-ink-faint">CalDAV server URL, for example <code className="text-ink-dull">https://caldav.forwardemail.net</code>.</p>
+							<Input
+								value={localValues.base_url as string}
+								onChange={(e) => handleChange("base_url", e.target.value)}
+								placeholder="https://caldav.example.com"
+								className="border-app-line/50 bg-app-darkBox/30"
+							/>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label className="text-sm font-medium text-ink">Username</label>
+							<p className="text-tiny text-ink-faint">Supports literal values, <code className="text-ink-dull">env:VAR</code>, or <code className="text-ink-dull">secret:NAME</code>. Leave blank to keep the current value.</p>
+							<Input
+								value={localValues.username as string}
+								onChange={(e) => handleChange("username", e.target.value)}
+								placeholder={(localValues.has_username as boolean) ? "Configured; enter a new value to replace" : "secret:CALDAV_USERNAME"}
+								className="border-app-line/50 bg-app-darkBox/30"
+							/>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label className="text-sm font-medium text-ink">Password</label>
+							<p className="text-tiny text-ink-faint">Supports <code className="text-ink-dull">secret:</code> references. Leave blank to keep the current value.</p>
+							<Input
+								type="password"
+								value={localValues.password as string}
+								onChange={(e) => handleChange("password", e.target.value)}
+								placeholder={(localValues.has_password as boolean) ? "Configured; enter a new value to replace" : "secret:CALDAV_PASSWORD"}
+								className="border-app-line/50 bg-app-darkBox/30"
+							/>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label className="text-sm font-medium text-ink">Selected Calendar Href</label>
+							<p className="text-tiny text-ink-faint">Persist the discovered calendar collection URL here once you know which calendar this agent should mirror.</p>
+							<Input
+								value={localValues.selected_calendar_href as string}
+								onChange={(e) => handleChange("selected_calendar_href", e.target.value)}
+								placeholder="/dav/user@example.com/calendar/"
+								className="border-app-line/50 bg-app-darkBox/30"
+							/>
+						</div>
+						<NumberStepper
+							label="Sync Interval"
+							description="Background sync cadence for the selected calendar."
+							value={localValues.sync_interval_secs as number}
+							onChange={(v) => handleChange("sync_interval_secs", v)}
+							min={30}
+							suffix="s"
+						/>
+						<ConfigToggleField
+							label="Read Only"
+							description="Prevent create/update/delete writes and keep the calendar mirror read-only."
+							value={localValues.read_only as boolean}
+							onChange={(v) => handleChange("read_only", v)}
+						/>
+						<div className="flex flex-col gap-1.5">
+							<label className="text-sm font-medium text-ink">ICS Export Token</label>
+							<p className="text-tiny text-ink-faint">Token for the public read-only ICS route. Leave blank to keep the current token or clear it explicitly.</p>
+							<Input
+								value={localValues.ics_export_token as string}
+								onChange={(e) => handleChange("ics_export_token", e.target.value)}
+								placeholder={(localValues.has_ics_export_token as boolean) ? "Configured; enter a new token to replace" : "calendar-export-token"}
+								className="border-app-line/50 bg-app-darkBox/30"
+							/>
+						</div>
 					</div>
 				);
 			default:

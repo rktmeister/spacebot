@@ -556,6 +556,25 @@ fn format_interval(secs: u64) -> String {
     }
 }
 
+/// Normalize delivery target for named instances.
+///
+/// If the LLM provided a bare platform adapter (e.g., "signal", "slack") but we're in
+/// a named instance conversation (e.g., "signal:gvoice1", "slack:work"), rewrite to
+/// include the instance name. This ensures the cron job can find the correct adapter
+/// at runtime.
+fn normalize_delivery_target(delivery_target: &str, current_adapter: &Option<String>) -> String {
+    if let Some(parsed) = crate::messaging::target::parse_delivery_target(delivery_target)
+        && let Some(current_adapter) = current_adapter.as_ref()
+    {
+        let expected_prefix = format!("{}:", parsed.adapter);
+        if current_adapter.starts_with(&expected_prefix) {
+            // current_adapter is a named instance of the parsed platform
+            return format!("{current_adapter}:{}", parsed.target);
+        }
+    }
+    delivery_target.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CronError, normalize_delivery_target, resolve_delivery_target};
@@ -737,23 +756,4 @@ mod tests {
         assert_eq!(target_default.adapter, "signal");
         assert_eq!(target_default.target, "+15551234567");
     }
-}
-
-/// Normalize delivery target for named instances.
-///
-/// If the LLM provided a bare platform adapter (e.g., "signal", "slack") but we're in
-/// a named instance conversation (e.g., "signal:gvoice1", "slack:work"), rewrite to
-/// include the instance name. This ensures the cron job can find the correct adapter
-/// at runtime.
-fn normalize_delivery_target(delivery_target: &str, current_adapter: &Option<String>) -> String {
-    if let Some(parsed) = crate::messaging::target::parse_delivery_target(delivery_target)
-        && let Some(current_adapter) = current_adapter.as_ref()
-    {
-        let expected_prefix = format!("{}:", parsed.adapter);
-        if current_adapter.starts_with(&expected_prefix) {
-            // current_adapter is a named instance of the parsed platform
-            return format!("{current_adapter}:{}", parsed.target);
-        }
-    }
-    delivery_target.to_string()
 }

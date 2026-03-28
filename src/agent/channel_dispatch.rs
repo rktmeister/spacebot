@@ -263,6 +263,7 @@ async fn spawn_branch(
         Some(state.clone()),
         state.deps.agent_id.clone(),
         state.deps.task_store.clone(),
+        state.deps.calendar_service.clone(),
         state.deps.memory_search.clone(),
         state.deps.runtime_config.clone(),
         state.deps.memory_event_tx.clone(),

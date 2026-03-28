@@ -2,9 +2,9 @@
 
 use super::state::ApiState;
 use super::{
-    agents, bindings, channels, config, cortex, cron, factory, ingest, links, mcp, memories,
-    messaging, models, opencode_proxy, projects, providers, secrets, settings, skills, ssh, system,
-    tasks, tools, webchat, workers,
+    agents, bindings, calendar, channels, config, cortex, cron, factory, ingest, links, mcp,
+    memories, messaging, models, opencode_proxy, projects, providers, secrets, settings, skills,
+    ssh, system, tasks, tools, webchat, workers,
 };
 
 use axum::Json;
@@ -13,7 +13,7 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{any, post};
+use axum::routing::{any, get, post};
 use rust_embed::Embed;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
@@ -73,6 +73,16 @@ pub fn api_router() -> OpenApiRouter<Arc<ApiState>> {
             agents::delete_avatar
         ))
         .routes(routes!(agents::get_identity, agents::update_identity))
+        // Calendar routes
+        .routes(routes!(calendar::calendar_overview))
+        .routes(routes!(calendar::calendar_events))
+        .routes(routes!(calendar::calendar_event))
+        .routes(routes!(calendar::calendar_free_time))
+        .routes(routes!(calendar::calendar_sync))
+        .routes(routes!(calendar::calendar_propose_create))
+        .routes(routes!(calendar::calendar_propose_update))
+        .routes(routes!(calendar::calendar_propose_delete))
+        .routes(routes!(calendar::calendar_apply_proposal))
         // MCP routes
         .routes(routes!(
             mcp::list_mcp_servers,
@@ -290,6 +300,10 @@ pub async fn start_http_server(
     let app = Router::new()
         // Mount all protected routes
         .merge(protected_routes)
+        .route(
+            "/calendar/ics/{agent_id}/{token}.ics",
+            get(calendar::export_calendar_ics),
+        )
         // Static file handler for frontend (unprotected)
         .fallback(static_handler)
         .layer(cors)

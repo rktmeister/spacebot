@@ -6,6 +6,7 @@
 
 pub mod agents;
 mod bindings;
+mod calendar;
 mod channels;
 mod config;
 mod cortex;

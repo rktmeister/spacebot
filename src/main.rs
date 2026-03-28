@@ -2740,6 +2740,13 @@ async fn initialize_agents(
         spacebot::projects::refresh_sandbox_project_paths(&project_store, &agent_id, &sandbox)
             .await;
 
+        let calendar_store = Arc::new(spacebot::calendar::CalendarStore::new(db.sqlite.clone()));
+        let calendar_service = spacebot::calendar::CalendarService::new(
+            calendar_store.clone(),
+            runtime_config.clone(),
+        );
+        calendar_service.start();
+
         let deps = spacebot::AgentDeps {
             agent_id: agent_id.clone(),
             memory_search,
@@ -2747,6 +2754,8 @@ async fn initialize_agents(
             mcp_manager,
             task_store: global_task_store.clone(),
             project_store: project_store.clone(),
+            calendar_store,
+            calendar_service,
             cron_tool: None,
             runtime_config,
             event_tx,
@@ -2822,6 +2831,8 @@ async fn initialize_agents(
         let mut memory_searches = std::collections::HashMap::new();
         let mut mcp_managers = std::collections::HashMap::new();
         let mut project_stores = std::collections::HashMap::new();
+        let mut calendar_stores = std::collections::HashMap::new();
+        let mut calendar_services = std::collections::HashMap::new();
         let mut agent_workspaces = std::collections::HashMap::new();
         let mut agent_identity_dirs = std::collections::HashMap::new();
         let mut agent_data_dirs = std::collections::HashMap::new();
@@ -2834,6 +2845,8 @@ async fn initialize_agents(
             memory_searches.insert(agent_id.to_string(), agent.deps.memory_search.clone());
             mcp_managers.insert(agent_id.to_string(), agent.deps.mcp_manager.clone());
             project_stores.insert(agent_id.to_string(), agent.deps.project_store.clone());
+            calendar_stores.insert(agent_id.to_string(), agent.deps.calendar_store.clone());
+            calendar_services.insert(agent_id.to_string(), agent.deps.calendar_service.clone());
             agent_workspaces.insert(agent_id.to_string(), agent.config.workspace.clone());
             agent_identity_dirs.insert(agent_id.to_string(), agent.config.identity_dir.clone());
             agent_data_dirs.insert(agent_id.to_string(), agent.config.data_dir.clone());
@@ -2857,6 +2870,8 @@ async fn initialize_agents(
         api_state.set_memory_searches(memory_searches);
         api_state.set_mcp_managers(mcp_managers);
         api_state.set_project_stores(project_stores);
+        api_state.set_calendar_stores(calendar_stores);
+        api_state.set_calendar_services(calendar_services);
         api_state.set_runtime_configs(runtime_configs);
         api_state.set_agent_workspaces(agent_workspaces);
         api_state.set_agent_identity_dirs(agent_identity_dirs);

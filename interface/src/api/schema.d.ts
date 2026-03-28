@@ -43,6 +43,159 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agents/calendar/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /agents/calendar/events` — list occurrences in a time range. */
+        get: operations["calendar_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/calendar/events/{event_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /agents/calendar/events/{event_id}` — fetch one mirrored calendar event. */
+        get: operations["calendar_event"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/calendar/free-time": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /agents/calendar/free-time` — find available slots within a range. */
+        get: operations["calendar_free_time"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/calendar/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /agents/calendar/overview` — current calendar configuration and sync state. */
+        get: operations["calendar_overview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/calendar/proposals/create": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** `POST /agents/calendar/proposals/create` — propose a new calendar event. */
+        post: operations["calendar_propose_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/calendar/proposals/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** `POST /agents/calendar/proposals/delete` — propose an event deletion. */
+        post: operations["calendar_propose_delete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/calendar/proposals/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** `POST /agents/calendar/proposals/update` — propose an event update. */
+        post: operations["calendar_propose_update"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/calendar/proposals/{proposal_id}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** `POST /agents/calendar/proposals/{proposal_id}/apply` — apply a pending proposal. */
+        post: operations["calendar_apply_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/calendar/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** `POST /agents/calendar/sync` — trigger a sync immediately. */
+        post: operations["calendar_sync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agents/config": {
         parameters: {
             query?: never;
@@ -591,6 +744,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agents/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List worker runs for an agent, with live status merged from StatusBlocks. */
+        get: operations["list_workers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/workers/detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get full detail for a single worker run, including decompressed transcript. */
+        get: operations["worker_detail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/bindings": {
         parameters: {
             query?: never;
@@ -790,7 +977,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/cortex/chat/messages": {
+    "/cortex-chat/messages": {
         parameters: {
             query?: never;
             header?: never;
@@ -811,7 +998,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/cortex/chat/send": {
+    "/cortex-chat/send": {
         parameters: {
             query?: never;
             header?: never;
@@ -836,7 +1023,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/cortex/chat/threads": {
+    "/cortex-chat/thread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a cortex chat thread and all its messages. */
+        delete: operations["cortex_chat_delete_thread"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cortex-chat/threads": {
         parameters: {
             query?: never;
             header?: never;
@@ -847,8 +1051,7 @@ export interface paths {
         get: operations["cortex_chat_threads"];
         put?: never;
         post?: never;
-        /** Delete a cortex chat thread and all its messages. */
-        delete: operations["cortex_chat_delete_thread"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1923,40 +2126,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/workers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List worker runs for an agent, with live status merged from StatusBlocks. */
-        get: operations["list_workers"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/workers/detail": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get full detail for a single worker run, including decompressed transcript. */
-        get: operations["worker_detail"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1995,6 +2164,7 @@ export interface components {
         };
         AgentConfigResponse: {
             browser: components["schemas"]["BrowserSection"];
+            calendar: components["schemas"]["CalendarSection"];
             channel: components["schemas"]["ChannelSection"];
             coalesce: components["schemas"]["CoalesceSection"];
             compaction: components["schemas"]["CompactionSection"];
@@ -2010,6 +2180,7 @@ export interface components {
         AgentConfigUpdateRequest: {
             agent_id: string;
             browser?: null | components["schemas"]["BrowserUpdate"];
+            calendar?: null | components["schemas"]["CalendarUpdate"];
             channel?: null | components["schemas"]["ChannelUpdate"];
             coalesce?: null | components["schemas"]["CoalesceUpdate"];
             compaction?: null | components["schemas"]["CompactionUpdate"];
@@ -2138,6 +2309,227 @@ export interface components {
             evaluate_enabled?: boolean | null;
             headless?: boolean | null;
             persist_session?: boolean | null;
+        };
+        CalendarApplyProposalRequest: {
+            agent_id: string;
+        };
+        /** @description Persisted attendee metadata for a calendar event. */
+        CalendarAttendee: {
+            common_name?: string | null;
+            email?: string | null;
+            event_id: string;
+            id: string;
+            is_organizer: boolean;
+            partstat?: string | null;
+            role?: string | null;
+            rsvp: boolean;
+        };
+        /** @description Attendee input accepted from tools and UI. */
+        CalendarAttendeeInput: {
+            common_name?: string | null;
+            email: string;
+            partstat?: string | null;
+            role?: string | null;
+            rsvp?: boolean;
+        };
+        /** @description Busy/available slot returned by the scheduling helper. */
+        CalendarAvailabilitySlot: {
+            end_at: string;
+            start_at: string;
+        };
+        /** @description Persisted proposal shared between chat tools and dashboard UI. */
+        CalendarChangeProposal: {
+            action: components["schemas"]["CalendarProposalAction"];
+            applied_at?: string | null;
+            basis_etag?: string | null;
+            created_at: string;
+            diff: string;
+            draft: components["schemas"]["CalendarEventDraft"];
+            error?: string | null;
+            event_id?: string | null;
+            id: string;
+            status: components["schemas"]["CalendarProposalStatus"];
+            summary: string;
+            updated_at: string;
+        };
+        /** @description Calendar collection discovered from the remote provider. */
+        CalendarCollection: {
+            color?: string | null;
+            ctag?: string | null;
+            description?: string | null;
+            discovered_at: string;
+            display_name?: string | null;
+            href: string;
+            is_selected: boolean;
+            last_synced_at?: string | null;
+            sync_token?: string | null;
+            timezone?: string | null;
+        };
+        CalendarCreateProposalRequest: {
+            agent_id: string;
+            draft: components["schemas"]["CalendarEventDraft"];
+        };
+        CalendarDeleteProposalRequest: {
+            agent_id: string;
+            event_id: string;
+        };
+        /** @description Stored VEVENT component derived from a synced ICS resource. */
+        CalendarEvent: {
+            all_day: boolean;
+            attendees: components["schemas"]["CalendarAttendee"][];
+            calendar_href: string;
+            deleted: boolean;
+            description?: string | null;
+            end_at_utc: string;
+            etag?: string | null;
+            id: string;
+            location?: string | null;
+            organizer_email?: string | null;
+            organizer_name?: string | null;
+            raw_ics: string;
+            recurrence_exdates_json?: string | null;
+            recurrence_id_utc?: string | null;
+            recurrence_rule?: string | null;
+            remote_href: string;
+            remote_uid: string;
+            resource_id: string;
+            /** Format: int64 */
+            sequence: number;
+            start_at_utc: string;
+            status?: string | null;
+            summary?: string | null;
+            timezone?: string | null;
+            transparency?: string | null;
+        };
+        /** @description Editable event draft for proposals and apply flows. */
+        CalendarEventDraft: {
+            all_day: boolean;
+            attendees: components["schemas"]["CalendarAttendeeInput"][];
+            description?: string | null;
+            end_at: string;
+            location?: string | null;
+            recurrence_rule?: string | null;
+            start_at: string;
+            summary: string;
+            timezone?: string | null;
+        };
+        CalendarEventResponse: {
+            event: components["schemas"]["CalendarEvent"];
+        };
+        CalendarFreeTimeResponse: {
+            slots: components["schemas"]["CalendarAvailabilitySlot"][];
+        };
+        /** @description Range-query occurrence returned to the dashboard and tools. */
+        CalendarOccurrence: {
+            all_day: boolean;
+            attendee_count: number;
+            calendar_href: string;
+            can_edit_series: boolean;
+            description?: string | null;
+            end_at: string;
+            event_id: string;
+            location?: string | null;
+            occurrence_id: string;
+            organizer_email?: string | null;
+            organizer_name?: string | null;
+            override_instance: boolean;
+            recurring: boolean;
+            remote_href: string;
+            remote_uid: string;
+            series_event_id: string;
+            start_at: string;
+            status?: string | null;
+            summary?: string | null;
+            timezone?: string | null;
+        };
+        CalendarOccurrencesResponse: {
+            occurrences: components["schemas"]["CalendarOccurrence"][];
+        };
+        /** @description Operator-facing overview for the dashboard and API. */
+        CalendarOverview: {
+            auth_kind: string;
+            calendars: components["schemas"]["CalendarCollection"][];
+            configured: boolean;
+            enabled: boolean;
+            ics_export_url?: string | null;
+            provider_kind: string;
+            read_only: boolean;
+            selected_calendar_href?: string | null;
+            source?: null | components["schemas"]["CalendarSourceState"];
+        };
+        /**
+         * @description Stored proposal action.
+         * @enum {string}
+         */
+        CalendarProposalAction: "create" | "update" | "delete";
+        CalendarProposalResponse: {
+            proposal: components["schemas"]["CalendarChangeProposal"];
+        };
+        /**
+         * @description Proposal lifecycle state.
+         * @enum {string}
+         */
+        CalendarProposalStatus: "pending" | "applied" | "failed" | "cancelled" | "expired";
+        CalendarSection: {
+            auth_kind: string;
+            base_url?: string | null;
+            enabled: boolean;
+            has_ics_export_token: boolean;
+            has_password: boolean;
+            has_username: boolean;
+            provider_kind: string;
+            read_only: boolean;
+            selected_calendar_href?: string | null;
+            /** Format: int64 */
+            sync_interval_secs: number;
+        };
+        /** @description Discovery and sync state for the configured remote calendar source. */
+        CalendarSourceState: {
+            auth_kind: string;
+            base_url?: string | null;
+            home_set_url?: string | null;
+            last_discovery_at?: string | null;
+            last_error?: string | null;
+            last_successful_sync_at?: string | null;
+            last_sync_at?: string | null;
+            principal_url?: string | null;
+            provider_kind: string;
+            source_id: string;
+            sync_status?: string | null;
+        };
+        CalendarSyncRequest: {
+            agent_id: string;
+        };
+        CalendarSyncResponse: {
+            summary: components["schemas"]["CalendarSyncSummary"];
+        };
+        /** @description Sync summary returned from discovery and refresh operations. */
+        CalendarSyncSummary: {
+            created_event_count: number;
+            deleted_event_count: number;
+            discovered_calendar_count: number;
+            mode: string;
+            selected_calendar_href?: string | null;
+            sync_finished_at: string;
+            sync_started_at: string;
+            synced_resource_count: number;
+            updated_event_count: number;
+        };
+        CalendarUpdate: {
+            base_url?: string | null;
+            enabled?: boolean | null;
+            ics_export_token?: string | null;
+            password?: string | null;
+            read_only?: boolean | null;
+            selected_calendar_href?: string | null;
+            /** Format: int64 */
+            sync_interval_secs?: number | null;
+            username?: string | null;
+        };
+        CalendarUpdateProposalRequest: {
+            agent_id: string;
+            draft: components["schemas"]["CalendarEventDraft"];
+            event_id: string;
         };
         CancelProcessRequest: {
             channel_id: string;
@@ -2482,7 +2874,7 @@ export interface components {
             failure_count: number;
             id: string;
             /** Format: int64 */
-            interval_secs: number;
+            interval_secs?: number | null;
             last_executed_at?: string | null;
             prompt: string;
             run_once: boolean;
@@ -3865,6 +4257,358 @@ export interface operations {
             };
             /** @description Agent not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    calendar_events: {
+        parameters: {
+            query: {
+                agent_id: string;
+                start_at: string;
+                end_at: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarOccurrencesResponse"];
+                };
+            };
+            /** @description Invalid datetime range */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    calendar_event: {
+        parameters: {
+            query: {
+                /** @description Agent ID */
+                agent_id: string;
+            };
+            header?: never;
+            path: {
+                /** @description Calendar event ID */
+                event_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarEventResponse"];
+                };
+            };
+            /** @description Event or agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    calendar_free_time: {
+        parameters: {
+            query: {
+                agent_id: string;
+                start_at: string;
+                end_at: string;
+                duration_minutes: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarFreeTimeResponse"];
+                };
+            };
+            /** @description Invalid datetime range */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    calendar_overview: {
+        parameters: {
+            query: {
+                /** @description Agent ID */
+                agent_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarOverview"];
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    calendar_propose_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalendarCreateProposalRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarProposalResponse"];
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    calendar_propose_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalendarDeleteProposalRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarProposalResponse"];
+                };
+            };
+            /** @description Agent or event not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    calendar_propose_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalendarUpdateProposalRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarProposalResponse"];
+                };
+            };
+            /** @description Agent or event not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    calendar_apply_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Calendar proposal ID */
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalendarApplyProposalRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarProposalResponse"];
+                };
+            };
+            /** @description Agent or proposal not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    calendar_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalendarSyncRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarSyncResponse"];
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5272,6 +6016,86 @@ export interface operations {
             };
         };
     };
+    list_workers: {
+        parameters: {
+            query: {
+                /** @description Agent ID */
+                agent_id: string;
+                /** @description Maximum number of results to return */
+                limit: number;
+                /** @description Number of results to skip */
+                offset: number;
+                /** @description Filter by worker status */
+                status?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerListResponse"];
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    worker_detail: {
+        parameters: {
+            query: {
+                /** @description Agent ID */
+                agent_id: string;
+                /** @description Worker ID */
+                worker_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerDetailResponse"];
+                };
+            };
+            /** @description Agent or worker not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     list_bindings: {
         parameters: {
             query?: {
@@ -5867,42 +6691,6 @@ export interface operations {
             };
         };
     };
-    cortex_chat_threads: {
-        parameters: {
-            query: {
-                /** @description Agent ID */
-                agent_id: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CortexChatThreadsResponse"];
-                };
-            };
-            /** @description Agent not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Internal server error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     cortex_chat_delete_thread: {
         parameters: {
             query?: never;
@@ -5924,6 +6712,42 @@ export interface operations {
                 content?: never;
             };
             /** @description Agent or thread not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    cortex_chat_threads: {
+        parameters: {
+            query: {
+                /** @description Agent ID */
+                agent_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CortexChatThreadsResponse"];
+                };
+            };
+            /** @description Agent not found */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -8342,86 +9166,6 @@ export interface operations {
             };
             /** @description Messaging manager not available */
             503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    list_workers: {
-        parameters: {
-            query: {
-                /** @description Agent ID */
-                agent_id: string;
-                /** @description Maximum number of results to return */
-                limit: number;
-                /** @description Number of results to skip */
-                offset: number;
-                /** @description Filter by worker status */
-                status?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkerListResponse"];
-                };
-            };
-            /** @description Agent not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Internal server error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    worker_detail: {
-        parameters: {
-            query: {
-                /** @description Agent ID */
-                agent_id: string;
-                /** @description Worker ID */
-                worker_id: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkerDetailResponse"];
-                };
-            };
-            /** @description Agent or worker not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Internal server error */
-            500: {
                 headers: {
                     [name: string]: unknown;
                 };

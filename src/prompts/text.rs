@@ -152,6 +152,27 @@ fn lookup(lang: &str, key: &str) -> &'static str {
         }
         ("en", "tools/route") => include_str!("../../prompts/en/tools/route_description.md.j2"),
         ("en", "tools/cancel") => include_str!("../../prompts/en/tools/cancel_description.md.j2"),
+        ("en", "tools/calendar_apply") => {
+            include_str!("../../prompts/en/tools/calendar_apply_description.md.j2")
+        }
+        ("en", "tools/calendar_create") => {
+            include_str!("../../prompts/en/tools/calendar_create_description.md.j2")
+        }
+        ("en", "tools/calendar_delete") => {
+            include_str!("../../prompts/en/tools/calendar_delete_description.md.j2")
+        }
+        ("en", "tools/calendar_find_free_time") => {
+            include_str!("../../prompts/en/tools/calendar_find_free_time_description.md.j2")
+        }
+        ("en", "tools/calendar_get") => {
+            include_str!("../../prompts/en/tools/calendar_get_description.md.j2")
+        }
+        ("en", "tools/calendar_list") => {
+            include_str!("../../prompts/en/tools/calendar_list_description.md.j2")
+        }
+        ("en", "tools/calendar_update") => {
+            include_str!("../../prompts/en/tools/calendar_update_description.md.j2")
+        }
         ("en", "tools/skip") => include_str!("../../prompts/en/tools/skip_description.md.j2"),
         ("en", "tools/react") => include_str!("../../prompts/en/tools/react_description.md.j2"),
         ("en", "tools/set_status") => {

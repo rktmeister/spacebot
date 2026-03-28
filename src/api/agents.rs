@@ -471,6 +471,12 @@ pub(super) async fn trigger_warmup(
             let (event_tx, memory_event_tx) = crate::create_process_event_buses();
             let project_store =
                 std::sync::Arc::new(crate::projects::ProjectStore::new(sqlite_pool.clone()));
+            let calendar_store =
+                std::sync::Arc::new(crate::calendar::CalendarStore::new(sqlite_pool.clone()));
+            let calendar_service = crate::calendar::CalendarService::new(
+                calendar_store.clone(),
+                runtime_config.clone(),
+            );
             let working_memory_tz = runtime_config
                 .user_timezone
                 .load()
@@ -494,6 +500,8 @@ pub(super) async fn trigger_warmup(
                 sandbox,
                 task_store,
                 project_store,
+                calendar_store,
+                calendar_service,
                 links: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
                 agent_names: Arc::new(std::collections::HashMap::new()),
                 humans: Arc::new(arc_swap::ArcSwap::from_pointee(humans)),
@@ -722,6 +730,7 @@ pub async fn create_agent_internal(
         cron_timezone: None,
         user_timezone: None,
         sandbox: None,
+        calendar: None,
         projects: None,
         cron: Vec::new(),
     };
@@ -865,6 +874,11 @@ pub async fn create_agent_internal(
     );
 
     let project_store = std::sync::Arc::new(crate::projects::ProjectStore::new(db.sqlite.clone()));
+    let calendar_store =
+        std::sync::Arc::new(crate::calendar::CalendarStore::new(db.sqlite.clone()));
+    let calendar_service =
+        crate::calendar::CalendarService::new(calendar_store.clone(), runtime_config.clone());
+    calendar_service.start();
 
     // Inject active project root paths into the sandbox allowlist.
     crate::projects::refresh_sandbox_project_paths(&project_store, &arc_agent_id, &sandbox).await;
@@ -876,6 +890,8 @@ pub async fn create_agent_internal(
         mcp_manager: mcp_manager.clone(),
         task_store: task_store.clone(),
         project_store: project_store.clone(),
+        calendar_store: calendar_store.clone(),
+        calendar_service: calendar_service.clone(),
         cron_tool: None,
         runtime_config: runtime_config.clone(),
         event_tx: event_tx.clone(),
@@ -1070,6 +1086,18 @@ pub async fn create_agent_internal(
         state
             .project_stores
             .store(std::sync::Arc::new(project_stores_map));
+
+        let mut calendar_stores_map = (**state.calendar_stores.load()).clone();
+        calendar_stores_map.insert(agent_id.clone(), calendar_store);
+        state
+            .calendar_stores
+            .store(std::sync::Arc::new(calendar_stores_map));
+
+        let mut calendar_services_map = (**state.calendar_services.load()).clone();
+        calendar_services_map.insert(agent_id.clone(), calendar_service);
+        state
+            .calendar_services
+            .store(std::sync::Arc::new(calendar_services_map));
 
         let mut agent_infos = (**state.agent_configs.load()).clone();
         agent_infos.push(AgentInfo {

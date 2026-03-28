@@ -1673,6 +1673,18 @@ fn collect_parts(
         }
 
         let mime_type = part.ctype.mimetype.to_ascii_lowercase();
+        if is_calendar_attachment(&mime_type, filename.as_deref()) {
+            if let Some(calendar_part) =
+                extract_inline_calendar_part(part, filename.as_deref(), max_attachment_bytes)
+            {
+                extracted.calendar_events.extend(calendar_part.events);
+                if let Some(warning) = calendar_part.warning {
+                    extracted.calendar_warnings.push(warning);
+                }
+            }
+            return;
+        }
+
         if mime_type.starts_with("text/plain") {
             if let Ok(body) = part.get_body()
                 && !body.trim().is_empty()
@@ -1752,6 +1764,61 @@ fn extract_calendar_attachment(
 
     Some(CalendarAttachmentExtraction {
         attachment: Some(attachment),
+        events,
+        warning,
+    })
+}
+
+fn extract_inline_calendar_part(
+    part: &mailparse::ParsedMail<'_>,
+    filename: Option<&str>,
+    max_attachment_bytes: usize,
+) -> Option<CalendarAttachmentExtraction> {
+    let mime_type = part.ctype.mimetype.to_ascii_lowercase();
+    if !is_calendar_attachment(&mime_type, filename) {
+        return None;
+    }
+
+    let label = filename
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("inline calendar part");
+    let bytes = match part.get_body_raw() {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Some(CalendarAttachmentExtraction {
+                attachment: None,
+                events: Vec::new(),
+                warning: Some(format!(
+                    "Calendar part '{label}' could not be read: {error}"
+                )),
+            });
+        }
+    };
+
+    if bytes.len() > max_attachment_bytes {
+        return Some(CalendarAttachmentExtraction {
+            attachment: None,
+            events: Vec::new(),
+            warning: Some(format!(
+                "Calendar part '{label}' was skipped because it exceeds the configured attachment size limit ({} bytes).",
+                bytes.len()
+            )),
+        });
+    }
+
+    let calendar_text = String::from_utf8_lossy(&bytes);
+    let events = parse_ical_events(&calendar_text);
+    let warning = if events.is_empty() {
+        Some(format!(
+            "Calendar part '{label}' was parsed but no VEVENT entries could be read."
+        ))
+    } else {
+        None
+    };
+
+    Some(CalendarAttachmentExtraction {
+        attachment: None,
         events,
         warning,
     })
@@ -2265,11 +2332,7 @@ mod tests {
             smtp_username: "bot@example.com".to_string(),
             smtp_password: "secret".to_string(),
             smtp_use_starttls: true,
-            from_address: if allow_outbound {
-                "bot@example.com".to_string()
-            } else {
-                String::new()
-            },
+            from_address: "bot@example.com".to_string(),
             from_name: Some("Spacebot".to_string()),
             poll_interval_secs: 30,
             folders: vec!["INBOX".to_string()],
@@ -2396,6 +2459,40 @@ mod tests {
             "END:VEVENT",
             "END:VCALENDAR",
             "--spacebot-boundary--",
+            "",
+        ]
+        .join("\r\n")
+    }
+
+    fn inline_calendar_email_fixture() -> String {
+        [
+            "From: Alice Example <alice@example.com>",
+            "To: bot@example.com",
+            "Subject: Inline Team Sync",
+            "Date: Tue, 10 Mar 2026 08:00:00 -0400",
+            "Message-ID: <inline-invite@example.com>",
+            "MIME-Version: 1.0",
+            "Content-Type: multipart/alternative; boundary=\"spacebot-inline-boundary\"",
+            "",
+            "--spacebot-inline-boundary",
+            "Content-Type: text/plain; charset=\"utf-8\"",
+            "",
+            "Please review the updated meeting invitation.",
+            "--spacebot-inline-boundary",
+            "Content-Type: text/calendar; method=REQUEST; charset=\"utf-8\"",
+            "",
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "BEGIN:VEVENT",
+            "UID:inline-invite-123",
+            "SUMMARY:Inline Team Sync",
+            "DTSTART;TZID=America/New_York:20260311T140000",
+            "DTEND;TZID=America/New_York:20260311T143000",
+            "LOCATION:Meet",
+            "ORGANIZER;CN=Alice Example:MAILTO:alice@example.com",
+            "END:VEVENT",
+            "END:VCALENDAR",
+            "--spacebot-inline-boundary--",
             "",
         ]
         .join("\r\n")
@@ -2582,6 +2679,24 @@ mod tests {
         );
         assert!(extracted.body_text.contains("UTC 2026-03-10 13:00:00"));
         assert!(extracted.body_text.contains("Attachments: invite.ics"));
+    }
+
+    #[test]
+    fn extract_text_and_attachments_summarizes_inline_calendar_parts() {
+        let raw = inline_calendar_email_fixture();
+        let parsed = mailparse::parse_mail(raw.as_bytes()).expect("fixture should parse");
+
+        let extracted = extract_text_and_attachments(&parsed, 20_000, 20_000);
+
+        assert!(extracted.calendar_attachments.is_empty());
+        assert_eq!(extracted.calendar_events.len(), 1);
+        assert_eq!(
+            extracted.calendar_events[0].summary.as_deref(),
+            Some("Inline Team Sync")
+        );
+        assert!(extracted.body_text.contains("Calendar invite details:"));
+        assert!(extracted.body_text.contains("Inline Team Sync"));
+        assert!(!extracted.body_text.contains("Attachments:"));
     }
 
     #[test]

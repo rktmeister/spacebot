@@ -1,0 +1,1045 @@
+//! iCalendar parsing, occurrence expansion, and mutation helpers.
+
+use crate::calendar::types::{
+    CalendarAttendeeInput, CalendarEvent, CalendarEventDraft, CalendarOccurrence,
+    SyncedCalendarEvent,
+};
+
+use anyhow::{Context as _, anyhow};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use rrule::{RRuleSet, Tz};
+use std::collections::{BTreeSet, HashMap};
+use std::str::FromStr;
+
+#[derive(Debug, Clone)]
+struct ParsedIcalDateTime {
+    utc: DateTime<Utc>,
+    timezone: Option<String>,
+    all_day: bool,
+    local_date: Option<NaiveDate>,
+    local_datetime: Option<NaiveDateTime>,
+}
+
+#[derive(Debug, Default)]
+struct SyncedEventBuilder {
+    uid: Option<String>,
+    summary: Option<String>,
+    description: Option<String>,
+    location: Option<String>,
+    status: Option<String>,
+    organizer_name: Option<String>,
+    organizer_email: Option<String>,
+    start: Option<ParsedIcalDateTime>,
+    end: Option<ParsedIcalDateTime>,
+    duration: Option<Duration>,
+    recurrence_rule: Option<String>,
+    recurrence_id: Option<ParsedIcalDateTime>,
+    recurrence_exdates: Vec<String>,
+    sequence: i64,
+    transparency: Option<String>,
+    attendees: Vec<CalendarAttendeeInput>,
+}
+
+impl SyncedEventBuilder {
+    fn build(self) -> anyhow::Result<Option<SyncedCalendarEvent>> {
+        let Some(uid) = self.uid else {
+            return Ok(None);
+        };
+        let Some(start) = self.start else {
+            return Ok(None);
+        };
+        let end = match (self.end, self.duration) {
+            (Some(end), _) => end,
+            (None, Some(duration)) => ParsedIcalDateTime {
+                utc: start.utc + duration,
+                timezone: start.timezone.clone(),
+                all_day: start.all_day,
+                local_date: None,
+                local_datetime: start.local_datetime.map(|dt| dt + duration),
+            },
+            (None, None) if start.all_day => ParsedIcalDateTime {
+                utc: start.utc + Duration::days(1),
+                timezone: start.timezone.clone(),
+                all_day: true,
+                local_date: start.local_date.map(|date| date.succ_opt().unwrap_or(date)),
+                local_datetime: None,
+            },
+            (None, None) => ParsedIcalDateTime {
+                utc: start.utc + Duration::hours(1),
+                timezone: start.timezone.clone(),
+                all_day: false,
+                local_date: None,
+                local_datetime: start.local_datetime.map(|dt| dt + Duration::hours(1)),
+            },
+        };
+
+        Ok(Some(SyncedCalendarEvent {
+            remote_uid: uid,
+            recurrence_id_utc: self.recurrence_id.map(|value| value.utc.to_rfc3339()),
+            summary: self.summary,
+            description: self.description,
+            location: self.location,
+            status: self.status,
+            organizer_name: self.organizer_name,
+            organizer_email: self.organizer_email,
+            start_at_utc: start.utc.to_rfc3339(),
+            end_at_utc: end.utc.to_rfc3339(),
+            timezone: start.timezone.or(end.timezone),
+            all_day: start.all_day,
+            recurrence_rule: self.recurrence_rule,
+            recurrence_exdates: self.recurrence_exdates,
+            sequence: self.sequence,
+            transparency: self.transparency,
+            attendees: self.attendees,
+        }))
+    }
+}
+
+pub fn parse_calendar_events(raw_ics: &str) -> anyhow::Result<Vec<SyncedCalendarEvent>> {
+    let lines = unfold_ical_lines(raw_ics);
+    let mut events = Vec::new();
+    let mut current: Option<SyncedEventBuilder> = None;
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("BEGIN:VEVENT") {
+            current = Some(SyncedEventBuilder::default());
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("END:VEVENT") {
+            if let Some(builder) = current.take()
+                && let Some(event) = builder.build()?
+            {
+                events.push(event);
+            }
+            continue;
+        }
+
+        let Some(builder) = current.as_mut() else {
+            continue;
+        };
+        let Some((name, params, value)) = parse_ical_property(trimmed) else {
+            continue;
+        };
+
+        match name.as_str() {
+            "UID" => builder.uid = Some(value.trim().to_string()),
+            "SUMMARY" => builder.summary = Some(unescape_ical_text(&value)),
+            "DESCRIPTION" => builder.description = Some(unescape_ical_text(&value)),
+            "LOCATION" => builder.location = Some(unescape_ical_text(&value)),
+            "STATUS" => builder.status = Some(value.trim().to_string()),
+            "TRANSP" => builder.transparency = Some(value.trim().to_string()),
+            "ORGANIZER" => {
+                let (name, email) = parse_organizer(&params, &value);
+                builder.organizer_name = name;
+                builder.organizer_email = email;
+            }
+            "ATTENDEE" => {
+                if let Some(attendee) = parse_attendee(&params, &value) {
+                    builder.attendees.push(attendee);
+                }
+            }
+            "DTSTART" => builder.start = parse_ical_datetime_value(&value, &params),
+            "DTEND" => builder.end = parse_ical_datetime_value(&value, &params),
+            "DURATION" => builder.duration = parse_ical_duration(&value),
+            "RRULE" => builder.recurrence_rule = Some(value.trim().to_string()),
+            "RECURRENCE-ID" => builder.recurrence_id = parse_ical_datetime_value(&value, &params),
+            "EXDATE" => {
+                for part in value.split(',') {
+                    if let Some(parsed) = parse_ical_datetime_value(part.trim(), &params) {
+                        builder.recurrence_exdates.push(parsed.utc.to_rfc3339());
+                    }
+                }
+            }
+            "SEQUENCE" => {
+                builder.sequence = value.trim().parse::<i64>().unwrap_or_default();
+            }
+            _ => {}
+        }
+    }
+
+    Ok(events)
+}
+
+pub fn expand_occurrences(
+    events: &[CalendarEvent],
+    range_start: DateTime<Utc>,
+    range_end: DateTime<Utc>,
+) -> anyhow::Result<Vec<CalendarOccurrence>> {
+    let mut grouped = HashMap::<String, Vec<&CalendarEvent>>::new();
+    for event in events {
+        grouped
+            .entry(event.remote_uid.clone())
+            .or_default()
+            .push(event);
+    }
+
+    let mut occurrences = Vec::new();
+    for (_, series) in grouped {
+        let Some(master) = series.iter().copied().find(|event| !event.is_override()) else {
+            continue;
+        };
+        let overrides = series
+            .iter()
+            .copied()
+            .filter_map(|event| {
+                event
+                    .recurrence_id_utc
+                    .as_ref()
+                    .map(|recurrence_id| (recurrence_id.clone(), event))
+            })
+            .collect::<HashMap<_, _>>();
+
+        if !master.is_recurring() {
+            maybe_push_occurrence(
+                &mut occurrences,
+                master,
+                master,
+                master.start_at_utc.as_str(),
+                range_start,
+                range_end,
+            )?;
+            continue;
+        }
+
+        let mut rrule_input = String::new();
+        rrule_input.push_str(&format!(
+            "{}\n",
+            format_dtstart_line(
+                master.start_at_utc.as_str(),
+                master.timezone.as_deref(),
+                master.all_day,
+            )?
+        ));
+        if let Some(rule) = &master.recurrence_rule {
+            rrule_input.push_str("RRULE:");
+            rrule_input.push_str(rule);
+            rrule_input.push('\n');
+        }
+        if let Some(exdates_json) = &master.recurrence_exdates_json {
+            for exdate in serde_json::from_str::<Vec<String>>(exdates_json)
+                .unwrap_or_default()
+                .into_iter()
+            {
+                rrule_input.push_str(&format!(
+                    "{}\n",
+                    format_exdate_line(&exdate, master.timezone.as_deref(), master.all_day)?
+                ));
+            }
+        }
+
+        let tz = parse_rrule_timezone(master.timezone.as_deref());
+        let set = RRuleSet::from_str(&rrule_input)
+            .with_context(|| format!("failed to parse recurrence rule for {}", master.remote_uid))?
+            .after(range_start.with_timezone(&tz))
+            .before(range_end.with_timezone(&tz));
+        let recurrence_result = set.all(4096);
+
+        for occurrence_start in recurrence_result.dates {
+            let occurrence_start_utc = occurrence_start.with_timezone(&Utc);
+            let occurrence_key = occurrence_start_utc.to_rfc3339();
+            if let Some(override_event) = overrides.get(&occurrence_key).copied() {
+                maybe_push_occurrence(
+                    &mut occurrences,
+                    master,
+                    override_event,
+                    occurrence_key.as_str(),
+                    range_start,
+                    range_end,
+                )?;
+            } else {
+                let duration = DateTime::parse_from_rfc3339(&master.end_at_utc)
+                    .context("invalid master end_at_utc")?
+                    .with_timezone(&Utc)
+                    - DateTime::parse_from_rfc3339(&master.start_at_utc)
+                        .context("invalid master start_at_utc")?
+                        .with_timezone(&Utc);
+                let occurrence_end_utc = occurrence_start_utc + duration;
+                if occurrence_end_utc <= range_start || occurrence_start_utc >= range_end {
+                    continue;
+                }
+                occurrences.push(CalendarOccurrence {
+                    occurrence_id: format!("{}@{}", master.id, occurrence_key),
+                    event_id: master.id.clone(),
+                    series_event_id: master.id.clone(),
+                    remote_uid: master.remote_uid.clone(),
+                    calendar_href: master.calendar_href.clone(),
+                    remote_href: master.remote_href.clone(),
+                    summary: master.summary.clone(),
+                    description: master.description.clone(),
+                    location: master.location.clone(),
+                    status: master.status.clone(),
+                    organizer_name: master.organizer_name.clone(),
+                    organizer_email: master.organizer_email.clone(),
+                    start_at: occurrence_start_utc.to_rfc3339(),
+                    end_at: occurrence_end_utc.to_rfc3339(),
+                    timezone: master.timezone.clone(),
+                    all_day: master.all_day,
+                    recurring: true,
+                    override_instance: false,
+                    can_edit_series: true,
+                    attendee_count: master.attendees.len(),
+                });
+            }
+        }
+    }
+
+    occurrences.sort_by(|left, right| left.start_at.cmp(&right.start_at));
+    Ok(occurrences)
+}
+
+fn maybe_push_occurrence(
+    occurrences: &mut Vec<CalendarOccurrence>,
+    master_event: &CalendarEvent,
+    occurrence_event: &CalendarEvent,
+    occurrence_key: &str,
+    range_start: DateTime<Utc>,
+    range_end: DateTime<Utc>,
+) -> anyhow::Result<()> {
+    let start_at = DateTime::parse_from_rfc3339(&occurrence_event.start_at_utc)
+        .context("invalid occurrence start")?
+        .with_timezone(&Utc);
+    let end_at = DateTime::parse_from_rfc3339(&occurrence_event.end_at_utc)
+        .context("invalid occurrence end")?
+        .with_timezone(&Utc);
+    if end_at <= range_start || start_at >= range_end {
+        return Ok(());
+    }
+
+    occurrences.push(CalendarOccurrence {
+        occurrence_id: format!("{}@{}", master_event.id, occurrence_key),
+        event_id: occurrence_event.id.clone(),
+        series_event_id: master_event.id.clone(),
+        remote_uid: master_event.remote_uid.clone(),
+        calendar_href: occurrence_event.calendar_href.clone(),
+        remote_href: occurrence_event.remote_href.clone(),
+        summary: occurrence_event.summary.clone(),
+        description: occurrence_event.description.clone(),
+        location: occurrence_event.location.clone(),
+        status: occurrence_event.status.clone(),
+        organizer_name: occurrence_event.organizer_name.clone(),
+        organizer_email: occurrence_event.organizer_email.clone(),
+        start_at: start_at.to_rfc3339(),
+        end_at: end_at.to_rfc3339(),
+        timezone: occurrence_event.timezone.clone(),
+        all_day: occurrence_event.all_day,
+        recurring: master_event.is_recurring(),
+        override_instance: occurrence_event.is_override(),
+        can_edit_series: true,
+        attendee_count: occurrence_event.attendees.len(),
+    });
+    Ok(())
+}
+
+pub fn build_new_event_resource(
+    draft: &CalendarEventDraft,
+    uid: &str,
+    sequence: i64,
+) -> anyhow::Result<String> {
+    let start = parse_user_datetime(&draft.start_at, draft.timezone.as_deref(), draft.all_day)?;
+    let end = parse_user_datetime(&draft.end_at, draft.timezone.as_deref(), draft.all_day)?;
+
+    let mut lines = vec![
+        "BEGIN:VCALENDAR".to_string(),
+        "VERSION:2.0".to_string(),
+        "PRODID:-//Spacebot//Calendar//EN".to_string(),
+        "CALSCALE:GREGORIAN".to_string(),
+        "BEGIN:VEVENT".to_string(),
+        format!("UID:{uid}"),
+        format!("DTSTAMP:{}", format_utc_ical(Utc::now())),
+        format!("LAST-MODIFIED:{}", format_utc_ical(Utc::now())),
+        format!("SEQUENCE:{}", sequence.max(0)),
+        format_ical_text_property("SUMMARY", &draft.summary),
+        format_dt_line("DTSTART", &start),
+        format_dt_line("DTEND", &end),
+    ];
+
+    if let Some(description) = &draft.description
+        && !description.trim().is_empty()
+    {
+        lines.push(format_ical_text_property("DESCRIPTION", description));
+    }
+    if let Some(location) = &draft.location
+        && !location.trim().is_empty()
+    {
+        lines.push(format_ical_text_property("LOCATION", location));
+    }
+    if let Some(rule) = &draft.recurrence_rule
+        && !rule.trim().is_empty()
+    {
+        lines.push(format!("RRULE:{}", rule.trim()));
+    }
+
+    lines.extend(
+        draft
+            .attendees
+            .iter()
+            .map(format_attendee_property)
+            .collect::<Vec<_>>(),
+    );
+
+    lines.push("STATUS:CONFIRMED".to_string());
+    lines.push("TRANSP:OPAQUE".to_string());
+    lines.push("END:VEVENT".to_string());
+    lines.push("END:VCALENDAR".to_string());
+
+    Ok(join_ical_lines(lines))
+}
+
+pub fn update_existing_resource(
+    raw_ics: &str,
+    current_event: &CalendarEvent,
+    draft: &CalendarEventDraft,
+) -> anyhow::Result<String> {
+    let document = split_calendar_document(raw_ics);
+    let mut updated_blocks = Vec::with_capacity(document.segments.len());
+    let mut replaced = false;
+
+    let current_start = parse_user_datetime(
+        &current_event.start_at_utc,
+        current_event.timezone.as_deref(),
+        current_event.all_day,
+    )?;
+    let requested_start =
+        parse_user_datetime(&draft.start_at, draft.timezone.as_deref(), draft.all_day)?;
+    let requested_end =
+        parse_user_datetime(&draft.end_at, draft.timezone.as_deref(), draft.all_day)?;
+    let recurring_time_change = current_event.is_recurring()
+        && (current_start.utc != requested_start.utc
+            || current_event.all_day != draft.all_day
+            || current_event.timezone != draft.timezone);
+
+    if recurring_time_change && document.override_count > 0 {
+        return Err(anyhow!(
+            "updating the start time or timezone of a recurring series with overridden occurrences is not supported in v1"
+        ));
+    }
+
+    for segment in document.segments {
+        match segment {
+            CalendarSegment::Lines(lines) => updated_blocks.extend(lines),
+            CalendarSegment::Event {
+                lines,
+                uid,
+                recurrence_id,
+            } => {
+                if !replaced
+                    && uid.as_deref() == Some(current_event.remote_uid.as_str())
+                    && recurrence_id.is_none()
+                {
+                    updated_blocks.extend(rewrite_master_event_block(
+                        &lines,
+                        current_event,
+                        draft,
+                        &requested_start,
+                        &requested_end,
+                    )?);
+                    replaced = true;
+                } else {
+                    updated_blocks.extend(lines);
+                }
+            }
+        }
+    }
+
+    if !replaced {
+        return Err(anyhow!(
+            "failed to locate target VEVENT in remote ICS resource"
+        ));
+    }
+
+    Ok(join_ical_lines(updated_blocks))
+}
+
+pub fn export_resources_to_ics(resources: &[String]) -> String {
+    let mut timezone_blocks = BTreeSet::new();
+    let mut events = Vec::new();
+
+    for resource in resources {
+        let document = split_calendar_document(resource);
+        for segment in document.segments {
+            match segment {
+                CalendarSegment::Lines(lines) => {
+                    let mut current_block = Vec::new();
+                    let mut current_name: Option<String> = None;
+                    for line in lines {
+                        let trimmed = line.trim();
+                        if let Some(name) = trimmed.strip_prefix("BEGIN:")
+                            && name != "VCALENDAR"
+                        {
+                            current_name = Some(name.to_string());
+                            current_block = vec![line.clone()];
+                            continue;
+                        }
+                        if let Some(name) = trimmed.strip_prefix("END:")
+                            && current_name.as_deref() == Some(name)
+                        {
+                            current_block.push(line.clone());
+                            if name == "VTIMEZONE" {
+                                timezone_blocks.insert(join_ical_lines(current_block.clone()));
+                            }
+                            current_name = None;
+                            current_block.clear();
+                            continue;
+                        }
+                        if current_name.is_some() {
+                            current_block.push(line.clone());
+                        }
+                    }
+                }
+                CalendarSegment::Event { lines, .. } => events.push(join_ical_lines(lines)),
+            }
+        }
+    }
+
+    let mut output = vec![
+        "BEGIN:VCALENDAR".to_string(),
+        "VERSION:2.0".to_string(),
+        "PRODID:-//Spacebot//Calendar Export//EN".to_string(),
+        "CALSCALE:GREGORIAN".to_string(),
+        "METHOD:PUBLISH".to_string(),
+    ];
+    for block in timezone_blocks {
+        output.extend(unfold_ical_lines(&block));
+    }
+    for event in events {
+        output.extend(unfold_ical_lines(&event));
+    }
+    output.push("END:VCALENDAR".to_string());
+    join_ical_lines(output)
+}
+
+#[derive(Debug)]
+enum CalendarSegment {
+    Lines(Vec<String>),
+    Event {
+        lines: Vec<String>,
+        uid: Option<String>,
+        recurrence_id: Option<String>,
+    },
+}
+
+#[derive(Debug)]
+struct ParsedCalendarDocument {
+    segments: Vec<CalendarSegment>,
+    override_count: usize,
+}
+
+fn split_calendar_document(raw_ics: &str) -> ParsedCalendarDocument {
+    let lines = unfold_ical_lines(raw_ics);
+    let mut segments = Vec::new();
+    let mut outside_lines = Vec::new();
+    let mut current_event = Vec::new();
+    let mut inside_event = false;
+    let mut override_count = 0usize;
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("BEGIN:VEVENT") {
+            if !outside_lines.is_empty() {
+                segments.push(CalendarSegment::Lines(std::mem::take(&mut outside_lines)));
+            }
+            inside_event = true;
+            current_event.push(line.clone());
+            continue;
+        }
+
+        if inside_event {
+            current_event.push(line.clone());
+            if trimmed.eq_ignore_ascii_case("END:VEVENT") {
+                let uid = current_event.iter().find_map(|line| {
+                    parse_ical_property(line).and_then(|(name, _, value)| {
+                        (name == "UID").then_some(value.trim().to_string())
+                    })
+                });
+                let recurrence_id = current_event.iter().find_map(|line| {
+                    parse_ical_property(line).and_then(|(name, params, value)| {
+                        if name != "RECURRENCE-ID" {
+                            return None;
+                        }
+                        parse_ical_datetime_value(&value, &params)
+                            .map(|parsed| parsed.utc.to_rfc3339())
+                    })
+                });
+                if recurrence_id.is_some() {
+                    override_count += 1;
+                }
+                segments.push(CalendarSegment::Event {
+                    lines: std::mem::take(&mut current_event),
+                    uid,
+                    recurrence_id,
+                });
+                inside_event = false;
+            }
+            continue;
+        }
+
+        outside_lines.push(line);
+    }
+
+    if !outside_lines.is_empty() {
+        segments.push(CalendarSegment::Lines(outside_lines));
+    }
+
+    ParsedCalendarDocument {
+        segments,
+        override_count,
+    }
+}
+
+fn rewrite_master_event_block(
+    lines: &[String],
+    current_event: &CalendarEvent,
+    draft: &CalendarEventDraft,
+    requested_start: &ParsedIcalDateTime,
+    requested_end: &ParsedIcalDateTime,
+) -> anyhow::Result<Vec<String>> {
+    let managed = [
+        "SUMMARY",
+        "DESCRIPTION",
+        "LOCATION",
+        "DTSTART",
+        "DTEND",
+        "DURATION",
+        "STATUS",
+        "TRANSP",
+        "LAST-MODIFIED",
+        "SEQUENCE",
+        "ATTENDEE",
+        "RRULE",
+    ];
+
+    let mut result = Vec::new();
+    let mut inserted = false;
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("BEGIN:VEVENT") {
+            result.push(line.clone());
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("END:VEVENT") {
+            if !inserted {
+                result.extend(build_replacement_properties(
+                    current_event,
+                    draft,
+                    requested_start,
+                    requested_end,
+                ));
+                inserted = true;
+            }
+            result.push(line.clone());
+            continue;
+        }
+
+        let Some((name, _, _)) = parse_ical_property(trimmed) else {
+            result.push(line.clone());
+            continue;
+        };
+
+        if name == "UID" {
+            result.push(line.clone());
+            if !inserted {
+                result.extend(build_replacement_properties(
+                    current_event,
+                    draft,
+                    requested_start,
+                    requested_end,
+                ));
+                inserted = true;
+            }
+            continue;
+        }
+
+        if managed.contains(&name.as_str()) {
+            continue;
+        }
+
+        result.push(line.clone());
+    }
+
+    if !inserted {
+        return Err(anyhow!("failed to rewrite VEVENT block"));
+    }
+
+    Ok(result)
+}
+
+fn build_replacement_properties(
+    current_event: &CalendarEvent,
+    draft: &CalendarEventDraft,
+    requested_start: &ParsedIcalDateTime,
+    requested_end: &ParsedIcalDateTime,
+) -> Vec<String> {
+    let mut lines = vec![
+        format!("LAST-MODIFIED:{}", format_utc_ical(Utc::now())),
+        format!("SEQUENCE:{}", current_event.sequence + 1),
+        format_ical_text_property("SUMMARY", &draft.summary),
+        format_dt_line("DTSTART", requested_start),
+        format_dt_line("DTEND", requested_end),
+    ];
+
+    if let Some(description) = &draft.description
+        && !description.trim().is_empty()
+    {
+        lines.push(format_ical_text_property("DESCRIPTION", description));
+    }
+    if let Some(location) = &draft.location
+        && !location.trim().is_empty()
+    {
+        lines.push(format_ical_text_property("LOCATION", location));
+    }
+    if let Some(rule) = current_event
+        .recurrence_rule
+        .as_ref()
+        .or(draft.recurrence_rule.as_ref())
+    {
+        lines.push(format!("RRULE:{}", rule.trim()));
+    }
+    lines.extend(
+        draft
+            .attendees
+            .iter()
+            .map(format_attendee_property)
+            .collect::<Vec<_>>(),
+    );
+    lines.push(format!(
+        "STATUS:{}",
+        current_event.status.as_deref().unwrap_or("CONFIRMED")
+    ));
+    lines.push(format!(
+        "TRANSP:{}",
+        current_event.transparency.as_deref().unwrap_or("OPAQUE")
+    ));
+    lines
+}
+
+fn parse_user_datetime(
+    value: &str,
+    timezone: Option<&str>,
+    all_day: bool,
+) -> anyhow::Result<ParsedIcalDateTime> {
+    if all_day {
+        let date = NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+            .or_else(|_| DateTime::parse_from_rfc3339(value).map(|dt| dt.date_naive()))
+            .with_context(|| format!("invalid all-day date '{value}'"))?;
+        let tz = parse_rrule_timezone(timezone);
+        let local = tz
+            .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
+            .single()
+            .ok_or_else(|| anyhow!("invalid all-day local datetime"))?;
+        return Ok(ParsedIcalDateTime {
+            utc: local.with_timezone(&Utc),
+            timezone: timezone.map(str::to_string),
+            all_day: true,
+            local_date: Some(date),
+            local_datetime: None,
+        });
+    }
+
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value.trim()) {
+        let utc = parsed.with_timezone(&Utc);
+        if let Some(tz_name) = timezone {
+            let tz = parse_rrule_timezone(Some(tz_name));
+            let local = utc.with_timezone(&tz).naive_local();
+            return Ok(ParsedIcalDateTime {
+                utc,
+                timezone: Some(tz_name.to_string()),
+                all_day: false,
+                local_date: None,
+                local_datetime: Some(local),
+            });
+        }
+        return Ok(ParsedIcalDateTime {
+            utc,
+            timezone: Some("UTC".to_string()),
+            all_day: false,
+            local_date: None,
+            local_datetime: Some(utc.naive_utc()),
+        });
+    }
+
+    let naive = NaiveDateTime::parse_from_str(value.trim(), "%Y-%m-%dT%H:%M:%S")
+        .or_else(|_| NaiveDateTime::parse_from_str(value.trim(), "%Y-%m-%dT%H:%M"))
+        .with_context(|| format!("invalid datetime '{value}'"))?;
+    let tz = parse_rrule_timezone(timezone);
+    let local = tz
+        .from_local_datetime(&naive)
+        .single()
+        .ok_or_else(|| anyhow!("ambiguous or invalid local datetime '{value}'"))?;
+    Ok(ParsedIcalDateTime {
+        utc: local.with_timezone(&Utc),
+        timezone: timezone.map(str::to_string),
+        all_day: false,
+        local_date: None,
+        local_datetime: Some(naive),
+    })
+}
+
+fn parse_organizer(
+    params: &HashMap<String, String>,
+    value: &str,
+) -> (Option<String>, Option<String>) {
+    let name = params.get("CN").map(|name| unescape_ical_text(name));
+    let email = value
+        .trim()
+        .strip_prefix("MAILTO:")
+        .or_else(|| value.trim().strip_prefix("mailto:"))
+        .map(str::to_string)
+        .or_else(|| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        });
+    (name, email)
+}
+
+fn parse_attendee(params: &HashMap<String, String>, value: &str) -> Option<CalendarAttendeeInput> {
+    let email = value
+        .trim()
+        .strip_prefix("MAILTO:")
+        .or_else(|| value.trim().strip_prefix("mailto:"))
+        .map(str::to_string)?;
+    Some(CalendarAttendeeInput {
+        email,
+        common_name: params.get("CN").map(|value| unescape_ical_text(value)),
+        role: params.get("ROLE").cloned(),
+        partstat: params.get("PARTSTAT").cloned(),
+        rsvp: params
+            .get("RSVP")
+            .is_some_and(|value| value.eq_ignore_ascii_case("TRUE")),
+    })
+}
+
+fn parse_ical_duration(value: &str) -> Option<Duration> {
+    let mut sign = 1i64;
+    let mut remaining = value.trim();
+    if let Some(rest) = remaining.strip_prefix('-') {
+        sign = -1;
+        remaining = rest;
+    }
+    let remaining = remaining.strip_prefix('P')?;
+    let mut days = 0i64;
+    let mut hours = 0i64;
+    let mut minutes = 0i64;
+    let mut seconds = 0i64;
+    let mut buffer = String::new();
+    let mut in_time = false;
+
+    for character in remaining.chars() {
+        if character == 'T' {
+            in_time = true;
+            continue;
+        }
+        if character.is_ascii_digit() {
+            buffer.push(character);
+            continue;
+        }
+        let value = buffer.parse::<i64>().ok()?;
+        buffer.clear();
+        match (character, in_time) {
+            ('D', false) => days = value,
+            ('H', true) => hours = value,
+            ('M', true) => minutes = value,
+            ('S', true) => seconds = value,
+            _ => return None,
+        }
+    }
+
+    let duration = Duration::days(days)
+        + Duration::hours(hours)
+        + Duration::minutes(minutes)
+        + Duration::seconds(seconds);
+    Some(if sign < 0 { -duration } else { duration })
+}
+
+fn format_dtstart_line(
+    start_at_utc: &str,
+    timezone: Option<&str>,
+    all_day: bool,
+) -> anyhow::Result<String> {
+    let parsed = parse_user_datetime(start_at_utc, timezone, all_day)?;
+    Ok(format_dt_line("DTSTART", &parsed))
+}
+
+fn format_exdate_line(
+    exdate_utc: &str,
+    timezone: Option<&str>,
+    all_day: bool,
+) -> anyhow::Result<String> {
+    let parsed = parse_user_datetime(exdate_utc, timezone, all_day)?;
+    Ok(format_dt_line("EXDATE", &parsed))
+}
+
+fn format_dt_line(name: &str, value: &ParsedIcalDateTime) -> String {
+    if value.all_day {
+        return format!(
+            "{name};VALUE=DATE:{}",
+            value
+                .local_date
+                .unwrap_or_else(|| value.utc.date_naive())
+                .format("%Y%m%d")
+        );
+    }
+
+    if let (Some(timezone), Some(local_datetime)) = (&value.timezone, &value.local_datetime)
+        && timezone != "UTC"
+    {
+        return format!(
+            "{name};TZID={timezone}:{}",
+            local_datetime.format("%Y%m%dT%H%M%S")
+        );
+    }
+
+    format!("{name}:{}", format_utc_ical(value.utc))
+}
+
+fn format_utc_ical(value: DateTime<Utc>) -> String {
+    value.format("%Y%m%dT%H%M%SZ").to_string()
+}
+
+fn format_ical_text_property(name: &str, value: &str) -> String {
+    format!("{name}:{}", escape_ical_text(value))
+}
+
+fn format_attendee_property(attendee: &CalendarAttendeeInput) -> String {
+    let mut property = String::from("ATTENDEE");
+    if let Some(name) = &attendee.common_name
+        && !name.trim().is_empty()
+    {
+        property.push_str(";CN=");
+        property.push_str(&escape_ical_param(name));
+    }
+    if let Some(role) = &attendee.role
+        && !role.trim().is_empty()
+    {
+        property.push_str(";ROLE=");
+        property.push_str(role.trim());
+    }
+    if let Some(partstat) = &attendee.partstat
+        && !partstat.trim().is_empty()
+    {
+        property.push_str(";PARTSTAT=");
+        property.push_str(partstat.trim());
+    }
+    if attendee.rsvp {
+        property.push_str(";RSVP=TRUE");
+    }
+    property.push(':');
+    property.push_str("MAILTO:");
+    property.push_str(attendee.email.trim());
+    property
+}
+
+fn escape_ical_text(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace(',', "\\,")
+        .replace(';', "\\;")
+}
+
+fn escape_ical_param(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn join_ical_lines(lines: Vec<String>) -> String {
+    let mut output = String::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        output.push_str(&line);
+        output.push_str("\r\n");
+    }
+    output
+}
+
+pub fn unfold_ical_lines(content: &str) -> Vec<String> {
+    let mut unfolded: Vec<String> = Vec::new();
+    for raw_line in content.replace("\r\n", "\n").split('\n') {
+        if matches!(raw_line.chars().next(), Some(' ' | '\t'))
+            && let Some(previous) = unfolded.last_mut()
+        {
+            previous.push_str(raw_line.trim_start());
+            continue;
+        }
+        unfolded.push(raw_line.to_string());
+    }
+    unfolded
+}
+
+pub fn parse_ical_property(line: &str) -> Option<(String, HashMap<String, String>, String)> {
+    let (name_part, value) = line.split_once(':')?;
+    let mut segments = name_part.split(';');
+    let name = segments.next()?.trim().to_ascii_uppercase();
+    let params = segments
+        .filter_map(|segment| {
+            let (key, value) = segment.split_once('=')?;
+            Some((key.trim().to_ascii_uppercase(), value.trim().to_string()))
+        })
+        .collect::<HashMap<_, _>>();
+    Some((name, params, value.to_string()))
+}
+
+fn parse_ical_datetime_value(
+    value: &str,
+    params: &HashMap<String, String>,
+) -> Option<ParsedIcalDateTime> {
+    let timezone = params.get("TZID").cloned();
+    let normalized = value.trim();
+    let value_type = params.get("VALUE").map(String::as_str);
+
+    if value_type == Some("DATE") || normalized.len() == 8 {
+        let date = NaiveDate::parse_from_str(normalized, "%Y%m%d").ok()?;
+        let tz = parse_rrule_timezone(timezone.as_deref());
+        let local = tz
+            .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
+            .single()?;
+        return Some(ParsedIcalDateTime {
+            utc: local.with_timezone(&Utc),
+            timezone,
+            all_day: true,
+            local_date: Some(date),
+            local_datetime: None,
+        });
+    }
+
+    if normalized.ends_with('Z') {
+        let date_time =
+            NaiveDateTime::parse_from_str(normalized.trim_end_matches('Z'), "%Y%m%dT%H%M%S")
+                .ok()?;
+        let utc = Utc.from_utc_datetime(&date_time);
+        return Some(ParsedIcalDateTime {
+            utc,
+            timezone: Some("UTC".to_string()),
+            all_day: false,
+            local_date: None,
+            local_datetime: Some(date_time),
+        });
+    }
+
+    let date_time = NaiveDateTime::parse_from_str(normalized, "%Y%m%dT%H%M%S").ok()?;
+    let tz = parse_rrule_timezone(timezone.as_deref());
+    let local = tz.from_local_datetime(&date_time).single()?;
+    Some(ParsedIcalDateTime {
+        utc: local.with_timezone(&Utc),
+        timezone,
+        all_day: false,
+        local_date: None,
+        local_datetime: Some(date_time),
+    })
+}
+
+fn parse_rrule_timezone(timezone: Option<&str>) -> Tz {
+    timezone
+        .and_then(|value| value.parse::<chrono_tz::Tz>().ok().map(Into::into))
+        .unwrap_or(Tz::UTC)
+}
+
+fn unescape_ical_text(value: &str) -> String {
+    value
+        .replace("\\n", "\n")
+        .replace("\\N", "\n")
+        .replace("\\,", ",")
+        .replace("\\;", ";")
+        .replace("\\\\", "\\")
+}

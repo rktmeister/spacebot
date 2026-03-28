@@ -293,6 +293,7 @@ pub(super) struct TomlDefaultsConfig {
     pub(super) user_timezone: Option<String>,
     pub(super) opencode: Option<TomlOpenCodeConfig>,
     pub(super) worker_log_mode: Option<String>,
+    pub(super) calendar: Option<TomlCalendarConfig>,
     pub(super) projects: Option<TomlProjectsConfig>,
 }
 
@@ -420,6 +421,26 @@ pub(super) struct TomlProjectsConfig {
     pub(super) disk_usage_warning_threshold: Option<u64>,
 }
 
+#[derive(Deserialize)]
+pub(super) struct TomlCalendarConfig {
+    pub(super) enabled: Option<bool>,
+    pub(super) provider_kind: Option<String>,
+    pub(super) auth_kind: Option<String>,
+    pub(super) base_url: Option<String>,
+    pub(super) username: Option<String>,
+    pub(super) password: Option<String>,
+    pub(super) selected_calendar_href: Option<String>,
+    pub(super) sync_interval_secs: Option<u64>,
+    pub(super) read_only: Option<bool>,
+    pub(super) ics_export_token: Option<String>,
+    pub(super) oauth2_client_id: Option<String>,
+    pub(super) oauth2_client_secret: Option<String>,
+    pub(super) oauth2_refresh_token: Option<String>,
+    pub(super) oauth2_token_url: Option<String>,
+    #[serde(default)]
+    pub(super) oauth2_scopes: Vec<String>,
+}
+
 #[derive(Deserialize, Clone)]
 pub(super) struct TomlMcpServerConfig {
     pub(super) name: String,
@@ -469,6 +490,7 @@ pub(super) struct TomlAgentConfig {
     pub(super) cron_timezone: Option<String>,
     pub(super) user_timezone: Option<String>,
     pub(super) sandbox: Option<crate::sandbox::SandboxConfig>,
+    pub(super) calendar: Option<TomlCalendarConfig>,
     pub(super) projects: Option<TomlProjectsConfig>,
     #[serde(default)]
     pub(super) cron: Vec<TomlCronDef>,

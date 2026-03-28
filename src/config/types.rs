@@ -32,6 +32,149 @@ pub struct TelemetryConfig {
     pub sample_rate: f64,
 }
 
+/// Supported remote calendar backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CalendarProviderKind {
+    #[default]
+    CalDav,
+}
+
+impl CalendarProviderKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CalDav => "caldav",
+        }
+    }
+}
+
+impl std::fmt::Display for CalendarProviderKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Authentication modes for remote calendar providers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CalendarAuthKind {
+    #[default]
+    Basic,
+    OAuth2,
+}
+
+impl CalendarAuthKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Basic => "basic",
+            Self::OAuth2 => "oauth2",
+        }
+    }
+}
+
+impl std::fmt::Display for CalendarAuthKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Calendar sync configuration for a single agent.
+#[derive(Clone)]
+pub struct CalendarConfig {
+    /// Enable the calendar subsystem for this agent.
+    pub enabled: bool,
+    /// Provider family. V1 implements CalDAV.
+    pub provider_kind: CalendarProviderKind,
+    /// Credential flow for the provider. V1 implements Basic auth only.
+    pub auth_kind: CalendarAuthKind,
+    /// Base CalDAV URL or discovery endpoint.
+    pub base_url: Option<String>,
+    /// Username or principal identifier (supports `secret:` or `env:` references).
+    pub username: Option<String>,
+    /// Password or app password (supports `secret:` or `env:` references).
+    pub password: Option<String>,
+    /// Selected calendar collection href. Operator intent is stored in config.
+    pub selected_calendar_href: Option<String>,
+    /// Periodic sync interval in seconds.
+    pub sync_interval_secs: u64,
+    /// Prevent remote mutations when set.
+    pub read_only: bool,
+    /// Optional token used by the public read-only ICS export route.
+    pub ics_export_token: Option<String>,
+    /// Reserved for future OAuth2 support.
+    pub oauth2_client_id: Option<String>,
+    /// Reserved for future OAuth2 support.
+    pub oauth2_client_secret: Option<String>,
+    /// Reserved for future OAuth2 support.
+    pub oauth2_refresh_token: Option<String>,
+    /// Reserved for future OAuth2 support.
+    pub oauth2_token_url: Option<String>,
+    /// Reserved for future OAuth2 support.
+    pub oauth2_scopes: Vec<String>,
+}
+
+impl CalendarConfig {
+    pub fn ics_export_enabled(&self) -> bool {
+        self.ics_export_token.is_some()
+    }
+}
+
+impl std::fmt::Debug for CalendarConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CalendarConfig")
+            .field("enabled", &self.enabled)
+            .field("provider_kind", &self.provider_kind)
+            .field("auth_kind", &self.auth_kind)
+            .field("base_url", &self.base_url)
+            .field("username", &self.username.as_ref().map(|_| "[REDACTED]"))
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("selected_calendar_href", &self.selected_calendar_href)
+            .field("sync_interval_secs", &self.sync_interval_secs)
+            .field("read_only", &self.read_only)
+            .field(
+                "ics_export_token",
+                &self.ics_export_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "oauth2_client_id",
+                &self.oauth2_client_id.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "oauth2_client_secret",
+                &self.oauth2_client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "oauth2_refresh_token",
+                &self.oauth2_refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("oauth2_token_url", &self.oauth2_token_url)
+            .field("oauth2_scopes", &self.oauth2_scopes)
+            .finish()
+    }
+}
+
+impl Default for CalendarConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider_kind: CalendarProviderKind::CalDav,
+            auth_kind: CalendarAuthKind::Basic,
+            base_url: None,
+            username: None,
+            password: None,
+            selected_calendar_href: None,
+            sync_interval_secs: 300,
+            read_only: false,
+            ics_export_token: None,
+            oauth2_client_id: None,
+            oauth2_client_secret: None,
+            oauth2_refresh_token: None,
+            oauth2_token_url: None,
+            oauth2_scopes: Vec::new(),
+        }
+    }
+}
+
 /// Top-level Spacebot configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -548,6 +691,8 @@ pub struct DefaultsConfig {
     pub opencode: OpenCodeConfig,
     /// Worker log mode: "errors_only", "all_separate", or "all_combined".
     pub worker_log_mode: crate::settings::WorkerLogMode,
+    /// Calendar sync and export defaults.
+    pub calendar: CalendarConfig,
     /// Projects workspace management defaults.
     pub projects: ProjectsConfig,
 }
@@ -580,6 +725,7 @@ impl std::fmt::Debug for DefaultsConfig {
             .field("cron", &self.cron)
             .field("opencode", &self.opencode)
             .field("worker_log_mode", &self.worker_log_mode)
+            .field("calendar", &self.calendar)
             .field("projects", &self.projects)
             .finish()
     }
@@ -1199,6 +1345,8 @@ pub struct AgentConfig {
     pub user_timezone: Option<String>,
     /// Sandbox configuration for process containment.
     pub sandbox: Option<crate::sandbox::SandboxConfig>,
+    /// Calendar sync and export overrides.
+    pub calendar: Option<CalendarConfig>,
     /// Projects workspace management overrides.
     pub projects: Option<ProjectsConfig>,
     /// Cron job definitions for this agent.
@@ -1259,6 +1407,8 @@ pub struct ResolvedAgentConfig {
     pub user_timezone: Option<String>,
     /// Sandbox configuration for process containment.
     pub sandbox: crate::sandbox::SandboxConfig,
+    /// Calendar sync and export configuration.
+    pub calendar: CalendarConfig,
     /// Projects workspace management settings.
     pub projects: ProjectsConfig,
     /// Number of messages to fetch from the platform when a new channel is created.
@@ -1291,6 +1441,7 @@ impl Default for DefaultsConfig {
             cron: Vec::new(),
             opencode: OpenCodeConfig::default(),
             worker_log_mode: crate::settings::WorkerLogMode::default(),
+            calendar: CalendarConfig::default(),
             projects: ProjectsConfig::default(),
         }
     }
@@ -1359,6 +1510,10 @@ impl AgentConfig {
             cron_timezone: resolved_cron_timezone,
             user_timezone: resolved_user_timezone,
             sandbox: self.sandbox.clone().unwrap_or_default(),
+            calendar: self
+                .calendar
+                .clone()
+                .unwrap_or_else(|| defaults.calendar.clone()),
             projects: self
                 .projects
                 .clone()

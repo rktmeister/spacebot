@@ -604,6 +604,19 @@ export interface ProjectsSection {
 	disk_usage_warning_threshold: number;
 }
 
+export interface CalendarSection {
+	enabled: boolean;
+	provider_kind: string;
+	auth_kind: string;
+	base_url: string | null;
+	has_username: boolean;
+	has_password: boolean;
+	selected_calendar_href: string | null;
+	sync_interval_secs: number;
+	read_only: boolean;
+	has_ics_export_token: boolean;
+}
+
 export interface DiscordSection {
 	enabled: boolean;
 	allow_bot_messages: boolean;
@@ -621,6 +634,7 @@ export interface AgentConfigResponse {
 	discord: DiscordSection;
 	sandbox: SandboxSection;
 	projects: ProjectsSection;
+	calendar: CalendarSection;
 }
 
 // Partial update types - all fields are optional
@@ -703,6 +717,17 @@ export interface ProjectsUpdate {
 	disk_usage_warning_threshold?: number;
 }
 
+export interface CalendarUpdate {
+	enabled?: boolean;
+	base_url?: string;
+	username?: string;
+	password?: string;
+	selected_calendar_href?: string;
+	sync_interval_secs?: number;
+	read_only?: boolean;
+	ics_export_token?: string;
+}
+
 export interface DiscordUpdate {
 	allow_bot_messages?: boolean;
 }
@@ -720,6 +745,7 @@ export interface AgentConfigUpdateRequest {
 	discord?: DiscordUpdate;
 	sandbox?: SandboxUpdate;
 	projects?: ProjectsUpdate;
+	calendar?: CalendarUpdate;
 }
 
 // -- Cron Types --
@@ -776,6 +802,174 @@ export interface CreateCronRequest {
 export interface CronExecutionsParams {
 	cron_id?: string;
 	limit?: number;
+}
+
+// -- Calendar Types --
+
+export interface CalendarSourceState {
+	source_id: string;
+	provider_kind: string;
+	base_url: string | null;
+	principal_url: string | null;
+	home_set_url: string | null;
+	auth_kind: string;
+	last_discovery_at: string | null;
+	last_sync_at: string | null;
+	last_successful_sync_at: string | null;
+	last_error: string | null;
+	sync_status: string | null;
+}
+
+export interface CalendarCollection {
+	href: string;
+	display_name: string | null;
+	description: string | null;
+	color: string | null;
+	timezone: string | null;
+	ctag: string | null;
+	sync_token: string | null;
+	is_selected: boolean;
+	discovered_at: string;
+	last_synced_at: string | null;
+}
+
+export interface CalendarAttendee {
+	id: string;
+	event_id: string;
+	email: string | null;
+	common_name: string | null;
+	role: string | null;
+	partstat: string | null;
+	rsvp: boolean;
+	is_organizer: boolean;
+}
+
+export interface CalendarEvent {
+	id: string;
+	resource_id: string;
+	calendar_href: string;
+	remote_href: string;
+	remote_uid: string;
+	recurrence_id_utc: string | null;
+	summary: string | null;
+	description: string | null;
+	location: string | null;
+	status: string | null;
+	organizer_name: string | null;
+	organizer_email: string | null;
+	start_at_utc: string;
+	end_at_utc: string;
+	timezone: string | null;
+	all_day: boolean;
+	recurrence_rule: string | null;
+	recurrence_exdates_json: string | null;
+	sequence: number;
+	transparency: string | null;
+	etag: string | null;
+	raw_ics: string;
+	deleted: boolean;
+	attendees: CalendarAttendee[];
+}
+
+export interface CalendarOccurrence {
+	occurrence_id: string;
+	event_id: string;
+	series_event_id: string;
+	remote_uid: string;
+	calendar_href: string;
+	remote_href: string;
+	summary: string | null;
+	description: string | null;
+	location: string | null;
+	status: string | null;
+	organizer_name: string | null;
+	organizer_email: string | null;
+	start_at: string;
+	end_at: string;
+	timezone: string | null;
+	all_day: boolean;
+	recurring: boolean;
+	override_instance: boolean;
+	can_edit_series: boolean;
+	attendee_count: number;
+}
+
+export interface CalendarSyncSummary {
+	discovered_calendar_count: number;
+	selected_calendar_href: string | null;
+	synced_resource_count: number;
+	created_event_count: number;
+	updated_event_count: number;
+	deleted_event_count: number;
+	sync_started_at: string;
+	sync_finished_at: string;
+	mode: string;
+}
+
+export interface CalendarOverview {
+	configured: boolean;
+	enabled: boolean;
+	read_only: boolean;
+	provider_kind: string;
+	auth_kind: string;
+	selected_calendar_href: string | null;
+	ics_export_url: string | null;
+	source: CalendarSourceState | null;
+	calendars: CalendarCollection[];
+}
+
+export interface CalendarAttendeeInput {
+	email: string;
+	common_name?: string | null;
+	role?: string | null;
+	partstat?: string | null;
+	rsvp?: boolean;
+}
+
+export interface CalendarEventDraft {
+	summary: string;
+	description?: string | null;
+	location?: string | null;
+	start_at: string;
+	end_at: string;
+	timezone?: string | null;
+	all_day: boolean;
+	recurrence_rule?: string | null;
+	attendees: CalendarAttendeeInput[];
+}
+
+export type CalendarProposalAction = "create" | "update" | "delete";
+export type CalendarProposalStatus = "pending" | "applied" | "failed" | "cancelled" | "expired";
+
+export interface CalendarProposal {
+	id: string;
+	action: CalendarProposalAction;
+	status: CalendarProposalStatus;
+	event_id: string | null;
+	summary: string;
+	diff: string;
+	basis_etag: string | null;
+	created_at: string;
+	updated_at: string;
+	applied_at: string | null;
+	error: string | null;
+	draft: CalendarEventDraft;
+}
+
+export interface CalendarAvailabilitySlot {
+	start_at: string;
+	end_at: string;
+}
+
+export interface CalendarOccurrencesParams {
+	start_at: string;
+	end_at: string;
+}
+
+export interface CalendarFreeTimeParams {
+	start_at: string;
+	end_at: string;
+	duration_minutes: number;
 }
 
 // -- Update Types --
@@ -1520,6 +1714,97 @@ export const api = {
 		if (params.cron_id) search.set("cron_id", params.cron_id);
 		if (params.limit) search.set("limit", String(params.limit));
 		return fetchJson<CronExecutionsResponse>(`/agents/cron/executions?${search}`);
+	},
+
+	// Calendar API
+	calendarOverview: (agentId: string) =>
+		fetchJson<CalendarOverview>(`/agents/calendar/overview?agent_id=${encodeURIComponent(agentId)}`),
+
+	calendarEvents: (agentId: string, params: CalendarOccurrencesParams) => {
+		const search = new URLSearchParams({
+			agent_id: agentId,
+			start_at: params.start_at,
+			end_at: params.end_at,
+		});
+		return fetchJson<{ occurrences: CalendarOccurrence[] }>(`/agents/calendar/events?${search}`);
+	},
+
+	calendarEvent: (agentId: string, eventId: string) =>
+		fetchJson<{ event: CalendarEvent }>(
+			`/agents/calendar/events/${encodeURIComponent(eventId)}?agent_id=${encodeURIComponent(agentId)}`,
+		),
+
+	calendarFreeTime: (agentId: string, params: CalendarFreeTimeParams) => {
+		const search = new URLSearchParams({
+			agent_id: agentId,
+			start_at: params.start_at,
+			end_at: params.end_at,
+			duration_minutes: String(params.duration_minutes),
+		});
+		return fetchJson<{ slots: CalendarAvailabilitySlot[] }>(`/agents/calendar/free-time?${search}`);
+	},
+
+	calendarSync: async (agentId: string) => {
+		const response = await fetch(`${getApiBase()}/agents/calendar/sync`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ agent_id: agentId }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ summary: CalendarSyncSummary }>;
+	},
+
+	calendarCreateProposal: async (agentId: string, draft: CalendarEventDraft) => {
+		const response = await fetch(`${getApiBase()}/agents/calendar/proposals/create`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ agent_id: agentId, draft }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ proposal: CalendarProposal }>;
+	},
+
+	calendarUpdateProposal: async (agentId: string, eventId: string, draft: CalendarEventDraft) => {
+		const response = await fetch(`${getApiBase()}/agents/calendar/proposals/update`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ agent_id: agentId, event_id: eventId, draft }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ proposal: CalendarProposal }>;
+	},
+
+	calendarDeleteProposal: async (agentId: string, eventId: string) => {
+		const response = await fetch(`${getApiBase()}/agents/calendar/proposals/delete`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ agent_id: agentId, event_id: eventId }),
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ proposal: CalendarProposal }>;
+	},
+
+	calendarApplyProposal: async (agentId: string, proposalId: string) => {
+		const response = await fetch(
+			`${getApiBase()}/agents/calendar/proposals/${encodeURIComponent(proposalId)}/apply`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ agent_id: agentId }),
+			},
+		);
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{ proposal: CalendarProposal }>;
 	},
 
 	createCronJob: async (agentId: string, request: CreateCronRequest) => {

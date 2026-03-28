@@ -4,9 +4,10 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 use super::{
-    BrowserConfig, ChannelConfig, CoalesceConfig, CompactionConfig, Config, CortexConfig,
-    DefaultsConfig, IngestionConfig, McpServerConfig, MemoryPersistenceConfig, OpenCodeConfig,
-    ResolvedAgentConfig, WarmupConfig, WarmupStatus, WorkReadiness, evaluate_work_readiness,
+    BrowserConfig, CalendarConfig, ChannelConfig, CoalesceConfig, CompactionConfig, Config,
+    CortexConfig, DefaultsConfig, IngestionConfig, McpServerConfig, MemoryPersistenceConfig,
+    OpenCodeConfig, ResolvedAgentConfig, WarmupConfig, WarmupStatus, WorkReadiness,
+    evaluate_work_readiness,
 };
 use crate::llm::routing::RoutingConfig;
 use crate::tools::browser::SharedBrowserHandle;
@@ -37,6 +38,7 @@ pub struct RuntimeConfig {
     pub max_concurrent_branches: ArcSwap<usize>,
     pub max_concurrent_workers: ArcSwap<usize>,
     pub browser_config: ArcSwap<BrowserConfig>,
+    pub calendar: ArcSwap<CalendarConfig>,
     pub mcp: ArcSwap<Vec<McpServerConfig>>,
     pub history_backfill_count: ArcSwap<usize>,
     pub brave_search_key: ArcSwap<Option<String>>,
@@ -131,6 +133,7 @@ impl RuntimeConfig {
             max_concurrent_branches: ArcSwap::from_pointee(agent_config.max_concurrent_branches),
             max_concurrent_workers: ArcSwap::from_pointee(agent_config.max_concurrent_workers),
             browser_config: ArcSwap::from_pointee(agent_config.browser.clone()),
+            calendar: ArcSwap::from_pointee(agent_config.calendar.clone()),
             mcp: ArcSwap::from_pointee(agent_config.mcp.clone()),
             history_backfill_count: ArcSwap::from_pointee(agent_config.history_backfill_count),
             brave_search_key: ArcSwap::from_pointee(agent_config.brave_search_key.clone()),
@@ -310,6 +313,7 @@ impl RuntimeConfig {
             );
         }
         self.browser_config.store(Arc::new(resolved.browser));
+        self.calendar.store(Arc::new(resolved.calendar));
         self.mcp.store(Arc::new(new_mcp.clone()));
         self.history_backfill_count
             .store(Arc::new(resolved.history_backfill_count));

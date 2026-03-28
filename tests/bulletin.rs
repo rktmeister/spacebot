@@ -72,6 +72,7 @@ async fn bootstrap_deps() -> anyhow::Result<spacebot::AgentDeps> {
         embedding_model,
     ));
     let task_store = Arc::new(spacebot::tasks::TaskStore::new(db.sqlite.clone()));
+    let calendar_store = Arc::new(spacebot::calendar::CalendarStore::new(db.sqlite.clone()));
 
     let identity = spacebot::identity::Identity::load(&agent_config.workspace).await;
     let prompts =
@@ -105,6 +106,8 @@ async fn bootstrap_deps() -> anyhow::Result<spacebot::AgentDeps> {
         )
         .await,
     );
+    let calendar_service =
+        spacebot::calendar::CalendarService::new(calendar_store.clone(), runtime_config.clone());
 
     Ok(spacebot::AgentDeps {
         agent_id,
@@ -112,6 +115,8 @@ async fn bootstrap_deps() -> anyhow::Result<spacebot::AgentDeps> {
         llm_manager,
         mcp_manager,
         task_store,
+        calendar_store,
+        calendar_service,
         project_store: Arc::new(spacebot::projects::ProjectStore::new(db.sqlite.clone())),
         cron_tool: None,
         runtime_config,

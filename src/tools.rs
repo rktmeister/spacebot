@@ -31,6 +31,13 @@
 pub mod attachment_recall;
 pub mod branch_tool;
 pub mod browser;
+pub mod calendar_apply;
+pub mod calendar_create;
+pub mod calendar_delete;
+pub mod calendar_find_free_time;
+pub mod calendar_get;
+pub mod calendar_list;
+pub mod calendar_update;
 pub mod cancel;
 pub mod channel_recall;
 pub mod config_inspect;
@@ -78,6 +85,26 @@ pub use branch_tool::{BranchArgs, BranchError, BranchOutput, BranchTool};
 pub use browser::{
     BrowserError, BrowserOutput, SharedBrowserHandle, TabInfo, new_shared_browser_handle,
     register_browser_tools,
+};
+pub use calendar_apply::{
+    CalendarApplyArgs, CalendarApplyError, CalendarApplyOutput, CalendarApplyTool,
+};
+pub use calendar_create::{
+    CalendarCreateArgs, CalendarCreateError, CalendarCreateOutput, CalendarCreateTool,
+};
+pub use calendar_delete::{
+    CalendarDeleteArgs, CalendarDeleteError, CalendarDeleteOutput, CalendarDeleteTool,
+};
+pub use calendar_find_free_time::{
+    CalendarFindFreeTimeArgs, CalendarFindFreeTimeError, CalendarFindFreeTimeOutput,
+    CalendarFindFreeTimeTool,
+};
+pub use calendar_get::{CalendarGetArgs, CalendarGetError, CalendarGetOutput, CalendarGetTool};
+pub use calendar_list::{
+    CalendarListArgs, CalendarListError, CalendarListOutput, CalendarListTool,
+};
+pub use calendar_update::{
+    CalendarUpdateArgs, CalendarUpdateError, CalendarUpdateOutput, CalendarUpdateTool,
 };
 pub use cancel::{CancelArgs, CancelError, CancelOutput, CancelTool};
 pub use channel_recall::{
@@ -532,6 +559,7 @@ pub fn create_branch_tool_server(
     state: Option<ChannelState>,
     agent_id: AgentId,
     task_store: Arc<TaskStore>,
+    calendar_service: Arc<crate::calendar::CalendarService>,
     memory_search: Arc<MemorySearch>,
     runtime_config: Arc<RuntimeConfig>,
     memory_event_tx: broadcast::Sender<ProcessEvent>,
@@ -559,6 +587,13 @@ pub fn create_branch_tool_server(
             channel_store,
             runtime_config.clone(),
         ))
+        .tool(CalendarListTool::new(calendar_service.clone()))
+        .tool(CalendarGetTool::new(calendar_service.clone()))
+        .tool(CalendarFindFreeTimeTool::new(calendar_service.clone()))
+        .tool(CalendarCreateTool::new(calendar_service.clone()))
+        .tool(CalendarUpdateTool::new(calendar_service.clone()))
+        .tool(CalendarDeleteTool::new(calendar_service.clone()))
+        .tool(CalendarApplyTool::new(calendar_service))
         .tool(SpacebotDocsTool::new())
         .tool(EmailSearchTool::new(runtime_config))
         .tool(WorkerInspectTool::new(run_logger, agent_id.to_string()))
@@ -699,7 +734,7 @@ pub fn create_cortex_chat_tool_server(
     let logs_dir = workspace.join(".spacebot").join("logs");
 
     let spawn_tool = {
-        let tool = DetachedSpawnWorkerTool::new(deps, screenshot_dir.clone(), logs_dir);
+        let tool = DetachedSpawnWorkerTool::new(deps.clone(), screenshot_dir.clone(), logs_dir);
         match cortex_ctx {
             Some(ctx) => tool.with_cortex_context(ctx),
             None => tool,
@@ -720,6 +755,13 @@ pub fn create_cortex_chat_tool_server(
             channel_store,
             runtime_config.clone(),
         ))
+        .tool(CalendarListTool::new(deps.calendar_service.clone()))
+        .tool(CalendarGetTool::new(deps.calendar_service.clone()))
+        .tool(CalendarFindFreeTimeTool::new(deps.calendar_service.clone()))
+        .tool(CalendarCreateTool::new(deps.calendar_service.clone()))
+        .tool(CalendarUpdateTool::new(deps.calendar_service.clone()))
+        .tool(CalendarDeleteTool::new(deps.calendar_service.clone()))
+        .tool(CalendarApplyTool::new(deps.calendar_service.clone()))
         .tool(SpacebotDocsTool::new())
         .tool(ConfigInspectTool::new(
             agent_id.to_string(),

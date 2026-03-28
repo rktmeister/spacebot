@@ -11,15 +11,15 @@ use super::providers::{
 };
 use super::toml_schema::*;
 use super::{
-    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, ChannelConfig, ClosePolicy,
-    CoalesceConfig, CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
-    DiscordInstanceConfig, EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig,
-    LinkDef, LlmConfig, MattermostConfig, MattermostInstanceConfig, McpServerConfig, McpTransport,
-    MemoryPersistenceConfig, MessagingConfig, MetricsConfig, OpenCodeConfig, ProjectsConfig,
-    ProviderConfig, SignalConfig, SignalInstanceConfig, SlackCommandConfig, SlackConfig,
-    SlackInstanceConfig, TelegramConfig, TelegramInstanceConfig, TelemetryConfig, TwitchConfig,
-    TwitchInstanceConfig, WarmupConfig, WebhookConfig, normalize_adapter,
-    validate_named_messaging_adapters,
+    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, CalendarAuthKind, CalendarConfig,
+    CalendarProviderKind, ChannelConfig, ClosePolicy, CoalesceConfig, CompactionConfig, Config,
+    CortexConfig, CronDef, DefaultsConfig, DiscordConfig, DiscordInstanceConfig, EmailConfig,
+    EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig, LinkDef, LlmConfig, MattermostConfig,
+    MattermostInstanceConfig, McpServerConfig, McpTransport, MemoryPersistenceConfig,
+    MessagingConfig, MetricsConfig, OpenCodeConfig, ProjectsConfig, ProviderConfig, SignalConfig,
+    SignalInstanceConfig, SlackCommandConfig, SlackConfig, SlackInstanceConfig, TelegramConfig,
+    TelegramInstanceConfig, TelemetryConfig, TwitchConfig, TwitchInstanceConfig, WarmupConfig,
+    WebhookConfig, normalize_adapter, validate_named_messaging_adapters,
 };
 use crate::error::{ConfigError, Result};
 
@@ -140,6 +140,99 @@ fn resolve_close_policy(
         ClosePolicy::Detach
     } else {
         fallback
+    })
+}
+
+fn resolve_calendar_config(
+    raw: Option<TomlCalendarConfig>,
+    defaults: &CalendarConfig,
+) -> Result<CalendarConfig> {
+    let Some(raw) = raw else {
+        return Ok(defaults.clone());
+    };
+
+    let provider_kind = match raw.provider_kind.as_deref() {
+        None => defaults.provider_kind,
+        Some("caldav") => CalendarProviderKind::CalDav,
+        Some(other) => {
+            return Err(ConfigError::Invalid(format!(
+                "calendar.provider_kind must be 'caldav' (got '{other}')"
+            ))
+            .into());
+        }
+    };
+
+    let auth_kind = match raw.auth_kind.as_deref() {
+        None => defaults.auth_kind,
+        Some("basic") => CalendarAuthKind::Basic,
+        Some("oauth2") => CalendarAuthKind::OAuth2,
+        Some(other) => {
+            return Err(ConfigError::Invalid(format!(
+                "calendar.auth_kind must be 'basic' or 'oauth2' (got '{other}')"
+            ))
+            .into());
+        }
+    };
+
+    Ok(CalendarConfig {
+        enabled: raw.enabled.unwrap_or(defaults.enabled),
+        provider_kind,
+        auth_kind,
+        base_url: raw
+            .base_url
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.base_url.clone()),
+        username: raw
+            .username
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.username.clone()),
+        password: raw
+            .password
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.password.clone()),
+        selected_calendar_href: raw
+            .selected_calendar_href
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.selected_calendar_href.clone()),
+        sync_interval_secs: raw
+            .sync_interval_secs
+            .unwrap_or(defaults.sync_interval_secs)
+            .max(30),
+        read_only: raw.read_only.unwrap_or(defaults.read_only),
+        ics_export_token: raw
+            .ics_export_token
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.ics_export_token.clone()),
+        oauth2_client_id: raw
+            .oauth2_client_id
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.oauth2_client_id.clone()),
+        oauth2_client_secret: raw
+            .oauth2_client_secret
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.oauth2_client_secret.clone()),
+        oauth2_refresh_token: raw
+            .oauth2_refresh_token
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.oauth2_refresh_token.clone()),
+        oauth2_token_url: raw
+            .oauth2_token_url
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.oauth2_token_url.clone()),
+        oauth2_scopes: if raw.oauth2_scopes.is_empty() {
+            defaults.oauth2_scopes.clone()
+        } else {
+            raw.oauth2_scopes
+        },
     })
 }
 
@@ -858,6 +951,7 @@ impl Config {
             cron_timezone: None,
             user_timezone: None,
             sandbox: None,
+            calendar: None,
             projects: None,
             cron: Vec::new(),
         }];
@@ -1601,6 +1695,7 @@ impl Config {
                 .as_deref()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(base_defaults.worker_log_mode),
+            calendar: resolve_calendar_config(toml.defaults.calendar, &base_defaults.calendar)?,
             projects: toml
                 .defaults
                 .projects
@@ -1762,6 +1857,10 @@ impl Config {
                     cron_timezone: a.cron_timezone.as_deref().and_then(resolve_env_value),
                     user_timezone: a.user_timezone.as_deref().and_then(resolve_env_value),
                     sandbox: a.sandbox,
+                    calendar: a
+                        .calendar
+                        .map(|calendar| resolve_calendar_config(Some(calendar), &defaults.calendar))
+                        .transpose()?,
                     projects: a.projects.map(|p| {
                         let base = &defaults.projects;
                         ProjectsConfig {
@@ -1816,6 +1915,7 @@ impl Config {
                 cron_timezone: None,
                 user_timezone: None,
                 sandbox: None,
+                calendar: None,
                 projects: None,
                 cron: Vec::new(),
             });

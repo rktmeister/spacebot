@@ -3,6 +3,7 @@
 use crate::agent::channel::ChannelState;
 use crate::agent::cortex_chat::CortexChatSession;
 use crate::agent::status::StatusBlock;
+use crate::calendar::{CalendarService, CalendarStore};
 use crate::config::{
     Binding, DefaultsConfig, DiscordPermissions, RuntimeConfig, SignalPermissions, SlackPermissions,
 };
@@ -86,6 +87,10 @@ pub struct ApiState {
     pub task_store: ArcSwap<Option<Arc<TaskStore>>>,
     /// Per-agent project stores for project/repo/worktree CRUD operations.
     pub project_stores: arc_swap::ArcSwap<HashMap<String, Arc<ProjectStore>>>,
+    /// Per-agent calendar stores for calendar queries and mirrored state.
+    pub calendar_stores: arc_swap::ArcSwap<HashMap<String, Arc<CalendarStore>>>,
+    /// Per-agent calendar services for sync, proposals, and remote mutations.
+    pub calendar_services: arc_swap::ArcSwap<HashMap<String, Arc<CalendarService>>>,
     /// Per-agent RuntimeConfig for reading live hot-reloaded configuration.
     pub runtime_configs: ArcSwap<HashMap<String, Arc<RuntimeConfig>>>,
     /// Per-agent MCP managers for status and reconnect APIs.
@@ -308,6 +313,8 @@ impl ApiState {
             cron_schedulers: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             task_store: ArcSwap::from_pointee(None),
             project_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
+            calendar_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
+            calendar_services: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             runtime_configs: ArcSwap::from_pointee(HashMap::new()),
             mcp_managers: ArcSwap::from_pointee(HashMap::new()),
             sandboxes: ArcSwap::from_pointee(HashMap::new()),
@@ -752,6 +759,16 @@ impl ApiState {
     /// Set the project stores for all agents.
     pub fn set_project_stores(&self, stores: HashMap<String, Arc<ProjectStore>>) {
         self.project_stores.store(Arc::new(stores));
+    }
+
+    /// Set the calendar stores for all agents.
+    pub fn set_calendar_stores(&self, stores: HashMap<String, Arc<CalendarStore>>) {
+        self.calendar_stores.store(Arc::new(stores));
+    }
+
+    /// Set the calendar services for all agents.
+    pub fn set_calendar_services(&self, services: HashMap<String, Arc<CalendarService>>) {
+        self.calendar_services.store(Arc::new(services));
     }
 
     /// Set the runtime configs for all agents.

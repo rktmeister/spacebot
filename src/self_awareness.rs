@@ -97,6 +97,7 @@ pub fn runtime_snapshot_value(agent_id: &str, runtime_config: &RuntimeConfig) ->
     let warmup = runtime_config.warmup.load();
     let warmup_status = runtime_config.warmup_status.load();
     let browser = runtime_config.browser_config.load();
+    let calendar = runtime_config.calendar.load();
     let sandbox = runtime_config.sandbox.load();
     let opencode = runtime_config.opencode.load();
     let mcp_servers = runtime_config
@@ -247,6 +248,19 @@ pub fn runtime_snapshot_value(agent_id: &str, runtime_config: &RuntimeConfig) ->
                 .as_ref()
                 .map(|path| path.display().to_string()),
             "chrome_cache_dir": browser.chrome_cache_dir.display().to_string(),
+        },
+        "calendar": {
+            "enabled": calendar.enabled,
+            "provider_kind": calendar.provider_kind.to_string(),
+            "auth_kind": calendar.auth_kind.to_string(),
+            "base_url": calendar.base_url,
+            "selected_calendar_href": calendar.selected_calendar_href,
+            "sync_interval_secs": calendar.sync_interval_secs,
+            "read_only": calendar.read_only,
+            "ics_export_enabled": calendar.ics_export_enabled(),
+            "oauth2_configured": calendar.oauth2_client_id.is_some()
+                || calendar.oauth2_client_secret.is_some()
+                || calendar.oauth2_refresh_token.is_some(),
         },
         "sandbox": {
             "mode": match sandbox.mode {

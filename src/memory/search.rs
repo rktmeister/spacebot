@@ -444,6 +444,7 @@ mod tests {
     use super::*;
     use crate::memory::types::MemoryType;
     use chrono::{Duration, Utc};
+    use std::sync::{Arc, OnceLock};
 
     fn make_scored(id: &str, score: f64) -> ScoredMemory {
         let mut memory = Memory::new(format!("content for {id}"), MemoryType::Fact);
@@ -569,6 +570,15 @@ mod tests {
         (store, memories)
     }
 
+    fn shared_embedding_model() -> Arc<EmbeddingModel> {
+        static MODEL: OnceLock<Arc<EmbeddingModel>> = OnceLock::new();
+        Arc::clone(MODEL.get_or_init(|| {
+            let cache_dir = std::env::temp_dir().join("spacebot-test-embedding-cache");
+            std::fs::create_dir_all(&cache_dir).expect("failed to create embedding cache dir");
+            Arc::new(EmbeddingModel::new(&cache_dir).expect("failed to initialize embedding model"))
+        }))
+    }
+
     #[tokio::test]
     async fn test_metadata_search_recent() {
         let (store, _memories) = setup_search_with_memories().await;
@@ -580,7 +590,7 @@ mod tests {
             .await
             .unwrap();
         let embedding_table = EmbeddingTable::open_or_create(&lance_conn).await.unwrap();
-        let embedding_model = Arc::new(EmbeddingModel::new(lance_dir.path()).unwrap());
+        let embedding_model = shared_embedding_model();
         let search = MemorySearch::new(store, embedding_table, embedding_model);
 
         let config = SearchConfig {
@@ -608,7 +618,7 @@ mod tests {
             .await
             .unwrap();
         let embedding_table = EmbeddingTable::open_or_create(&lance_conn).await.unwrap();
-        let embedding_model = Arc::new(EmbeddingModel::new(lance_dir.path()).unwrap());
+        let embedding_model = shared_embedding_model();
         let search = MemorySearch::new(store, embedding_table, embedding_model);
 
         let config = SearchConfig {
@@ -633,7 +643,7 @@ mod tests {
             .await
             .unwrap();
         let embedding_table = EmbeddingTable::open_or_create(&lance_conn).await.unwrap();
-        let embedding_model = Arc::new(EmbeddingModel::new(lance_dir.path()).unwrap());
+        let embedding_model = shared_embedding_model();
         let search = MemorySearch::new(store, embedding_table, embedding_model);
 
         let config = SearchConfig {
@@ -658,7 +668,7 @@ mod tests {
             .await
             .unwrap();
         let embedding_table = EmbeddingTable::open_or_create(&lance_conn).await.unwrap();
-        let embedding_model = Arc::new(EmbeddingModel::new(lance_dir.path()).unwrap());
+        let embedding_model = shared_embedding_model();
         let search = MemorySearch::new(store, embedding_table, embedding_model);
 
         let config = SearchConfig {

@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod api;
 pub mod auth;
+pub mod calendar;
 pub mod config;
 pub mod conversation;
 pub mod cron;
@@ -394,6 +395,8 @@ pub struct AgentDeps {
     pub mcp_manager: Arc<mcp::McpManager>,
     pub task_store: Arc<tasks::TaskStore>,
     pub project_store: Arc<projects::ProjectStore>,
+    pub calendar_store: Arc<calendar::CalendarStore>,
+    pub calendar_service: Arc<calendar::CalendarService>,
     pub cron_tool: Option<tools::CronTool>,
     pub runtime_config: Arc<config::RuntimeConfig>,
     pub event_tx: tokio::sync::broadcast::Sender<ProcessEvent>,
