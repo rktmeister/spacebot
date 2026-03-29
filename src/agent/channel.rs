@@ -80,6 +80,41 @@ fn cron_can_finalize(state: CronAsyncState) -> bool {
         && !state.pending_retrigger
 }
 
+fn is_cron_channel_id(channel_id: &str) -> bool {
+    channel_id.starts_with("cron:")
+}
+
+fn compose_channel_adapter_prompt(
+    prompt_engine: &crate::prompts::PromptEngine,
+    is_cron_channel: bool,
+    delivery_adapter: Option<&str>,
+) -> Option<String> {
+    let mut fragments = Vec::new();
+    let mut rendered_platforms = HashSet::new();
+
+    if is_cron_channel
+        && rendered_platforms.insert("cron")
+        && let Some(fragment) = prompt_engine.render_channel_adapter_prompt("cron")
+    {
+        fragments.push(fragment);
+    }
+
+    if let Some(adapter) = delivery_adapter {
+        let platform = adapter.split(':').next().unwrap_or(adapter);
+        if rendered_platforms.insert(platform)
+            && let Some(fragment) = prompt_engine.render_channel_adapter_prompt(adapter)
+        {
+            fragments.push(fragment);
+        }
+    }
+
+    if fragments.is_empty() {
+        None
+    } else {
+        Some(fragments.join("\n\n"))
+    }
+}
+
 const EVENT_LAG_WARNING_INTERVAL_SECS: u64 = 30;
 
 async fn recv_channel_event(
@@ -640,6 +675,10 @@ impl Channel {
     }
 
     fn current_adapter(&self) -> Option<&str> {
+        self.delivery_adapter()
+    }
+
+    fn delivery_adapter(&self) -> Option<&str> {
         self.source_adapter
             .as_deref()
             .or_else(|| {
@@ -648,6 +687,14 @@ impl Channel {
                     .and_then(|conversation_id| conversation_id.split(':').next())
             })
             .filter(|adapter| !adapter.is_empty())
+    }
+
+    fn is_cron_channel(&self) -> bool {
+        is_cron_channel_id(self.id.as_ref())
+            || self
+                .conversation_id
+                .as_deref()
+                .is_some_and(is_cron_channel_id)
     }
 
     fn sync_listen_only_mode_from_runtime(&mut self) {
@@ -791,7 +838,7 @@ impl Channel {
         &self,
         turn_output_capture: &crate::tools::TurnOutputCapture,
     ) {
-        if self.current_adapter() != Some("cron") {
+        if !self.is_cron_channel() {
             return;
         }
 
@@ -1597,9 +1644,11 @@ impl Channel {
 
         let org_context = self.build_org_context(&prompt_engine);
 
-        let adapter_prompt = self
-            .current_adapter()
-            .and_then(|adapter| prompt_engine.render_channel_adapter_prompt(adapter));
+        let adapter_prompt = compose_channel_adapter_prompt(
+            &prompt_engine,
+            self.is_cron_channel(),
+            self.delivery_adapter(),
+        );
 
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
 
@@ -2032,8 +2081,7 @@ impl Channel {
     async fn build_available_channels(&self) -> Option<String> {
         self.deps.messaging_manager.as_ref()?;
 
-        let current_adapter = self.current_adapter();
-        if matches!(current_adapter, Some("cron")) {
+        if self.is_cron_channel() {
             return None;
         }
 
@@ -2047,9 +2095,7 @@ impl Channel {
 
         let entries: Vec<crate::prompts::engine::ChannelEntry> = channels
             .into_iter()
-            .filter(|channel| {
-                should_expose_channel_as_sendable_target(self.id.as_ref(), current_adapter, channel)
-            })
+            .filter(|channel| should_expose_channel_as_sendable_target(self.id.as_ref(), channel))
             .map(|channel| crate::prompts::engine::ChannelEntry {
                 name: channel.display_name.unwrap_or_else(|| channel.id.clone()),
                 platform: channel.platform,
@@ -2299,9 +2345,11 @@ impl Channel {
 
         let org_context = self.build_org_context(&prompt_engine);
 
-        let adapter_prompt = self
-            .current_adapter()
-            .and_then(|adapter| prompt_engine.render_channel_adapter_prompt(adapter));
+        let adapter_prompt = compose_channel_adapter_prompt(
+            &prompt_engine,
+            self.is_cron_channel(),
+            self.delivery_adapter(),
+        );
 
         let project_context = self.build_project_context(&prompt_engine).await;
 
@@ -3594,10 +3642,9 @@ fn should_send_quiet_mode_fallback(
 
 fn should_expose_channel_as_sendable_target(
     current_channel_id: &str,
-    current_adapter: Option<&str>,
     channel: &crate::conversation::channels::ChannelInfo,
 ) -> bool {
-    if matches!(current_adapter, Some("cron")) {
+    if is_cron_channel_id(current_channel_id) {
         return false;
     }
 
@@ -3622,13 +3669,15 @@ fn is_dm_conversation_id(conv_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CronAsyncState, QuietModeFallbackState, compute_listen_mode_invocation, cron_can_finalize,
+        CronAsyncState, QuietModeFallbackState, compose_channel_adapter_prompt,
+        compute_listen_mode_invocation, cron_can_finalize, is_cron_channel_id,
         is_dm_conversation_id, recv_channel_event, should_expose_channel_as_sendable_target,
         should_process_event_for_channel, should_send_discord_quiet_mode_ping_ack,
         should_send_quiet_mode_fallback,
     };
     use crate::conversation::channels::ChannelInfo;
     use crate::memory::MemoryType;
+    use crate::prompts::PromptEngine;
     use crate::{AgentId, ChannelId, InboundMessage, MessageContent, ProcessEvent, ProcessId};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -3716,7 +3765,6 @@ mod tests {
         let link_channel = channel_info("link:main:admin", "link");
         assert!(!should_expose_channel_as_sendable_target(
             "telegram:-5179214743",
-            Some("telegram"),
             &link_channel,
         ));
     }
@@ -3726,9 +3774,25 @@ mod tests {
         let telegram_channel = channel_info("telegram:-5179214743", "telegram");
         assert!(!should_expose_channel_as_sendable_target(
             "cron:weekday-email-briefing",
-            Some("cron"),
             &telegram_channel,
         ));
+    }
+
+    #[test]
+    fn cron_channel_detection_uses_channel_identity() {
+        assert!(is_cron_channel_id("cron:weekday-email-briefing"));
+        assert!(!is_cron_channel_id("telegram:-5179214743"));
+    }
+
+    #[test]
+    fn compose_channel_adapter_prompt_includes_cron_and_delivery_contracts() {
+        let prompt_engine = PromptEngine::new("en").expect("prompt engine should build");
+
+        let prompt = compose_channel_adapter_prompt(&prompt_engine, true, Some("telegram:alerts"))
+            .expect("cron+telegram prompt should render");
+
+        assert!(prompt.contains("This is an automated scheduled task"));
+        assert!(prompt.contains("Telegram output contract"));
     }
 
     #[test]
