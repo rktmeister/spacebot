@@ -7,7 +7,8 @@ use crate::calendar::ics::{
     normalize_timezone_label, update_existing_resource,
 };
 use crate::calendar::invite_email::{
-    InviteEmail, build_cancel_invite_email, build_request_invite_email,
+    InviteEmail, build_cancel_invite_email, build_removed_attendee_cancel_invite_email,
+    build_request_invite_email,
 };
 use crate::calendar::store::CalendarStore;
 use crate::calendar::types::{
@@ -515,6 +516,11 @@ impl CalendarService {
                     if let Some(schedule) = schedule.as_ref() {
                         if mailer.is_none() {
                             mailer = self.build_invite_mailer(&config)?;
+                        }
+                        if let Some(cancel_email) =
+                            build_removed_attendee_cancel_invite_email(&current, &draft, schedule)?
+                        {
+                            pending_invites.push(cancel_email);
                         }
                         if let Some(invite_email) =
                             build_request_invite_email(&draft, schedule, &updated_ics, true)?
