@@ -96,6 +96,9 @@ pub use calendar_create::{
 pub use calendar_delete::{
     CalendarDeleteArgs, CalendarDeleteError, CalendarDeleteOutput, CalendarDeleteTool,
 };
+pub use calendar_display::{
+    CalendarAvailabilitySlotDisplay, CalendarEventDisplay, CalendarOccurrenceDisplay,
+};
 pub use calendar_find_free_time::{
     CalendarFindFreeTimeArgs, CalendarFindFreeTimeError, CalendarFindFreeTimeOutput,
     CalendarFindFreeTimeTool,

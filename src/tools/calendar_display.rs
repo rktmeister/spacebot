@@ -8,7 +8,7 @@ use chrono::{DateTime, Local, Utc};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
-pub(crate) struct CalendarOccurrenceDisplay {
+pub struct CalendarOccurrenceDisplay {
     pub occurrence_id: String,
     pub event_id: String,
     pub series_event_id: String,
@@ -35,7 +35,7 @@ pub(crate) struct CalendarOccurrenceDisplay {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct CalendarEventDisplay {
+pub struct CalendarEventDisplay {
     pub id: String,
     pub resource_id: String,
     pub calendar_href: String,
@@ -68,7 +68,7 @@ pub(crate) struct CalendarEventDisplay {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct CalendarAvailabilitySlotDisplay {
+pub struct CalendarAvailabilitySlotDisplay {
     pub start_at_utc: String,
     pub end_at_utc: String,
     pub display_start: String,
