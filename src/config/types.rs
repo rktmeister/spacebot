@@ -79,10 +79,9 @@ impl std::fmt::Display for CalendarAuthKind {
 }
 
 /// Join-policy presets for Google Meet spaces created by Spacebot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GoogleMeetAccessType {
-    #[default]
     Open,
     Trusted,
     Restricted,
@@ -149,8 +148,9 @@ pub struct CalendarConfig {
     pub google_meet_refresh_token: Option<String>,
     /// Optional override for the Google OAuth token endpoint.
     pub google_meet_token_url: Option<String>,
-    /// Access policy for newly created Google Meet spaces.
-    pub google_meet_access_type: GoogleMeetAccessType,
+    /// Optional access policy override for newly created Google Meet spaces.
+    /// When omitted, Google applies the account default.
+    pub google_meet_access_type: Option<GoogleMeetAccessType>,
     /// Reserved for future CalDAV OAuth2 support.
     pub oauth2_client_id: Option<String>,
     /// Reserved for future CalDAV OAuth2 support.
@@ -262,7 +262,7 @@ impl Default for CalendarConfig {
             google_meet_client_secret: None,
             google_meet_refresh_token: None,
             google_meet_token_url: None,
-            google_meet_access_type: GoogleMeetAccessType::Open,
+            google_meet_access_type: None,
             oauth2_client_id: None,
             oauth2_client_secret: None,
             oauth2_refresh_token: None,

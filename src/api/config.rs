@@ -125,7 +125,7 @@ pub(super) struct CalendarSection {
     has_google_meet_client_id: bool,
     has_google_meet_client_secret: bool,
     has_google_meet_refresh_token: bool,
-    google_meet_access_type: String,
+    google_meet_access_type: Option<String>,
 }
 
 #[derive(Serialize, Debug, utoipa::ToSchema)]
@@ -476,7 +476,9 @@ pub(super) async fn get_agent_config(
                 .as_deref()
                 .map(|value| !value.is_empty())
                 .unwrap_or(false),
-            google_meet_access_type: calendar.google_meet_access_type.to_string(),
+            google_meet_access_type: calendar
+                .google_meet_access_type
+                .map(|value| value.to_string()),
         },
         discord: {
             let perms = state.discord_permissions.read().await;

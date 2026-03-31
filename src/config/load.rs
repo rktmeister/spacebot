@@ -177,9 +177,9 @@ fn resolve_calendar_config(
 
     let google_meet_access_type = match raw.google_meet_access_type.as_deref() {
         None => defaults.google_meet_access_type,
-        Some("open") => GoogleMeetAccessType::Open,
-        Some("trusted") => GoogleMeetAccessType::Trusted,
-        Some("restricted") => GoogleMeetAccessType::Restricted,
+        Some("open") => Some(GoogleMeetAccessType::Open),
+        Some("trusted") => Some(GoogleMeetAccessType::Trusted),
+        Some("restricted") => Some(GoogleMeetAccessType::Restricted),
         Some(other) => {
             return Err(ConfigError::Invalid(format!(
                 "calendar.google_meet_access_type must be 'open', 'trusted', or 'restricted' (got '{other}')"

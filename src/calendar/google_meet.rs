@@ -15,7 +15,7 @@ pub struct GoogleMeetClient {
     client_secret: String,
     refresh_token: String,
     token_url: String,
-    access_type: GoogleMeetAccessType,
+    access_type: Option<GoogleMeetAccessType>,
 }
 
 impl GoogleMeetClient {
@@ -24,7 +24,7 @@ impl GoogleMeetClient {
         client_secret: impl Into<String>,
         refresh_token: impl Into<String>,
         token_url: Option<&str>,
-        access_type: GoogleMeetAccessType,
+        access_type: Option<GoogleMeetAccessType>,
     ) -> anyhow::Result<Self> {
         let token_url = token_url
             .map(str::trim)
@@ -51,7 +51,9 @@ impl GoogleMeetClient {
             .bearer_auth(&access_token)
             .json(&CreateSpaceRequest {
                 config: SpaceConfigRequest {
-                    access_type: self.access_type.as_google_api_value(),
+                    access_type: self
+                        .access_type
+                        .map(GoogleMeetAccessType::as_google_api_value),
                     entry_point_access: "ALL",
                 },
             })
@@ -119,7 +121,8 @@ struct CreateSpaceRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SpaceConfigRequest<'a> {
-    access_type: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    access_type: Option<&'a str>,
     entry_point_access: &'a str,
 }
 
@@ -132,4 +135,37 @@ struct CreateSpaceResponse {
 #[derive(Debug, Deserialize)]
 struct GoogleTokenResponse {
     access_token: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_space_request_omits_access_type_when_unset() {
+        let payload = serde_json::to_value(CreateSpaceRequest {
+            config: SpaceConfigRequest {
+                access_type: None,
+                entry_point_access: "ALL",
+            },
+        })
+        .expect("request should serialize");
+
+        assert_eq!(payload["config"]["entryPointAccess"], "ALL");
+        assert!(payload["config"].get("accessType").is_none());
+    }
+
+    #[test]
+    fn create_space_request_serializes_access_type_when_set() {
+        let payload = serde_json::to_value(CreateSpaceRequest {
+            config: SpaceConfigRequest {
+                access_type: Some("RESTRICTED"),
+                entry_point_access: "ALL",
+            },
+        })
+        .expect("request should serialize");
+
+        assert_eq!(payload["config"]["accessType"], "RESTRICTED");
+        assert_eq!(payload["config"]["entryPointAccess"], "ALL");
+    }
 }

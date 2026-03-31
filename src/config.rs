@@ -249,6 +249,23 @@ google_meet_access_type = "invalid"
     }
 
     #[test]
+    fn test_calendar_google_meet_access_type_omitted_uses_account_default() {
+        let _lock = env_test_lock().lock();
+        let _env = EnvGuard::new();
+
+        let toml = r#"
+[defaults.calendar]
+enabled = true
+google_meet_enabled = true
+"#;
+
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+
+        assert_eq!(config.defaults.calendar.google_meet_access_type, None);
+    }
+
+    #[test]
     fn test_llm_provider_tables_parse_with_env_and_lowercase_keys() {
         let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();
