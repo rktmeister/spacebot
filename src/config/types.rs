@@ -78,6 +78,40 @@ impl std::fmt::Display for CalendarAuthKind {
     }
 }
 
+/// Join-policy presets for Google Meet spaces created by Spacebot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GoogleMeetAccessType {
+    #[default]
+    Open,
+    Trusted,
+    Restricted,
+}
+
+impl GoogleMeetAccessType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Trusted => "trusted",
+            Self::Restricted => "restricted",
+        }
+    }
+
+    pub fn as_google_api_value(self) -> &'static str {
+        match self {
+            Self::Open => "OPEN",
+            Self::Trusted => "TRUSTED",
+            Self::Restricted => "RESTRICTED",
+        }
+    }
+}
+
+impl std::fmt::Display for GoogleMeetAccessType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Calendar sync configuration for a single agent.
 #[derive(Clone)]
 pub struct CalendarConfig {
@@ -101,21 +135,53 @@ pub struct CalendarConfig {
     pub read_only: bool,
     /// Optional token used by the public read-only ICS export route.
     pub ics_export_token: Option<String>,
-    /// Reserved for future OAuth2 support.
+    /// Organizer display name used when Spacebot sends attendee-bearing invites.
+    pub organizer_name: Option<String>,
+    /// Organizer email used when Spacebot sends attendee-bearing invites.
+    pub organizer_email: Option<String>,
+    /// Generate Google Meet links for attendee-bearing events.
+    pub google_meet_enabled: bool,
+    /// Google OAuth client ID for Meet link generation.
+    pub google_meet_client_id: Option<String>,
+    /// Google OAuth client secret for Meet link generation.
+    pub google_meet_client_secret: Option<String>,
+    /// Google OAuth refresh token for Meet link generation.
+    pub google_meet_refresh_token: Option<String>,
+    /// Optional override for the Google OAuth token endpoint.
+    pub google_meet_token_url: Option<String>,
+    /// Access policy for newly created Google Meet spaces.
+    pub google_meet_access_type: GoogleMeetAccessType,
+    /// Reserved for future CalDAV OAuth2 support.
     pub oauth2_client_id: Option<String>,
-    /// Reserved for future OAuth2 support.
+    /// Reserved for future CalDAV OAuth2 support.
     pub oauth2_client_secret: Option<String>,
-    /// Reserved for future OAuth2 support.
+    /// Reserved for future CalDAV OAuth2 support.
     pub oauth2_refresh_token: Option<String>,
-    /// Reserved for future OAuth2 support.
+    /// Reserved for future CalDAV OAuth2 support.
     pub oauth2_token_url: Option<String>,
-    /// Reserved for future OAuth2 support.
+    /// Reserved for future CalDAV OAuth2 support.
     pub oauth2_scopes: Vec<String>,
 }
 
 impl CalendarConfig {
     pub fn ics_export_enabled(&self) -> bool {
         self.ics_export_token.is_some()
+    }
+
+    pub fn google_meet_configured(&self) -> bool {
+        self.google_meet_enabled
+            && self
+                .google_meet_client_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            && self
+                .google_meet_client_secret
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            && self
+                .google_meet_refresh_token
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
     }
 }
 
@@ -135,6 +201,29 @@ impl std::fmt::Debug for CalendarConfig {
                 "ics_export_token",
                 &self.ics_export_token.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("organizer_name", &self.organizer_name)
+            .field("organizer_email", &self.organizer_email)
+            .field("google_meet_enabled", &self.google_meet_enabled)
+            .field(
+                "google_meet_client_id",
+                &self.google_meet_client_id.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "google_meet_client_secret",
+                &self
+                    .google_meet_client_secret
+                    .as_ref()
+                    .map(|_| "[REDACTED]"),
+            )
+            .field(
+                "google_meet_refresh_token",
+                &self
+                    .google_meet_refresh_token
+                    .as_ref()
+                    .map(|_| "[REDACTED]"),
+            )
+            .field("google_meet_token_url", &self.google_meet_token_url)
+            .field("google_meet_access_type", &self.google_meet_access_type)
             .field(
                 "oauth2_client_id",
                 &self.oauth2_client_id.as_ref().map(|_| "[REDACTED]"),
@@ -166,6 +255,14 @@ impl Default for CalendarConfig {
             sync_interval_secs: 300,
             read_only: false,
             ics_export_token: None,
+            organizer_name: None,
+            organizer_email: None,
+            google_meet_enabled: false,
+            google_meet_client_id: None,
+            google_meet_client_secret: None,
+            google_meet_refresh_token: None,
+            google_meet_token_url: None,
+            google_meet_access_type: GoogleMeetAccessType::Open,
             oauth2_client_id: None,
             oauth2_client_secret: None,
             oauth2_refresh_token: None,

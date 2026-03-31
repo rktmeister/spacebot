@@ -249,6 +249,13 @@ base_url = "https://..."
 auth_kind = "basic" # or "oauth2"
 username = "secret:CALDAV_USERNAME"
 password = "secret:CALDAV_PASSWORD"
+organizer_name = "Spacebot"
+organizer_email = "secret:CALENDAR_ORGANIZER_EMAIL"
+google_meet_enabled = true
+google_meet_client_id = "secret:GOOGLE_MEET_CLIENT_ID"
+google_meet_client_secret = "secret:GOOGLE_MEET_CLIENT_SECRET"
+google_meet_refresh_token = "secret:GOOGLE_MEET_REFRESH_TOKEN"
+google_meet_access_type = "open" # or "trusted" / "restricted"
 sync_interval_secs = 300
 read_only = false
 ics_export_enabled = false
@@ -267,6 +274,9 @@ selected_calendar_href = "https://caldav.example.com/dav/calendars/user/bot/"
 - the selected calendar href should be persisted after discovery/selection
 - `read_only` is a useful operational mode
 - ICS export is optional and disabled by default
+- attendee-bearing events need an organizer email so CalDAV scheduling/iMIP has a stable sender identity
+- Google Meet link generation is optional and separate from the calendar provider auth flow
+- when Google Meet is enabled, Spacebot appends a managed `Google Meet: https://meet.google.com/...` line to the event description instead of requiring Google Calendar conference data
 
 ### Auth Model
 

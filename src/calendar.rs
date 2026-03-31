@@ -1,6 +1,7 @@
 //! Calendar sync, storage, and occurrence expansion.
 
 pub mod caldav;
+pub mod google_meet;
 pub mod ics;
 pub mod service;
 pub mod store;

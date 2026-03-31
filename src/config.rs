@@ -230,6 +230,25 @@ api_key = "sk-proj-xyz789"
     }
 
     #[test]
+    fn test_calendar_google_meet_access_type_invalid() {
+        let _lock = env_test_lock().lock();
+        let _env = EnvGuard::new();
+
+        let toml = r#"
+[defaults.calendar]
+google_meet_access_type = "invalid"
+"#;
+
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let error = Config::from_toml(parsed, PathBuf::from("."))
+            .expect_err("config should reject invalid Google Meet access type");
+
+        assert!(error.to_string().contains(
+            "calendar.google_meet_access_type must be 'open', 'trusted', or 'restricted'"
+        ));
+    }
+
+    #[test]
     fn test_llm_provider_tables_parse_with_env_and_lowercase_keys() {
         let _lock = env_test_lock().lock();
         let _env = EnvGuard::new();

@@ -12,6 +12,12 @@ use std::collections::{BTreeSet, HashMap};
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
+pub struct EventScheduleContext {
+    pub organizer_name: Option<String>,
+    pub organizer_email: String,
+}
+
+#[derive(Debug, Clone)]
 struct ParsedIcalDateTime {
     utc: DateTime<Utc>,
     timezone: Option<String>,
@@ -349,16 +355,24 @@ pub fn build_new_event_resource(
     draft: &CalendarEventDraft,
     uid: &str,
     sequence: i64,
+    schedule: Option<&EventScheduleContext>,
 ) -> anyhow::Result<String> {
     let start = parse_user_datetime(&draft.start_at, draft.timezone.as_deref(), draft.all_day)?;
     let end = parse_user_datetime(&draft.end_at, draft.timezone.as_deref(), draft.all_day)?;
     ensure_valid_event_range(&start, &end)?;
+    let scheduled_event = schedule.is_some() && !draft.attendees.is_empty();
+    let attendees = build_outbound_attendees(None, draft, scheduled_event);
 
     let mut lines = vec![
         "BEGIN:VCALENDAR".to_string(),
         "VERSION:2.0".to_string(),
         "PRODID:-//Spacebot//Calendar//EN".to_string(),
         "CALSCALE:GREGORIAN".to_string(),
+    ];
+    if scheduled_event {
+        lines.push("METHOD:REQUEST".to_string());
+    }
+    lines.extend([
         "BEGIN:VEVENT".to_string(),
         format!("UID:{uid}"),
         format!("DTSTAMP:{}", format_utc_ical(Utc::now())),
@@ -367,7 +381,7 @@ pub fn build_new_event_resource(
         format_ical_text_property("SUMMARY", &draft.summary),
         format_dt_line("DTSTART", &start),
         format_dt_line("DTEND", &end),
-    ];
+    ]);
 
     if let Some(description) = &draft.description
         && !description.trim().is_empty()
@@ -384,14 +398,12 @@ pub fn build_new_event_resource(
     {
         lines.push(format!("RRULE:{}", rule.trim()));
     }
-
-    lines.extend(
-        draft
-            .attendees
-            .iter()
-            .map(format_attendee_property)
-            .collect::<Vec<_>>(),
-    );
+    if let Some(schedule) = schedule
+        && scheduled_event
+    {
+        lines.push(format_organizer_property(schedule));
+    }
+    lines.extend(attendees.iter().map(format_attendee_property));
 
     lines.push("STATUS:CONFIRMED".to_string());
     lines.push("TRANSP:OPAQUE".to_string());
@@ -405,10 +417,13 @@ pub fn update_existing_resource(
     raw_ics: &str,
     current_event: &CalendarEvent,
     draft: &CalendarEventDraft,
+    schedule: Option<&EventScheduleContext>,
 ) -> anyhow::Result<String> {
     let document = split_calendar_document(raw_ics);
     let mut updated_blocks = Vec::with_capacity(document.segments.len());
     let mut replaced = false;
+    let mut calendar_method_written = false;
+    let scheduled_event = schedule.is_some() && !draft.attendees.is_empty();
 
     let current_start = parse_user_datetime(
         &current_event.start_at_utc,
@@ -433,7 +448,11 @@ pub fn update_existing_resource(
 
     for segment in document.segments {
         match segment {
-            CalendarSegment::Lines(lines) => updated_blocks.extend(lines),
+            CalendarSegment::Lines(lines) => updated_blocks.extend(rewrite_calendar_lines(
+                &lines,
+                scheduled_event.then_some("REQUEST"),
+                &mut calendar_method_written,
+            )),
             CalendarSegment::Event {
                 lines,
                 uid,
@@ -449,6 +468,55 @@ pub fn update_existing_resource(
                         draft,
                         &requested_start,
                         &requested_end,
+                        schedule,
+                    )?);
+                    replaced = true;
+                } else {
+                    updated_blocks.extend(lines);
+                }
+            }
+        }
+    }
+
+    if !replaced {
+        return Err(anyhow!(
+            "failed to locate target VEVENT in remote ICS resource"
+        ));
+    }
+
+    Ok(join_ical_lines(updated_blocks))
+}
+
+pub fn build_cancelled_resource(
+    raw_ics: &str,
+    current_event: &CalendarEvent,
+    schedule: &EventScheduleContext,
+) -> anyhow::Result<String> {
+    let document = split_calendar_document(raw_ics);
+    let mut updated_blocks = Vec::with_capacity(document.segments.len());
+    let mut replaced = false;
+    let mut calendar_method_written = false;
+
+    for segment in document.segments {
+        match segment {
+            CalendarSegment::Lines(lines) => updated_blocks.extend(rewrite_calendar_lines(
+                &lines,
+                Some("CANCEL"),
+                &mut calendar_method_written,
+            )),
+            CalendarSegment::Event {
+                lines,
+                uid,
+                recurrence_id,
+            } => {
+                if !replaced
+                    && uid.as_deref() == Some(current_event.remote_uid.as_str())
+                    && recurrence_id.is_none()
+                {
+                    updated_blocks.extend(rewrite_cancelled_master_event_block(
+                        &lines,
+                        current_event,
+                        schedule,
                     )?);
                     replaced = true;
                 } else {
@@ -609,21 +677,9 @@ fn rewrite_master_event_block(
     draft: &CalendarEventDraft,
     requested_start: &ParsedIcalDateTime,
     requested_end: &ParsedIcalDateTime,
+    schedule: Option<&EventScheduleContext>,
 ) -> anyhow::Result<Vec<String>> {
-    let managed = [
-        "SUMMARY",
-        "DESCRIPTION",
-        "LOCATION",
-        "DTSTART",
-        "DTEND",
-        "DURATION",
-        "STATUS",
-        "TRANSP",
-        "LAST-MODIFIED",
-        "SEQUENCE",
-        "ATTENDEE",
-        "RRULE",
-    ];
+    let scheduled_event = schedule.is_some() && !draft.attendees.is_empty();
 
     let mut result = Vec::new();
     let mut inserted = false;
@@ -640,6 +696,7 @@ fn rewrite_master_event_block(
                     draft,
                     requested_start,
                     requested_end,
+                    schedule,
                 ));
                 inserted = true;
             }
@@ -660,13 +717,14 @@ fn rewrite_master_event_block(
                     draft,
                     requested_start,
                     requested_end,
+                    schedule,
                 ));
                 inserted = true;
             }
             continue;
         }
 
-        if managed.contains(&name.as_str()) {
+        if is_managed_rewrite_property(&name, scheduled_event) {
             continue;
         }
 
@@ -685,7 +743,10 @@ fn build_replacement_properties(
     draft: &CalendarEventDraft,
     requested_start: &ParsedIcalDateTime,
     requested_end: &ParsedIcalDateTime,
+    schedule: Option<&EventScheduleContext>,
 ) -> Vec<String> {
+    let scheduled_event = schedule.is_some() && !draft.attendees.is_empty();
+    let attendees = build_outbound_attendees(Some(current_event), draft, scheduled_event);
     let mut lines = vec![
         format!("LAST-MODIFIED:{}", format_utc_ical(Utc::now())),
         format!("SEQUENCE:{}", current_event.sequence + 1),
@@ -711,13 +772,12 @@ fn build_replacement_properties(
     {
         lines.push(format!("RRULE:{}", rule.trim()));
     }
-    lines.extend(
-        draft
-            .attendees
-            .iter()
-            .map(format_attendee_property)
-            .collect::<Vec<_>>(),
-    );
+    if let Some(schedule) = schedule
+        && scheduled_event
+    {
+        lines.push(format_organizer_property(schedule));
+    }
+    lines.extend(attendees.iter().map(format_attendee_property));
     lines.push(format!(
         "STATUS:{}",
         current_event.status.as_deref().unwrap_or("CONFIRMED")
@@ -727,6 +787,195 @@ fn build_replacement_properties(
         current_event.transparency.as_deref().unwrap_or("OPAQUE")
     ));
     lines
+}
+
+fn rewrite_cancelled_master_event_block(
+    lines: &[String],
+    current_event: &CalendarEvent,
+    schedule: &EventScheduleContext,
+) -> anyhow::Result<Vec<String>> {
+    let mut result = Vec::new();
+    let mut inserted = false;
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("BEGIN:VEVENT") {
+            result.push(line.clone());
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("END:VEVENT") {
+            if !inserted {
+                result.extend(build_cancelled_properties(current_event, schedule));
+                inserted = true;
+            }
+            result.push(line.clone());
+            continue;
+        }
+
+        let Some((name, _, _)) = parse_ical_property(trimmed) else {
+            result.push(line.clone());
+            continue;
+        };
+
+        if name == "UID" {
+            result.push(line.clone());
+            if !inserted {
+                result.extend(build_cancelled_properties(current_event, schedule));
+                inserted = true;
+            }
+            continue;
+        }
+
+        if matches!(
+            name.as_str(),
+            "STATUS" | "LAST-MODIFIED" | "SEQUENCE" | "ORGANIZER"
+        ) {
+            continue;
+        }
+
+        result.push(line.clone());
+    }
+
+    if !inserted {
+        return Err(anyhow!("failed to rewrite VEVENT block"));
+    }
+
+    Ok(result)
+}
+
+fn build_cancelled_properties(
+    current_event: &CalendarEvent,
+    schedule: &EventScheduleContext,
+) -> Vec<String> {
+    vec![
+        format!("LAST-MODIFIED:{}", format_utc_ical(Utc::now())),
+        format!("SEQUENCE:{}", current_event.sequence + 1),
+        format_organizer_property(schedule),
+        "STATUS:CANCELLED".to_string(),
+    ]
+}
+
+fn is_managed_rewrite_property(name: &str, scheduled_event: bool) -> bool {
+    matches!(
+        name,
+        "SUMMARY"
+            | "DESCRIPTION"
+            | "LOCATION"
+            | "DTSTART"
+            | "DTEND"
+            | "DURATION"
+            | "STATUS"
+            | "TRANSP"
+            | "LAST-MODIFIED"
+            | "SEQUENCE"
+            | "ATTENDEE"
+            | "RRULE"
+    ) || (scheduled_event && name == "ORGANIZER")
+}
+
+fn rewrite_calendar_lines(
+    lines: &[String],
+    desired_method: Option<&str>,
+    method_inserted: &mut bool,
+) -> Vec<String> {
+    let mut rewritten = lines
+        .iter()
+        .filter(|line| {
+            parse_ical_property(line)
+                .map(|(name, _, _)| name != "METHOD")
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if !*method_inserted && let Some(method) = desired_method {
+        insert_calendar_method(&mut rewritten, method);
+        *method_inserted = true;
+    }
+
+    rewritten
+}
+
+fn insert_calendar_method(lines: &mut Vec<String>, method: &str) {
+    let mut insert_at = 0usize;
+
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("BEGIN:VCALENDAR") {
+            insert_at = index + 1;
+            continue;
+        }
+        if matches!(
+            parse_ical_property(trimmed).map(|(name, _, _)| name),
+            Some(name) if matches!(name.as_str(), "VERSION" | "PRODID" | "CALSCALE")
+        ) {
+            insert_at = index + 1;
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("BEGIN:VEVENT") {
+            break;
+        }
+    }
+
+    lines.insert(insert_at, format!("METHOD:{method}"));
+}
+
+fn build_outbound_attendees(
+    current_event: Option<&CalendarEvent>,
+    draft: &CalendarEventDraft,
+    scheduled_event: bool,
+) -> Vec<CalendarAttendeeInput> {
+    let current_attendees = current_event
+        .map(|event| {
+            event
+                .attendees
+                .iter()
+                .filter_map(|attendee| {
+                    attendee
+                        .email
+                        .as_ref()
+                        .map(|email| (normalize_attendee_email_key(email), attendee))
+                })
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+
+    draft
+        .attendees
+        .iter()
+        .map(|attendee| {
+            let existing = current_attendees
+                .get(&normalize_attendee_email_key(&attendee.email))
+                .copied();
+            CalendarAttendeeInput {
+                email: attendee.email.trim().to_string(),
+                common_name: trimmed_non_empty(attendee.common_name.as_deref())
+                    .or_else(|| existing.and_then(|value| value.common_name.clone())),
+                role: trimmed_non_empty(attendee.role.as_deref())
+                    .or_else(|| existing.and_then(|value| value.role.clone()))
+                    .or_else(|| scheduled_event.then_some("REQ-PARTICIPANT".to_string())),
+                partstat: trimmed_non_empty(attendee.partstat.as_deref())
+                    .or_else(|| existing.and_then(|value| value.partstat.clone()))
+                    .or_else(|| scheduled_event.then_some("NEEDS-ACTION".to_string())),
+                rsvp: if scheduled_event {
+                    true
+                } else {
+                    attendee.rsvp || existing.is_some_and(|value| value.rsvp)
+                },
+            }
+        })
+        .collect()
+}
+
+fn normalize_attendee_email_key(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
+}
+
+fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn parse_user_datetime(
@@ -928,6 +1177,20 @@ fn format_utc_ical(value: DateTime<Utc>) -> String {
 
 fn format_ical_text_property(name: &str, value: &str) -> String {
     format!("{name}:{}", escape_ical_text(value))
+}
+
+fn format_organizer_property(schedule: &EventScheduleContext) -> String {
+    let mut property = String::from("ORGANIZER");
+    if let Some(name) = schedule.organizer_name.as_deref()
+        && !name.trim().is_empty()
+    {
+        property.push_str(";CN=");
+        property.push_str(&escape_ical_param(name));
+    }
+    property.push(':');
+    property.push_str("MAILTO:");
+    property.push_str(schedule.organizer_email.trim());
+    property
 }
 
 fn format_attendee_property(attendee: &CalendarAttendeeInput) -> String {
@@ -1136,6 +1399,13 @@ mod tests {
     use super::*;
     use crate::calendar::types::CalendarEvent;
 
+    fn invite_schedule() -> EventScheduleContext {
+        EventScheduleContext {
+            organizer_name: Some("Spacebot".to_string()),
+            organizer_email: "bot@example.com".to_string(),
+        }
+    }
+
     fn recurring_event(timezone: Option<&str>) -> CalendarEvent {
         CalendarEvent {
             id: "event-1".to_string(),
@@ -1268,6 +1538,192 @@ mod tests {
     }
 
     #[test]
+    fn build_new_event_resource_adds_request_and_organizer_for_invites() {
+        let draft = CalendarEventDraft {
+            summary: "Team sync".to_string(),
+            description: Some("Agenda".to_string()),
+            location: None,
+            start_at: "2026-03-30T09:00".to_string(),
+            end_at: "2026-03-30T10:00".to_string(),
+            timezone: Some("Asia/Singapore".to_string()),
+            all_day: false,
+            recurrence_rule: None,
+            attendees: vec![CalendarAttendeeInput {
+                email: "alice@example.com".to_string(),
+                common_name: Some("Alice".to_string()),
+                role: None,
+                partstat: None,
+                rsvp: false,
+            }],
+        };
+
+        let raw_ics =
+            build_new_event_resource(&draft, "uid-team-sync", 0, Some(&invite_schedule()))
+                .expect("invite resource should build");
+
+        assert!(raw_ics.contains("METHOD:REQUEST\r\n"));
+        assert!(raw_ics.contains("ORGANIZER;CN=Spacebot:MAILTO:bot@example.com\r\n"));
+        assert!(raw_ics.contains(
+            "ATTENDEE;CN=Alice;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:MAILTO:alice@example.com\r\n"
+        ));
+    }
+
+    #[test]
+    fn update_existing_resource_preserves_attendee_partstat_for_invites() {
+        let current_event = CalendarEvent {
+            id: "event-1".to_string(),
+            resource_id: "resource-1".to_string(),
+            calendar_href: "https://example.com/cal/".to_string(),
+            remote_href: "https://example.com/cal/event-1.ics".to_string(),
+            remote_uid: "uid-team-sync".to_string(),
+            recurrence_id_utc: None,
+            summary: Some("Team sync".to_string()),
+            description: Some("Agenda".to_string()),
+            location: None,
+            status: Some("CONFIRMED".to_string()),
+            organizer_name: Some("Spacebot".to_string()),
+            organizer_email: Some("bot@example.com".to_string()),
+            start_at_utc: "2026-03-30T01:00:00+00:00".to_string(),
+            end_at_utc: "2026-03-30T02:00:00+00:00".to_string(),
+            timezone: Some("Asia/Singapore".to_string()),
+            all_day: false,
+            recurrence_rule: None,
+            recurrence_exdates_json: None,
+            sequence: 2,
+            transparency: Some("OPAQUE".to_string()),
+            etag: Some("\"etag-1\"".to_string()),
+            raw_ics: indoc::indoc! {"
+                BEGIN:VCALENDAR
+                VERSION:2.0
+                PRODID:-//Spacebot//Calendar//EN
+                CALSCALE:GREGORIAN
+                BEGIN:VEVENT
+                UID:uid-team-sync
+                DTSTAMP:20260329T010000Z
+                LAST-MODIFIED:20260329T010000Z
+                SEQUENCE:2
+                SUMMARY:Team sync
+                DTSTART;TZID=Asia/Singapore:20260330T090000
+                DTEND;TZID=Asia/Singapore:20260330T100000
+                ATTENDEE;CN=Alice;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE:MAILTO:alice@example.com
+                STATUS:CONFIRMED
+                TRANSP:OPAQUE
+                END:VEVENT
+                END:VCALENDAR
+            "}
+            .replace('\n', "\r\n"),
+            deleted: false,
+            attendees: vec![crate::calendar::CalendarAttendee {
+                id: "attendee-1".to_string(),
+                event_id: "event-1".to_string(),
+                email: Some("alice@example.com".to_string()),
+                common_name: Some("Alice".to_string()),
+                role: Some("REQ-PARTICIPANT".to_string()),
+                partstat: Some("ACCEPTED".to_string()),
+                rsvp: true,
+                is_organizer: false,
+            }],
+        };
+        let draft = CalendarEventDraft {
+            summary: "Team sync updated".to_string(),
+            description: Some("Agenda updated".to_string()),
+            location: None,
+            start_at: "2026-03-30T09:30".to_string(),
+            end_at: "2026-03-30T10:30".to_string(),
+            timezone: Some("Asia/Singapore".to_string()),
+            all_day: false,
+            recurrence_rule: None,
+            attendees: vec![CalendarAttendeeInput {
+                email: "alice@example.com".to_string(),
+                common_name: Some("Alice".to_string()),
+                role: None,
+                partstat: None,
+                rsvp: false,
+            }],
+        };
+
+        let updated = update_existing_resource(
+            &current_event.raw_ics,
+            &current_event,
+            &draft,
+            Some(&invite_schedule()),
+        )
+        .expect("invite update should build");
+
+        assert!(updated.contains("METHOD:REQUEST\r\n"));
+        assert!(updated.contains("SEQUENCE:3\r\n"));
+        assert!(updated.contains("ORGANIZER;CN=Spacebot:MAILTO:bot@example.com\r\n"));
+        assert!(updated.contains("PARTSTAT=ACCEPTED"));
+    }
+
+    #[test]
+    fn build_cancelled_resource_sets_cancel_method_and_status() {
+        let current_event = CalendarEvent {
+            id: "event-1".to_string(),
+            resource_id: "resource-1".to_string(),
+            calendar_href: "https://example.com/cal/".to_string(),
+            remote_href: "https://example.com/cal/event-1.ics".to_string(),
+            remote_uid: "uid-team-sync".to_string(),
+            recurrence_id_utc: None,
+            summary: Some("Team sync".to_string()),
+            description: Some("Agenda".to_string()),
+            location: None,
+            status: Some("CONFIRMED".to_string()),
+            organizer_name: Some("Spacebot".to_string()),
+            organizer_email: Some("bot@example.com".to_string()),
+            start_at_utc: "2026-03-30T01:00:00+00:00".to_string(),
+            end_at_utc: "2026-03-30T02:00:00+00:00".to_string(),
+            timezone: Some("Asia/Singapore".to_string()),
+            all_day: false,
+            recurrence_rule: None,
+            recurrence_exdates_json: None,
+            sequence: 2,
+            transparency: Some("OPAQUE".to_string()),
+            etag: Some("\"etag-1\"".to_string()),
+            raw_ics: indoc::indoc! {"
+                BEGIN:VCALENDAR
+                VERSION:2.0
+                PRODID:-//Spacebot//Calendar//EN
+                CALSCALE:GREGORIAN
+                BEGIN:VEVENT
+                UID:uid-team-sync
+                DTSTAMP:20260329T010000Z
+                LAST-MODIFIED:20260329T010000Z
+                SEQUENCE:2
+                SUMMARY:Team sync
+                DTSTART;TZID=Asia/Singapore:20260330T090000
+                DTEND;TZID=Asia/Singapore:20260330T100000
+                ATTENDEE;CN=Alice;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE:MAILTO:alice@example.com
+                STATUS:CONFIRMED
+                TRANSP:OPAQUE
+                END:VEVENT
+                END:VCALENDAR
+            "}
+            .replace('\n', "\r\n"),
+            deleted: false,
+            attendees: vec![crate::calendar::CalendarAttendee {
+                id: "attendee-1".to_string(),
+                event_id: "event-1".to_string(),
+                email: Some("alice@example.com".to_string()),
+                common_name: Some("Alice".to_string()),
+                role: Some("REQ-PARTICIPANT".to_string()),
+                partstat: Some("ACCEPTED".to_string()),
+                rsvp: true,
+                is_organizer: false,
+            }],
+        };
+
+        let cancelled =
+            build_cancelled_resource(&current_event.raw_ics, &current_event, &invite_schedule())
+                .expect("cancel resource should build");
+
+        assert!(cancelled.contains("METHOD:CANCEL\r\n"));
+        assert!(cancelled.contains("SEQUENCE:3\r\n"));
+        assert!(cancelled.contains("ORGANIZER;CN=Spacebot:MAILTO:bot@example.com\r\n"));
+        assert!(cancelled.contains("STATUS:CANCELLED\r\n"));
+    }
+
+    #[test]
     fn build_new_event_resource_rejects_non_positive_ranges() {
         let draft = CalendarEventDraft {
             summary: "Bad range".to_string(),
@@ -1281,8 +1737,8 @@ mod tests {
             attendees: Vec::new(),
         };
 
-        let error =
-            build_new_event_resource(&draft, "uid-bad-range", 0).expect_err("range should fail");
+        let error = build_new_event_resource(&draft, "uid-bad-range", 0, None)
+            .expect_err("range should fail");
         assert!(
             error
                 .to_string()

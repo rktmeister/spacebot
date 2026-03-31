@@ -1,9 +1,10 @@
 //! Calendar sync orchestration and proposal application.
 
 use crate::calendar::caldav::CalDavClient;
+use crate::calendar::google_meet::GoogleMeetClient;
 use crate::calendar::ics::{
-    build_new_event_resource, expand_occurrences, export_resources_to_ics,
-    normalize_timezone_label, update_existing_resource,
+    EventScheduleContext, build_cancelled_resource, build_new_event_resource, expand_occurrences,
+    export_resources_to_ics, normalize_timezone_label, update_existing_resource,
 };
 use crate::calendar::store::CalendarStore;
 use crate::calendar::types::{
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 
 const DEFAULT_SOURCE_ID: &str = "default";
+const GOOGLE_MEET_LINE_PREFIX: &str = "Google Meet: ";
 
 #[derive(Debug)]
 pub struct CalendarService {
@@ -455,7 +457,12 @@ impl CalendarService {
                     let uid = uuid::Uuid::new_v4().to_string();
                     let remote_href =
                         format!("{}/{}.ics", selected_href.trim_end_matches('/'), uid);
-                    let raw_ics = build_new_event_resource(&proposal.draft, &uid, 0)?;
+                    let draft = self
+                        .prepare_draft_for_remote_write(&config, None, &proposal.draft)
+                        .await?;
+                    let schedule =
+                        scheduling_context(&config, draft.attendees.len(), None::<&CalendarEvent>)?;
+                    let raw_ics = build_new_event_resource(&draft, &uid, 0, schedule.as_ref())?;
                     client
                         .put_resource(&remote_href, &raw_ics, None, true)
                         .await?;
@@ -471,8 +478,16 @@ impl CalendarService {
                         .get_event(event_id)
                         .await?
                         .ok_or_else(|| anyhow!("target calendar event no longer exists"))?;
-                    let updated_ics =
-                        update_existing_resource(&current.raw_ics, &current, &proposal.draft)?;
+                    let draft = self
+                        .prepare_draft_for_remote_write(&config, Some(&current), &proposal.draft)
+                        .await?;
+                    let schedule = scheduling_context(&config, draft.attendees.len(), Some(&current))?;
+                    let updated_ics = update_existing_resource(
+                        &current.raw_ics,
+                        &current,
+                        &draft,
+                        schedule.as_ref(),
+                    )?;
                     client
                         .put_resource(
                             &current.remote_href,
@@ -492,12 +507,19 @@ impl CalendarService {
                         .get_event(event_id)
                         .await?
                         .ok_or_else(|| anyhow!("target calendar event no longer exists"))?;
-                    client
-                        .delete_resource(
-                            &current.remote_href,
-                            proposal.basis_etag.as_deref().or(current.etag.as_deref()),
-                        )
-                        .await?;
+                    let etag = proposal.basis_etag.as_deref().or(current.etag.as_deref());
+                    if let Some(schedule) =
+                        scheduling_context(&config, current.attendees.len(), Some(&current))?
+                    {
+                        let cancelled_ics =
+                            build_cancelled_resource(&current.raw_ics, &current, &schedule)?;
+                        client
+                            .put_resource(&current.remote_href, &cancelled_ics, etag, false)
+                            .await?;
+                        client.delete_resource(&current.remote_href, None).await?;
+                    } else {
+                        client.delete_resource(&current.remote_href, etag).await?;
+                    }
                     expected_deleted_resource_href = Some(current.remote_href.clone());
                     force_full_sync_calendar_href = Some(current.calendar_href.clone());
                 }
@@ -616,6 +638,159 @@ impl CalendarService {
             .map(|timezone| timezone.trim().to_string())
             .filter(|timezone| !timezone.is_empty())
     }
+
+    fn build_google_meet_client(&self, config: &CalendarConfig) -> Result<GoogleMeetClient> {
+        let client_id = trimmed_config_value(config.google_meet_client_id.as_deref())
+            .ok_or_else(|| anyhow!("calendar.google_meet_client_id is required"))?;
+        let client_secret = trimmed_config_value(config.google_meet_client_secret.as_deref())
+            .ok_or_else(|| anyhow!("calendar.google_meet_client_secret is required"))?;
+        let refresh_token = trimmed_config_value(config.google_meet_refresh_token.as_deref())
+            .ok_or_else(|| anyhow!("calendar.google_meet_refresh_token is required"))?;
+        GoogleMeetClient::new(
+            client_id,
+            client_secret,
+            refresh_token,
+            config.google_meet_token_url.as_deref(),
+            config.google_meet_access_type,
+        )
+        .map_err(Into::into)
+    }
+
+    async fn create_google_meet_link(&self, config: &CalendarConfig) -> Result<String> {
+        let client = self.build_google_meet_client(config)?;
+        client.create_space().await.map_err(Into::into)
+    }
+
+    async fn prepare_draft_for_remote_write(
+        &self,
+        config: &CalendarConfig,
+        current_event: Option<&CalendarEvent>,
+        draft: &CalendarEventDraft,
+    ) -> Result<CalendarEventDraft> {
+        let existing_meet_url = extract_managed_google_meet_url(draft.description.as_deref())
+            .or_else(|| {
+                current_event
+                    .and_then(|event| extract_managed_google_meet_url(event.description.as_deref()))
+            });
+        let user_description = strip_managed_google_meet_line(draft.description.as_deref());
+        let meeting_url = if let Some(url) = existing_meet_url {
+            Some(url)
+        } else if config.google_meet_enabled && !draft.attendees.is_empty() {
+            Some(self.create_google_meet_link(config).await?)
+        } else {
+            None
+        };
+
+        let mut prepared = draft.clone();
+        prepared.description = render_description_with_google_meet(
+            user_description.as_deref(),
+            meeting_url.as_deref(),
+        );
+        Ok(prepared)
+    }
+}
+
+fn scheduling_context(
+    config: &CalendarConfig,
+    attendee_count: usize,
+    current_event: Option<&CalendarEvent>,
+) -> Result<Option<EventScheduleContext>> {
+    if attendee_count == 0 {
+        return Ok(None);
+    }
+
+    let organizer_name = current_event
+        .and_then(|event| trimmed_config_value(event.organizer_name.as_deref()))
+        .map(str::to_string)
+        .or_else(|| trimmed_config_value(config.organizer_name.as_deref()).map(str::to_string));
+    let organizer_email = current_event
+        .and_then(|event| trimmed_config_value(event.organizer_email.as_deref()))
+        .map(str::to_string)
+        .or_else(|| trimmed_config_value(config.organizer_email.as_deref()).map(str::to_string))
+        .ok_or_else(|| {
+            anyhow!("calendar.organizer_email is required for attendee-bearing events")
+        })?;
+
+    Ok(Some(EventScheduleContext {
+        organizer_name,
+        organizer_email,
+    }))
+}
+
+fn trimmed_config_value(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn extract_managed_google_meet_url(description: Option<&str>) -> Option<String> {
+    description
+        .into_iter()
+        .flat_map(str::lines)
+        .find_map(|line| {
+            let trimmed = line.trim();
+            trimmed
+                .strip_prefix(GOOGLE_MEET_LINE_PREFIX)
+                .map(str::trim)
+                .filter(|value| is_google_meet_url(value))
+                .map(ToOwned::to_owned)
+        })
+}
+
+fn strip_managed_google_meet_line(description: Option<&str>) -> Option<String> {
+    let Some(description) = description else {
+        return None;
+    };
+
+    let mut cleaned = Vec::new();
+    let mut previous_blank = false;
+    for line in description.lines() {
+        let trimmed = line.trim();
+        if trimmed
+            .strip_prefix(GOOGLE_MEET_LINE_PREFIX)
+            .is_some_and(|value| is_google_meet_url(value.trim()))
+        {
+            continue;
+        }
+
+        let blank = trimmed.is_empty();
+        if blank && (cleaned.is_empty() || previous_blank) {
+            continue;
+        }
+
+        cleaned.push(line.trim_end().to_string());
+        previous_blank = blank;
+    }
+
+    while cleaned.last().is_some_and(|line| line.trim().is_empty()) {
+        cleaned.pop();
+    }
+
+    (!cleaned.is_empty()).then_some(cleaned.join("\n"))
+}
+
+fn render_description_with_google_meet(
+    base_description: Option<&str>,
+    meeting_url: Option<&str>,
+) -> Option<String> {
+    match (
+        base_description
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        meeting_url.map(str::trim).filter(|value| !value.is_empty()),
+    ) {
+        (Some(description), Some(url)) => {
+            Some(format!("{description}\n\n{GOOGLE_MEET_LINE_PREFIX}{url}"))
+        }
+        (Some(description), None) => Some(description.to_string()),
+        (None, Some(url)) => Some(format!("{GOOGLE_MEET_LINE_PREFIX}{url}")),
+        (None, None) => None,
+    }
+}
+
+fn is_google_meet_url(value: &str) -> bool {
+    value
+        .trim()
+        .strip_prefix("https://meet.google.com/")
+        .is_some()
 }
 
 fn render_create_diff(draft: &CalendarEventDraft) -> String {
@@ -700,6 +875,7 @@ fn normalize_draft_timezone(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calendar::CalendarAttendee;
 
     fn calendar_collection(href: &str, sync_token: Option<&str>) -> CalendarCollection {
         CalendarCollection {
@@ -794,5 +970,90 @@ mod tests {
 
         let normalized = normalize_draft_timezone(draft, Some("Asia/Singapore"));
         assert_eq!(normalized.timezone.as_deref(), Some("Asia/Singapore"));
+    }
+
+    #[test]
+    fn scheduling_context_prefers_current_event_organizer() {
+        let config = CalendarConfig {
+            organizer_name: Some("Config Name".to_string()),
+            organizer_email: Some("config@example.com".to_string()),
+            ..CalendarConfig::default()
+        };
+        let current_event = CalendarEvent {
+            id: "event-1".to_string(),
+            resource_id: "resource-1".to_string(),
+            calendar_href: "https://example.com/cal/".to_string(),
+            remote_href: "https://example.com/cal/event-1.ics".to_string(),
+            remote_uid: "uid-1".to_string(),
+            recurrence_id_utc: None,
+            summary: Some("Team sync".to_string()),
+            description: None,
+            location: None,
+            status: Some("CONFIRMED".to_string()),
+            organizer_name: Some("Current Name".to_string()),
+            organizer_email: Some("current@example.com".to_string()),
+            start_at_utc: "2026-03-30T01:00:00+00:00".to_string(),
+            end_at_utc: "2026-03-30T02:00:00+00:00".to_string(),
+            timezone: Some("UTC".to_string()),
+            all_day: false,
+            recurrence_rule: None,
+            recurrence_exdates_json: None,
+            sequence: 0,
+            transparency: Some("OPAQUE".to_string()),
+            etag: None,
+            raw_ics: String::new(),
+            deleted: false,
+            attendees: vec![CalendarAttendee {
+                id: "attendee-1".to_string(),
+                event_id: "event-1".to_string(),
+                email: Some("alice@example.com".to_string()),
+                common_name: Some("Alice".to_string()),
+                role: Some("REQ-PARTICIPANT".to_string()),
+                partstat: Some("NEEDS-ACTION".to_string()),
+                rsvp: true,
+                is_organizer: false,
+            }],
+        };
+
+        let schedule = scheduling_context(&config, 1, Some(&current_event))
+            .expect("schedule context should build")
+            .expect("attendee-bearing events should schedule");
+
+        assert_eq!(schedule.organizer_name.as_deref(), Some("Current Name"));
+        assert_eq!(schedule.organizer_email, "current@example.com");
+    }
+
+    #[test]
+    fn scheduling_context_requires_organizer_email_for_attendees() {
+        let error = scheduling_context(&CalendarConfig::default(), 1, None::<&CalendarEvent>)
+            .expect_err("attendee-bearing events should require organizer_email");
+
+        assert!(
+            error
+                .to_string()
+                .contains("calendar.organizer_email is required for attendee-bearing events")
+        );
+    }
+
+    #[test]
+    fn managed_google_meet_line_round_trips_cleanly() {
+        let description = "Agenda line\n\nGoogle Meet: https://meet.google.com/abc-mnop-xyz\n";
+
+        assert_eq!(
+            extract_managed_google_meet_url(Some(description)).as_deref(),
+            Some("https://meet.google.com/abc-mnop-xyz")
+        );
+        assert_eq!(
+            strip_managed_google_meet_line(Some(description)).as_deref(),
+            Some("Agenda line")
+        );
+        assert_eq!(
+            render_description_with_google_meet(
+                Some("Agenda line"),
+                Some("https://meet.google.com/abc-mnop-xyz"),
+            )
+            .as_deref(),
+            Some("Agenda line\n\nGoogle Meet: https://meet.google.com/abc-mnop-xyz")
+        );
     }
 }

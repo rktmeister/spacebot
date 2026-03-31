@@ -1,5 +1,5 @@
 use super::state::ApiState;
-use crate::config::ClosePolicy;
+use crate::config::{ClosePolicy, GoogleMeetAccessType};
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -119,6 +119,13 @@ pub(super) struct CalendarSection {
     sync_interval_secs: u64,
     read_only: bool,
     has_ics_export_token: bool,
+    organizer_name: Option<String>,
+    has_organizer_email: bool,
+    google_meet_enabled: bool,
+    has_google_meet_client_id: bool,
+    has_google_meet_client_secret: bool,
+    has_google_meet_refresh_token: bool,
+    google_meet_access_type: String,
 }
 
 #[derive(Serialize, Debug, utoipa::ToSchema)]
@@ -290,6 +297,14 @@ pub(super) struct CalendarUpdate {
     sync_interval_secs: Option<u64>,
     read_only: Option<bool>,
     ics_export_token: Option<String>,
+    organizer_name: Option<String>,
+    organizer_email: Option<String>,
+    google_meet_enabled: Option<bool>,
+    google_meet_client_id: Option<String>,
+    google_meet_client_secret: Option<String>,
+    google_meet_refresh_token: Option<String>,
+    google_meet_token_url: Option<String>,
+    google_meet_access_type: Option<GoogleMeetAccessType>,
 }
 
 #[derive(Deserialize, Debug, utoipa::ToSchema)]
@@ -439,6 +454,29 @@ pub(super) async fn get_agent_config(
                 .as_deref()
                 .map(|value| !value.is_empty())
                 .unwrap_or(false),
+            organizer_name: calendar.organizer_name.clone(),
+            has_organizer_email: calendar
+                .organizer_email
+                .as_deref()
+                .map(|value| !value.is_empty())
+                .unwrap_or(false),
+            google_meet_enabled: calendar.google_meet_enabled,
+            has_google_meet_client_id: calendar
+                .google_meet_client_id
+                .as_deref()
+                .map(|value| !value.is_empty())
+                .unwrap_or(false),
+            has_google_meet_client_secret: calendar
+                .google_meet_client_secret
+                .as_deref()
+                .map(|value| !value.is_empty())
+                .unwrap_or(false),
+            has_google_meet_refresh_token: calendar
+                .google_meet_refresh_token
+                .as_deref()
+                .map(|value| !value.is_empty())
+                .unwrap_or(false),
+            google_meet_access_type: calendar.google_meet_access_type.to_string(),
         },
         discord: {
             let perms = state.discord_permissions.read().await;
@@ -1026,6 +1064,30 @@ fn update_calendar_table(
     }
     if let Some(ref v) = calendar.ics_export_token {
         set_optional_string(table, "ics_export_token", v);
+    }
+    if let Some(ref v) = calendar.organizer_name {
+        set_optional_string(table, "organizer_name", v);
+    }
+    if let Some(ref v) = calendar.organizer_email {
+        set_optional_string(table, "organizer_email", v);
+    }
+    if let Some(v) = calendar.google_meet_enabled {
+        table["google_meet_enabled"] = toml_edit::value(v);
+    }
+    if let Some(ref v) = calendar.google_meet_client_id {
+        set_optional_string(table, "google_meet_client_id", v);
+    }
+    if let Some(ref v) = calendar.google_meet_client_secret {
+        set_optional_string(table, "google_meet_client_secret", v);
+    }
+    if let Some(ref v) = calendar.google_meet_refresh_token {
+        set_optional_string(table, "google_meet_refresh_token", v);
+    }
+    if let Some(ref v) = calendar.google_meet_token_url {
+        set_optional_string(table, "google_meet_token_url", v);
+    }
+    if let Some(v) = calendar.google_meet_access_type {
+        table["google_meet_access_type"] = toml_edit::value(v.as_str());
     }
     Ok(())
 }

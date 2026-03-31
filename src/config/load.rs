@@ -14,12 +14,13 @@ use super::{
     AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, CalendarAuthKind, CalendarConfig,
     CalendarProviderKind, ChannelConfig, ClosePolicy, CoalesceConfig, CompactionConfig, Config,
     CortexConfig, CronDef, DefaultsConfig, DiscordConfig, DiscordInstanceConfig, EmailConfig,
-    EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig, LinkDef, LlmConfig, MattermostConfig,
-    MattermostInstanceConfig, McpServerConfig, McpTransport, MemoryPersistenceConfig,
-    MessagingConfig, MetricsConfig, OpenCodeConfig, ProjectsConfig, ProviderConfig, SignalConfig,
-    SignalInstanceConfig, SlackCommandConfig, SlackConfig, SlackInstanceConfig, TelegramConfig,
-    TelegramInstanceConfig, TelemetryConfig, TwitchConfig, TwitchInstanceConfig, WarmupConfig,
-    WebhookConfig, normalize_adapter, validate_named_messaging_adapters,
+    EmailInstanceConfig, GoogleMeetAccessType, GroupDef, HumanDef, IngestionConfig, LinkDef,
+    LlmConfig, MattermostConfig, MattermostInstanceConfig, McpServerConfig, McpTransport,
+    MemoryPersistenceConfig, MessagingConfig, MetricsConfig, OpenCodeConfig, ProjectsConfig,
+    ProviderConfig, SignalConfig, SignalInstanceConfig, SlackCommandConfig, SlackConfig,
+    SlackInstanceConfig, TelegramConfig, TelegramInstanceConfig, TelemetryConfig, TwitchConfig,
+    TwitchInstanceConfig, WarmupConfig, WebhookConfig, normalize_adapter,
+    validate_named_messaging_adapters,
 };
 use crate::error::{ConfigError, Result};
 
@@ -174,6 +175,19 @@ fn resolve_calendar_config(
         }
     };
 
+    let google_meet_access_type = match raw.google_meet_access_type.as_deref() {
+        None => defaults.google_meet_access_type,
+        Some("open") => GoogleMeetAccessType::Open,
+        Some("trusted") => GoogleMeetAccessType::Trusted,
+        Some("restricted") => GoogleMeetAccessType::Restricted,
+        Some(other) => {
+            return Err(ConfigError::Invalid(format!(
+                "calendar.google_meet_access_type must be 'open', 'trusted', or 'restricted' (got '{other}')"
+            ))
+            .into());
+        }
+    };
+
     Ok(CalendarConfig {
         enabled: raw.enabled.unwrap_or(defaults.enabled),
         provider_kind,
@@ -208,6 +222,40 @@ fn resolve_calendar_config(
             .as_deref()
             .and_then(resolve_env_value)
             .or_else(|| defaults.ics_export_token.clone()),
+        organizer_name: raw
+            .organizer_name
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.organizer_name.clone()),
+        organizer_email: raw
+            .organizer_email
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.organizer_email.clone()),
+        google_meet_enabled: raw
+            .google_meet_enabled
+            .unwrap_or(defaults.google_meet_enabled),
+        google_meet_client_id: raw
+            .google_meet_client_id
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.google_meet_client_id.clone()),
+        google_meet_client_secret: raw
+            .google_meet_client_secret
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.google_meet_client_secret.clone()),
+        google_meet_refresh_token: raw
+            .google_meet_refresh_token
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.google_meet_refresh_token.clone()),
+        google_meet_token_url: raw
+            .google_meet_token_url
+            .as_deref()
+            .and_then(resolve_env_value)
+            .or_else(|| defaults.google_meet_token_url.clone()),
+        google_meet_access_type,
         oauth2_client_id: raw
             .oauth2_client_id
             .as_deref()

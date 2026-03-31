@@ -258,6 +258,14 @@ pub fn runtime_snapshot_value(agent_id: &str, runtime_config: &RuntimeConfig) ->
             "sync_interval_secs": calendar.sync_interval_secs,
             "read_only": calendar.read_only,
             "ics_export_enabled": calendar.ics_export_enabled(),
+            "organizer_name": calendar.organizer_name,
+            "organizer_email_configured": calendar
+                .organizer_email
+                .as_deref()
+                .is_some_and(|value| !value.is_empty()),
+            "google_meet_enabled": calendar.google_meet_enabled,
+            "google_meet_configured": calendar.google_meet_configured(),
+            "google_meet_access_type": calendar.google_meet_access_type.to_string(),
             "oauth2_configured": calendar.oauth2_client_id.is_some()
                 || calendar.oauth2_client_secret.is_some()
                 || calendar.oauth2_refresh_token.is_some(),
