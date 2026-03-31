@@ -499,9 +499,8 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 					const dayOccurrences = groupedOccurrences.get(dayKey(currentDay, displayTimeZone)) ?? [];
 					const inMonth = currentDay.getMonth() === cursorDate.getMonth();
 					return (
-						<button
+						<div
 							key={currentDay.toISOString()}
-							type="button"
 							className={cx(
 								"flex min-h-0 flex-col border-b border-r border-app-line px-2 py-2 text-left transition-colors",
 								inMonth ? "bg-app-darkBox/10" : "bg-app-darkBox/5 text-ink-faint",
@@ -518,18 +517,29 @@ export function AgentCalendar({ agentId }: AgentCalendarProps) {
 							</div>
 							<div className="space-y-1 overflow-hidden">
 								{dayOccurrences.slice(0, 3).map((occurrence) => (
-									<div
+									<button
 										key={occurrence.occurrence_id}
-										className="truncate rounded-md border border-app-line bg-app-darkBox/70 px-2 py-1 text-xs text-ink"
+										type="button"
+										className={cx(
+											"block w-full truncate rounded-md border px-2 py-1 text-left text-xs transition-colors",
+											selectedOccurrence?.occurrence_id === occurrence.occurrence_id
+												? "border-accent bg-accent/12 text-ink"
+												: "border-app-line bg-app-darkBox/70 text-ink hover:bg-app-darkBox/85",
+										)}
+										onClick={(event) => {
+											event.stopPropagation();
+											setCursorDate(currentDay);
+											setSelectedOccurrence(occurrence);
+										}}
 									>
 										{occurrence.summary || "Untitled event"}
-									</div>
+									</button>
 								))}
 								{dayOccurrences.length > 3 && (
 									<div className="text-xs text-ink-faint">+{dayOccurrences.length - 3} more</div>
 								)}
 							</div>
-						</button>
+						</div>
 					);
 				})}
 			</div>
