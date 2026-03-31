@@ -1,6 +1,11 @@
 //! Calendar free-time discovery tool.
 
 use crate::calendar::CalendarService;
+use crate::config::RuntimeConfig;
+use crate::tools::calendar_display::{
+    CalendarAvailabilitySlotDisplay, availability_slot_display, display_timezone_label,
+    guidance_summary,
+};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
@@ -10,11 +15,15 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct CalendarFindFreeTimeTool {
     calendar_service: Arc<CalendarService>,
+    runtime_config: Arc<RuntimeConfig>,
 }
 
 impl CalendarFindFreeTimeTool {
-    pub fn new(calendar_service: Arc<CalendarService>) -> Self {
-        Self { calendar_service }
+    pub fn new(calendar_service: Arc<CalendarService>, runtime_config: Arc<RuntimeConfig>) -> Self {
+        Self {
+            calendar_service,
+            runtime_config,
+        }
     }
 }
 
@@ -35,7 +44,9 @@ pub struct CalendarFindFreeTimeArgs {
 #[derive(Debug, Serialize)]
 pub struct CalendarFindFreeTimeOutput {
     pub success: bool,
-    pub slots: Vec<crate::calendar::CalendarAvailabilitySlot>,
+    pub display_timezone: String,
+    pub summary: String,
+    pub slots: Vec<CalendarAvailabilitySlotDisplay>,
 }
 
 impl Tool for CalendarFindFreeTimeTool {
@@ -84,9 +95,17 @@ impl Tool for CalendarFindFreeTimeTool {
             .find_free_time(start_at, end_at, args.duration_minutes)
             .await
             .map_err(|error| CalendarFindFreeTimeError(error.to_string()))?;
+        let display_timezone = display_timezone_label(self.runtime_config.as_ref());
+        let slots = slots
+            .iter()
+            .map(|slot| availability_slot_display(self.runtime_config.as_ref(), slot))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(CalendarFindFreeTimeError)?;
 
         Ok(CalendarFindFreeTimeOutput {
             success: true,
+            display_timezone: display_timezone.clone(),
+            summary: guidance_summary(&display_timezone),
             slots,
         })
     }

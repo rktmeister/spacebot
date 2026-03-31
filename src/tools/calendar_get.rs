@@ -1,6 +1,10 @@
 //! Calendar event lookup tool.
 
 use crate::calendar::CalendarService;
+use crate::config::RuntimeConfig;
+use crate::tools::calendar_display::{
+    CalendarEventDisplay, display_timezone_label, event_display, guidance_summary,
+};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
@@ -10,11 +14,15 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct CalendarGetTool {
     calendar_service: Arc<CalendarService>,
+    runtime_config: Arc<RuntimeConfig>,
 }
 
 impl CalendarGetTool {
-    pub fn new(calendar_service: Arc<CalendarService>) -> Self {
-        Self { calendar_service }
+    pub fn new(calendar_service: Arc<CalendarService>, runtime_config: Arc<RuntimeConfig>) -> Self {
+        Self {
+            calendar_service,
+            runtime_config,
+        }
     }
 }
 
@@ -31,7 +39,9 @@ pub struct CalendarGetArgs {
 #[derive(Debug, Serialize)]
 pub struct CalendarGetOutput {
     pub success: bool,
-    pub event: crate::calendar::CalendarEvent,
+    pub display_timezone: String,
+    pub summary: String,
+    pub event: CalendarEventDisplay,
 }
 
 impl Tool for CalendarGetTool {
@@ -67,9 +77,14 @@ impl Tool for CalendarGetTool {
             .ok_or_else(|| {
                 CalendarGetError(format!("calendar event '{}' not found", args.event_id))
             })?;
+        let display_timezone = display_timezone_label(self.runtime_config.as_ref());
+        let event =
+            event_display(self.runtime_config.as_ref(), &event).map_err(CalendarGetError)?;
 
         Ok(CalendarGetOutput {
             success: true,
+            display_timezone: display_timezone.clone(),
+            summary: guidance_summary(&display_timezone),
             event,
         })
     }

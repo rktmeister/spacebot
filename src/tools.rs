@@ -34,6 +34,7 @@ pub mod browser;
 pub mod calendar_apply;
 pub mod calendar_create;
 pub mod calendar_delete;
+mod calendar_display;
 pub mod calendar_find_free_time;
 pub mod calendar_get;
 pub mod calendar_list;
@@ -587,9 +588,18 @@ pub fn create_branch_tool_server(
             channel_store,
             runtime_config.clone(),
         ))
-        .tool(CalendarListTool::new(calendar_service.clone()))
-        .tool(CalendarGetTool::new(calendar_service.clone()))
-        .tool(CalendarFindFreeTimeTool::new(calendar_service.clone()))
+        .tool(CalendarListTool::new(
+            calendar_service.clone(),
+            runtime_config.clone(),
+        ))
+        .tool(CalendarGetTool::new(
+            calendar_service.clone(),
+            runtime_config.clone(),
+        ))
+        .tool(CalendarFindFreeTimeTool::new(
+            calendar_service.clone(),
+            runtime_config.clone(),
+        ))
         .tool(CalendarCreateTool::new(calendar_service.clone()))
         .tool(CalendarUpdateTool::new(calendar_service.clone()))
         .tool(CalendarDeleteTool::new(calendar_service.clone()))
@@ -755,9 +765,18 @@ pub fn create_cortex_chat_tool_server(
             channel_store,
             runtime_config.clone(),
         ))
-        .tool(CalendarListTool::new(deps.calendar_service.clone()))
-        .tool(CalendarGetTool::new(deps.calendar_service.clone()))
-        .tool(CalendarFindFreeTimeTool::new(deps.calendar_service.clone()))
+        .tool(CalendarListTool::new(
+            deps.calendar_service.clone(),
+            runtime_config.clone(),
+        ))
+        .tool(CalendarGetTool::new(
+            deps.calendar_service.clone(),
+            runtime_config.clone(),
+        ))
+        .tool(CalendarFindFreeTimeTool::new(
+            deps.calendar_service.clone(),
+            runtime_config.clone(),
+        ))
         .tool(CalendarCreateTool::new(deps.calendar_service.clone()))
         .tool(CalendarUpdateTool::new(deps.calendar_service.clone()))
         .tool(CalendarDeleteTool::new(deps.calendar_service.clone()))

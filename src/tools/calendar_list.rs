@@ -1,6 +1,11 @@
 //! Calendar occurrence listing tool for branches and cortex chat.
 
 use crate::calendar::CalendarService;
+use crate::config::RuntimeConfig;
+use crate::tools::calendar_display::{
+    CalendarOccurrenceDisplay, display_timestamp, display_timezone_label, guidance_summary,
+    occurrence_display,
+};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
@@ -10,11 +15,15 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct CalendarListTool {
     calendar_service: Arc<CalendarService>,
+    runtime_config: Arc<RuntimeConfig>,
 }
 
 impl CalendarListTool {
-    pub fn new(calendar_service: Arc<CalendarService>) -> Self {
-        Self { calendar_service }
+    pub fn new(calendar_service: Arc<CalendarService>, runtime_config: Arc<RuntimeConfig>) -> Self {
+        Self {
+            calendar_service,
+            runtime_config,
+        }
     }
 }
 
@@ -40,10 +49,14 @@ fn default_limit() -> i32 {
 #[derive(Debug, Serialize)]
 pub struct CalendarListOutput {
     pub success: bool,
-    pub range_start: String,
-    pub range_end: String,
+    pub display_timezone: String,
+    pub summary: String,
+    pub range_start_utc: String,
+    pub range_end_utc: String,
+    pub range_start_display: String,
+    pub range_end_display: String,
     pub count: usize,
-    pub occurrences: Vec<crate::calendar::CalendarOccurrence>,
+    pub occurrences: Vec<CalendarOccurrenceDisplay>,
 }
 
 impl Tool for CalendarListTool {
@@ -103,11 +116,21 @@ impl Tool for CalendarListTool {
             .map_err(|error| CalendarListError(error.to_string()))?;
         let limit = usize::try_from(args.limit.clamp(1, 500)).unwrap_or(100);
         occurrences.truncate(limit);
+        let display_timezone = display_timezone_label(self.runtime_config.as_ref());
+        let occurrences = occurrences
+            .iter()
+            .map(|occurrence| occurrence_display(self.runtime_config.as_ref(), occurrence))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(CalendarListError)?;
 
         Ok(CalendarListOutput {
             success: true,
-            range_start: range_start.to_rfc3339(),
-            range_end: range_end.to_rfc3339(),
+            summary: guidance_summary(&display_timezone),
+            display_timezone,
+            range_start_utc: range_start.to_rfc3339(),
+            range_end_utc: range_end.to_rfc3339(),
+            range_start_display: display_timestamp(self.runtime_config.as_ref(), range_start),
+            range_end_display: display_timestamp(self.runtime_config.as_ref(), range_end),
             count: occurrences.len(),
             occurrences,
         })
