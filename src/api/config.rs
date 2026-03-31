@@ -121,6 +121,7 @@ pub(super) struct CalendarSection {
     has_ics_export_token: bool,
     organizer_name: Option<String>,
     has_organizer_email: bool,
+    smtp_invites_enabled: bool,
     google_meet_enabled: bool,
     has_google_meet_client_id: bool,
     has_google_meet_client_secret: bool,
@@ -299,6 +300,7 @@ pub(super) struct CalendarUpdate {
     ics_export_token: Option<String>,
     organizer_name: Option<String>,
     organizer_email: Option<String>,
+    smtp_invites_enabled: Option<bool>,
     google_meet_enabled: Option<bool>,
     google_meet_client_id: Option<String>,
     google_meet_client_secret: Option<String>,
@@ -460,6 +462,7 @@ pub(super) async fn get_agent_config(
                 .as_deref()
                 .map(|value| !value.is_empty())
                 .unwrap_or(false),
+            smtp_invites_enabled: calendar.smtp_invites_enabled,
             google_meet_enabled: calendar.google_meet_enabled,
             has_google_meet_client_id: calendar
                 .google_meet_client_id
@@ -1072,6 +1075,9 @@ fn update_calendar_table(
     }
     if let Some(ref v) = calendar.organizer_email {
         set_optional_string(table, "organizer_email", v);
+    }
+    if let Some(v) = calendar.smtp_invites_enabled {
+        table["smtp_invites_enabled"] = toml_edit::value(v);
     }
     if let Some(v) = calendar.google_meet_enabled {
         table["google_meet_enabled"] = toml_edit::value(v);

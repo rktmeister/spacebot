@@ -716,6 +716,7 @@ Channel/worker temporal context timezone precedence is:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | bool | false | Enable Email adapter |
+| `allow_channel_replies` | bool | true | Allow normal Spacebot replies/broadcasts over the email adapter |
 | `imap_host` | string | None | IMAP host (or `env:VAR_NAME`) |
 | `imap_port` | integer | 993 | IMAP port |
 | `imap_username` | string | None | IMAP username (or `env:VAR_NAME`) |
@@ -734,12 +735,17 @@ Channel/worker temporal context timezone precedence is:
 | `max_body_bytes` | integer | 262144 | Max inbound body bytes before truncation |
 | `max_attachment_bytes` | integer | 10485760 | Max attachment bytes to process metadata for |
 
+When `allow_channel_replies = false`, Spacebot can still poll IMAP and use the configured SMTP credentials for calendar invites, but it will not send normal conversational replies over the email adapter.
+
+`[messaging.email]` can also be configured as SMTP-only for calendar invite delivery. When `imap_host` is left empty, Spacebot does not start the email adapter or poll any inbox, but calendar invite delivery can still use the configured SMTP credentials.
+
 ### `[[messaging.email.instances]]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `name` | string | **required** | Instance selector used by bindings (`adapter = "name"`) |
 | `enabled` | bool | true | Enable this named instance |
+| `allow_channel_replies` | bool | true | Allow normal Spacebot replies/broadcasts over this email adapter |
 | `imap_host` | string | **required** | IMAP host (or `env:VAR_NAME`) |
 | `imap_port` | integer | 993 | IMAP port |
 | `imap_username` | string | **required** | IMAP username (or `env:VAR_NAME`) |

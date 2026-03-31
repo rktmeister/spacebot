@@ -435,6 +435,7 @@ pub(super) struct TomlCalendarConfig {
     pub(super) ics_export_token: Option<String>,
     pub(super) organizer_name: Option<String>,
     pub(super) organizer_email: Option<String>,
+    pub(super) smtp_invites_enabled: Option<bool>,
     pub(super) google_meet_enabled: Option<bool>,
     pub(super) google_meet_client_id: Option<String>,
     pub(super) google_meet_client_secret: Option<String>,
@@ -623,6 +624,8 @@ pub(super) struct TomlEmailConfig {
     pub(super) enabled: bool,
     #[serde(default = "default_email_allow_outbound")]
     pub(super) allow_outbound: bool,
+    #[serde(default = "default_email_allow_channel_replies")]
+    pub(super) allow_channel_replies: bool,
     pub(super) imap_host: Option<String>,
     #[serde(default = "default_email_imap_port")]
     pub(super) imap_port: u16,
@@ -660,6 +663,8 @@ pub(super) struct TomlEmailInstanceConfig {
     pub(super) enabled: bool,
     #[serde(default = "default_email_allow_outbound")]
     pub(super) allow_outbound: bool,
+    #[serde(default = "default_email_allow_channel_replies")]
+    pub(super) allow_channel_replies: bool,
     pub(super) imap_host: Option<String>,
     #[serde(default = "default_email_imap_port")]
     pub(super) imap_port: u16,
@@ -785,6 +790,10 @@ pub(super) fn default_email_imap_use_tls() -> bool {
 }
 
 pub(super) fn default_email_allow_outbound() -> bool {
+    true
+}
+
+pub(super) fn default_email_allow_channel_replies() -> bool {
     true
 }
 

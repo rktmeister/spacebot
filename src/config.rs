@@ -593,6 +593,42 @@ bind = "127.0.0.1"
         assert_eq!(config.api.bind, "0.0.0.0");
     }
 
+    #[test]
+    fn test_from_toml_allows_smtp_only_email_config() {
+        let toml = r#"
+[messaging.email]
+enabled = true
+allow_outbound = true
+allow_channel_replies = false
+smtp_host = "smtp.test.com"
+smtp_port = 587
+smtp_username = "bot@test.com"
+smtp_password = "smtp-pass"
+smtp_use_starttls = true
+from_address = "bot@test.com"
+"#;
+
+        let parsed: TomlConfig = toml::from_str(toml).expect("failed to parse test TOML");
+        let config = Config::from_toml(parsed, PathBuf::from(".")).expect("failed to build Config");
+
+        let email = config
+            .messaging
+            .email
+            .as_ref()
+            .expect("smtp-only email config should load");
+
+        assert!(email.enabled);
+        assert!(email.allow_outbound);
+        assert!(!email.allow_channel_replies);
+        assert_eq!(email.smtp_host, "smtp.test.com");
+        assert_eq!(email.smtp_username, "bot@test.com");
+        assert_eq!(email.from_address, "bot@test.com");
+        assert!(
+            email.imap_host.is_empty(),
+            "SMTP-only config should not require IMAP"
+        );
+    }
+
     /// Helper to build a minimal `SlackConfig` for permission tests.
     fn slack_config_with_dm_users(dm_allowed_users: Vec<String>) -> SlackConfig {
         SlackConfig {
@@ -1715,6 +1751,7 @@ maintenance_merge_similarity_threshold = 1.1
             email: Some(EmailConfig {
                 enabled: true,
                 allow_outbound: true,
+                allow_channel_replies: true,
                 imap_host: "imap.test.com".into(),
                 imap_port: 993,
                 imap_username: "user".into(),
@@ -1768,6 +1805,7 @@ maintenance_merge_similarity_threshold = 1.1
             email: Some(EmailConfig {
                 enabled: true,
                 allow_outbound: false,
+                allow_channel_replies: true,
                 imap_host: "imap.test.com".into(),
                 imap_port: 993,
                 imap_username: "user".into(),

@@ -3,8 +3,11 @@
 use crate::calendar::caldav::CalDavClient;
 use crate::calendar::google_meet::GoogleMeetClient;
 use crate::calendar::ics::{
-    EventScheduleContext, build_cancelled_resource, build_new_event_resource, expand_occurrences,
-    export_resources_to_ics, normalize_timezone_label, update_existing_resource,
+    EventScheduleContext, build_new_event_resource, expand_occurrences, export_resources_to_ics,
+    normalize_timezone_label, update_existing_resource,
+};
+use crate::calendar::invite_email::{
+    InviteEmail, build_cancel_invite_email, build_request_invite_email,
 };
 use crate::calendar::store::CalendarStore;
 use crate::calendar::types::{
@@ -14,6 +17,7 @@ use crate::calendar::types::{
 };
 use crate::config::{CalendarAuthKind, CalendarConfig, CalendarProviderKind, RuntimeConfig};
 use crate::error::Result;
+use crate::messaging::email::EmailAdapter;
 
 use anyhow::{Context as _, anyhow};
 use chrono::{DateTime, Duration, Utc};
@@ -451,6 +455,8 @@ impl CalendarService {
             let mut expected_create_uid = None;
             let mut expected_deleted_resource_href = None;
             let mut force_full_sync_calendar_href = None;
+            let mut mailer = None;
+            let mut pending_invites = Vec::new();
             match proposal.action {
                 CalendarProposalAction::Create => {
                     let selected_href = self.selected_calendar_href()?;
@@ -466,6 +472,16 @@ impl CalendarService {
                     client
                         .put_resource(&remote_href, &raw_ics, None, true)
                         .await?;
+                    if let Some(schedule) = schedule.as_ref() {
+                        if mailer.is_none() {
+                            mailer = self.build_invite_mailer(&config)?;
+                        }
+                        if let Some(invite_email) =
+                            build_request_invite_email(&draft, schedule, &raw_ics, false)?
+                        {
+                            pending_invites.push(invite_email);
+                        }
+                    }
                     expected_create_uid = Some((selected_href, uid));
                 }
                 CalendarProposalAction::Update => {
@@ -496,6 +512,16 @@ impl CalendarService {
                             false,
                         )
                         .await?;
+                    if let Some(schedule) = schedule.as_ref() {
+                        if mailer.is_none() {
+                            mailer = self.build_invite_mailer(&config)?;
+                        }
+                        if let Some(invite_email) =
+                            build_request_invite_email(&draft, schedule, &updated_ics, true)?
+                        {
+                            pending_invites.push(invite_email);
+                        }
+                    }
                 }
                 CalendarProposalAction::Delete => {
                     let event_id = proposal
@@ -508,17 +534,16 @@ impl CalendarService {
                         .await?
                         .ok_or_else(|| anyhow!("target calendar event no longer exists"))?;
                     let etag = proposal.basis_etag.as_deref().or(current.etag.as_deref());
-                    if let Some(schedule) =
-                        scheduling_context(&config, current.attendees.len(), Some(&current))?
-                    {
-                        let cancelled_ics =
-                            build_cancelled_resource(&current.raw_ics, &current, &schedule)?;
-                        client
-                            .put_resource(&current.remote_href, &cancelled_ics, etag, false)
-                            .await?;
-                        client.delete_resource(&current.remote_href, None).await?;
-                    } else {
-                        client.delete_resource(&current.remote_href, etag).await?;
+                    let schedule =
+                        scheduling_context(&config, current.attendees.len(), Some(&current))?;
+                    client.delete_resource(&current.remote_href, etag).await?;
+                    if let Some(schedule) = schedule.as_ref() {
+                        if mailer.is_none() {
+                            mailer = self.build_invite_mailer(&config)?;
+                        }
+                        if let Some(invite_email) = build_cancel_invite_email(&current, schedule)? {
+                            pending_invites.push(invite_email);
+                        }
                     }
                     expected_deleted_resource_href = Some(current.remote_href.clone());
                     force_full_sync_calendar_href = Some(current.calendar_href.clone());
@@ -547,6 +572,8 @@ impl CalendarService {
                     .into());
                 }
             }
+            self.send_pending_invites(mailer.as_ref(), pending_invites)
+                .await?;
             let applied_at = Utc::now().to_rfc3339();
             self.store
                 .update_proposal_status(
@@ -687,6 +714,81 @@ impl CalendarService {
             meeting_url.as_deref(),
         );
         Ok(prepared)
+    }
+
+    fn build_invite_mailer(&self, config: &CalendarConfig) -> Result<Option<EmailAdapter>> {
+        if !config.smtp_invites_enabled {
+            return Ok(None);
+        }
+
+        let email_config = self
+            .runtime_config
+            .email
+            .load()
+            .as_ref()
+            .clone()
+            .ok_or_else(|| {
+                anyhow!("calendar.smtp_invites_enabled requires messaging.email SMTP configuration")
+            })?;
+
+        if !email_config.enabled {
+            return Err(anyhow!(
+                "calendar.smtp_invites_enabled requires messaging.email.enabled = true"
+            )
+            .into());
+        }
+
+        if !email_config.allow_outbound {
+            return Err(anyhow!(
+                "calendar.smtp_invites_enabled requires messaging.email.allow_outbound = true"
+            )
+            .into());
+        }
+
+        EmailAdapter::from_config(&email_config).map(Some)
+    }
+
+    async fn send_pending_invites(
+        &self,
+        mailer: Option<&EmailAdapter>,
+        pending_invites: Vec<InviteEmail>,
+    ) -> Result<()> {
+        let Some(mailer) = mailer else {
+            return Ok(());
+        };
+
+        let mut failures = Vec::new();
+        for invite in pending_invites {
+            for recipient in &invite.recipients {
+                if let Err(error) = mailer
+                    .send_email(
+                        recipient,
+                        &invite.subject,
+                        invite.body.clone(),
+                        None,
+                        Vec::new(),
+                        Some((
+                            invite.attachment_name.clone(),
+                            invite.attachment_bytes.clone(),
+                            invite.attachment_mime_type.clone(),
+                        )),
+                    )
+                    .await
+                {
+                    failures.push(format!("{recipient}: {error}"));
+                }
+            }
+        }
+
+        if failures.is_empty() {
+            return Ok(());
+        }
+
+        Err(anyhow!(
+            "calendar event was written, but SMTP invite delivery failed: {}",
+            failures.join("; ")
+        )
+        .into())
     }
 }
 

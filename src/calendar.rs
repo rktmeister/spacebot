@@ -3,6 +3,7 @@
 pub mod caldav;
 pub mod google_meet;
 pub mod ics;
+pub mod invite_email;
 pub mod service;
 pub mod store;
 pub mod types;

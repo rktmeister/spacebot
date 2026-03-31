@@ -138,6 +138,8 @@ pub struct CalendarConfig {
     pub organizer_name: Option<String>,
     /// Organizer email used when Spacebot sends attendee-bearing invites.
     pub organizer_email: Option<String>,
+    /// Send attendee invites and cancellations over SMTP in addition to calendar writes.
+    pub smtp_invites_enabled: bool,
     /// Generate Google Meet links for attendee-bearing events.
     pub google_meet_enabled: bool,
     /// Google OAuth client ID for Meet link generation.
@@ -203,6 +205,7 @@ impl std::fmt::Debug for CalendarConfig {
             )
             .field("organizer_name", &self.organizer_name)
             .field("organizer_email", &self.organizer_email)
+            .field("smtp_invites_enabled", &self.smtp_invites_enabled)
             .field("google_meet_enabled", &self.google_meet_enabled)
             .field(
                 "google_meet_client_id",
@@ -257,6 +260,7 @@ impl Default for CalendarConfig {
             ics_export_token: None,
             organizer_name: None,
             organizer_email: None,
+            smtp_invites_enabled: false,
             google_meet_enabled: false,
             google_meet_client_id: None,
             google_meet_client_secret: None,
@@ -2722,6 +2726,7 @@ impl SystemSecrets for TelegramConfig {
 pub struct EmailConfig {
     pub enabled: bool,
     pub allow_outbound: bool,
+    pub allow_channel_replies: bool,
     pub imap_host: String,
     pub imap_port: u16,
     pub imap_username: String,
@@ -2748,6 +2753,7 @@ pub struct EmailInstanceConfig {
     pub name: String,
     pub enabled: bool,
     pub allow_outbound: bool,
+    pub allow_channel_replies: bool,
     pub imap_host: String,
     pub imap_port: u16,
     pub imap_username: String,
@@ -2773,6 +2779,7 @@ impl std::fmt::Debug for EmailInstanceConfig {
             .field("name", &self.name)
             .field("enabled", &self.enabled)
             .field("allow_outbound", &self.allow_outbound)
+            .field("allow_channel_replies", &self.allow_channel_replies)
             .field("imap_host", &self.imap_host)
             .field("imap_port", &self.imap_port)
             .field("imap_username", &"[REDACTED]")
@@ -2799,6 +2806,7 @@ impl std::fmt::Debug for EmailConfig {
         f.debug_struct("EmailConfig")
             .field("enabled", &self.enabled)
             .field("allow_outbound", &self.allow_outbound)
+            .field("allow_channel_replies", &self.allow_channel_replies)
             .field("imap_host", &self.imap_host)
             .field("imap_port", &self.imap_port)
             .field("imap_username", &"[REDACTED]")

@@ -369,9 +369,6 @@ pub fn build_new_event_resource(
         "PRODID:-//Spacebot//Calendar//EN".to_string(),
         "CALSCALE:GREGORIAN".to_string(),
     ];
-    if scheduled_event {
-        lines.push("METHOD:REQUEST".to_string());
-    }
     lines.extend([
         "BEGIN:VEVENT".to_string(),
         format!("UID:{uid}"),
@@ -422,8 +419,6 @@ pub fn update_existing_resource(
     let document = split_calendar_document(raw_ics);
     let mut updated_blocks = Vec::with_capacity(document.segments.len());
     let mut replaced = false;
-    let mut calendar_method_written = false;
-    let scheduled_event = schedule.is_some() && !draft.attendees.is_empty();
 
     let current_start = parse_user_datetime(
         &current_event.start_at_utc,
@@ -448,11 +443,9 @@ pub fn update_existing_resource(
 
     for segment in document.segments {
         match segment {
-            CalendarSegment::Lines(lines) => updated_blocks.extend(rewrite_calendar_lines(
-                &lines,
-                scheduled_event.then_some("REQUEST"),
-                &mut calendar_method_written,
-            )),
+            CalendarSegment::Lines(lines) => {
+                updated_blocks.extend(rewrite_calendar_lines(&lines));
+            }
             CalendarSegment::Event {
                 lines,
                 uid,
@@ -487,7 +480,24 @@ pub fn update_existing_resource(
     Ok(join_ical_lines(updated_blocks))
 }
 
-pub fn build_cancelled_resource(
+pub fn build_scheduling_message(raw_ics: &str, method: &str) -> anyhow::Result<String> {
+    let document = split_calendar_document(raw_ics);
+    let mut updated_blocks = Vec::with_capacity(document.segments.len());
+    let mut calendar_method_written = false;
+
+    for segment in document.segments {
+        match segment {
+            CalendarSegment::Lines(lines) => updated_blocks.extend(
+                rewrite_calendar_lines_with_method(&lines, method, &mut calendar_method_written),
+            ),
+            CalendarSegment::Event { lines, .. } => updated_blocks.extend(lines),
+        }
+    }
+
+    Ok(join_ical_lines(updated_blocks))
+}
+
+pub fn build_cancelled_scheduling_message(
     raw_ics: &str,
     current_event: &CalendarEvent,
     schedule: &EventScheduleContext,
@@ -499,11 +509,9 @@ pub fn build_cancelled_resource(
 
     for segment in document.segments {
         match segment {
-            CalendarSegment::Lines(lines) => updated_blocks.extend(rewrite_calendar_lines(
-                &lines,
-                Some("CANCEL"),
-                &mut calendar_method_written,
-            )),
+            CalendarSegment::Lines(lines) => updated_blocks.extend(
+                rewrite_calendar_lines_with_method(&lines, "CANCEL", &mut calendar_method_written),
+            ),
             CalendarSegment::Event {
                 lines,
                 uid,
@@ -873,12 +881,8 @@ fn is_managed_rewrite_property(name: &str, scheduled_event: bool) -> bool {
     ) || (scheduled_event && name == "ORGANIZER")
 }
 
-fn rewrite_calendar_lines(
-    lines: &[String],
-    desired_method: Option<&str>,
-    method_inserted: &mut bool,
-) -> Vec<String> {
-    let mut rewritten = lines
+fn rewrite_calendar_lines(lines: &[String]) -> Vec<String> {
+    lines
         .iter()
         .filter(|line| {
             parse_ical_property(line)
@@ -886,9 +890,17 @@ fn rewrite_calendar_lines(
                 .unwrap_or(true)
         })
         .cloned()
-        .collect::<Vec<_>>();
+        .collect()
+}
 
-    if !*method_inserted && let Some(method) = desired_method {
+fn rewrite_calendar_lines_with_method(
+    lines: &[String],
+    method: &str,
+    method_inserted: &mut bool,
+) -> Vec<String> {
+    let mut rewritten = rewrite_calendar_lines(lines);
+
+    if !*method_inserted {
         insert_calendar_method(&mut rewritten, method);
         *method_inserted = true;
     }
@@ -1538,7 +1550,7 @@ mod tests {
     }
 
     #[test]
-    fn build_new_event_resource_adds_request_and_organizer_for_invites() {
+    fn build_new_event_resource_keeps_organizer_and_omits_method_for_invites() {
         let draft = CalendarEventDraft {
             summary: "Team sync".to_string(),
             description: Some("Agenda".to_string()),
@@ -1561,7 +1573,7 @@ mod tests {
             build_new_event_resource(&draft, "uid-team-sync", 0, Some(&invite_schedule()))
                 .expect("invite resource should build");
 
-        assert!(raw_ics.contains("METHOD:REQUEST\r\n"));
+        assert!(!raw_ics.contains("METHOD:"));
         assert!(raw_ics.contains("ORGANIZER;CN=Spacebot:MAILTO:bot@example.com\r\n"));
         assert!(raw_ics.contains(
             "ATTENDEE;CN=Alice;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:MAILTO:alice@example.com\r\n"
@@ -1597,6 +1609,7 @@ mod tests {
                 VERSION:2.0
                 PRODID:-//Spacebot//Calendar//EN
                 CALSCALE:GREGORIAN
+                METHOD:REQUEST
                 BEGIN:VEVENT
                 UID:uid-team-sync
                 DTSTAMP:20260329T010000Z
@@ -1650,14 +1663,45 @@ mod tests {
         )
         .expect("invite update should build");
 
-        assert!(updated.contains("METHOD:REQUEST\r\n"));
+        assert!(!updated.contains("METHOD:"));
         assert!(updated.contains("SEQUENCE:3\r\n"));
         assert!(updated.contains("ORGANIZER;CN=Spacebot:MAILTO:bot@example.com\r\n"));
         assert!(updated.contains("PARTSTAT=ACCEPTED"));
     }
 
     #[test]
-    fn build_cancelled_resource_sets_cancel_method_and_status() {
+    fn build_scheduling_message_adds_request_method_for_email_delivery() {
+        let stored = indoc::indoc! {"
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            PRODID:-//Spacebot//Calendar//EN
+            CALSCALE:GREGORIAN
+            BEGIN:VEVENT
+            UID:uid-team-sync
+            DTSTAMP:20260329T010000Z
+            LAST-MODIFIED:20260329T010000Z
+            SEQUENCE:0
+            SUMMARY:Team sync
+            DTSTART;TZID=Asia/Singapore:20260330T090000
+            DTEND;TZID=Asia/Singapore:20260330T100000
+            ORGANIZER;CN=Spacebot:MAILTO:bot@example.com
+            ATTENDEE;CN=Alice;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:MAILTO:alice@example.com
+            STATUS:CONFIRMED
+            TRANSP:OPAQUE
+            END:VEVENT
+            END:VCALENDAR
+        "}
+        .replace('\n', "\r\n");
+
+        let request = build_scheduling_message(&stored, "REQUEST")
+            .expect("request scheduling ICS should build");
+
+        assert!(request.contains("METHOD:REQUEST\r\n"));
+        assert!(request.contains("ORGANIZER;CN=Spacebot:MAILTO:bot@example.com\r\n"));
+    }
+
+    #[test]
+    fn build_cancelled_scheduling_message_sets_cancel_method_and_status() {
         let current_event = CalendarEvent {
             id: "event-1".to_string(),
             resource_id: "resource-1".to_string(),
@@ -1713,9 +1757,12 @@ mod tests {
             }],
         };
 
-        let cancelled =
-            build_cancelled_resource(&current_event.raw_ics, &current_event, &invite_schedule())
-                .expect("cancel resource should build");
+        let cancelled = build_cancelled_scheduling_message(
+            &current_event.raw_ics,
+            &current_event,
+            &invite_schedule(),
+        )
+        .expect("cancel scheduling ICS should build");
 
         assert!(cancelled.contains("METHOD:CANCEL\r\n"));
         assert!(cancelled.contains("SEQUENCE:3\r\n"));

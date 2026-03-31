@@ -232,6 +232,9 @@ fn resolve_calendar_config(
             .as_deref()
             .and_then(resolve_env_value)
             .or_else(|| defaults.organizer_email.clone()),
+        smtp_invites_enabled: raw
+            .smtp_invites_enabled
+            .unwrap_or(defaults.smtp_invites_enabled),
         google_meet_enabled: raw
             .google_meet_enabled
             .unwrap_or(defaults.google_meet_enabled),
@@ -2164,6 +2167,7 @@ impl Config {
                             name: instance.name,
                             enabled: instance.enabled && has_credentials,
                             allow_outbound,
+                            allow_channel_replies: instance.allow_channel_replies,
                             imap_host: imap_host.unwrap_or_default(),
                             imap_port: instance.imap_port,
                             imap_username: imap_username_val,
@@ -2203,10 +2207,10 @@ impl Config {
                     .or_else(|| email.smtp_host.as_deref().and_then(resolve_env_value));
 
                 let allow_outbound = email.allow_outbound;
-                let has_default = imap_host.is_some()
-                    && imap_username.is_some()
-                    && imap_password.is_some()
-                    && (!allow_outbound || smtp_host.is_some());
+                let has_imap_default =
+                    imap_host.is_some() && imap_username.is_some() && imap_password.is_some();
+                let has_smtp_default = allow_outbound && smtp_host.is_some();
+                let has_default = has_imap_default || has_smtp_default;
 
                 if !has_default && instances.is_empty() {
                     return None;
@@ -2236,6 +2240,7 @@ impl Config {
                 Some(EmailConfig {
                     enabled: email.enabled,
                     allow_outbound,
+                    allow_channel_replies: email.allow_channel_replies,
                     imap_host,
                     imap_port: email.imap_port,
                     imap_username,

@@ -174,6 +174,7 @@ pub struct EmailAdapter {
     imap_password: String,
     imap_use_tls: bool,
     allow_outbound: bool,
+    allow_channel_replies: bool,
     smtp_host: String,
     smtp_port: u16,
     smtp_username: String,
@@ -199,6 +200,7 @@ impl std::fmt::Debug for EmailAdapter {
             .field("imap_password", &"[REDACTED]")
             .field("imap_use_tls", &self.imap_use_tls)
             .field("allow_outbound", &self.allow_outbound)
+            .field("allow_channel_replies", &self.allow_channel_replies)
             .field("smtp_host", &self.smtp_host)
             .field("smtp_port", &self.smtp_port)
             .field("smtp_username", &"[REDACTED]")
@@ -227,6 +229,7 @@ impl EmailAdapter {
         let email_config = EmailConfig {
             enabled: config.enabled,
             allow_outbound: config.allow_outbound,
+            allow_channel_replies: config.allow_channel_replies,
             imap_host: config.imap_host.clone(),
             imap_port: config.imap_port,
             imap_username: config.imap_username.clone(),
@@ -277,6 +280,7 @@ impl EmailAdapter {
             imap_password: config.imap_password.clone(),
             imap_use_tls: config.imap_use_tls,
             allow_outbound: config.allow_outbound,
+            allow_channel_replies: config.allow_channel_replies,
             smtp_host: config.smtp_host.clone(),
             smtp_port: config.smtp_port,
             smtp_username: config.smtp_username.clone(),
@@ -326,7 +330,7 @@ impl EmailAdapter {
             .ok_or_else(|| anyhow::anyhow!("outbound email delivery is disabled").into())
     }
 
-    async fn send_email(
+    pub(crate) async fn send_email(
         &self,
         recipient: &str,
         subject: &str,
@@ -394,7 +398,7 @@ impl Messaging for EmailAdapter {
     }
 
     fn supports_outbound_delivery(&self) -> bool {
-        self.allow_outbound
+        self.allow_outbound && self.allow_channel_replies
     }
 
     async fn start(&self) -> crate::Result<InboundStream> {
@@ -478,6 +482,15 @@ impl Messaging for EmailAdapter {
         message: &InboundMessage,
         response: OutboundResponse,
     ) -> crate::Result<()> {
+        if !self.allow_channel_replies {
+            tracing::info!(
+                adapter = %self.runtime_key,
+                conversation_id = %message.conversation_id,
+                "dropping email reply because channel replies are disabled"
+            );
+            return Ok(());
+        }
+
         let mut context = reply_context_from_message(message)?;
 
         match response {
@@ -578,6 +591,15 @@ impl Messaging for EmailAdapter {
     }
 
     async fn broadcast(&self, target: &str, response: OutboundResponse) -> crate::Result<()> {
+        if !self.allow_channel_replies {
+            tracing::info!(
+                adapter = %self.runtime_key,
+                recipient = %target,
+                "dropping email broadcast because channel replies are disabled"
+            );
+            return Ok(());
+        }
+
         let recipient = normalize_email_target(target)
             .ok_or_else(|| anyhow::anyhow!("invalid email target '{target}'"))?;
 
@@ -2318,6 +2340,7 @@ mod tests {
         EmailConfig {
             enabled: true,
             allow_outbound,
+            allow_channel_replies: true,
             imap_host: "imap.example.com".to_string(),
             imap_port: 993,
             imap_username: "bot@example.com".to_string(),
@@ -2427,6 +2450,43 @@ mod tests {
                 .contains("outbound email delivery is disabled"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn respond_is_suppressed_when_channel_replies_are_disabled() {
+        let mut config = test_email_config(true);
+        config.allow_channel_replies = false;
+        let adapter = EmailAdapter::from_config(&config).expect("email config should build");
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "email_reply_to".to_string(),
+            serde_json::Value::String("alice@example.com".to_string()),
+        );
+        metadata.insert(
+            "email_subject".to_string(),
+            serde_json::Value::String("Question".to_string()),
+        );
+
+        let message = InboundMessage {
+            id: "1".to_string(),
+            source: "email".to_string(),
+            adapter: None,
+            conversation_id: "email:test:thread".to_string(),
+            sender_id: "alice@example.com".to_string(),
+            agent_id: None,
+            content: MessageContent::Text("hello".to_string()),
+            timestamp: chrono::Utc::now(),
+            metadata,
+            formatted_author: None,
+        };
+
+        adapter
+            .respond(&message, OutboundResponse::Text("reply".to_string()))
+            .await
+            .expect("suppressed replies should no-op successfully");
+
+        assert!(!adapter.supports_outbound_delivery());
     }
 
     fn invite_email_fixture() -> String {

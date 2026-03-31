@@ -2687,6 +2687,7 @@ async fn initialize_agents(
             &config.instance_dir,
             agent_config,
             &config.defaults,
+            config.messaging.email.clone(),
             prompt_engine.clone(),
             identity,
             skills,

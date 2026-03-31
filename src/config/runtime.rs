@@ -5,9 +5,9 @@ use arc_swap::ArcSwap;
 
 use super::{
     BrowserConfig, CalendarConfig, ChannelConfig, CoalesceConfig, CompactionConfig, Config,
-    CortexConfig, DefaultsConfig, IngestionConfig, McpServerConfig, MemoryPersistenceConfig,
-    OpenCodeConfig, ResolvedAgentConfig, WarmupConfig, WarmupStatus, WorkReadiness,
-    evaluate_work_readiness,
+    CortexConfig, DefaultsConfig, EmailConfig, IngestionConfig, McpServerConfig,
+    MemoryPersistenceConfig, OpenCodeConfig, ResolvedAgentConfig, WarmupConfig, WarmupStatus,
+    WorkReadiness, evaluate_work_readiness,
 };
 use crate::llm::routing::RoutingConfig;
 use crate::tools::browser::SharedBrowserHandle;
@@ -39,6 +39,7 @@ pub struct RuntimeConfig {
     pub max_concurrent_workers: ArcSwap<usize>,
     pub browser_config: ArcSwap<BrowserConfig>,
     pub calendar: ArcSwap<CalendarConfig>,
+    pub email: ArcSwap<Option<EmailConfig>>,
     pub mcp: ArcSwap<Vec<McpServerConfig>>,
     pub history_backfill_count: ArcSwap<usize>,
     pub brave_search_key: ArcSwap<Option<String>>,
@@ -106,6 +107,7 @@ impl RuntimeConfig {
         instance_dir: &Path,
         agent_config: &ResolvedAgentConfig,
         defaults: &DefaultsConfig,
+        email: Option<EmailConfig>,
         prompts: crate::prompts::PromptEngine,
         identity: crate::identity::Identity,
         skills: crate::skills::SkillSet,
@@ -134,6 +136,7 @@ impl RuntimeConfig {
             max_concurrent_workers: ArcSwap::from_pointee(agent_config.max_concurrent_workers),
             browser_config: ArcSwap::from_pointee(agent_config.browser.clone()),
             calendar: ArcSwap::from_pointee(agent_config.calendar.clone()),
+            email: ArcSwap::from_pointee(email),
             mcp: ArcSwap::from_pointee(agent_config.mcp.clone()),
             history_backfill_count: ArcSwap::from_pointee(agent_config.history_backfill_count),
             brave_search_key: ArcSwap::from_pointee(agent_config.brave_search_key.clone()),
@@ -314,6 +317,7 @@ impl RuntimeConfig {
         }
         self.browser_config.store(Arc::new(resolved.browser));
         self.calendar.store(Arc::new(resolved.calendar));
+        self.email.store(Arc::new(config.messaging.email.clone()));
         self.mcp.store(Arc::new(new_mcp.clone()));
         self.history_backfill_count
             .store(Arc::new(resolved.history_backfill_count));

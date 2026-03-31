@@ -263,6 +263,7 @@ pub fn runtime_snapshot_value(agent_id: &str, runtime_config: &RuntimeConfig) ->
                 .organizer_email
                 .as_deref()
                 .is_some_and(|value| !value.is_empty()),
+            "smtp_invites_enabled": calendar.smtp_invites_enabled,
             "google_meet_enabled": calendar.google_meet_enabled,
             "google_meet_configured": calendar.google_meet_configured(),
             "google_meet_access_type": calendar
