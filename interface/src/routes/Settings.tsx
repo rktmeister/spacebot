@@ -467,10 +467,6 @@ export function Settings() {
 				setMessage({ text: "Base URL must contain '.openai.azure.com'", type: "error" });
 				return;
 			}
-			if (!keyInput.trim()) {
-				setMessage({ text: "API key is required for Azure", type: "error" });
-				return;
-			}
 		}
 
 		if (testedSignature !== currentSignature) {
@@ -1027,7 +1023,7 @@ export function Settings() {
 								</Button>
 							<Button
 								onClick={handleSave}
-								disabled={!azureBaseUrl.trim() || !azureApiVersion.trim() || !azureDeployment.trim()}
+								disabled={!azureBaseUrl.trim() || !azureApiVersion.trim() || !azureDeployment.trim() || !modelInput.trim()}
 								loading={updateMutation.isPending}
 								size="sm"
 							>
