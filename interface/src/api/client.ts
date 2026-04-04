@@ -1632,7 +1632,7 @@ export const api = {
 		}>;
 	},
 	startOpenAiOAuthBrowser: async (params: {model: string}) => {
-		const response = await fetch(`${getApiBase()}/providers/openai/oauth/browser/start`, {
+		const response = await fetch(`${getApiBase()}/providers/openai/browser-oauth/start`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -1646,7 +1646,7 @@ export const api = {
 	},
 	openAiOAuthBrowserStatus: async (state: string) => {
 		const response = await fetch(
-			`${getApiBase()}/providers/openai/oauth/browser/status?state=${encodeURIComponent(state)}`,
+			`${getApiBase()}/providers/openai/browser-oauth/status?state=${encodeURIComponent(state)}`,
 		);
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
@@ -1825,9 +1825,9 @@ export const api = {
 	},
 
 	// Raw config API
-	rawConfig: () => fetchJson<Types.RawConfigResponse>("/config/raw"),
+	rawConfig: () => fetchJson<Types.RawConfigResponse>("/settings/raw"),
 	updateRawConfig: async (content: string) => {
-		const response = await fetch(`${getApiBase()}/config/raw`, {
+		const response = await fetch(`${getApiBase()}/settings/raw`, {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ content }),
