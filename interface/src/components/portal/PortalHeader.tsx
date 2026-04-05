@@ -6,6 +6,8 @@ import {
 	Button,
 } from "@spacedrive/primitives";
 import {GearSix, ClockCounterClockwise} from "@phosphor-icons/react";
+import {useState} from "react";
+import {WorkersPanelContent} from "@/components/WorkersPanel";
 import {ConversationSettingsPanel} from "@/components/ConversationSettingsPanel";
 import {PortalHistoryPopover} from "./PortalHistoryPopover";
 import type {
@@ -13,11 +15,13 @@ import type {
 	ConversationSettings,
 } from "@/api/client";
 import type {PortalConversationSummary} from "@/api/types";
+import type {ActiveWorker} from "@/hooks/useChannelLiveState";
 
 interface PortalHeaderProps {
 	title: string;
 	modelLabel?: string;
 	responseMode?: string;
+	activeWorkers?: ActiveWorker[];
 
 	// Settings popover
 	showSettings: boolean;
@@ -45,6 +49,7 @@ export function PortalHeader({
 	title,
 	modelLabel,
 	responseMode,
+	activeWorkers = [],
 	showSettings,
 	onToggleSettings,
 	defaults,
@@ -63,6 +68,8 @@ export function PortalHeader({
 	showHistory,
 	onToggleHistory,
 }: PortalHeaderProps) {
+	const [showWorkers, setShowWorkers] = useState(false);
+
 	return (
 		<div className="flex items-center justify-between border-b border-app-line px-4 py-2">
 			<div className="flex items-center gap-2">
@@ -79,6 +86,24 @@ export function PortalHeader({
 					<span className="rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-400">
 						Mention Only
 					</span>
+				)}
+				{activeWorkers.length > 0 && (
+					<PopoverRoot open={showWorkers} onOpenChange={setShowWorkers}>
+						<PopoverTrigger asChild>
+							<Button variant="gray" size="md">
+								<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+								{activeWorkers.length} worker{activeWorkers.length !== 1 ? "s" : ""}
+							</Button>
+						</PopoverTrigger>
+						<PopoverContent
+							align="start"
+							sideOffset={8}
+							collisionPadding={16}
+							className="w-[420px] p-0"
+						>
+							<WorkersPanelContent />
+						</PopoverContent>
+					</PopoverRoot>
 				)}
 			</div>
 

@@ -276,7 +276,7 @@ export function AgentWorkers({agentId}: {agentId: string}) {
 	);
 }
 
-interface LiveWorker {
+export interface LiveWorker {
 	id: string;
 	task: string;
 	status: string;
@@ -373,7 +373,7 @@ function WorkerCard({
 
 type DetailTab = "opencode" | "transcript";
 
-function WorkerDetail({
+export function WorkerDetail({
 	detail,
 	liveWorker,
 	liveTranscript,

@@ -6,7 +6,6 @@ import { api, type ConversationDefaultsResponse, type ConversationSettings } fro
 import { PortalHeader } from "./PortalHeader";
 import { PortalTimeline } from "./PortalTimeline";
 import { PortalComposer } from "./PortalComposer";
-import { PortalActiveWorkers } from "./PortalActiveWorkers";
 import { PortalEmpty } from "./PortalEmpty";
 
 interface PortalPanelProps {
@@ -36,6 +35,15 @@ export function PortalPanel({ agentId }: PortalPanelProps) {
 	});
 
 	const conversations = conversationsData?.conversations ?? [];
+
+	// Auto-select the newest conversation on first load
+	useEffect(() => {
+		if (conversations.length === 0) return;
+		const isPlaceholder = activeConversationId === getPortalSessionId(agentId);
+		if (!isPlaceholder) return;
+		const newest = conversations[0];
+		if (newest) setActiveConversationId(newest.id);
+	}, [conversationsData, agentId]);
 
 	// Reset settings when switching conversations, hydrating from cached data
 	useEffect(() => {
@@ -159,6 +167,7 @@ export function PortalPanel({ agentId }: PortalPanelProps) {
 					title={agentDisplayName}
 					modelLabel={modelLabel}
 					responseMode={settings.response_mode}
+					activeWorkers={activeWorkers}
 					showSettings={showSettings}
 					onToggleSettings={setShowSettings}
 					defaults={defaults}
@@ -179,12 +188,6 @@ export function PortalPanel({ agentId }: PortalPanelProps) {
 					showHistory={showHistory}
 					onToggleHistory={setShowHistory}
 				/>
-
-				{activeWorkers.length > 0 && (
-					<div className="mx-4 mt-3 min-w-0">
-						<PortalActiveWorkers workers={activeWorkers} agentId={agentId} />
-					</div>
-				)}
 
 				{isEmpty ? (
 					<div className="flex flex-1 items-center justify-center py-10">

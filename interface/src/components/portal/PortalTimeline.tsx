@@ -1,8 +1,8 @@
-import { useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { MessageBubble } from "@spacedrive/ai";
-import { api, type TimelineItem, type WorkerListItem } from "@/api/client";
-import { PortalWorkerCard } from "./PortalWorkerCard";
+import {useEffect, useRef} from "react";
+import {useQuery} from "@tanstack/react-query";
+import {MessageBubble} from "@spacedrive/ai";
+import {api, type TimelineItem, type WorkerListItem} from "@/api/client";
+import {PortalWorkerCard} from "./PortalWorkerCard";
 
 interface PortalTimelineProps {
 	agentId: string;
@@ -24,7 +24,7 @@ function ThinkingIndicator() {
 /** Synthesize a minimal WorkerListItem from a timeline item when the workers
  * list hasn't caught up yet. */
 function synthesizeWorker(
-	item: Extract<TimelineItem, { type: "worker_run" }>,
+	item: Extract<TimelineItem, {type: "worker_run"}>,
 	channelId: string,
 ): WorkerListItem {
 	return {
@@ -58,7 +58,7 @@ export function PortalTimeline({
 	// Fetch workers for this channel to resolve worker_run items.
 	const workersQuery = useQuery({
 		queryKey: ["portal-workers", agentId, conversationId],
-		queryFn: () => api.workersList(agentId, { limit: 20 }),
+		queryFn: () => api.workersList(agentId, {limit: 20}),
 		enabled: Boolean(conversationId),
 		refetchInterval: 2000,
 	});
@@ -93,7 +93,7 @@ export function PortalTimeline({
 
 		if (shouldAutoScroll) {
 			requestAnimationFrame(() => {
-				element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
+				element.scrollTo({top: element.scrollHeight, behavior: "auto"});
 			});
 		}
 
@@ -106,7 +106,7 @@ export function PortalTimeline({
 
 	return (
 		<div ref={scrollRef} className="flex-1 overflow-x-hidden overflow-y-auto">
-			<div className="mx-auto flex max-w-3xl flex-col gap-2 px-4 py-6 pb-32">
+			<div className="mx-auto flex max-w-3xl flex-col gap-2 px-4 py-6 pb-[180px]">
 				{visibleItems.map((item) => {
 					if (item.type === "message") {
 						return (

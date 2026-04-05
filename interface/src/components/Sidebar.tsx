@@ -25,6 +25,7 @@ import { House, TreeStructure, Wrench, CheckSquare, GearSix, DotsThree, ChatCirc
 import { CircleButton, SelectPill } from "@spacedrive/primitives";
 import { CreateAgentDialog } from "@/components/CreateAgentDialog";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
+import { WorkersPanelButton } from "@/components/WorkersPanel";
 
 interface SidebarProps {
 	liveStates: Record<string, ChannelLiveState>;
@@ -344,7 +345,8 @@ export function Sidebar({ liveStates: _liveStates }: SidebarProps) {
 			</div>
 
 			{/* Footer */}
-			<div className="flex shrink-0 items-center border-t border-app-line/30 px-3 py-2">
+			<div className="flex shrink-0 items-center justify-between border-t border-app-line/30 px-3 py-2">
+				<WorkersPanelButton />
 				<Link to="/settings">
 					<CircleButton
 						icon={GearSix}
