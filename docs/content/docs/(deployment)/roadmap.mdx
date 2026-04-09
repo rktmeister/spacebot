@@ -48,6 +48,22 @@ The full message-in → LLM → response-out pipeline is wired end-to-end across
 - **Hosted platform** — control plane, dashboard, marketing site. Instance provisioning, auth, reverse proxy to private instances over WireGuard mesh.
 - **Ingestion pipeline** — file watcher on `agents/{id}/ingest/`, chunking, per-chunk worker with INGESTION.md prompt, memory extraction, cleanup to `ingest/done/`
 - **Agent CLI** — `spacebot agents list/create/delete`, identity template bootstrapping
+- **Secrets store** — instance-level credential storage in `secrets.redb` with two categories (system/tool), `secret:` config resolution, auto-migration from plaintext config, and optional AES-256-GCM encryption at rest with OS keystore integration. See [Secret Store](/docs/secrets).
+- **Streaming** — `prompt_once_streaming` on SpacebotHook with token-by-token `WorkerText` deltas. OpenAI Responses API SSE streaming with function call deltas, text deltas, and reasoning summaries. Channels use streaming.
+- **Portal** — webchat renamed to portal. Modular PortalPanel/Timeline/Composer/Header. Conversation persistence with full CRUD, file attachments with multipart upload and drag-and-drop, conversation settings with model overrides, memory modes, and delegation. See [Portal](/docs/portal).
+- **Wiki** — full wiki system: SQLite-backed pages with versioning, tolerant multi-pass edit matching, 6 tools (create/edit/read/list/search/history), REST API, frontend with page browser, viewer, and wiki-link navigation. See [Wiki](/docs/wiki).
+- **Notifications** — SQLite store, API endpoints, SSE real-time broadcasting, `useNotifications` hook with optimistic dismiss, task approval and worker failure notifications. See [Notifications](/docs/notifications).
+- **Projects** — elevated from per-agent to instance level. Migration with full dedup logic, dropped `agent_id` from the projects table. Auto logo detection scanning `.github/`, `public/`, `src-tauri/`. See [Projects](/docs/projects).
+- **Token usage tracking** — `token_usage` table with `UsageAccumulator` flushed per-process, wired to the dashboard chart
+- **Conversation settings** — `ConversationSettings` struct with memory mode, delegation, worker context, model selection. Per-channel persistence via `ChannelSettingsStore` with resolution chain. `ModelOverrides` threaded through all process types. Settings hot-reload via `ProcessEvent::SettingsUpdated`.
+- **Channel settings unification** — `ResponseMode` enum (Active/Observe/MentionOnly) replacing the old `listen_only_mode` system. Per-channel persistence, `[bindings.settings]` TOML support, slash commands that persist to DB.
+- **Direct mode** — channels can get full worker-level tools (shell, file, browser, wiki, web search, memory) with tool calls rendered in the portal timeline
+- **Tool-use enforcement** — configurable per-model prompt injection across all process types
+- **Built-in skills** — compiled into the binary via `include_str!`, starting with a wiki-writing skill
+- **Azure OpenAI provider** — full Azure deployment support with endpoint/API version/deployment config
+- **Cron improvements** — wall-clock cron expression support, `set_outcome` tool for clean delivery, persistent `next_run_at` cursor, claim-before-run scheduling, separate execution/delivery outcome tracking
+- **Tool nudging** — `SpacebotHook` injects "use your tools" when the LLM responds with text instead of tool calls in early iterations
+- **Prometheus metrics** — feature-gated metrics endpoint with LLM usage, cost estimation, tool calls, worker/branch gauges, and memory operations. See [Metrics](/docs/metrics).
 
 ## In Progress
 
@@ -55,13 +71,8 @@ The full message-in → LLM → response-out pipeline is wired end-to-end across
 - **Memory merge** — `merge_similar_memories()` is a no-op placeholder
 - **Cortex observe()** — extracts some event types but hardcodes `memory_type` and `importance` values instead of pulling from actual event data
 - **CortexHook** — all hook methods are trace-only passthrough, no observation logic
-- **Secrets store** — empty struct, no redb/AES-256-GCM integration
 
 ## Upcoming
-
-### Streaming
-
-`SpacebotModel.stream()` is implemented with provider SSE parsing. Remaining work is wiring stream-native Rig loops (`stream_prompt`) into runtime paths that still use non-streaming `.prompt(...)` calls (for example, cortex chat and channel loops).
 
 ### Cortex Consolidation
 
@@ -71,13 +82,9 @@ The full message-in → LLM → response-out pipeline is wired end-to-end across
 - Wire real values into `observe()` signal extraction
 - Implement CortexHook observation logic (anomaly detection, consolidation triggers)
 
-### ~~Secrets Store~~ ✓ Shipped
+### Cost Tracking — Budget Enforcement
 
-Implemented. Per-agent credential storage in `secrets.redb` with two categories (system/tool), `secret:` config resolution, auto-migration from plaintext config, and optional AES-256-GCM encryption at rest with OS keystore integration. See [Secret Store](/docs/secrets).
-
-### Cost Tracking
-
-Per-agent token usage and cost tracking with budget enforcement. Session, daily, and monthly aggregates stored in redb. Per-model breakdown so you can see what's expensive. Warning threshold at configurable percentage, hard block when budget is exceeded — the agent gets a clean error instead of a provider 429. Essential for the hosted platform's pricing model and for self-hosted users who want to cap spend.
+Token usage tracking is shipped (see Completed). Remaining: budget enforcement with warning thresholds and hard blocks, session/daily/monthly aggregates, per-model breakdown in the dashboard.
 
 ### Hardening
 
@@ -86,14 +93,7 @@ Per-agent token usage and cost tracking with budget enforcement. Session, daily,
 - **SSRF protection** — block private IP ranges (RFC1918, link-local, loopback), IPv4-mapped IPv6 bypasses, and shared address space in browser and HTTP tools. Require domain allowlists for outbound requests from workers.
 - **Error message sanitization** — scrub API keys and tokens from provider error messages before they hit logs or the UI. Leak detection catches tool output, but provider errors can also contain credentials when auth fails.
 - **Audit logging** — structured JSONL trail of security-relevant events (command execution, file access, policy violations). Rotation by size. Pairs with autonomy levels to give visibility into what the agent did and whether it was approved.
-- Tool nudging — inject "use your tools" in `SpacebotHook.on_completion_response()` when LLM responds with text in early iterations
 - Outbound HTTP leak scanning — block exfiltration via tool output before it reaches external services
-
-### Observability
-
-- OpenTelemetry trace + metrics export (OTLP)
-- Prometheus metrics endpoint on the control API
-- Structured per-agent metrics: token usage, tool call counts, latency percentiles, memory operations
 
 ### Additional Channel Adapters
 
