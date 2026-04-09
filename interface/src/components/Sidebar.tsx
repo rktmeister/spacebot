@@ -351,7 +351,7 @@ export function Sidebar({liveStates: _liveStates}: SidebarProps) {
 							</Link>
 						</div>
 						<div className="space-y-0.5">
-							{projects.map((project) => {
+							{projects.slice(0, 5).map((project) => {
 								const logoUrl = project.logo_path
 									? `${getApiBase()}/agents/projects/${encodeURIComponent(project.id)}/logo`
 									: null;
@@ -385,7 +385,7 @@ export function Sidebar({liveStates: _liveStates}: SidebarProps) {
 												{project.name}
 											</div>
 											{project.description && (
-												<div className="text-sidebar-inkDull truncate text-xs">
+												<div className="text-ink-faint truncate text-[11px]">
 													{project.description}
 												</div>
 											)}
@@ -393,6 +393,16 @@ export function Sidebar({liveStates: _liveStates}: SidebarProps) {
 									</Link>
 								);
 							})}
+							{projects.length > 5 && (
+								<Link
+									to="/projects"
+									className="flex w-full items-center px-2 py-1"
+								>
+									<span className="text-[11px] text-ink-faint">
+										{projects.length - 5} more project{projects.length - 5 !== 1 ? "s" : ""}
+									</span>
+								</Link>
+							)}
 						</div>
 					</section>
 				)}
