@@ -310,6 +310,8 @@ impl PromptEngine {
         tool_secret_names: &[String],
         browser_persist_session: bool,
         status_text: Option<String>,
+        wiki_enabled: bool,
+        project_context: Option<String>,
     ) -> Result<String> {
         self.render(
             "worker",
@@ -323,17 +325,25 @@ impl PromptEngine {
                 tool_secret_names => tool_secret_names,
                 browser_persist_session => browser_persist_session,
                 status_text => status_text,
+                wiki_enabled => wiki_enabled,
+                project_context => project_context,
             },
         )
     }
 
     /// Render the branch system prompt with filesystem context.
-    pub fn render_branch_prompt(&self, instance_dir: &str, workspace_dir: &str) -> Result<String> {
+    pub fn render_branch_prompt(
+        &self,
+        instance_dir: &str,
+        workspace_dir: &str,
+        wiki_enabled: bool,
+    ) -> Result<String> {
         self.render(
             "branch",
             context! {
                 instance_dir => instance_dir,
                 workspace_dir => workspace_dir,
+                wiki_enabled => wiki_enabled,
             },
         )
     }
@@ -557,6 +567,7 @@ impl PromptEngine {
             None,
             None,
             None,
+            false,
         )
     }
 
@@ -666,6 +677,7 @@ impl PromptEngine {
         backfill_transcript: Option<String>,
         working_memory: Option<String>,
         channel_activity_map: Option<String>,
+        direct_mode: bool,
     ) -> Result<String> {
         // During the transition, the bulletin is also exposed as knowledge_synthesis
         // so the template can render it under the new heading.
@@ -690,6 +702,7 @@ impl PromptEngine {
                 working_memory => working_memory,
                 channel_activity_map => channel_activity_map,
                 knowledge_synthesis => knowledge_synthesis,
+                direct_mode => direct_mode,
             },
         )
     }

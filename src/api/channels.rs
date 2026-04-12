@@ -708,10 +708,7 @@ pub(super) async fn inspect_prompt(
         use crate::prompts::engine::{ProjectContext, ProjectRepoContext, ProjectWorktreeContext};
         let store = &channel_state.deps.project_store;
         let projects = store
-            .list_projects(
-                &channel_state.deps.agent_id,
-                Some(crate::projects::ProjectStatus::Active),
-            )
+            .list_projects(Some(crate::projects::ProjectStatus::Active))
             .await
             .unwrap_or_default();
         if projects.is_empty() {
@@ -780,6 +777,7 @@ pub(super) async fn inspect_prompt(
             None, // backfill_transcript — only set during channel initialization
             empty_to_none(working_memory),
             empty_to_none(channel_activity_map),
+            false, // direct_mode — resolved at runtime by the channel, not available here
         )
         .unwrap_or_default();
 
@@ -1032,7 +1030,10 @@ pub(super) async fn get_channel_settings(
     channel_store
         .get(&channel_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(|error| {
+            tracing::error!(%error, %channel_id, "failed to load channel for settings fetch");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let store = crate::conversation::ChannelSettingsStore::new(pool.clone());
@@ -1077,7 +1078,10 @@ pub(super) async fn update_channel_settings(
     channel_store
         .get(&channel_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(|error| {
+            tracing::error!(%error, %channel_id, "failed to load channel for settings update");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let store = crate::conversation::ChannelSettingsStore::new(pool.clone());
