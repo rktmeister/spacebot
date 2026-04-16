@@ -22,6 +22,17 @@ use super::{
     TwitchInstanceConfig, WarmupConfig, WebhookConfig, normalize_adapter,
     validate_named_messaging_adapters,
 };
+use super::{
+    AgentConfig, ApiConfig, ApiType, Binding, BrowserConfig, ChannelConfig, ClosePolicy,
+    CoalesceConfig, CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
+    DiscordInstanceConfig, EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig,
+    LinkDef, LlmConfig, MattermostConfig, MattermostInstanceConfig, McpServerConfig, McpTransport,
+    MemoryPersistenceConfig, MessagingConfig, MetricsConfig, OpenCodeConfig,
+    ParticipantContextConfig, ProjectsConfig, ProviderConfig, SignalConfig, SignalInstanceConfig,
+    SlackCommandConfig, SlackConfig, SlackInstanceConfig, TelegramConfig, TelegramInstanceConfig,
+    TelemetryConfig, TwitchConfig, TwitchInstanceConfig, WarmupConfig, WebhookConfig,
+    normalize_adapter, validate_named_messaging_adapters,
+};
 use crate::error::{ConfigError, Result};
 
 use anyhow::Context as _;
@@ -111,6 +122,40 @@ pub(super) fn warn_unknown_config_keys(content: &str) {
                  or consult the configuration reference."
             );
         }
+    }
+}
+
+/// Parse response_mode from TOML, with backwards compatibility for listen_only_mode.
+fn parse_response_mode(
+    response_mode: Option<&str>,
+    listen_only_mode: Option<bool>,
+) -> Option<crate::conversation::settings::ResponseMode> {
+    use crate::conversation::settings::ResponseMode;
+
+    if let Some(mode) = response_mode {
+        return match mode {
+            "active" => Some(ResponseMode::Active),
+            "observe" | "quiet" => Some(ResponseMode::Observe),
+            "mention_only" => Some(ResponseMode::MentionOnly),
+            unknown => {
+                tracing::warn!(
+                    response_mode = unknown,
+                    "unknown response_mode value, ignoring"
+                );
+                None
+            }
+        };
+    }
+    // Backwards compat: listen_only_mode maps to response_mode
+    match listen_only_mode {
+        Some(true) => {
+            tracing::warn!(
+                "listen_only_mode is deprecated, use response_mode = \"observe\" instead"
+            );
+            Some(ResponseMode::Observe)
+        }
+        Some(false) => Some(ResponseMode::Active),
+        None => None,
     }
 }
 
@@ -599,6 +644,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: anthropic_from_auth_token,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -612,6 +659,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: openrouter_extra_headers(),
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -683,6 +732,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -696,6 +747,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -709,6 +762,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -722,6 +777,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: openrouter_extra_headers(),
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -763,6 +820,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -776,6 +835,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -789,6 +850,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -802,6 +865,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -815,6 +880,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -828,6 +895,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -841,6 +910,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -854,6 +925,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -867,6 +940,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -880,6 +955,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -893,6 +970,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -906,6 +985,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -919,6 +1000,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -935,6 +1018,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -989,6 +1074,7 @@ impl Config {
             max_turns: None,
             branch_max_turns: None,
             context_window: None,
+            tool_use_enforcement: None,
             compaction: None,
             memory_persistence: None,
             coalesce: None,
@@ -1262,6 +1348,8 @@ impl Config {
                             name: config.name,
                             use_bearer_auth: false,
                             extra_headers,
+                            api_version: config.api_version,
+                            deployment: config.deployment,
                         },
                     ))
                 })
@@ -1288,6 +1376,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: anthropic_from_auth_token,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1301,6 +1391,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1314,6 +1406,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: openrouter_extra_headers(),
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1385,6 +1479,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1398,6 +1494,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1411,6 +1509,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1424,6 +1524,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1437,6 +1539,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1450,6 +1554,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1463,6 +1569,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1476,6 +1584,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1489,6 +1599,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1502,6 +1614,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1515,6 +1629,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1531,6 +1647,8 @@ impl Config {
                     name: None,
                     use_bearer_auth: false,
                     extra_headers: vec![],
+                    api_version: None,
+                    deployment: None,
                 });
         }
 
@@ -1574,6 +1692,10 @@ impl Config {
                 .defaults
                 .context_window
                 .unwrap_or(base_defaults.context_window),
+            tool_use_enforcement: toml
+                .defaults
+                .tool_use_enforcement
+                .unwrap_or_else(|| base_defaults.tool_use_enforcement.clone()),
             compaction: toml
                 .defaults
                 .compaction
@@ -1647,6 +1769,36 @@ impl Config {
                         .unwrap_or(base_defaults.warmup.startup_delay_secs),
                 })
                 .unwrap_or(base_defaults.warmup),
+            participant_context: toml
+                .defaults
+                .participant_context
+                .map(|participant_context| -> Result<ParticipantContextConfig> {
+                    let resolved = ParticipantContextConfig {
+                        enabled: participant_context
+                            .enabled
+                            .unwrap_or(base_defaults.participant_context.enabled),
+                        min_participants: participant_context
+                            .min_participants
+                            .unwrap_or(base_defaults.participant_context.min_participants),
+                        token_budget: participant_context
+                            .token_budget
+                            .unwrap_or(base_defaults.participant_context.token_budget),
+                        max_participants: participant_context
+                            .max_participants
+                            .unwrap_or(base_defaults.participant_context.max_participants),
+                    };
+                    if resolved.max_participants < resolved.min_participants {
+                        return Err(ConfigError::Invalid(format!(
+                            "defaults.participant_context.max_participants ({}) must be >= defaults.participant_context.min_participants ({})",
+                            resolved.max_participants, resolved.min_participants
+                        ))
+                        .into());
+                    }
+
+                    Ok(resolved)
+                })
+                .transpose()?
+                .unwrap_or(base_defaults.participant_context),
             browser: {
                 let chrome_cache_dir = instance_dir.join("chrome_cache");
                 toml.defaults
@@ -1681,13 +1833,20 @@ impl Config {
             channel: toml
                 .defaults
                 .channel
-                .map(|channel_config| ChannelConfig {
-                    listen_only_mode: channel_config
-                        .listen_only_mode
-                        .unwrap_or(base_defaults.channel.listen_only_mode),
-                    save_attachments: channel_config
-                        .save_attachments
-                        .unwrap_or(base_defaults.channel.save_attachments),
+                .map(|channel_config| {
+                    let response_mode = parse_response_mode(
+                        channel_config.response_mode.as_deref(),
+                        channel_config.listen_only_mode,
+                    );
+                    ChannelConfig {
+                        listen_only_mode: channel_config
+                            .listen_only_mode
+                            .unwrap_or(base_defaults.channel.listen_only_mode),
+                        response_mode,
+                        save_attachments: channel_config
+                            .save_attachments
+                            .unwrap_or(base_defaults.channel.save_attachments),
+                    }
                 })
                 .unwrap_or(base_defaults.channel),
             mcp: default_mcp,
@@ -1816,6 +1975,7 @@ impl Config {
                     max_turns: a.max_turns,
                     branch_max_turns: a.branch_max_turns,
                     context_window: a.context_window,
+                    tool_use_enforcement: a.tool_use_enforcement,
                     compaction: a.compaction.map(|c| CompactionConfig {
                         background_threshold: c
                             .background_threshold
@@ -1887,13 +2047,21 @@ impl Config {
                         ),
                         chrome_cache_dir: defaults.browser.chrome_cache_dir.clone(),
                     }),
-                    channel: a.channel.map(|channel_config| ChannelConfig {
-                        listen_only_mode: channel_config
-                            .listen_only_mode
-                            .unwrap_or(defaults.channel.listen_only_mode),
-                        save_attachments: channel_config
-                            .save_attachments
-                            .unwrap_or(defaults.channel.save_attachments),
+                    channel: a.channel.map(|channel_config| {
+                        let response_mode = parse_response_mode(
+                            channel_config.response_mode.as_deref(),
+                            channel_config.listen_only_mode,
+                        )
+                        .or(defaults.channel.response_mode);
+                        ChannelConfig {
+                            listen_only_mode: channel_config
+                                .listen_only_mode
+                                .unwrap_or(defaults.channel.listen_only_mode),
+                            response_mode,
+                            save_attachments: channel_config
+                                .save_attachments
+                                .unwrap_or(defaults.channel.save_attachments),
+                        }
                     }),
                     mcp: match a.mcp {
                         Some(mcp_servers) => Some(
@@ -1953,6 +2121,7 @@ impl Config {
                 max_turns: None,
                 branch_max_turns: None,
                 context_window: None,
+                tool_use_enforcement: None,
                 compaction: None,
                 memory_persistence: None,
                 coalesce: None,
@@ -2451,17 +2620,63 @@ impl Config {
         let bindings: Vec<Binding> = toml
             .bindings
             .into_iter()
-            .map(|b| Binding {
-                agent_id: b.agent_id,
-                channel: b.channel,
-                adapter: normalize_adapter(b.adapter),
-                guild_id: b.guild_id,
-                workspace_id: b.workspace_id,
-                chat_id: b.chat_id,
-                team_id: b.team_id,
-                channel_ids: b.channel_ids,
-                require_mention: b.require_mention,
-                dm_allowed_users: b.dm_allowed_users,
+            .map(|b| {
+                let settings = b.settings.map(|s| {
+                    use crate::conversation::settings::*;
+                    let mut cs = ConversationSettings {
+                        model: s.model,
+                        save_attachments: s.save_attachments,
+                        ..Default::default()
+                    };
+                    // Only override enum fields when explicitly set in TOML,
+                    // so omitted fields inherit from agent/system defaults.
+                    if let Some(m) = s.memory.as_deref() {
+                        match m {
+                            "ambient" => cs.memory = MemoryMode::Ambient,
+                            "off" => cs.memory = MemoryMode::Off,
+                            "full" => cs.memory = MemoryMode::Full,
+                            other => tracing::warn!(
+                                value = other,
+                                "unknown memory mode in binding settings, ignoring"
+                            ),
+                        }
+                    }
+                    if let Some(d) = s.delegation.as_deref() {
+                        match d {
+                            "direct" => cs.delegation = DelegationMode::Direct,
+                            "standard" => cs.delegation = DelegationMode::Standard,
+                            other => tracing::warn!(
+                                value = other,
+                                "unknown delegation mode in binding settings, ignoring"
+                            ),
+                        }
+                    }
+                    if let Some(r) = s.response_mode.as_deref() {
+                        match r {
+                            "observe" | "quiet" => cs.response_mode = ResponseMode::Observe,
+                            "mention_only" => cs.response_mode = ResponseMode::MentionOnly,
+                            "active" => cs.response_mode = ResponseMode::Active,
+                            other => tracing::warn!(
+                                value = other,
+                                "unknown response_mode in binding settings, ignoring"
+                            ),
+                        }
+                    }
+                    cs
+                });
+                Binding {
+                    agent_id: b.agent_id,
+                    channel: b.channel,
+                    adapter: normalize_adapter(b.adapter),
+                    guild_id: b.guild_id,
+                    workspace_id: b.workspace_id,
+                    chat_id: b.chat_id,
+                    team_id: b.team_id,
+                    channel_ids: b.channel_ids,
+                    require_mention: b.require_mention,
+                    dm_allowed_users: b.dm_allowed_users,
+                    settings,
+                }
             })
             .collect();
 

@@ -431,6 +431,8 @@ pub enum ApiType {
     Anthropic,
     /// Google Gemini API (https://generativelanguage.googleapis.com/v1beta/openai/chat/completions)
     Gemini,
+    /// Azure OpenAI API (https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version})
+    Azure,
 }
 
 impl<'de> serde::Deserialize<'de> for ApiType {
@@ -445,16 +447,89 @@ impl<'de> serde::Deserialize<'de> for ApiType {
             "openai_responses" => Ok(Self::OpenAiResponses),
             "anthropic" => Ok(Self::Anthropic),
             "gemini" => Ok(Self::Gemini),
+            "azure" => Ok(Self::Azure),
             other => Err(serde::de::Error::invalid_value(
                 serde::de::Unexpected::Str(other),
-                &"one of \"openai_completions\", \"openai_chat_completions\", \"kilo_gateway\", \"openai_responses\", \"anthropic\", or \"gemini\"",
+                &"one of \"openai_completions\", \"openai_chat_completions\", \"kilo_gateway\", \"openai_responses\", \"anthropic\", \"gemini\", or \"azure\"",
+            )),
+        }
+    }
+}
+
+/// Tool-use enforcement configuration for preventing models from describing
+/// actions instead of calling tools.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ToolUseEnforcement {
+    /// Auto-detect based on model name (GPT/Codex models get enforcement).
+    #[default]
+    Auto,
+    /// Always inject tool-use enforcement guidance.
+    Always,
+    /// Never inject tool-use enforcement guidance.
+    Never,
+    /// Custom list of model name substrings to match.
+    Custom(Vec<String>),
+}
+
+impl ToolUseEnforcement {
+    /// Check if enforcement should be injected for the given model name.
+    pub fn should_inject(&self, model: &str) -> bool {
+        let model_lower = model.to_lowercase();
+        match self {
+            Self::Auto => {
+                // Match GPT and Codex models by default
+                model_lower.contains("gpt") || model_lower.contains("codex")
+            }
+            Self::Always => true,
+            Self::Never => false,
+            Self::Custom(patterns) => patterns
+                .iter()
+                .any(|p| model_lower.contains(&p.to_lowercase())),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ToolUseEnforcement {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error;
+        let value = toml::Value::deserialize(deserializer)?;
+        match value {
+            toml::Value::String(s) => match s.to_lowercase().as_str() {
+                "auto" => Ok(Self::Auto),
+                "true" | "always" | "yes" | "on" => Ok(Self::Always),
+                "false" | "never" | "no" | "off" => Ok(Self::Never),
+                other => Err(D::Error::invalid_value(
+                    serde::de::Unexpected::Str(other),
+                    &"one of 'auto', 'true', 'false', 'always', 'never'",
+                )),
+            },
+            toml::Value::Boolean(enabled) => Ok(if enabled { Self::Always } else { Self::Never }),
+            toml::Value::Array(arr) => {
+                let patterns: Vec<String> = arr
+                    .into_iter()
+                    .map(|v| {
+                        v.as_str().map(String::from).ok_or_else(|| {
+                            D::Error::invalid_value(
+                                serde::de::Unexpected::Other("non-string array element"),
+                                &"array of strings",
+                            )
+                        })
+                    })
+                    .collect::<std::result::Result<_, _>>()?;
+                Ok(Self::Custom(patterns))
+            }
+            _ => Err(D::Error::invalid_value(
+                serde::de::Unexpected::Other("non-string/non-array value"),
+                &"string or array of strings",
             )),
         }
     }
 }
 
 /// Configuration for a single LLM provider.
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize)]
 pub struct ProviderConfig {
     pub api_type: ApiType,
     pub base_url: String,
@@ -463,10 +538,18 @@ pub struct ProviderConfig {
     /// When true, use `Authorization: Bearer` instead of `x-api-key` for
     /// Anthropic requests. Set automatically when the key originates from
     /// `ANTHROPIC_AUTH_TOKEN` (proxy-compatible auth).
+    #[serde(default)]
     pub use_bearer_auth: bool,
     /// Additional HTTP headers included in requests to this provider.
     /// Currently applied in `call_openai()` (the `OpenAiCompletions` path).
+    #[serde(default)]
     pub extra_headers: Vec<(String, String)>,
+    /// Azure API version (e.g., "2024-12-01-preview"). Required for Azure providers.
+    #[serde(default)]
+    pub api_version: Option<String>,
+    /// Azure deployment name (e.g., "gpt-4o"). Required for Azure providers.
+    #[serde(default)]
+    pub deployment: Option<String>,
 }
 
 impl std::fmt::Debug for ProviderConfig {
@@ -778,6 +861,7 @@ pub struct DefaultsConfig {
     pub ingestion: IngestionConfig,
     pub cortex: CortexConfig,
     pub warmup: WarmupConfig,
+    pub participant_context: ParticipantContextConfig,
     pub browser: BrowserConfig,
     pub channel: ChannelConfig,
     pub mcp: Vec<McpServerConfig>,
@@ -789,6 +873,9 @@ pub struct DefaultsConfig {
     pub user_timezone: Option<String>,
     pub history_backfill_count: usize,
     pub cron: Vec<CronDef>,
+    /// Tool-use enforcement for preventing models from describing actions instead of calling tools.
+    /// "auto" (default) — matches GPT/Codex models; true — always inject; false — never inject.
+    pub tool_use_enforcement: ToolUseEnforcement,
     pub opencode: OpenCodeConfig,
     /// Worker log mode: "errors_only", "all_separate", or "all_combined".
     pub worker_log_mode: crate::settings::WorkerLogMode,
@@ -813,6 +900,7 @@ impl std::fmt::Debug for DefaultsConfig {
             .field("ingestion", &self.ingestion)
             .field("cortex", &self.cortex)
             .field("warmup", &self.warmup)
+            .field("participant_context", &self.participant_context)
             .field("browser", &self.browser)
             .field("channel", &self.channel)
             .field("mcp", &self.mcp)
@@ -824,6 +912,7 @@ impl std::fmt::Debug for DefaultsConfig {
             .field("user_timezone", &self.user_timezone)
             .field("history_backfill_count", &self.history_backfill_count)
             .field("cron", &self.cron)
+            .field("tool_use_enforcement", &self.tool_use_enforcement)
             .field("opencode", &self.opencode)
             .field("worker_log_mode", &self.worker_log_mode)
             .field("calendar", &self.calendar)
@@ -890,11 +979,20 @@ pub struct CompactionConfig {
 /// Spawns a silent branch every N messages to recall existing memories and save
 /// new ones from the recent conversation. Runs without blocking the channel and
 /// the result is never injected into channel history.
+///
+/// Legacy note: active working-memory persistence triggers are now configured in
+/// `WorkingMemoryConfig` (`persistence_message_threshold`,
+/// `persistence_time_threshold_secs`, `persistence_event_density_threshold`).
+/// Keep these values in sync only if you intentionally preserve this legacy
+/// branch cadence.
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryPersistenceConfig {
     /// Whether auto memory persistence branches are enabled.
     pub enabled: bool,
-    /// Number of user messages between automatic memory persistence branches.
+    /// Legacy branch cadence in user messages.
+    ///
+    /// Runtime checks now use the working-memory thresholds in
+    /// `WorkingMemoryConfig`.
     pub message_interval: usize,
 }
 
@@ -960,6 +1058,38 @@ impl Default for WorkingMemoryConfig {
             persistence_message_threshold: 20,
             persistence_time_threshold_secs: 900,
             persistence_event_density_threshold: 5,
+        }
+    }
+}
+
+/// Participant context configuration.
+///
+/// Keeps the prompt-facing participant-awareness surface separate from working
+/// memory so the future humans/user-identity pipeline can evolve behind a
+/// stable boundary.
+#[derive(Debug, Clone, Copy)]
+pub struct ParticipantContextConfig {
+    /// Whether participant context injection is enabled.
+    pub enabled: bool,
+    /// Minimum active participants required before the section appears.
+    ///
+    /// Defaults to 1 for the current config-backed implementation so DMs still
+    /// benefit from participant metadata. The fuller participant-awareness
+    /// pipeline can raise this later if needed.
+    pub min_participants: usize,
+    /// Token budget for the participant context section.
+    pub token_budget: usize,
+    /// Maximum participants to render in the prompt.
+    pub max_participants: usize,
+}
+
+impl Default for ParticipantContextConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_participants: 1,
+            token_budget: 400,
+            max_participants: 5,
         }
     }
 }
@@ -1100,14 +1230,26 @@ impl Default for BrowserConfig {
 }
 
 /// Channel behavior configuration.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct ChannelConfig {
-    /// When true, unsolicited chat messages are ignored unless command/mention/reply.
+    /// Deprecated: use `response_mode` instead. Kept for backwards compatibility.
     pub listen_only_mode: bool,
+    /// Default response mode for channels. Overrides listen_only_mode when set.
+    pub response_mode: Option<crate::conversation::settings::ResponseMode>,
     /// When true, file attachments received in the channel are saved to
     /// `workspace/saved/` and tracked in the `saved_attachments` table so
     /// they can be recalled on later turns.
     pub save_attachments: bool,
+}
+
+impl Default for ChannelConfig {
+    fn default() -> Self {
+        Self {
+            listen_only_mode: false,
+            response_mode: None,
+            save_attachments: true,
+        }
+    }
 }
 
 /// OpenCode subprocess worker configuration.
@@ -1185,7 +1327,7 @@ impl Default for CortexConfig {
         Self {
             tick_interval_secs: 30,
             worker_timeout_secs: 600,
-            branch_timeout_secs: 60,
+            branch_timeout_secs: 600,
             detached_worker_timeout_retry_limit: 2,
             supervisor_kill_budget_per_tick: 8,
             circuit_breaker_threshold: 3,
@@ -1429,6 +1571,8 @@ pub struct AgentConfig {
     pub max_turns: Option<usize>,
     pub branch_max_turns: Option<usize>,
     pub context_window: Option<usize>,
+    /// Tool-use enforcement for preventing models from describing actions instead of calling tools.
+    pub tool_use_enforcement: Option<ToolUseEnforcement>,
     pub compaction: Option<CompactionConfig>,
     pub memory_persistence: Option<MemoryPersistenceConfig>,
     pub coalesce: Option<CoalesceConfig>,
@@ -1515,6 +1659,8 @@ pub struct ResolvedAgentConfig {
     /// Number of messages to fetch from the platform when a new channel is created.
     pub history_backfill_count: usize,
     pub cron: Vec<CronDef>,
+    /// Tool-use enforcement for preventing models from describing actions instead of calling tools.
+    pub tool_use_enforcement: ToolUseEnforcement,
 }
 
 impl Default for DefaultsConfig {
@@ -1532,6 +1678,7 @@ impl Default for DefaultsConfig {
             ingestion: IngestionConfig::default(),
             cortex: CortexConfig::default(),
             warmup: WarmupConfig::default(),
+            participant_context: ParticipantContextConfig::default(),
             browser: BrowserConfig::default(),
             channel: ChannelConfig::default(),
             mcp: Vec::new(),
@@ -1540,6 +1687,7 @@ impl Default for DefaultsConfig {
             user_timezone: None,
             history_backfill_count: 50,
             cron: Vec::new(),
+            tool_use_enforcement: ToolUseEnforcement::default(),
             opencode: OpenCodeConfig::default(),
             worker_log_mode: crate::settings::WorkerLogMode::default(),
             calendar: CalendarConfig::default(),
@@ -1621,6 +1769,10 @@ impl AgentConfig {
                 .unwrap_or_else(|| defaults.projects.clone()),
             history_backfill_count: defaults.history_backfill_count,
             cron: self.cron.clone(),
+            tool_use_enforcement: self
+                .tool_use_enforcement
+                .clone()
+                .unwrap_or_else(|| defaults.tool_use_enforcement.clone()),
         }
     }
 }
@@ -1796,9 +1948,16 @@ pub struct Binding {
     /// Channel IDs this binding applies to. If empty, all channels in the guild/workspace are allowed.
     pub channel_ids: Vec<String>,
     /// Require explicit @mention (or reply-to-bot) for inbound messages.
+    /// Messages that don't match are blocked at the routing level and never
+    /// reach the channel — the agent cannot see them at all.
+    /// For context-aware mention filtering (agent sees messages but only
+    /// responds to mentions), use the channel-level `MentionOnly` response
+    /// mode instead.
     pub require_mention: bool,
     /// User IDs allowed to DM the bot through this binding.
     pub dm_allowed_users: Vec<String>,
+    /// Default conversation settings for channels matched by this binding.
+    pub settings: Option<crate::conversation::ConversationSettings>,
 }
 
 impl Binding {
@@ -1823,8 +1982,8 @@ impl Binding {
             return false;
         }
 
-        // For webchat messages, match based on agent_id in the message
-        if message.source == "webchat"
+        // For portal messages, match based on agent_id in the message
+        if message.source == "portal"
             && let Some(message_agent_id) = &message.agent_id
         {
             return message_agent_id.as_ref() == self.agent_id;
@@ -2456,15 +2615,24 @@ fn validate_runtime_keys(
 ///
 /// Returns `None` when a binding matched on routing but the message was
 /// suppressed by `require_mention` — the caller should drop the message.
+///
+/// When a binding matches, its optional `settings` are returned alongside the
+/// agent ID so the caller can use them as channel defaults.
 pub fn resolve_agent_for_message(
     bindings: &[Binding],
     message: &crate::InboundMessage,
     default_agent_id: &str,
-) -> Option<crate::AgentId> {
+) -> Option<(
+    crate::AgentId,
+    Option<crate::conversation::ConversationSettings>,
+)> {
     for binding in bindings {
         if binding.matches_route(message) {
             if binding.passes_require_mention(message) {
-                return Some(std::sync::Arc::from(binding.agent_id.as_str()));
+                return Some((
+                    std::sync::Arc::from(binding.agent_id.as_str()),
+                    binding.settings.clone(),
+                ));
             }
             // Binding owns this message but require_mention blocked it.
             // Drop instead of falling through to the default agent.
@@ -2476,7 +2644,7 @@ pub fn resolve_agent_for_message(
             return None;
         }
     }
-    Some(std::sync::Arc::from(default_agent_id))
+    Some((std::sync::Arc::from(default_agent_id), None))
 }
 
 // ---------------------------------------------------------------------------

@@ -13,7 +13,8 @@ use crate::llm::LlmManager;
 use crate::mcp::McpManager;
 use crate::memory::{EmbeddingModel, MemorySearch};
 use crate::messaging::MessagingManager;
-use crate::messaging::webchat::WebChatAdapter;
+use crate::messaging::portal::PortalAdapter;
+use crate::notifications::{NewNotification, Notification, NotificationStore};
 use crate::projects::ProjectStore;
 use crate::prompts::PromptEngine;
 use crate::tasks::TaskStore;
@@ -85,12 +86,16 @@ pub struct ApiState {
     pub cron_schedulers: arc_swap::ArcSwap<HashMap<String, Arc<Scheduler>>>,
     /// Instance-level global task store shared across all agents.
     pub task_store: ArcSwap<Option<Arc<TaskStore>>>,
-    /// Per-agent project stores for project/repo/worktree CRUD operations.
-    pub project_stores: arc_swap::ArcSwap<HashMap<String, Arc<ProjectStore>>>,
     /// Per-agent calendar stores for calendar queries and mirrored state.
     pub calendar_stores: arc_swap::ArcSwap<HashMap<String, Arc<CalendarStore>>>,
     /// Per-agent calendar services for sync, proposals, and remote mutations.
     pub calendar_services: arc_swap::ArcSwap<HashMap<String, Arc<CalendarService>>>,
+    /// Instance-wide wiki knowledge base.
+    pub wiki_store: ArcSwap<Option<Arc<crate::wiki::WikiStore>>>,
+    /// Instance-level shared project store.
+    pub project_store: ArcSwap<Option<Arc<ProjectStore>>>,
+    /// Instance-level notification store for the dashboard inbox.
+    pub notification_store: ArcSwap<Option<Arc<NotificationStore>>>,
     /// Per-agent RuntimeConfig for reading live hot-reloaded configuration.
     pub runtime_configs: ArcSwap<HashMap<String, Arc<RuntimeConfig>>>,
     /// Per-agent MCP managers for status and reconnect APIs.
@@ -127,8 +132,8 @@ pub struct ApiState {
     pub agent_tx: mpsc::Sender<crate::Agent>,
     /// Sender to remove agents from the main event loop.
     pub agent_remove_tx: mpsc::Sender<String>,
-    /// Shared webchat adapter for session management from API handlers.
-    pub webchat_adapter: ArcSwap<Option<Arc<WebChatAdapter>>>,
+    /// Shared portal adapter for session management from API handlers.
+    pub portal_adapter: ArcSwap<Option<Arc<PortalAdapter>>>,
     /// Sender for cross-agent message injection.
     pub injection_tx: mpsc::Sender<crate::ChannelInjection>,
     /// Instance-level agent links for the communication graph.
@@ -142,9 +147,24 @@ pub struct ApiState {
     /// recover the transcript without waiting for the worker to complete.
     /// Keyed by worker_id, cleared on worker completion.
     pub live_worker_transcripts: Arc<RwLock<HashMap<String, Vec<TranscriptStep>>>>,
+    /// In-memory cache of tool calls for running channel turns (direct mode).
+    /// Keyed by channel_id, drained when the bot message is persisted.
+    pub live_channel_tool_calls: Arc<RwLock<HashMap<String, Vec<ChannelToolCallEntry>>>>,
     /// Serializes SSH daemon enable/disable transitions to prevent races
     /// between overlapping toggle requests.
     pub ssh_mutex: tokio::sync::Mutex<()>,
+}
+
+/// A single channel-level tool call accumulated in memory during a direct-mode turn.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct ChannelToolCallEntry {
+    pub id: String,
+    pub tool_name: String,
+    pub args: String,
+    pub result: Option<String>,
+    pub status: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
 }
 
 /// Events sent to SSE clients. Wraps ProcessEvents with agent context.
@@ -158,6 +178,8 @@ pub enum ApiEvent {
         sender_name: Option<String>,
         sender_id: String,
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<crate::agent::channel_attachments::SavedAttachmentMeta>,
     },
     /// An outbound message sent by the bot.
     OutboundMessage {
@@ -284,6 +306,14 @@ pub enum ApiEvent {
         content: String,
         tool_calls: Option<Vec<crate::agent::cortex_chat::CortexChatToolCall>>,
     },
+    /// A new notification was created and persisted.
+    NotificationCreated { notification: Notification },
+    /// A notification was updated (read or dismissed) — for cross-tab sync.
+    NotificationUpdated {
+        id: String,
+        read: bool,
+        dismissed: bool,
+    },
 }
 
 impl ApiState {
@@ -312,9 +342,11 @@ impl ApiState {
             cron_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             cron_schedulers: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             task_store: ArcSwap::from_pointee(None),
-            project_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             calendar_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             calendar_services: arc_swap::ArcSwap::from_pointee(HashMap::new()),
+            wiki_store: ArcSwap::from_pointee(None),
+            project_store: ArcSwap::from_pointee(None),
+            notification_store: ArcSwap::from_pointee(None),
             runtime_configs: ArcSwap::from_pointee(HashMap::new()),
             mcp_managers: ArcSwap::from_pointee(HashMap::new()),
             sandboxes: ArcSwap::from_pointee(HashMap::new()),
@@ -334,11 +366,12 @@ impl ApiState {
             agent_tx,
             agent_remove_tx,
             injection_tx,
-            webchat_adapter: ArcSwap::from_pointee(None),
+            portal_adapter: ArcSwap::from_pointee(None),
             agent_links: ArcSwap::from_pointee(Vec::new()),
             agent_groups: ArcSwap::from_pointee(Vec::new()),
             agent_humans: ArcSwap::from_pointee(Vec::new()),
             live_worker_transcripts: Arc::new(RwLock::new(HashMap::new())),
+            live_channel_tool_calls: Arc::new(RwLock::new(HashMap::new())),
             ssh_mutex: tokio::sync::Mutex::new(()),
         }
     }
@@ -389,6 +422,10 @@ impl ApiState {
     ) {
         let api_tx = self.event_tx.clone();
         let live_transcripts = self.live_worker_transcripts.clone();
+        let live_channel_tools = self.live_channel_tool_calls.clone();
+        // Snapshot the notification store at registration time. It is set once
+        // at startup before any agents register, so the snapshot is always valid.
+        let _notif_store_snap = self.notification_store.load_full();
         tokio::spawn(async move {
             loop {
                 match agent_event_rx.recv().await {
@@ -481,6 +518,49 @@ impl ApiState {
                                         success: *success,
                                     })
                                     .ok();
+                                // TODO: re-enable WorkerFailed notifications once action_url points somewhere useful
+                                // if !success {
+                                //     if let Some(ref store) = *notif_store_snap {
+                                //         let store = store.clone();
+                                //         let event_tx = api_tx.clone();
+                                //         let agent_id_n = agent_id.clone();
+                                //         let worker_id_n = worker_id.to_string();
+                                //         let body = if result.is_empty() {
+                                //             None
+                                //         } else {
+                                //             Some(result.chars().take(300).collect::<String>())
+                                //         };
+                                //         tokio::spawn(async move {
+                                //             let n = NewNotification {
+                                //                 kind: NotificationKind::WorkerFailed,
+                                //                 severity: NotificationSeverity::Error,
+                                //                 title: format!("Worker failed: {worker_id_n}"),
+                                //                 body,
+                                //                 agent_id: Some(agent_id_n),
+                                //                 related_entity_type: Some("worker".to_string()),
+                                //                 related_entity_id: Some(worker_id_n),
+                                //                 action_url: None,
+                                //                 metadata: None,
+                                //             };
+                                //             match store.insert(n).await {
+                                //                 Ok(Some(notification)) => {
+                                //                     event_tx
+                                //                         .send(ApiEvent::NotificationCreated {
+                                //                             notification,
+                                //                         })
+                                //                         .ok();
+                                //                 }
+                                //                 Ok(None) => {}
+                                //                 Err(error) => {
+                                //                     tracing::warn!(
+                                //                         %error,
+                                //                         "failed to insert worker failure notification"
+                                //                     );
+                                //                 }
+                                //             }
+                                //         });
+                                //     }
+                                // }
                             }
                             ProcessEvent::BranchResult {
                                 branch_id,
@@ -520,6 +600,25 @@ impl ApiState {
                                         steps.push(step);
                                     }
                                 }
+                                // Accumulate channel-level tool calls in memory,
+                                // skipping conversation/routing tools.
+                                if let ProcessId::Channel(ch_id) = process_id {
+                                    if is_hidden_channel_tool(tool_name) {
+                                        // skip
+                                    } else {
+                                        let entry = ChannelToolCallEntry {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            tool_name: tool_name.clone(),
+                                            args: args.clone(),
+                                            result: None,
+                                            status: "running".into(),
+                                            started_at: chrono::Utc::now().to_rfc3339(),
+                                            completed_at: None,
+                                        };
+                                        let mut guard = live_channel_tools.write().await;
+                                        guard.entry(ch_id.to_string()).or_default().push(entry);
+                                    }
+                                }
                                 api_tx
                                     .send(ApiEvent::ToolStarted {
                                         agent_id: agent_id.clone(),
@@ -549,6 +648,19 @@ impl ApiState {
                                     let mut guard = live_transcripts.write().await;
                                     if let Some(steps) = guard.get_mut(&worker_id.to_string()) {
                                         steps.push(step);
+                                    }
+                                }
+                                // Complete channel-level tool call in memory (FIFO).
+                                if let ProcessId::Channel(ch_id) = process_id {
+                                    let mut guard = live_channel_tools.write().await;
+                                    if let Some(calls) = guard.get_mut(&ch_id.to_string())
+                                        && let Some(entry) = calls.iter_mut().find(|c| {
+                                            c.tool_name == *tool_name && c.status == "running"
+                                        })
+                                    {
+                                        entry.result = Some(result.clone());
+                                        entry.status = "completed".into();
+                                        entry.completed_at = Some(chrono::Utc::now().to_rfc3339());
                                     }
                                 }
                                 api_tx
@@ -756,11 +868,6 @@ impl ApiState {
         self.task_store.store(Arc::new(Some(store)));
     }
 
-    /// Set the project stores for all agents.
-    pub fn set_project_stores(&self, stores: HashMap<String, Arc<ProjectStore>>) {
-        self.project_stores.store(Arc::new(stores));
-    }
-
     /// Set the calendar stores for all agents.
     pub fn set_calendar_stores(&self, stores: HashMap<String, Arc<CalendarStore>>) {
         self.calendar_stores.store(Arc::new(stores));
@@ -769,6 +876,40 @@ impl ApiState {
     /// Set the calendar services for all agents.
     pub fn set_calendar_services(&self, services: HashMap<String, Arc<CalendarService>>) {
         self.calendar_services.store(Arc::new(services));
+    }
+
+    /// Set the instance-wide wiki store.
+    pub fn set_wiki_store(&self, store: Arc<crate::wiki::WikiStore>) {
+        self.wiki_store.store(Arc::new(Some(store)));
+    }
+
+    /// Set the shared project store.
+    pub fn set_project_store(&self, store: Arc<ProjectStore>) {
+        self.project_store.store(Arc::new(Some(store)));
+    }
+
+    /// Set the instance-level notification store.
+    pub fn set_notification_store(&self, store: Arc<NotificationStore>) {
+        self.notification_store.store(Arc::new(Some(store)));
+    }
+
+    /// Insert a notification and broadcast `NotificationCreated` via SSE.
+    /// Fire-and-forget: spawns a task and returns immediately.
+    pub fn emit_notification(&self, n: NewNotification) {
+        let store = self.notification_store.load().as_ref().clone();
+        let event_tx = self.event_tx.clone();
+        let Some(store) = store else { return };
+        tokio::spawn(async move {
+            match store.insert(n).await {
+                Ok(Some(notification)) => {
+                    event_tx
+                        .send(ApiEvent::NotificationCreated { notification })
+                        .ok();
+                }
+                Ok(None) => {} // duplicate suppressed by unique index
+                Err(error) => tracing::warn!(%error, "failed to insert notification"),
+            }
+        });
     }
 
     /// Set the runtime configs for all agents.
@@ -841,9 +982,9 @@ impl ApiState {
         *self.defaults_config.write().await = Some(defaults);
     }
 
-    /// Set the shared webchat adapter for API handlers.
-    pub fn set_webchat_adapter(&self, adapter: Arc<WebChatAdapter>) {
-        self.webchat_adapter.store(Arc::new(Some(adapter)));
+    /// Set the shared portal adapter for API handlers.
+    pub fn set_portal_adapter(&self, adapter: Arc<PortalAdapter>) {
+        self.portal_adapter.store(Arc::new(Some(adapter)));
     }
 
     /// Set the agent links for the communication graph.
@@ -861,10 +1002,27 @@ impl ApiState {
         self.agent_humans.store(Arc::new(humans));
     }
 
+    /// Drain accumulated channel tool calls for a channel.
+    ///
+    /// Called when the bot message is about to be persisted so the tool calls
+    /// can be stored in the message metadata.
+    pub async fn take_channel_tool_calls(&self, channel_id: &str) -> Vec<ChannelToolCallEntry> {
+        let mut guard = self.live_channel_tool_calls.write().await;
+        guard.remove(channel_id).unwrap_or_default()
+    }
+
     /// Send an event to all SSE subscribers.
     pub fn send_event(&self, event: ApiEvent) {
         let _ = self.event_tx.send(event);
     }
+}
+
+/// Conversation/routing tools that should not be stored or surfaced as channel tool calls.
+fn is_hidden_channel_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "reply" | "react" | "skip" | "set_outcome" | "spawn_worker" | "branch" | "route" | "cancel"
+    )
 }
 
 /// Extract (process_type, id_string) from a ProcessId.

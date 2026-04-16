@@ -19,6 +19,8 @@ pub(super) struct ChannelResponse {
     is_active: bool,
     last_activity_at: String,
     created_at: String,
+    response_mode: Option<String>,
+    model: Option<String>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -130,16 +132,39 @@ pub(super) async fn list_channels(
 
     sort_channels_newest_first(&mut collected_channels);
 
+    // Read settings from running channel states for response_mode/model display.
+    let channel_states = state.channel_states.read().await;
+
     let all_channels = collected_channels
         .into_iter()
-        .map(|(agent_id, channel)| ChannelResponse {
-            agent_id,
-            id: channel.id,
-            platform: channel.platform,
-            display_name: channel.display_name,
-            is_active: channel.is_active,
-            last_activity_at: channel.last_activity_at.to_rfc3339(),
-            created_at: channel.created_at.to_rfc3339(),
+        .map(|(agent_id, channel)| {
+            let (response_mode, model) = channel_states
+                .get(&channel.id)
+                .map(|cs| {
+                    let settings = &cs.model_overrides;
+                    let mode = match settings.response_mode {
+                        crate::conversation::ResponseMode::Active => None,
+                        crate::conversation::ResponseMode::Observe => Some("observe".to_string()),
+                        crate::conversation::ResponseMode::MentionOnly => {
+                            Some("mention_only".to_string())
+                        }
+                    };
+                    let model = settings.resolve_model("channel").map(String::from);
+                    (mode, model)
+                })
+                .unwrap_or((None, None));
+
+            ChannelResponse {
+                agent_id,
+                id: channel.id,
+                platform: channel.platform,
+                display_name: channel.display_name,
+                is_active: channel.is_active,
+                last_activity_at: channel.last_activity_at.to_rfc3339(),
+                created_at: channel.created_at.to_rfc3339(),
+                response_mode,
+                model,
+            }
         })
         .collect();
 
@@ -498,6 +523,7 @@ pub(super) async fn inspect_prompt(
     // ── Gather all dynamic sections ──
     let identity_context = rc.identity.load().render();
     let memory_bulletin = rc.memory_bulletin.load();
+    let knowledge_synthesis = rc.knowledge_synthesis.load();
     let skills = rc.skills.load();
     let skills_prompt = skills
         .render_channel_prompt(&prompt_engine)
@@ -551,6 +577,7 @@ pub(super) async fn inspect_prompt(
     };
 
     let sandbox_enabled = channel_state.deps.sandbox.containment_active();
+    let adapter = query.channel_id.split(':').next().filter(|a| !a.is_empty());
 
     // ── Render working memory layers (Layers 2 + 3) ──
     let wm_config = **rc.working_memory.load();
@@ -573,6 +600,27 @@ pub(super) async fn inspect_prompt(
     )
     .await
     .unwrap_or_default();
+
+    let participant_config = **rc.participant_context.load();
+    let tracked_participants = {
+        let participants = channel_state.active_participants.read().await;
+        crate::conversation::renderable_participants(&participants, &participant_config)
+    };
+    let participant_context = crate::memory::working::render_participant_context(
+        &channel_state.deps.working_memory,
+        &tracked_participants,
+        &query.channel_id,
+        &participant_config,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(
+            %error,
+            channel_id = %query.channel_id,
+            "failed to render participant context for prompt inspection"
+        );
+        String::new()
+    });
 
     // ── Available channels ──
     let available_channels = {
@@ -675,7 +723,6 @@ pub(super) async fn inspect_prompt(
     };
 
     // ── Adapter prompt ──
-    let adapter = query.channel_id.split(':').next().filter(|a| !a.is_empty());
     let adapter_prompt =
         adapter.and_then(|adapter| prompt_engine.render_channel_adapter_prompt(adapter));
 
@@ -684,10 +731,7 @@ pub(super) async fn inspect_prompt(
         use crate::prompts::engine::{ProjectContext, ProjectRepoContext, ProjectWorktreeContext};
         let store = &channel_state.deps.project_store;
         let projects = store
-            .list_projects(
-                &channel_state.deps.agent_id,
-                Some(crate::projects::ProjectStatus::Active),
-            )
+            .list_projects(Some(crate::projects::ProjectStatus::Active))
             .await
             .unwrap_or_default();
         if projects.is_empty() {
@@ -743,6 +787,7 @@ pub(super) async fn inspect_prompt(
         .render_channel_prompt_with_links(
             empty_to_none(identity_context),
             empty_to_none(memory_bulletin.to_string()),
+            empty_to_none(knowledge_synthesis.to_string()),
             empty_to_none(skills_prompt),
             worker_capabilities,
             conversation_context,
@@ -756,6 +801,8 @@ pub(super) async fn inspect_prompt(
             None, // backfill_transcript — only set during channel initialization
             empty_to_none(working_memory),
             empty_to_none(channel_activity_map),
+            empty_to_none(participant_context),
+            false, // direct_mode — resolved at runtime by the channel, not available here
         )
         .unwrap_or_default();
 
@@ -961,6 +1008,141 @@ async fn find_snapshot_store(
     }
 
     Err(StatusCode::NOT_FOUND)
+}
+
+// --- Channel Settings Endpoints ---
+
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
+pub(super) struct ChannelSettingsQuery {
+    agent_id: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct ChannelSettingsResponse {
+    conversation_id: String,
+    settings: crate::conversation::ConversationSettings,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct UpdateChannelSettingsRequest {
+    agent_id: String,
+    settings: crate::conversation::ConversationSettings,
+}
+
+#[utoipa::path(
+    get,
+    path = "/channels/{channel_id}/settings",
+    params(
+        ("channel_id" = String, Path, description = "Channel conversation ID"),
+        ChannelSettingsQuery,
+    ),
+    responses(
+        (status = 200, body = ChannelSettingsResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
+pub(super) async fn get_channel_settings(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Path(channel_id): axum::extract::Path<String>,
+    Query(query): Query<ChannelSettingsQuery>,
+) -> Result<Json<ChannelSettingsResponse>, StatusCode> {
+    let pools = state.agent_pools.load();
+    let pool = pools.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    // Validate channel exists
+    let channel_store = ChannelStore::new(pool.clone());
+    channel_store
+        .get(&channel_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %channel_id, "failed to load channel for settings fetch");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let store = crate::conversation::ChannelSettingsStore::new(pool.clone());
+    let settings = store
+        .get(&query.agent_id, &channel_id)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, %channel_id, "failed to get channel settings");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .unwrap_or_default();
+
+    Ok(Json(ChannelSettingsResponse {
+        conversation_id: channel_id,
+        settings,
+    }))
+}
+
+#[utoipa::path(
+    put,
+    path = "/channels/{channel_id}/settings",
+    request_body = UpdateChannelSettingsRequest,
+    params(
+        ("channel_id" = String, Path, description = "Channel conversation ID"),
+    ),
+    responses(
+        (status = 200, body = ChannelSettingsResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "channels",
+)]
+pub(super) async fn update_channel_settings(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Path(channel_id): axum::extract::Path<String>,
+    Json(request): Json<UpdateChannelSettingsRequest>,
+) -> Result<Json<ChannelSettingsResponse>, StatusCode> {
+    let pools = state.agent_pools.load();
+    let pool = pools.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    // Validate channel exists
+    let channel_store = ChannelStore::new(pool.clone());
+    channel_store
+        .get(&channel_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %channel_id, "failed to load channel for settings update");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let store = crate::conversation::ChannelSettingsStore::new(pool.clone());
+    store
+        .upsert(&request.agent_id, &channel_id, &request.settings)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, %channel_id, "failed to update channel settings");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Notify the running channel to hot-reload its settings.
+    {
+        let channel_states = state.channel_states.read().await;
+        if let Some(channel_state) = channel_states.get(&channel_id)
+            && let Err(error) =
+                channel_state
+                    .deps
+                    .event_tx
+                    .send(crate::ProcessEvent::SettingsUpdated {
+                        agent_id: channel_state.deps.agent_id.clone(),
+                        channel_id: channel_state.channel_id.clone(),
+                    })
+        {
+            tracing::warn!(
+                %error,
+                %channel_id,
+                "failed to send SettingsUpdated event to channel"
+            );
+        }
+    }
+
+    Ok(Json(ChannelSettingsResponse {
+        conversation_id: channel_id,
+        settings: request.settings,
+    }))
 }
 
 #[cfg(test)]
