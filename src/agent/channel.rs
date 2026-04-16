@@ -869,8 +869,6 @@ impl Channel {
             control_handle,
             cron_finalization_tx,
             resolved_settings,
-            cron_finalization_tx,
-            resolved_settings,
         };
 
         (channel, message_tx)

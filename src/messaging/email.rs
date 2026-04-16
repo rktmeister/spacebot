@@ -1862,6 +1862,7 @@ fn build_embedded_attachment(filename: &str, mime_type: &str, bytes: Vec<u8>) ->
         url: format!("data:{stored_mime_type};base64,{encoded}"),
         size_bytes: Some(size_bytes),
         auth_header: None,
+        pre_saved_id: None,
     }
 }
 
